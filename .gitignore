@@ -49,3 +49,7 @@ settings.ini
 # Debug information
 *.pdb
 *.dSYM/
+
+# Claude Code
+CLAUDE.md
+.claude

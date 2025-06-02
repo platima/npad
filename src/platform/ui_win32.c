@@ -277,7 +277,7 @@ bool ui_platform_has_selection(Window *window) {
     if (!window || !window->edit_hwnd)
         return false;
 
-    DWORD start, end;
+    DWORD start = 0, end = 0;
     SendMessage(window->edit_hwnd, EM_GETSEL, (WPARAM) &start, (LPARAM) &end);
     return start != end;
 }
@@ -286,7 +286,7 @@ char *ui_platform_get_selected_text(Window *window) {
     if (!window || !window->edit_hwnd)
         return NULL;
 
-    DWORD start, end;
+    DWORD start = 0, end = 0;
     SendMessage(window->edit_hwnd, EM_GETSEL, (WPARAM) &start, (LPARAM) &end);
 
     if (start == end)
@@ -317,7 +317,7 @@ int ui_platform_get_cursor_position(Window *window) {
     if (!window || !window->edit_hwnd)
         return 0;
 
-    DWORD start, end;
+    DWORD start = 0, end = 0;
     SendMessage(window->edit_hwnd, EM_GETSEL, (WPARAM) &start, (LPARAM) &end);
     return (int) start;
 }
@@ -440,8 +440,28 @@ void ui_platform_show_about_dialog(Window *parent) {
 }
 
 Dialog *ui_platform_show_find_dialog(Window *parent) {
-    // TODO: Implement find dialog
-    return NULL;
+    Dialog *dialog = malloc(sizeof(Dialog));
+    if (!dialog)
+        return NULL;
+
+    dialog->parent = parent;
+
+    // Create a simple modal dialog for find
+    dialog->hwnd =
+        CreateWindowEx(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
+                       "STATIC", // Using STATIC class as placeholder
+                       "Find", WS_POPUP | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT,
+                       300, 100, parent ? parent->hwnd : NULL, NULL, g_hinstance, NULL);
+
+    if (!dialog->hwnd) {
+        free(dialog);
+        return NULL;
+    }
+
+    // Show the dialog
+    ShowWindow(dialog->hwnd, SW_SHOW);
+
+    return dialog;
 }
 
 Dialog *ui_platform_show_replace_dialog(Window *parent) {

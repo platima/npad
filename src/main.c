@@ -12,6 +12,7 @@
 
 #include "core/editor.h"
 #include "core/settings.h"
+#include "main.h"
 #include "ui_interface.h"
 
 #ifdef DEBUG

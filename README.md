@@ -99,7 +99,7 @@ Settings include window position, auto-save preferences, theme selection, and ot
 |----------|--------|---------|
 | Windows  | ✅ Active Development | Win32 API |
 | macOS    | 🚧 Planned | Cocoa |
-| Linux    | 🚧 Planned | X11/Wayland |
+| Linux    | 🚧 Planned | X11 & Wayland |
 | *nix Terminal | 🚧 Planned | ncurses |
 | Windows Terminal | 🚧 Planned | Windows Console API |
 

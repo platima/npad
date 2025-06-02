@@ -224,12 +224,20 @@ void editor_redo(void) {
 bool editor_find(const char *text, bool case_sensitive, bool whole_word) {
     // TODO: Implement find functionality
     // This would involve searching through the text content
+    (void) text;
+    (void) case_sensitive;
+    (void) whole_word;
     return false;
 }
 
 bool editor_replace(const char *find_text, const char *replace_text, bool case_sensitive,
                     bool whole_word, bool replace_all) {
     // TODO: Implement replace functionality
+    (void) find_text;
+    (void) replace_text;
+    (void) case_sensitive;
+    (void) whole_word;
+    (void) replace_all;
     return false;
 }
 

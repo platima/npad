@@ -27,12 +27,12 @@ WINDOWS_TARGET = npad.exe
 # macOS specific (future)
 MACOS_SOURCES = src/platform/ui_cocoa.m
 MACOS_LIBS = -framework Cocoa
-MACOS_TARGET = npad
+MACOS_TARGET = npad-macos
 
 # Linux specific (future)
 LINUX_SOURCES = src/platform/ui_x11.c
 LINUX_LIBS = -lX11
-LINUX_TARGET = npad
+LINUX_TARGET = npad-linux
 
 # ncurses specific (future)
 NCURSES_SOURCES = src/platform/ui_ncurses.c
@@ -137,7 +137,7 @@ clean:
 	rm -f *.o src/**/*.o
 
 # Installation
-install: $(WINDOWS_TARGET)
+install: detect-platform
 ifeq ($(OS),Windows_NT)
 	copy $(WINDOWS_TARGET) C:\Windows\System32\
 else

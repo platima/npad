@@ -220,10 +220,10 @@ Use conventional commits for consistency:
 - Uses native Win32 API for maximum performance
 - Handle Windows-specific features (registry, file associations)
 
-### Linux (X11)
+### Linux (X11 & Wayland)
 - **Future implementation** in `src/platform/ui_x11.c`
 - Currently contains stubs - contributions welcome!
-- Should support both X11 and Wayland
+- Should support both X11 & Wayland display protocols
 
 ### macOS (Cocoa)
 - **Future implementation** in `src/platform/ui_cocoa.m`

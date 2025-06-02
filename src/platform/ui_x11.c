@@ -1,11 +1,11 @@
 /*
- * npad - X11 UI Implementation (Stub)
- * Linux/Unix X11-specific UI implementation
+ * npad - X11 & Wayland UI Implementation (Stub)
+ * Linux/Unix X11 & Wayland-specific UI implementation
  *
  * Author: Platima
  * https://github.com/platima/npad
  *
- * TODO: Implement X11 backend
+ * TODO: Implement X11 & Wayland backend
  */
 
 #include "../ui_interface.h"
@@ -13,10 +13,10 @@
 #include <stdlib.h>
 
 // Placeholder implementations - to be completed
-// This allows the project to build for Linux while X11 implementation is pending
+// This allows the project to build for Linux while X11 & Wayland implementation is pending
 
 bool ui_platform_init(void) {
-    printf("X11 UI implementation not yet available\n");
+    printf("X11 & Wayland UI implementation not yet available\n");
     return false;
 }
 
