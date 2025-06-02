@@ -6,8 +6,8 @@ TabWidth: 4
 UseTab: Never
 ColumnLimit: 100
 
-# Braces
-BreakBeforeBraces: Linux
+# Braces - K&R Style (Attach)
+BreakBeforeBraces: Attach
 Cpp11BracedListStyle: false
 
 # Indentation
