@@ -9,14 +9,15 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <commdlg.h>
-#include <commctrl.h>
 #include <shellapi.h>
-#include <richedit.h>
+
+// Include commctrl.h after windows.h
+#include <commctrl.h>
 
 #include "../ui_interface.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 
 // Window class name
 #define NPAD_WINDOW_CLASS "NpadMainWindow"
@@ -772,4 +773,3 @@ static void apply_theme(Window* window)
                      g_dark_mode ? MF_CHECKED : MF_UNCHECKED);
     }
 }
-    

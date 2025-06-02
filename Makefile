@@ -21,7 +21,7 @@ SHARED_SOURCES = src/ui_interface.c
 
 # Windows specific
 WINDOWS_SOURCES = src/platform/ui_win32.c
-WINDOWS_LIBS = -luser32 -lkernel32 -lgdi32 -lcomdlg32 -lshell32
+WINDOWS_LIBS = -luser32 -lkernel32 -lgdi32 -lcomdlg32 -lshell32 -lcomctl32
 WINDOWS_TARGET = npad.exe
 
 # macOS specific (future)
