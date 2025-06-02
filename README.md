@@ -14,11 +14,11 @@ A lightweight, cross-platform text editor inspired by the simplicity and speed o
 - [Features](#features)
 - [Why](#why)
 - [What npad is not](#what-npad-is-not)
-- [What features will be considered](#what-features-will-be-considered)
+- [What will be considered](#what-will-be-considered)
 - [Platform Support](#platform-support)
 - [Sponsor This Project](#sponsor-this-project)
-- [Get](#get)
-- [Use](#use)
+- [Get npad](#get-npad)
+- [Use npad](#use-npad)
 - [Design Principles](#design-principles)
 - [Architecture](#architecture)
 - [Contributing](#contributing)
@@ -34,7 +34,7 @@ npad aims to recreate the beloved simplicity of original Windows Notepad while a
 
 - **⚡ Lightning fast** - Native API implementation with minimal overhead
 - **🌍 Cross-platform** - Windows, macOS, Linux and CLI
-- **🪶 Minimal resource usage** - Tiny memory footprint and fast startup
+- **💨 Minimal resource usage** - Tiny memory footprint and fast startup
 - **🎯 Classic interface** - Familiar Notepad-style UI and behavior
 - **📦 Easy install** - Installable by portable exe, or exe installer, with MSI, winget, and others planned
 - **🚀 Easy launch** - Optionally 'notepad' in Windows
@@ -76,7 +76,7 @@ The below 'features' are 99% locked-in as not going to happen. 100% for the firs
 
 ## What features will be considered 🤷
 
-These items may or may not be added, and are essentially subject to my whim, but suggestions may be raised [here](https://github.com/platima/npad/issues/new?labels=enhancement).
+These items may or may not be added, and are essentially subject to my whim, but suggestions may be raised as an 'Issue'
 
 - 🎨 Optional Solarized colouring for dark and light modes
 - 🔌 Optional plugin support
