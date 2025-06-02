@@ -14,7 +14,8 @@ A lightweight, cross-platform text editor inspired by the simplicity and speed o
 - [Features](#features)
 - [Why](#why)
 - [What npad is not](#what-npad-is-not)
-- [What will be considered](#what-will-be-considered)
+- [What will be considered](#what-features-will-be-considered)
+- [Configuration](#configuration)
 - [Platform Support](#platform-support)
 - [Sponsor This Project](#sponsor-this-project)
 - [Get npad](#get-npad)
@@ -82,6 +83,15 @@ These items may or may not be added, and are essentially subject to my whim, but
 - 🔌 Optional plugin support
 - 🔍 Optional RegEx in find and replace
 - ⌨️ Optional custom keyboard shortcuts
+
+## Configuration 🔧
+
+npad stores its settings in JSON format in standard system locations:
+- **Linux**: `~/.config/npad/settings.json`
+- **Windows**: `%APPDATA%\Platima\npad\settings.json`
+- **macOS**: `~/Library/Application Support/npad/settings.json` (when implemented)
+
+Settings include window position, auto-save preferences, theme selection, and other user preferences. All settings are optional - npad works perfectly with default values.
 
 ## Platform Support 🖥️
 
@@ -223,7 +233,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [ ] Core text editing functionality
   - [ ] File operations (New, Open, Save, Save As)
   - [ ] Find/Replace dialog with improved functionality
-  - [ ] Settings system with INI-style storage
+  - [ ] Settings system with JSON storage
   - [ ] Auto-save feature (enabled by default)
   - [ ] Dark/light theme support
   - [ ] Multi-language support
