@@ -15,10 +15,12 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Install dependencies
+    - name: Check dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y cppcheck clang-format-14 gcc-mingw-w64
+        echo "Checking for required tools..."
+        which cppcheck || echo "cppcheck not found"
+        which clang-format || echo "clang-format not found"
+        which x86_64-w64-mingw32-gcc || echo "mingw64 not found"
     
     - name: Run cppcheck
       run: |
@@ -30,7 +32,7 @@ jobs:
     
     - name: Check code formatting
       run: |
-        find src/ -name "*.c" -o -name "*.h" | xargs clang-format-14 --dry-run --Werror
+        find src/ -name "*.c" -o -name "*.h" | xargs clang-format --dry-run --Werror
 
   build-windows:
     runs-on: self-hosted
@@ -38,10 +40,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Install MinGW cross-compiler
+    - name: Check cross-compiler
       run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-mingw-w64-x86-64 gcc-mingw-w64-i686
+        echo "Checking MinGW cross-compiler..."
+        which x86_64-w64-mingw32-gcc || echo "x64 mingw not found"
+        which i686-w64-mingw32-gcc || echo "x86 mingw not found"
     
     - name: Build Windows x64
       run: |
@@ -73,10 +76,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Install dependencies
+    - name: Check build tools
       run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential libx11-dev
+        echo "Checking build tools..."
+        which gcc || echo "gcc not found"
+        ls /usr/include/X11/Xlib.h || echo "X11 headers not found"
     
     - name: Build Linux
       run: |
@@ -103,8 +107,8 @@ jobs:
     - name: Test Windows build (basic checks)
       run: |
         # Basic file checks for Windows builds
-        file artifacts/npad-windows-x64/npad-x64.exe
-        file artifacts/npad-windows-x86/npad-x86.exe
+        file artifacts/npad-windows-x64/npad-x64.exe || echo "file command not available"
+        file artifacts/npad-windows-x86/npad-x86.exe || echo "file command not available"
         
         # Check that executables exist and have reasonable size
         test -f artifacts/npad-windows-x64/npad-x64.exe
@@ -118,11 +122,13 @@ jobs:
         test $size_x64 -lt 5000000
         test $size_x86 -gt 50000
         test $size_x86 -lt 5000000
+        
+        echo "Windows builds passed basic checks"
     
     - name: Test Linux build
       run: |
         # Basic file checks for Linux build
-        file artifacts/npad-linux-x64/npad
+        file artifacts/npad-linux-x64/npad || echo "file command not available"
         test -x artifacts/npad-linux-x64/npad
         
         # Size checks
@@ -132,3 +138,5 @@ jobs:
         
         # Test help output (should exit cleanly)
         artifacts/npad-linux-x64/npad --help || test $? -eq 0
+        
+        echo "Linux build passed basic checks"

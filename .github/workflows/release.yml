@@ -76,10 +76,13 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Install dependencies
+    - name: Check dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 build-essential libx11-dev cppcheck
+        echo "Checking for required tools..."
+        which cppcheck || echo "WARNING: cppcheck not found"
+        which x86_64-w64-mingw32-gcc || echo "WARNING: mingw64 not found"
+        which i686-w64-mingw32-gcc || echo "WARNING: mingw32 not found"
+        which gcc || echo "WARNING: gcc not found"
     
     - name: Run linting
       run: |

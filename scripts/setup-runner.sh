@@ -2,7 +2,8 @@
 
 # npad - GitHub Runner Setup Script
 # Sets up a Linux Mint/Ubuntu system for building npad
-# Run this on your self-hosted runner to install all dependencies
+# Run this ONCE on your self-hosted runner to install all dependencies
+# This should be run manually, NOT in CI/CD workflows
 
 set -e
 
