@@ -140,7 +140,7 @@ Download the portable EXE or installer from the [**Releases page**](https://gith
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/platima/npad
+   git clone https://github.com/platima/npad.git
    cd npad
    ```
 
