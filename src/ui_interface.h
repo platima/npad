@@ -1,7 +1,7 @@
 /*
  * npad - UI Interface Layer
  * Platform-independent UI abstraction
- * 
+ *
  * Author: Platima
  * https://github.com/platima/npad
  */
@@ -40,12 +40,12 @@ typedef enum {
 // Event structure
 typedef struct {
     UIEventType type;
-    Window* window;
-    void* data;
+    Window *window;
+    void *data;
 } UIEvent;
 
 // Event handler function pointer
-typedef bool (*UIEventHandler)(const UIEvent* event);
+typedef bool (*UIEventHandler)(const UIEvent *event);
 
 // Window creation parameters
 typedef struct {
@@ -53,16 +53,16 @@ typedef struct {
     int height;
     int x;
     int y;
-    const char* title;
+    const char *title;
     bool resizable;
     bool dark_mode;
 } WindowParams;
 
 // File dialog parameters
 typedef struct {
-    const char* title;
-    const char* default_filename;
-    const char* filter;
+    const char *title;
+    const char *default_filename;
+    const char *filter;
     bool save_dialog;
 } FileDialogParams;
 
@@ -73,51 +73,51 @@ int ui_message_loop(void);
 void ui_quit(void);
 
 // Window management
-Window* ui_create_main_window(void);
-void ui_destroy_window(Window* window);
-void ui_show_window(Window* window);
-void ui_hide_window(Window* window);
-void ui_set_window_title(Window* window, const char* title);
-void ui_get_window_size(Window* window, int* width, int* height);
-void ui_set_window_size(Window* window, int width, int height);
-void ui_get_window_position(Window* window, int* x, int* y);
-void ui_set_window_position(Window* window, int x, int y);
+Window *ui_create_main_window(void);
+void ui_destroy_window(Window *window);
+void ui_show_window(Window *window);
+void ui_hide_window(Window *window);
+void ui_set_window_title(Window *window, const char *title);
+void ui_get_window_size(Window *window, int *width, int *height);
+void ui_set_window_size(Window *window, int width, int height);
+void ui_get_window_position(Window *window, int *x, int *y);
+void ui_set_window_position(Window *window, int x, int y);
 
 // Text editing
-void ui_set_text(Window* window, const char* text);
-char* ui_get_text(Window* window);
-void ui_clear_text(Window* window);
-bool ui_has_selection(Window* window);
-char* ui_get_selected_text(Window* window);
-void ui_select_all(Window* window);
-void ui_set_cursor_position(Window* window, int position);
-int ui_get_cursor_position(Window* window);
+void ui_set_text(Window *window, const char *text);
+char *ui_get_text(Window *window);
+void ui_clear_text(Window *window);
+bool ui_has_selection(Window *window);
+char *ui_get_selected_text(Window *window);
+void ui_select_all(Window *window);
+void ui_set_cursor_position(Window *window, int position);
+int ui_get_cursor_position(Window *window);
 
 // Clipboard operations
-void ui_cut(Window* window);
-void ui_copy(Window* window);
-void ui_paste(Window* window);
+void ui_cut(Window *window);
+void ui_copy(Window *window);
+void ui_paste(Window *window);
 
 // Undo/Redo
-void ui_undo(Window* window);
-void ui_redo(Window* window);
-bool ui_can_undo(Window* window);
-bool ui_can_redo(Window* window);
+void ui_undo(Window *window);
+void ui_redo(Window *window);
+bool ui_can_undo(Window *window);
+bool ui_can_redo(Window *window);
 
 // Dialogs
-char* ui_show_open_dialog(Window* parent, const FileDialogParams* params);
-char* ui_show_save_dialog(Window* parent, const FileDialogParams* params);
-bool ui_show_message_box(Window* parent, const char* title, const char* message, bool is_question);
-void ui_show_about_dialog(Window* parent);
+char *ui_show_open_dialog(Window *parent, const FileDialogParams *params);
+char *ui_show_save_dialog(Window *parent, const FileDialogParams *params);
+bool ui_show_message_box(Window *parent, const char *title, const char *message, bool is_question);
+void ui_show_about_dialog(Window *parent);
 
 // Find/Replace
-Dialog* ui_show_find_dialog(Window* parent);
-Dialog* ui_show_replace_dialog(Window* parent);
-void ui_close_dialog(Dialog* dialog);
+Dialog *ui_show_find_dialog(Window *parent);
+Dialog *ui_show_replace_dialog(Window *parent);
+void ui_close_dialog(Dialog *dialog);
 
 // Event handling
 void ui_set_event_handler(UIEventHandler handler);
-bool ui_post_event(UIEventType type, Window* window, void* data);
+bool ui_post_event(UIEventType type, Window *window, void *data);
 
 // Theme support
 void ui_set_dark_mode(bool enabled);
@@ -125,12 +125,12 @@ bool ui_is_dark_mode(void);
 bool ui_system_supports_dark_mode(void);
 
 // Status information
-bool ui_is_text_modified(Window* window);
-void ui_set_text_modified(Window* window, bool modified);
-int ui_get_line_count(Window* window);
-void ui_get_cursor_line_column(Window* window, int* line, int* column);
+bool ui_is_text_modified(Window *window);
+void ui_set_text_modified(Window *window, bool modified);
+int ui_get_line_count(Window *window);
+void ui_get_cursor_line_column(Window *window, int *line, int *column);
 
 // Platform-specific helpers (implemented per platform)
-void* ui_get_native_handle(Window* window);
+void *ui_get_native_handle(Window *window);
 
 #endif // UI_INTERFACE_H
