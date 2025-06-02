@@ -9,10 +9,10 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <commdlg.h>
-#include <shellapi.h>
 
 // Include commctrl.h after windows.h
 #include <commctrl.h>
+#include <shellapi.h>
 
 #include "../ui_interface.h"
 #include <stdio.h>
