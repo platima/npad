@@ -45,7 +45,7 @@ sudo apt-get install build-essential gcc-mingw-w64 libx11-dev cppcheck clang-for
 
 1. **Fork and clone the repository:**
    ```bash
-   git clone https://github.com/yourusername/npad.git
+   git clone https://github.com/platima/npad
    cd npad
    ```
 
