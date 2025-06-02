@@ -7,11 +7,11 @@
  */
 
 #define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #include <commctrl.h>
 #include <commdlg.h>
 #include <richedit.h>
 #include <shellapi.h>
-#include <windows.h>
 
 #include "../ui_interface.h"
 #include <stdio.h>

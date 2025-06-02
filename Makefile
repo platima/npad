@@ -49,8 +49,8 @@ CFLAGS += -g -DDEBUG -O0
 LDFLAGS += -g
 endif
 
-# Default target
-all: detect-platform
+# Default target - build all available platforms
+all: windows linux
 
 detect-platform:
 ifeq ($(CC),i686-w64-mingw32-gcc)
@@ -107,11 +107,8 @@ debug-linux:
 	$(MAKE) linux DEBUG=1
 
 # Cross-compilation targets
-windows-x64:
+windows:
 	$(MAKE) windows CC=x86_64-w64-mingw32-gcc
-
-windows-x86:
-	$(MAKE) windows CC=i686-w64-mingw32-gcc
 
 # Code quality
 lint:
@@ -133,7 +130,7 @@ format-check:
 # Cleanup
 clean:
 	rm -f $(WINDOWS_TARGET) $(MACOS_TARGET) $(LINUX_TARGET) $(NCURSES_TARGET)
-	rm -f npad-*.exe npad-*-x64 npad-*-x86
+	rm -f npad-*.exe npad-*linux
 	rm -f *.o src/**/*.o
 
 # Installation
@@ -158,8 +155,6 @@ help:
 	@echo "Targets:"
 	@echo "  all              - Auto-detect platform and build"
 	@echo "  windows          - Build for Windows"
-	@echo "  windows-x64      - Cross-compile for Windows x64"
-	@echo "  windows-x86      - Cross-compile for Windows x86"
 	@echo "  linux            - Build for Linux"
 	@echo "  macos            - Build for macOS"
 	@echo "  terminal         - Build terminal version"
@@ -177,4 +172,4 @@ help:
 	@echo "  DEBUG=1          - Enable debug build"
 	@echo "  VERSION          - Version string (auto-detected from git)"
 
-.PHONY: all windows macos linux terminal debug debug-windows debug-linux windows-x64 windows-x86 clean install uninstall lint format format-check help detect-platform
+.PHONY: all windows macos linux terminal debug debug-windows debug-linux clean install uninstall lint format format-check help detect-platform

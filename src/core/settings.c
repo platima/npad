@@ -40,7 +40,6 @@ static char *g_settings_file_path = NULL;
 
 // Helper functions
 static char *get_settings_directory(void);
-static char *trim_whitespace(char *str);
 static SettingEntry *find_setting(const char *key);
 static SettingEntry *create_setting(const char *key, const char *value);
 static void free_settings_list(void);
@@ -405,25 +404,6 @@ static char *get_settings_directory(void) {
 #endif
 }
 
-static char *trim_whitespace(char *str) {
-    if (!str)
-        return NULL;
-
-    // Trim leading whitespace
-    while (isspace(*str))
-        str++;
-
-    if (*str == 0)
-        return str;
-
-    // Trim trailing whitespace
-    char *end = str + strlen(str) - 1;
-    while (end > str && isspace(*end))
-        end--;
-
-    end[1] = '\0';
-    return str;
-}
 
 static SettingEntry *find_setting(const char *key) {
     if (!key)
