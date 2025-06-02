@@ -1,24 +1,41 @@
-# npad
+# npad 📝
 
 A lightweight, cross-platform text editor inspired by the simplicity and speed of classic Windows Notepad. Built with native APIs for maximum performance and minimal resource usage.
 
-## Philosophy
+## Table of Contents
+- [Philosophy](#philosophy)
+- [Features](#features)
+- [Why](#why)
+- [What npad is not](#what-npad-is-not)
+- [What features will be considered](#what-features-will-be-considered)
+- [Platform Support](#platform-support)
+- [Sponsor This Project](#sponsor-this-project)
+- [Get](#get)
+- [Use](#use)
+- [Design Principles](#design-principles)
+- [Architecture](#architecture)
+- [Contributing](#contributing)
+- [Roadmap](#roadmap)
+- [License](#license)
+- [Author](#author)
+
+## Philosophy 💭
 
 npad aims to recreate the beloved simplicity of original Windows Notepad while adding essential quality-of-life improvements. No AI integration, no spell check - just fast, reliable text editing.
 
-## Features
+## Features ✨
 
-- **Lightning fast** - Native API implementation with minimal overhead
-- **Cross-platform** - Windows, macOS, Linux and CLI
-- **Minimal resource usage** - Tiny memory footprint and fast startup
-- **Classic interface** - Familiar Notepad-style UI and behavior
-- **Easy install** - Installable by portable exe, or exe installer, with MSI, winget, and others planned
-- **Easy launch** - Optionally 'notepad' in Windows
-- **Familiar** - Default functionality matches notepad.exe almost 1:1, with the exception of dark/light mode
-- **Quality-of-life enhancements:**
+- **⚡ Lightning fast** - Native API implementation with minimal overhead
+- **🌍 Cross-platform** - Windows, macOS, Linux and CLI
+- **🪶 Minimal resource usage** - Tiny memory footprint and fast startup
+- **🎯 Classic interface** - Familiar Notepad-style UI and behavior
+- **📦 Easy install** - Installable by portable exe, or exe installer, with MSI, winget, and others planned
+- **🚀 Easy launch** - Optionally 'notepad' in Windows
+- **👀 Familiar** - Default functionality matches notepad.exe almost 1:1, with the exception of dark/light mode
+- **🔧 Quality-of-life enhancements:**
   - Optional auto-save (enabled by default, configurable)
   - Optional tabbed interface (disabled by default, configurable)
-  - Resume session / crash protection (ddisabled by default, configurable)
+  - Resume session / crash protection (disabled by default, configurable)
   - Dark / light theme support (follows system theme by default, configurable)
   - Full undo / redo history
   - Improved find and replace functionality
@@ -27,9 +44,9 @@ npad aims to recreate the beloved simplicity of original Windows Notepad while a
 
 _**Note: Windows support will be first, for the obvious reasons, as compile-yourself, a portable EXE, or as an EXE installer. Other platforms and installers will come with time or contributions**_
 
-## Why
+## Why 🤔
 
-Quite simple really; I'll be forced to use Windows 11 at work in October, and the new Windows Notepad is bloated, slow, crashes, and suffers from the forced-injection of AI and other garbage features. Microsoft has recently annouced even more 'features' (read; bloat), thus I figure it's now a race
+Quite simple really; I'll be forced to use Windows 11 at work in October, and the new Windows Notepad is bloated, slow, crashes, and suffers from the forced-injection of AI and other garbage features. Microsoft has recently announced even more 'features' (read; bloat), thus I figure it's now a race
 
 Whilst yes, you can remove the app redirect or uninstall it, it appears you cannot truly remove it and revert to the original notepad.
 
@@ -37,29 +54,29 @@ And yes, there are many great other options such as Sublime Text, Notepad++, Neo
 
 If you want a 1:1 Windows 7 notepad.exe please see [Windows 7 Games for Windows 11 and Windows 10](https://win7games.com/).
 
-## What npad is not
+## What npad is not ❌
 
 The below 'features' are 99% locked-in as not going to happen. 100% for the first one, actually. That does not mean that they could not be added via plugins later - if developed - but these items fall outside of my design goals for this.
 
-- No AI integration
-- No spellcheck
-- No syntax highlighting
-- No bloated frameworks, not even .Net (ideally, I may change my mind later)
-- No rich text editing
-- No forced features
-- No automatic updates
-- No background services
+- 🚫 No AI integration
+- 🚫 No spellcheck
+- 🚫 No syntax highlighting
+- 🚫 No bloated frameworks, not even .Net (ideally, I may change my mind later)
+- 🚫 No rich text editing
+- 🚫 No forced features
+- 🚫 No automatic updates
+- 🚫 No background services
 
-## What features will be considered
+## What features will be considered 🤷
 
 These items may or may not be added, and are essentially subject to my whim, but suggestions may be raised as an 'Issue'
 
-- Optional Solarized colouring for dark and light modes
-- Optional plugin support
-- Optional RegEx in find and replace
-- Optional custom keyboard shortcuts
+- 🎨 Optional Solarized colouring for dark and light modes
+- 🔌 Optional plugin support
+- 🔍 Optional RegEx in find and replace
+- ⌨️ Optional custom keyboard shortcuts
 
-## Platform Support
+## Platform Support 🖥️
 
 | Platform | Status | Backend |
 |----------|--------|---------|
@@ -69,41 +86,88 @@ These items may or may not be added, and are essentially subject to my whim, but
 | *nix Terminal | 🚧 Planned | ncurses |
 | Windows Terminal | 🚧 Planned | Windows Console API |
 
-## Sponsor This Project
+## Sponsor This Project 💝
 
-(CLAUDE FILL THIS IN)
+Love the project? Consider sponsoring its development! Your support helps dedicate more time to making npad the best lightweight text editor it can be.
 
-## Get
+**[💖 Sponsor on GitHub](https://github.com/sponsors/platima)**
+
+Every sponsorship, no matter the size, is deeply appreciated and goes directly toward:
+- 🚀 Faster development and new features
+- 🐛 Bug fixes and stability improvements
+- 📚 Better documentation and guides
+- 🌍 Cross-platform support expansion
+
+Your support makes a real difference in keeping this project alive and thriving! ✨
+
+## Get 📥
 
 ### Pre-Built
 
-Downloaded portable EXE or installer from the Releases page (CLAUDE TURN THIS INTO A LINK AND ADD MORE DETAIL)
+Download the portable EXE or installer from the [**Releases page**](https://github.com/platima/npad/releases).
+
+**Available options:**
+- 📦 **Portable EXE** - Just download and run, no installation required
+- 🛠️ **EXE Installer** - Traditional Windows installer with registry integration
+- 📋 **MSI Package** - Coming soon for enterprise deployment
+- 🎁 **Winget** - Coming soon for `winget install npad`
 
 ### Compile Yourself
 
 #### Prerequisites
 - **Windows**: MinGW-w64 or Visual Studio Build Tools
-- **macOS**: Xcode Command Line Tools
+- **macOS**: Xcode Command Line Tools  
 - **Linux**: GCC and development headers for X11
 
-(CLAUDE FILL THIS IN: clone repo, compile with VS Code, etc)
+#### Build Instructions
 
-## Use
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/platima/npad.git
+   cd npad
+   ```
+
+2. **Build for your platform:**
+   ```bash
+   # Windows
+   make windows
+   
+   # macOS (when implemented)
+   make macos
+   
+   # Linux (when implemented)  
+   make linux
+   
+   # Terminal version (when implemented)
+   make terminal
+   
+   # All platforms
+   make all
+   ```
+
+3. **Development with VS Code:**
+   - Open the project folder in VS Code
+   - Install the C/C++ extension
+   - Use Ctrl+Shift+P → "Tasks: Run Task" → "build windows"
+   - Or use the integrated terminal with the make commands above
+
+## Use 🎯
 
 ### Running from Windows Run dialog
 After installation, simply press `Win+R` and type `npad` to launch.
 
 You can also type 'npad' in any File Explorer address bar, and npad will launch and show you an Open dialog in that location.
 
-## Design Principles
+## Design Principles 🏗️
 
-1. **Native over frameworks** - Direct platform APIs instead of cross-platform UI libraries
-2. **Performance first** - Optimized for speed and low resource usage
-3. **Simplicity preserved** - Core Notepad functionality remains unchanged
-4. **Quality enhancements only** - New features improve workflow without adding complexity
-5. **No dependencies** - Self-contained executable with no external requirements
+1. **🔧 Native over frameworks** - Direct platform APIs for maximum performance
+2. **⚡ Performance first** - Optimized for speed and minimal resource usage  
+3. **🎯 Simplicity preserved** - Core functionality stays true to classic Notepad
+4. **✨ Quality enhancements only** - New features improve workflow without complexity
+5. **📦 Zero dependencies** - Self-contained executable with no external requirements
+6. **🚫 No bloat** - Resistance to feature creep and unnecessary additions
 
-## Architecture
+## Architecture 🏛️
 
 npad uses a clean abstraction layer that separates platform-specific UI code from core logic:
 
@@ -115,37 +179,54 @@ UI Interface Layer (abstraction)
 Platform Implementation (Win32/Cocoa/X11/ncurses)
 ```
 
-## Contributing
+## Contributing 🤝
 
 Contributions are welcome! Please focus on:
-- Performance optimizations
-- Bug fixes
-- Platform-specific implementations
-- Quality-of-life improvements that maintain simplicity
+- ⚡ Performance optimizations
+- 🐛 Bug fixes
+- 🖥️ Platform-specific implementations  
+- ✨ Quality-of-life improvements that maintain simplicity
 
-## Roadmap
+## Roadmap 🗺️
 
 - [x] Project structure and build system
-- [ ] Windows Win32 implementation
-- [ ] Core text editing functionality
-- [ ] File operations (New, Open, Save, Save As)
-- [ ] Find/Replace dialog
-- [ ] Settings system
-- [ ] Auto-save feature
-- [ ] Tabbed interface
-- [ ] Theme support
-- [ ] macOS Cocoa implementation
-- [ ] Linux X11 implementation
-- [ ] ncurses terminal implementation
+- [ ] **Windows Win32 Implementation**
+  - [ ] Core text editing functionality
+  - [ ] File operations (New, Open, Save, Save As)
+  - [ ] Find/Replace dialog with improved functionality
+  - [ ] Settings system with INI-style storage
+  - [ ] Auto-save feature (enabled by default)
+  - [ ] Dark/light theme support
+  - [ ] Multi-language support
+  - [ ] Session resume / crash protection
+- [ ] **Advanced Windows Features**
+  - [ ] Tabbed interface (optional)
+  - [ ] Full undo/redo history
+  - [ ] Custom keyboard shortcuts
+  - [ ] Solarized color schemes
+- [ ] **Distribution & Installation**
+  - [ ] Portable EXE build
+  - [ ] Windows installer (EXE)
+  - [ ] MSI package
+  - [ ] Winget integration
+  - [ ] Optional 'notepad' command replacement
+- [ ] **Cross-Platform Expansion**
+  - [ ] macOS Cocoa implementation
+  - [ ] Linux X11/Wayland implementation
+  - [ ] ncurses terminal implementation
+  - [ ] Windows Terminal implementation
+- [ ] **Future Considerations**
+  - [ ] Plugin system evaluation
+  - [ ] RegEx find/replace option
 
-## License
+## License 📄
 
 MIT License - See [LICENSE](LICENSE) file for details.
 
-## Author
+## Author 👨‍💻
 
 **Platima** - [GitHub Profile](https://github.com/platima)
 
 ---
 
-*"Sometimes the best software is the software that gets out of your way."*
+*"Sometimes the best software is the software that gets out of your way."* ✨

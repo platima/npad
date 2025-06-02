@@ -1,0 +1,52 @@
+# Compiled binaries
+*.exe
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+npad
+npad-term
+
+# Build directories
+build/
+bin/
+obj/
+
+# IDE files
+.vs/
+*.vcxproj*
+*.sln
+*.suo
+*.user
+
+# OS specific files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Log files
+*.log
+
+# Settings and config files (user specific)
+config.ini
+settings.ini
+
+# Backup files
+*.bak
+*.backup
+
+# Core dumps
+core
+*.core
+
+# Debug information
+*.pdb
+*.dSYM/
