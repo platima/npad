@@ -146,7 +146,12 @@ static void show_help(void)
 
 static void show_version(void)
 {
-    printf("npad version 0.1.0\n");
+#ifdef NPAD_VERSION
+    printf("npad version %s\n", NPAD_VERSION);
+#else
+    printf("npad version 0.1.0-dev\n");
+#endif
     printf("Built on %s at %s\n", __DATE__, __TIME__);
     printf("https://github.com/platima/npad\n");
+    printf("\nFollows Semantic Versioning (SemVer) - https://semver.org/\n");
 }

@@ -1,6 +1,13 @@
 # npad 📝
 
+[![Build Status](https://github.com/platima/npad/workflows/CI/badge.svg)](https://github.com/platima/npad/actions/workflows/ci.yml)
+[![Release](https://github.com/platima/npad/workflows/Release/badge.svg)](https://github.com/platima/npad/actions/workflows/release.yml)
+[![Latest Release](https://img.shields.io/github/v/release/platima/npad)](https://github.com/platima/npad/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A lightweight, cross-platform text editor inspired by the simplicity and speed of classic Windows Notepad. Built with native APIs for maximum performance and minimal resource usage.
+
+**Versioning**: This project follows [Semantic Versioning](https://semver.org/) (SemVer) for predictable and reliable version management.
 
 ## Table of Contents
 - [Philosophy](#philosophy)
@@ -69,7 +76,7 @@ The below 'features' are 99% locked-in as not going to happen. 100% for the firs
 
 ## What features will be considered 🤷
 
-These items may or may not be added, and are essentially subject to my whim, but suggestions may be raised as an 'Issue'
+These items may or may not be added, and are essentially subject to my whim, but suggestions may be raised [here](https://github.com/platima/npad/issues/new?labels=enhancement).
 
 - 🎨 Optional Solarized colouring for dark and light modes
 - 🔌 Optional plugin support
@@ -127,29 +134,43 @@ Download the portable EXE or installer from the [**Releases page**](https://gith
    cd npad
    ```
 
-2. **Build for your platform:**
+2. **Install dependencies (Linux):**
    ```bash
-   # Windows
-   make windows
+   # Automated setup (recommended)
+   ./scripts/setup-runner.sh
+   
+   # Or manually install
+   sudo apt-get install build-essential gcc-mingw-w64 libx11-dev
+   ```
+
+3. **Build for your platform:**
+   ```bash
+   # Windows (cross-compile from Linux)
+   make windows-x64    # Recommended for most users
+   make windows-x86    # For 32-bit systems
+   
+   # Native Linux
+   make linux
    
    # macOS (when implemented)
    make macos
    
-   # Linux (when implemented)  
-   make linux
-   
-   # Terminal version (when implemented)
-   make terminal
-   
-   # All platforms
-   make all
+   # See all options
+   make help
    ```
 
-3. **Development with VS Code:**
+4. **Development with VS Code:**
    - Open the project folder in VS Code
    - Install the C/C++ extension
    - Use Ctrl+Shift+P → "Tasks: Run Task" → "build windows"
-   - Or use the integrated terminal with the make commands above
+   - Debug with F5 (requires `make debug`)
+
+5. **Code quality checks:**
+   ```bash
+   make lint           # Run static analysis
+   make format-check   # Verify code formatting
+   make format         # Auto-format code
+   ```
 
 ## Use 🎯
 
@@ -181,11 +202,19 @@ Platform Implementation (Win32/Cocoa/X11/ncurses)
 
 ## Contributing 🤝
 
-Contributions are welcome! Please focus on:
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
+
+**Focus areas:**
 - ⚡ Performance optimizations
-- 🐛 Bug fixes
-- 🖥️ Platform-specific implementations  
+- 🐛 Bug fixes  
+- 🖥️ Platform-specific implementations
 - ✨ Quality-of-life improvements that maintain simplicity
+
+**Development:**
+- 🔧 Self-hosted CI/CD with cross-compilation
+- 🧪 Automated testing and linting
+- 📦 Automated releases via GitHub Actions
+- 🎯 Code formatting and quality checks
 
 ## Roadmap 🗺️
 
