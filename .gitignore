@@ -44,7 +44,6 @@ settings.ini
 *.backup
 
 # Core dumps
-core
 *.core
 
 # Debug information
