@@ -1,7 +1,7 @@
 /*
  * npad - Lightweight cross-platform text editor
  * Main entry point
- * 
+ *
  * Author: Platima
  * https://github.com/platima/npad
  */
@@ -10,9 +10,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "ui_interface.h"
 #include "core/editor.h"
 #include "core/settings.h"
+#include "ui_interface.h"
 
 #ifdef DEBUG
 #define DEBUG_PRINT(fmt, ...) printf("[DEBUG] " fmt "\n", ##__VA_ARGS__)
@@ -20,30 +20,29 @@
 #define DEBUG_PRINT(fmt, ...)
 #endif
 
-static void parse_command_line(int argc, char* argv[]);
+static void parse_command_line(int argc, char *argv[]);
 static void show_help(void);
 static void show_version(void);
 
-int main(int argc, char* argv[])
-{
+int main(int argc, char *argv[]) {
     DEBUG_PRINT("npad starting...");
-    
+
     // Parse command line arguments
     parse_command_line(argc, argv);
-    
+
     // Initialize settings
     if (!settings_init()) {
         fprintf(stderr, "Failed to initialize settings\n");
         return 1;
     }
-    
+
     // Initialize the UI system
     if (!ui_init()) {
         fprintf(stderr, "Failed to initialize UI system\n");
         settings_cleanup();
         return 1;
     }
-    
+
     // Initialize the editor core
     if (!editor_init()) {
         fprintf(stderr, "Failed to initialize editor\n");
@@ -51,9 +50,9 @@ int main(int argc, char* argv[])
         settings_cleanup();
         return 1;
     }
-    
+
     // Create main window
-    Window* main_window = ui_create_main_window();
+    Window *main_window = ui_create_main_window();
     if (!main_window) {
         fprintf(stderr, "Failed to create main window\n");
         editor_cleanup();
@@ -61,7 +60,7 @@ int main(int argc, char* argv[])
         settings_cleanup();
         return 1;
     }
-    
+
     // Load window state from settings
     int x, y, width, height;
     bool maximized;
@@ -69,62 +68,58 @@ int main(int argc, char* argv[])
         ui_set_window_position(main_window, x, y);
         ui_set_window_size(main_window, width, height);
     }
-    
+
     // Show the window
     ui_show_window(main_window);
-    
+
     // Set the main window reference in editor
     extern EditorState g_editor;
     g_editor.main_window = main_window;
-    
+
     // Open startup file if specified
-    extern char* g_startup_file;
+    extern char *g_startup_file;
     if (g_startup_file) {
         editor_open_file(g_startup_file);
     }
-    
+
     DEBUG_PRINT("Entering message loop...");
-    
+
     // Main message loop
     int result = ui_message_loop();
-    
+
     DEBUG_PRINT("Message loop exited with code: %d", result);
-    
+
     // Save window state
     ui_get_window_position(main_window, &x, &y);
     ui_get_window_size(main_window, &width, &height);
     settings_save_window_state(x, y, width, height, false); // TODO: detect maximized state
-    
+
     // Save settings
     settings_save();
-    
+
     // Cleanup
     editor_cleanup();
     ui_cleanup();
     settings_cleanup();
-    
+
     DEBUG_PRINT("npad shutting down");
-    
+
     return result;
 }
 
-static void parse_command_line(int argc, char* argv[])
-{
+static void parse_command_line(int argc, char *argv[]) {
     // Handle command line arguments
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             show_help();
             exit(0);
-        }
-        else if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-v") == 0) {
+        } else if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-v") == 0) {
             show_version();
             exit(0);
-        }
-        else if (argv[i][0] != '-') {
+        } else if (argv[i][0] != '-') {
             // Assume it's a filename to open
             editor_set_startup_file(argv[i]);
-        }
-        else {
+        } else {
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
             fprintf(stderr, "Use --help for usage information\n");
             exit(1);
@@ -132,8 +127,7 @@ static void parse_command_line(int argc, char* argv[])
     }
 }
 
-static void show_help(void)
-{
+static void show_help(void) {
     printf("npad - Lightweight cross-platform text editor\n");
     printf("Usage: npad [options] [filename]\n");
     printf("\n");
@@ -144,8 +138,7 @@ static void show_help(void)
     printf("If no filename is specified, npad starts with a new document.\n");
 }
 
-static void show_version(void)
-{
+static void show_version(void) {
 #ifdef NPAD_VERSION
     printf("npad version %s\n", NPAD_VERSION);
 #else
