@@ -114,7 +114,7 @@ jobs:
         file artifacts/npad-windows-gui-x64/npad.exe || echo "file command not available"
         test -f artifacts/npad-windows-gui-x64/npad.exe
         
-        echo "Size checks for GUI (should be at least 50KB, less than 5MB)""
+        echo "Size checks for GUI (should be at least 50KB, less than 5MB)"
         size_gui=$(stat -c%s artifacts/npad-windows-gui-x64/npad.exe)
         test $size_gui -gt 50000
         test $size_gui -lt 5000000
@@ -132,7 +132,7 @@ jobs:
     
     - name: Test Linux builds
       run: |
-        echo "Restore execute permissions (lost during artifact upload/download)""
+        echo "Restore execute permissions (lost during artifact upload/download)"
         chmod +x artifacts/npad-linux-x11-x64/npad-linux-x11
         chmod +x artifacts/npad-linux-wayland-x64/npad-linux-wayland
         chmod +x artifacts/npad-linux-terminal-x64/npad-linux-terminal
@@ -158,7 +158,7 @@ jobs:
         test $size_terminal -gt 30000
         test $size_terminal -lt 5000000
         
-        echo "Test help output for one of the builds (should exit cleanly)""
+        echo "Test help output for one of the builds (should exit cleanly)"
         echo "Testing help output..."
         artifacts/npad-linux-x11-x64/npad-linux-x11 --help
         if [ $? -ne 0 ]; then
