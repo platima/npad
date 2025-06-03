@@ -53,3 +53,7 @@ settings.ini
 # Claude Code
 CLAUDE.md
 .claude
+
+# Executables from testing
+npad-linux-*
+unpad*.exe

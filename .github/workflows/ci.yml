@@ -155,6 +155,10 @@ jobs:
         
         # Test help output for one of the builds (should exit cleanly)
         echo "Testing help output..."
-        artifacts/npad-linux-x11-x64/npad-linux-x11 --help || echo "Help command returned non-zero exit code: $?"
+        artifacts/npad-linux-x11-x64/npad-linux-x11 --help
+        if [ $? -ne 0 ]; then
+            echo "Help command failed with exit code $?"
+            exit 1
+        fi
         
         echo "Linux builds passed basic checks"
