@@ -40,12 +40,13 @@ int main(int argc, char *argv[]) {
     // Try different DPI awareness methods in order of preference
     HMODULE user32 = GetModuleHandle("user32.dll");
     HMODULE shcore = LoadLibrary("shcore.dll");
-    
+
     // Windows 10 1703+ - Per-Monitor V2 (best option)
     if (user32) {
         typedef BOOL(WINAPI * SetProcessDpiAwarenessContextFunc)(DPI_AWARENESS_CONTEXT);
         SetProcessDpiAwarenessContextFunc pSetProcessDpiAwarenessContext =
-            (SetProcessDpiAwarenessContextFunc)GetProcAddress(user32, "SetProcessDpiAwarenessContext");
+            (SetProcessDpiAwarenessContextFunc) GetProcAddress(user32,
+                                                               "SetProcessDpiAwarenessContext");
         if (pSetProcessDpiAwarenessContext) {
             pSetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         }
@@ -53,7 +54,7 @@ int main(int argc, char *argv[]) {
         else if (shcore) {
             typedef HRESULT(WINAPI * SetProcessDpiAwarenessFunc)(PROCESS_DPI_AWARENESS);
             SetProcessDpiAwarenessFunc pSetProcessDpiAwareness =
-                (SetProcessDpiAwarenessFunc)GetProcAddress(shcore, "SetProcessDpiAwareness");
+                (SetProcessDpiAwarenessFunc) GetProcAddress(shcore, "SetProcessDpiAwareness");
             if (pSetProcessDpiAwareness) {
                 pSetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
             }
@@ -63,7 +64,7 @@ int main(int argc, char *argv[]) {
             SetProcessDPIAware();
         }
     }
-    
+
     if (shcore) {
         FreeLibrary(shcore);
     }
