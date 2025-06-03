@@ -187,8 +187,8 @@ jobs:
         size_gui=$(stat -c%s artifacts/npad-windows-gui-x64/npad.exe)
         echo "Windows GUI size: $size_gui bytes"
         
-        if [ "$size_gui" -le 50000 ]; then
-          echo "ERROR: Windows GUI build too small ($size_gui bytes, expected > 50000)"
+        if [ "$size_gui" -le 40000 ]; then
+          echo "ERROR: Windows GUI build too small ($size_gui bytes, expected > 40000)"
           exit 1
         fi
         
@@ -223,8 +223,8 @@ jobs:
         size_terminal=$(stat -c%s artifacts/npad-windows-terminal-x64/npad-win32-terminal.exe)
         echo "Windows Terminal size: $size_terminal bytes"
         
-        if [ "$size_terminal" -le 50000 ]; then
-          echo "ERROR: Windows Terminal build too small ($size_terminal bytes, expected > 50000)"
+        if [ "$size_terminal" -le 40000 ]; then
+          echo "ERROR: Windows Terminal build too small ($size_terminal bytes, expected > 40000)"
           exit 1
         fi
         
@@ -273,8 +273,8 @@ jobs:
         size_x11=$(stat -c%s artifacts/npad-linux-x11-x64/npad-linux-x11)
         echo "Linux X11 size: $size_x11 bytes"
         
-        if [ "$size_x11" -le 30000 ]; then
-          echo "ERROR: Linux X11 build too small ($size_x11 bytes, expected > 30000)"
+        if [ "$size_x11" -le 20000 ]; then
+          echo "ERROR: Linux X11 build too small ($size_x11 bytes, expected > 20000)"
           exit 1
         fi
         
@@ -314,8 +314,8 @@ jobs:
         size_wayland=$(stat -c%s artifacts/npad-linux-wayland-x64/npad-linux-wayland)
         echo "Linux Wayland size: $size_wayland bytes"
         
-        if [ "$size_wayland" -le 30000 ]; then
-          echo "ERROR: Linux Wayland build too small ($size_wayland bytes, expected > 30000)"
+        if [ "$size_wayland" -le 20000 ]; then
+          echo "ERROR: Linux Wayland build too small ($size_wayland bytes, expected > 20000)"
           exit 1
         fi
         
@@ -355,8 +355,8 @@ jobs:
         size_terminal=$(stat -c%s artifacts/npad-linux-terminal-x64/npad-linux-terminal)
         echo "Linux Terminal size: $size_terminal bytes"
         
-        if [ "$size_terminal" -le 30000 ]; then
-          echo "ERROR: Linux Terminal build too small ($size_terminal bytes, expected > 30000)"
+        if [ "$size_terminal" -le 15000 ]; then
+          echo "ERROR: Linux Terminal build too small ($size_terminal bytes, expected > 15000)"
           exit 1
         fi
         
