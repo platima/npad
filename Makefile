@@ -106,18 +106,21 @@ macos: $(MACOS_TARGET)
 
 $(MACOS_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(MACOS_SOURCES) src/main.c
 	$(CC) $(CFLAGS) -o $@ $^ $(MACOS_LIBS) $(LDFLAGS)
+	chmod +x $@
 	@echo "macOS build complete: $(MACOS_TARGET)"
 
 linux-x11: $(LINUX_X11_TARGET)
 
 $(LINUX_X11_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_X11_SOURCES) src/main.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LINUX_X11_LIBS) $(LDFLAGS)
+	chmod +x $@
 	@echo "Linux X11 build complete: $(LINUX_X11_TARGET)"
 
 linux-wayland: $(LINUX_WAYLAND_TARGET)
 
 $(LINUX_WAYLAND_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_WAYLAND_SOURCES) src/main.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LINUX_WAYLAND_LIBS) $(LDFLAGS)
+	chmod +x $@
 	@echo "Linux Wayland build complete: $(LINUX_WAYLAND_TARGET)"
 
 linux: linux-x11 linux-wayland linux-terminal
@@ -135,6 +138,7 @@ linux-terminal: $(LINUX_TERMINAL_TARGET)
 
 $(LINUX_TERMINAL_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_TERMINAL_SOURCES) src/main.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LINUX_TERMINAL_LIBS) $(LDFLAGS)
+	chmod +x $@
 	@echo "Linux Terminal build complete: $(LINUX_TERMINAL_TARGET)"
 
 # Cross-platform terminal builds
