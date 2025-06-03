@@ -110,20 +110,20 @@ jobs:
     
     - name: Test Windows builds (basic checks)
       run: |
-        # Basic file checks for Windows GUI build
+        echo Basic file checks for Windows GUI build
         file artifacts/npad-windows-gui-x64/npad.exe || echo "file command not available"
         test -f artifacts/npad-windows-gui-x64/npad.exe
         
-        # Size checks for GUI (should be at least 50KB, less than 5MB)
+        echo Size checks for GUI (should be at least 50KB, less than 5MB)
         size_gui=$(stat -c%s artifacts/npad-windows-gui-x64/npad.exe)
         test $size_gui -gt 50000
         test $size_gui -lt 5000000
         
-        # Basic file checks for Windows Terminal build
+        echo Basic file checks for Windows Terminal build
         file artifacts/npad-windows-terminal-x64/npad-win32-terminal.exe || echo "file command not available"
         test -f artifacts/npad-windows-terminal-x64/npad-win32-terminal.exe
         
-        # Size checks for Terminal
+        echo Size checks for Terminal
         size_terminal=$(stat -c%s artifacts/npad-windows-terminal-x64/npad-win32-terminal.exe)
         test $size_terminal -gt 50000
         test $size_terminal -lt 5000000
@@ -132,33 +132,33 @@ jobs:
     
     - name: Test Linux builds
       run: |
-        # Restore execute permissions (lost during artifact upload/download)
+        echo Restore execute permissions (lost during artifact upload/download)
         chmod +x artifacts/npad-linux-x11-x64/npad-linux-x11
         chmod +x artifacts/npad-linux-wayland-x64/npad-linux-wayland
         chmod +x artifacts/npad-linux-terminal-x64/npad-linux-terminal
         
-        # Test Linux X11 build
+        echo Test Linux X11 build
         file artifacts/npad-linux-x11-x64/npad-linux-x11 || echo "file command not available"
         test -x artifacts/npad-linux-x11-x64/npad-linux-x11
         size_x11=$(stat -c%s artifacts/npad-linux-x11-x64/npad-linux-x11)
         test $size_x11 -gt 30000
         test $size_x11 -lt 5000000
         
-        # Test Linux Wayland build
+        echo Test Linux Wayland build
         file artifacts/npad-linux-wayland-x64/npad-linux-wayland || echo "file command not available"
         test -x artifacts/npad-linux-wayland-x64/npad-linux-wayland
         size_wayland=$(stat -c%s artifacts/npad-linux-wayland-x64/npad-linux-wayland)
         test $size_wayland -gt 30000
         test $size_wayland -lt 5000000
         
-        # Test Linux Terminal build
+        echo Test Linux Terminal build
         file artifacts/npad-linux-terminal-x64/npad-linux-terminal || echo "file command not available"
         test -x artifacts/npad-linux-terminal-x64/npad-linux-terminal
         size_terminal=$(stat -c%s artifacts/npad-linux-terminal-x64/npad-linux-terminal)
         test $size_terminal -gt 30000
         test $size_terminal -lt 5000000
         
-        # Test help output for one of the builds (should exit cleanly)
+        echo Test help output for one of the builds (should exit cleanly)
         echo "Testing help output..."
         artifacts/npad-linux-x11-x64/npad-linux-x11 --help
         if [ $? -ne 0 ]; then
