@@ -57,3 +57,4 @@ CLAUDE.md
 # Executables from testing
 npad-linux-*
 unpad*.exe
+src/npad.res
