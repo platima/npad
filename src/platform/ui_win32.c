@@ -351,6 +351,7 @@ void ui_platform_undo(Window *window) {
 }
 
 void ui_platform_redo(Window *window) {
+    (void) window;
     // Standard EDIT control doesn't support redo
     // Would need RichEdit control for full undo/redo stack
 }
@@ -362,11 +363,13 @@ bool ui_platform_can_undo(Window *window) {
 }
 
 bool ui_platform_can_redo(Window *window) {
+    (void) window;
     // Standard EDIT control doesn't support redo
     return false;
 }
 
 char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *params) {
+    (void) params;
     OPENFILENAME ofn;
     char filename[MAX_PATH] = "";
 
@@ -394,6 +397,7 @@ char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *param
 }
 
 char *ui_platform_show_save_dialog(Window *parent, const FileDialogParams *params) {
+    (void) params;
     OPENFILENAME ofn;
     char filename[MAX_PATH] = "";
 
@@ -465,6 +469,7 @@ Dialog *ui_platform_show_find_dialog(Window *parent) {
 }
 
 Dialog *ui_platform_show_replace_dialog(Window *parent) {
+    (void) parent;
     // TODO: Implement replace dialog
     return NULL;
 }
