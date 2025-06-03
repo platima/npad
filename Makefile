@@ -57,6 +57,10 @@ CFLAGS += -DNPAD_VERSION=\"$(VERSION)\"
 ifdef DEBUG
 CFLAGS += -g -DDEBUG -O0
 LDFLAGS += -g
+else
+# Release build optimizations
+CFLAGS += -Os -DNDEBUG
+LDFLAGS += -s
 endif
 
 # Default target - detect platform and build  
@@ -93,6 +97,9 @@ windows-gui: $(WINDOWS_GUI_TARGET)
 $(WINDOWS_GUI_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(WINDOWS_GUI_SOURCES) src/main.c src/platform/npad.rc
 	cd src/platform && x86_64-w64-mingw32-windres npad.rc -O coff -o npad.res
 	x86_64-w64-mingw32-gcc $(CFLAGS) -o $@ $(CORE_SOURCES) $(SHARED_SOURCES) $(WINDOWS_GUI_SOURCES) src/main.c src/platform/npad.res $(WINDOWS_GUI_LIBS) $(LDFLAGS)
+ifndef DEBUG
+	x86_64-w64-mingw32-strip $@
+endif
 	@echo "Windows GUI build complete: $(WINDOWS_GUI_TARGET)"
 
 macos: $(MACOS_TARGET)
@@ -119,6 +126,9 @@ windows-terminal: $(WINDOWS_TERMINAL_TARGET)
 
 $(WINDOWS_TERMINAL_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(WINDOWS_TERMINAL_SOURCES) src/main.c
 	x86_64-w64-mingw32-gcc $(CFLAGS) -o $@ $^ $(WINDOWS_TERMINAL_LIBS) $(LDFLAGS)
+ifndef DEBUG
+	x86_64-w64-mingw32-strip $@
+endif
 	@echo "Windows Terminal build complete: $(WINDOWS_TERMINAL_TARGET)"
 
 linux-terminal: $(LINUX_TERMINAL_TARGET)
