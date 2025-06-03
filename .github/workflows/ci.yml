@@ -45,16 +45,22 @@ jobs:
         echo "Checking MinGW cross-compiler..."
         which x86_64-w64-mingw32-gcc || echo "x64 mingw not found"
     
-    - name: Build Windows x64
+    - name: Build Windows variants
       run: |
         make clean
-        CC=x86_64-w64-mingw32-gcc make windows
+        make windows
     
-    - name: Upload Windows x64 artifact
+    - name: Upload Windows GUI artifact
       uses: actions/upload-artifact@v4
       with:
-        name: npad-windows-x64
+        name: npad-windows-gui-x64
         path: npad.exe
+    
+    - name: Upload Windows Terminal artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: npad-windows-terminal-x64
+        path: npad-win32-terminal.exe
 
   build-linux:
     runs-on: self-hosted
@@ -68,16 +74,28 @@ jobs:
         which gcc || echo "gcc not found"
         ls /usr/include/X11/Xlib.h || echo "X11 headers not found"
     
-    - name: Build Linux
+    - name: Build Linux variants
       run: |
         make clean
         make linux
     
-    - name: Upload Linux artifact
+    - name: Upload Linux X11 artifact
       uses: actions/upload-artifact@v4
       with:
-        name: npad-linux-x64
-        path: npad
+        name: npad-linux-x11-x64
+        path: npad-linux-x11
+    
+    - name: Upload Linux Wayland artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: npad-linux-wayland-x64
+        path: npad-linux-wayland
+    
+    - name: Upload Linux Terminal artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: npad-linux-terminal-x64
+        path: npad-linux-terminal
 
   test:
     runs-on: self-hosted
@@ -90,34 +108,52 @@ jobs:
       with:
         path: artifacts/
     
-    - name: Test Windows build (basic checks)
+    - name: Test Windows builds (basic checks)
       run: |
-        # Basic file checks for Windows build
-        file artifacts/npad-windows-x64/npad.exe || echo "file command not available"
+        # Basic file checks for Windows GUI build
+        file artifacts/npad-windows-gui-x64/npad.exe || echo "file command not available"
+        test -f artifacts/npad-windows-gui-x64/npad.exe
         
-        # Check that executable exists and has reasonable size
-        test -f artifacts/npad-windows-x64/npad.exe
+        # Size checks for GUI (should be at least 50KB, less than 5MB)
+        size_gui=$(stat -c%s artifacts/npad-windows-gui-x64/npad.exe)
+        test $size_gui -gt 50000
+        test $size_gui -lt 5000000
         
-        # Size checks (should be at least 50KB, less than 5MB)
-        size_x64=$(stat -c%s artifacts/npad-windows-x64/npad.exe)
+        # Basic file checks for Windows Terminal build
+        file artifacts/npad-windows-terminal-x64/npad-win32-terminal.exe || echo "file command not available"
+        test -f artifacts/npad-windows-terminal-x64/npad-win32-terminal.exe
         
-        test $size_x64 -gt 50000
-        test $size_x64 -lt 5000000
+        # Size checks for Terminal
+        size_terminal=$(stat -c%s artifacts/npad-windows-terminal-x64/npad-win32-terminal.exe)
+        test $size_terminal -gt 50000
+        test $size_terminal -lt 5000000
         
-        echo "Windows build passed basic checks"
+        echo "Windows builds passed basic checks"
     
-    - name: Test Linux build
+    - name: Test Linux builds
       run: |
-        # Basic file checks for Linux build
-        file artifacts/npad-linux-x64/npad || echo "file command not available"
-        test -x artifacts/npad-linux-x64/npad
+        # Test Linux X11 build
+        file artifacts/npad-linux-x11-x64/npad-linux-x11 || echo "file command not available"
+        test -x artifacts/npad-linux-x11-x64/npad-linux-x11
+        size_x11=$(stat -c%s artifacts/npad-linux-x11-x64/npad-linux-x11)
+        test $size_x11 -gt 30000
+        test $size_x11 -lt 5000000
         
-        # Size checks
-        size_linux=$(stat -c%s artifacts/npad-linux-x64/npad)
-        test $size_linux -gt 50000
-        test $size_linux -lt 5000000
+        # Test Linux Wayland build
+        file artifacts/npad-linux-wayland-x64/npad-linux-wayland || echo "file command not available"
+        test -x artifacts/npad-linux-wayland-x64/npad-linux-wayland
+        size_wayland=$(stat -c%s artifacts/npad-linux-wayland-x64/npad-linux-wayland)
+        test $size_wayland -gt 30000
+        test $size_wayland -lt 5000000
         
-        # Test help output (should exit cleanly)
-        artifacts/npad-linux-x64/npad --help || test $? -eq 0
+        # Test Linux Terminal build
+        file artifacts/npad-linux-terminal-x64/npad-linux-terminal || echo "file command not available"
+        test -x artifacts/npad-linux-terminal-x64/npad-linux-terminal
+        size_terminal=$(stat -c%s artifacts/npad-linux-terminal-x64/npad-linux-terminal)
+        test $size_terminal -gt 30000
+        test $size_terminal -lt 5000000
         
-        echo "Linux build passed basic checks"
+        # Test help output for one of the builds (should exit cleanly)
+        artifacts/npad-linux-x11-x64/npad-linux-x11 --help || test $? -eq 0
+        
+        echo "Linux builds passed basic checks"

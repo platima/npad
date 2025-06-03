@@ -10,9 +10,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "main.h"
+
+#ifdef NPAD_PLATFORM_WINDOWS
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <shellscalingapi.h>
+#endif
+
 #include "core/editor.h"
 #include "core/settings.h"
-#include "main.h"
 #include "ui_interface.h"
 
 #ifdef DEBUG
@@ -27,6 +34,40 @@ static void show_version(void);
 
 int main(int argc, char *argv[]) {
     DEBUG_PRINT("npad starting...");
+
+#ifdef NPAD_PLATFORM_WINDOWS
+    // Enable high DPI awareness as early as possible (before any UI calls)
+    // Try different DPI awareness methods in order of preference
+    HMODULE user32 = GetModuleHandle("user32.dll");
+    HMODULE shcore = LoadLibrary("shcore.dll");
+    
+    // Windows 10 1703+ - Per-Monitor V2 (best option)
+    if (user32) {
+        typedef BOOL(WINAPI * SetProcessDpiAwarenessContextFunc)(DPI_AWARENESS_CONTEXT);
+        SetProcessDpiAwarenessContextFunc pSetProcessDpiAwarenessContext =
+            (SetProcessDpiAwarenessContextFunc)GetProcAddress(user32, "SetProcessDpiAwarenessContext");
+        if (pSetProcessDpiAwarenessContext) {
+            pSetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        }
+        // Windows 8.1+ fallback - Per-Monitor V1
+        else if (shcore) {
+            typedef HRESULT(WINAPI * SetProcessDpiAwarenessFunc)(PROCESS_DPI_AWARENESS);
+            SetProcessDpiAwarenessFunc pSetProcessDpiAwareness =
+                (SetProcessDpiAwarenessFunc)GetProcAddress(shcore, "SetProcessDpiAwareness");
+            if (pSetProcessDpiAwareness) {
+                pSetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
+            }
+        }
+        // Windows Vista+ fallback - System DPI aware
+        else {
+            SetProcessDPIAware();
+        }
+    }
+    
+    if (shcore) {
+        FreeLibrary(shcore);
+    }
+#endif
 
     // Parse command line arguments
     parse_command_line(argc, argv);

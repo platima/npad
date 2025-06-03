@@ -12,6 +12,7 @@
 #include <commdlg.h>
 #include <richedit.h>
 #include <shellapi.h>
+#include <shellscalingapi.h>
 
 #include "../ui_interface.h"
 #include <stdio.h>
@@ -70,6 +71,8 @@ static void apply_theme(Window *window);
 // Platform initialization
 bool ui_platform_init(void) {
     g_hinstance = GetModuleHandle(NULL);
+
+    // DPI awareness is now handled early in main.c before any UI initialization
 
     // Initialize common controls
     INITCOMMONCONTROLSEX icex;

@@ -19,10 +19,15 @@ endif
 CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c
 SHARED_SOURCES = src/ui_interface.c
 
-# Windows specific
-WINDOWS_SOURCES = src/platform/ui_win32.c
-WINDOWS_LIBS = -lcomctl32 -lcomdlg32 -lgdi32 -lkernel32 -lshell32 -luser32
-WINDOWS_TARGET = npad.exe
+# Windows GUI specific
+WINDOWS_GUI_SOURCES = src/platform/ui_win32.c
+WINDOWS_GUI_LIBS = -mwindows -lcomctl32 -lcomdlg32 -lgdi32 -lkernel32 -lshell32 -luser32 -lshcore
+WINDOWS_GUI_TARGET = npad.exe
+
+# Windows Terminal specific
+WINDOWS_TERMINAL_SOURCES = src/platform/ui_win32_terminal.c
+WINDOWS_TERMINAL_LIBS = -lkernel32
+WINDOWS_TERMINAL_TARGET = npad-win32-terminal.exe
 
 # macOS specific (future)
 MACOS_SOURCES = src/platform/ui_cocoa.m
@@ -39,10 +44,10 @@ LINUX_WAYLAND_SOURCES = src/platform/ui_wayland.c
 LINUX_WAYLAND_LIBS = -lwayland-client
 LINUX_WAYLAND_TARGET = npad-linux-wayland
 
-# ncurses specific (future)
-NCURSES_SOURCES = src/platform/ui_ncurses.c
-NCURSES_LIBS = -lncurses
-NCURSES_TARGET = npad-term
+# Linux Terminal (ncurses) specific
+LINUX_TERMINAL_SOURCES = src/platform/ui_ncurses.c
+LINUX_TERMINAL_LIBS = -lncurses
+LINUX_TERMINAL_TARGET = npad-linux-terminal
 
 # Version information
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.1.0-dev")
@@ -58,7 +63,7 @@ endif
 .DEFAULT_GOAL := detect-platform
 
 # Build all platforms that can be built on current system
-all: windows linux-x11 linux-wayland terminal
+all: windows linux
 # Note: macOS builds require macOS host system with Xcode/clang
 
 detect-platform:
@@ -73,19 +78,22 @@ else ifeq ($(OS),Windows_NT)
 else ifeq ($(UNAME_S),Darwin)
 	$(MAKE) macos
 else ifeq ($(UNAME_S),Linux)
-	$(MAKE) linux-x11
+	$(MAKE) linux
 else
 	@echo "Unknown platform: $(UNAME_S)"
 	@echo "Trying Linux build..."
-	$(MAKE) linux-x11
+	$(MAKE) linux
 endif
 
 # Platform-specific builds
-windows: $(WINDOWS_TARGET)
+windows: windows-gui windows-terminal
 
-$(WINDOWS_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(WINDOWS_SOURCES) src/main.c
-	x86_64-w64-mingw32-gcc $(CFLAGS) -o $@ $^ $(WINDOWS_LIBS) $(LDFLAGS)
-	@echo "Windows build complete: $(WINDOWS_TARGET)"
+windows-gui: $(WINDOWS_GUI_TARGET)
+
+$(WINDOWS_GUI_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(WINDOWS_GUI_SOURCES) src/main.c src/platform/npad.rc
+	cd src/platform && x86_64-w64-mingw32-windres npad.rc -O coff -o npad.res
+	x86_64-w64-mingw32-gcc $(CFLAGS) -o $@ $(CORE_SOURCES) $(SHARED_SOURCES) $(WINDOWS_GUI_SOURCES) src/main.c src/platform/npad.res $(WINDOWS_GUI_LIBS) $(LDFLAGS)
+	@echo "Windows GUI build complete: $(WINDOWS_GUI_TARGET)"
 
 macos: $(MACOS_TARGET)
 
@@ -105,24 +113,41 @@ $(LINUX_WAYLAND_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_WAYLAND_SOURC
 	$(CC) $(CFLAGS) -o $@ $^ $(LINUX_WAYLAND_LIBS) $(LDFLAGS)
 	@echo "Linux Wayland build complete: $(LINUX_WAYLAND_TARGET)"
 
-# Legacy linux target for backwards compatibility
-linux: linux-x11
+linux: linux-x11 linux-wayland linux-terminal
 
-terminal: $(NCURSES_TARGET)
+windows-terminal: $(WINDOWS_TERMINAL_TARGET)
 
-$(NCURSES_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(NCURSES_SOURCES) src/main.c
-	$(CC) $(CFLAGS) -o $@ $^ $(NCURSES_LIBS) $(LDFLAGS)
-	@echo "Terminal build complete: $(NCURSES_TARGET)"
+$(WINDOWS_TERMINAL_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(WINDOWS_TERMINAL_SOURCES) src/main.c
+	x86_64-w64-mingw32-gcc $(CFLAGS) -o $@ $^ $(WINDOWS_TERMINAL_LIBS) $(LDFLAGS)
+	@echo "Windows Terminal build complete: $(WINDOWS_TERMINAL_TARGET)"
+
+linux-terminal: $(LINUX_TERMINAL_TARGET)
+
+$(LINUX_TERMINAL_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_TERMINAL_SOURCES) src/main.c
+	$(CC) $(CFLAGS) -o $@ $^ $(LINUX_TERMINAL_LIBS) $(LDFLAGS)
+	@echo "Linux Terminal build complete: $(LINUX_TERMINAL_TARGET)"
+
+# Cross-platform terminal builds
+terminal: windows-terminal linux-terminal
 
 # Development targets
 debug: 
 	$(MAKE) DEBUG=1
 
+debug-linux:
+	$(MAKE) linux DEBUG=1
+
 debug-windows:
 	$(MAKE) windows DEBUG=1
 
-debug-linux:
-	$(MAKE) linux-x11 DEBUG=1
+debug-windows-gui:
+	$(MAKE) windows-gui DEBUG=1
+
+debug-windows-terminal:
+	$(MAKE) windows-terminal DEBUG=1
+
+debug-linux-terminal:
+	$(MAKE) linux-terminal DEBUG=1
 
 debug-linux-x11:
 	$(MAKE) linux-x11 DEBUG=1
@@ -153,16 +178,19 @@ format-check:
 
 # Cleanup
 clean:
-	rm -f $(WINDOWS_TARGET) $(MACOS_TARGET) $(LINUX_X11_TARGET) $(LINUX_WAYLAND_TARGET) $(NCURSES_TARGET)
-	rm -f npad-*.exe npad-*linux*
-	rm -f *.o src/**/*.o
+	rm -f $(WINDOWS_GUI_TARGET) $(WINDOWS_TERMINAL_TARGET) $(MACOS_TARGET) $(LINUX_X11_TARGET) $(LINUX_WAYLAND_TARGET) $(LINUX_TERMINAL_TARGET)
+	rm -f npad-*.exe npad-*linux* npad-*win32*
+	rm -f *.o src/**/*.o src/platform/npad.res
 
 # Installation
 install: detect-platform
 ifeq ($(OS),Windows_NT)
 	copy $(WINDOWS_TARGET) C:\Windows\System32\
 else
-	install -D $(LINUX_X11_TARGET) $(DESTDIR)/usr/local/bin/npad
+	install -D $(LINUX_X11_TARGET) $(DESTDIR)/usr/local/bin/npad-x11
+		install -D $(LINUX_WAYLAND_TARGET) $(DESTDIR)/usr/local/bin/npad-wayland
+		install -D $(LINUX_TERMINAL_TARGET) $(DESTDIR)/usr/local/bin/npad-terminal
+		ln -sf npad-x11 $(DESTDIR)/usr/local/bin/npad
 endif
 
 uninstall:
@@ -178,12 +206,15 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  all              - Auto-detect platform and build"
-	@echo "  windows          - Build for Windows"
-	@echo "  linux            - Build for Linux (X11)"
+	@echo "  windows          - Build all Windows variants (GUI + Terminal)"
+	@echo "  windows-gui      - Build Windows GUI version"
+	@echo "  windows-terminal - Build Windows Terminal version"
+	@echo "  linux            - Build all Linux variants (X11 + Wayland + Terminal)"
 	@echo "  linux-x11        - Build for Linux with X11"
 	@echo "  linux-wayland    - Build for Linux with Wayland"
+	@echo "  linux-terminal   - Build for Linux Terminal (ncurses)"
+	@echo "  terminal         - Build all Terminal variants (Windows + Linux)"
 	@echo "  macos            - Build for macOS"
-	@echo "  terminal         - Build terminal version"
 	@echo "  debug            - Build with debug symbols"
 	@echo "  lint             - Run code linting"
 	@echo "  format           - Format code with clang-format"
@@ -198,4 +229,4 @@ help:
 	@echo "  DEBUG=1          - Enable debug build"
 	@echo "  VERSION          - Version string (auto-detected from git)"
 
-.PHONY: all windows macos linux terminal debug debug-windows debug-linux clean install uninstall lint format format-check help detect-platform
+.PHONY: all windows windows-gui windows-terminal linux linux-x11 linux-wayland linux-terminal terminal macos debug debug-windows debug-linux clean install uninstall lint format format-check help detect-platform
