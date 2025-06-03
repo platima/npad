@@ -139,7 +139,8 @@ jobs:
         
         echo "Test Linux X11 build"
         file artifacts/npad-linux-x11-x64/npad-linux-x11 || echo "file command not available"
-        test -x artifacts/npad-linux-x11-x64/npad-linux-x11
+        which test
+        test -x artifacts/npad-linux-x11-x64/npad-linux-x11 || echo "text command failed with $?"
         size_x11=$(stat -c%s artifacts/npad-linux-x11-x64/npad-linux-x11)
         test $size_x11 -gt 30000
         test $size_x11 -lt 5000000
