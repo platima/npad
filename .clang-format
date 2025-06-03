@@ -41,7 +41,7 @@ SpacesInSquareBrackets: false
 
 # Comments and strings
 ReflowComments: true
-SortIncludes: true
+SortIncludes: false # Caused issues with Windows.h being included last rather than first
 
 # Penalties (for line breaking decisions)
 PenaltyBreakBeforeFirstCallParameter: 19

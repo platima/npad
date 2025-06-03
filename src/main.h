@@ -19,18 +19,20 @@
 
 // Version information
 #ifndef NPAD_VERSION
-#define NPAD_VERSION STRINGIFY(NPAD_VERSION_MAJOR) "." STRINGIFY(NPAD_VERSION_MINOR) "." STRINGIFY(NPAD_VERSION_PATCH) "-" NPAD_VERSION_RELEASE
+#define NPAD_VERSION                                                                               \
+    STRINGIFY(NPAD_VERSION_MAJOR)                                                                  \
+    "." STRINGIFY(NPAD_VERSION_MINOR) "." STRINGIFY(NPAD_VERSION_PATCH) "-" NPAD_VERSION_RELEASE
 #endif
 
 // Platform detection
 #if defined(_WIN32) || defined(_WIN64)
-    #define NPAD_PLATFORM_WINDOWS
+#define NPAD_PLATFORM_WINDOWS
 #elif defined(__APPLE__)
-    #define NPAD_PLATFORM_MACOS
+#define NPAD_PLATFORM_MACOS
 #elif defined(__linux__)
-    #define NPAD_PLATFORM_LINUX
+#define NPAD_PLATFORM_LINUX
 #else
-    #error "Unsupported platform"
+#error "Unsupported platform"
 #endif
 
 #endif // MAIN_H

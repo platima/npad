@@ -404,7 +404,6 @@ static char *get_settings_directory(void) {
 #endif
 }
 
-
 static SettingEntry *find_setting(const char *key) {
     if (!key)
         return NULL;

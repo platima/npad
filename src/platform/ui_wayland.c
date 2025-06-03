@@ -88,9 +88,11 @@ void ui_platform_show_context_menu(Menu *menu, int x, int y) {
 
 // Legacy text content functions removed - replaced with new signatures in missing functions section
 
-// Legacy cursor position functions removed - replaced with new signatures in missing functions section
+// Legacy cursor position functions removed - replaced with new signatures in missing functions
+// section
 
-void ui_platform_set_selection(Window *window, int start_line, int start_column, int end_line, int end_column) {
+void ui_platform_set_selection(Window *window, int start_line, int start_column, int end_line,
+                               int end_column) {
     (void) window;
     (void) start_line;
     (void) start_column;

@@ -65,6 +65,7 @@ print_section "Installing Windows Cross-Compilation Tools"
 sudo apt-get install -y \
     gcc-mingw-w64 \
     gcc-mingw-w64-x86-64 \
+    mingw-w64-common
 
 # Install Linux development dependencies
 print_section "Installing Linux Development Dependencies"
