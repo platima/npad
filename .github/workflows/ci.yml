@@ -132,6 +132,11 @@ jobs:
     
     - name: Test Linux builds
       run: |
+        # Restore execute permissions (lost during artifact upload/download)
+        chmod +x artifacts/npad-linux-x11-x64/npad-linux-x11
+        chmod +x artifacts/npad-linux-wayland-x64/npad-linux-wayland
+        chmod +x artifacts/npad-linux-terminal-x64/npad-linux-terminal
+        
         # Test Linux X11 build
         file artifacts/npad-linux-x11-x64/npad-linux-x11 || echo "file command not available"
         test -x artifacts/npad-linux-x11-x64/npad-linux-x11
