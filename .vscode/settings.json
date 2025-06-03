@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "main.h": "c",
+        "ui_interface.h": "c",
+        "editor.h": "c"
+    }
+}

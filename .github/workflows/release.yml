@@ -33,8 +33,7 @@ jobs:
           🎉 **New Release Available!**
           
           ### Downloads
-          - **Windows x64**: `npad-${{ steps.get_version.outputs.version }}-windows-x64.exe` - Recommended for most users
-          - **Windows x86**: `npad-${{ steps.get_version.outputs.version }}-windows-x86.exe` - For 32-bit systems
+          - **Windows x64**: `npad-${{ steps.get_version.outputs.version }}-windows-x64.exe` - For Windows systems
           - **Linux x64**: `npad-${{ steps.get_version.outputs.version }}-linux-x64` - For Linux distributions
           
           ### Installation
@@ -62,11 +61,6 @@ jobs:
             make_target: windows
             output: npad.exe
             asset_name: npad-${{ needs.create-release.outputs.version }}-windows-x64.exe
-          - target: windows-x86
-            cc: i686-w64-mingw32-gcc
-            make_target: windows
-            output: npad.exe
-            asset_name: npad-${{ needs.create-release.outputs.version }}-windows-x86.exe
           - target: linux-x64
             cc: gcc
             make_target: linux
@@ -81,7 +75,6 @@ jobs:
         echo "Checking for required tools..."
         which cppcheck || echo "WARNING: cppcheck not found"
         which x86_64-w64-mingw32-gcc || echo "WARNING: mingw64 not found"
-        which i686-w64-mingw32-gcc || echo "WARNING: mingw32 not found"
         which gcc || echo "WARNING: gcc not found"
     
     - name: Run linting

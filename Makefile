@@ -29,10 +29,15 @@ MACOS_SOURCES = src/platform/ui_cocoa.m
 MACOS_LIBS = -framework Cocoa
 MACOS_TARGET = npad-macos
 
-# Linux specific (future)
-LINUX_SOURCES = src/platform/ui_x11.c
-LINUX_LIBS = -lX11
-LINUX_TARGET = npad-linux
+# Linux X11 specific
+LINUX_X11_SOURCES = src/platform/ui_x11.c
+LINUX_X11_LIBS = -lX11
+LINUX_X11_TARGET = npad-linux-x11
+
+# Linux Wayland specific (future)
+LINUX_WAYLAND_SOURCES = src/platform/ui_wayland.c
+LINUX_WAYLAND_LIBS = -lwayland-client
+LINUX_WAYLAND_TARGET = npad-linux-wayland
 
 # ncurses specific (future)
 NCURSES_SOURCES = src/platform/ui_ncurses.c
@@ -49,8 +54,12 @@ CFLAGS += -g -DDEBUG -O0
 LDFLAGS += -g
 endif
 
-# Default target - build all available platforms
-all: windows linux
+# Default target - detect platform and build  
+.DEFAULT_GOAL := detect-platform
+
+# Build all platforms that can be built on current system
+all: windows linux-x11 linux-wayland terminal
+# Note: macOS builds require macOS host system with Xcode/clang
 
 detect-platform:
 ifeq ($(CC),i686-w64-mingw32-gcc)
@@ -64,18 +73,18 @@ else ifeq ($(OS),Windows_NT)
 else ifeq ($(UNAME_S),Darwin)
 	$(MAKE) macos
 else ifeq ($(UNAME_S),Linux)
-	$(MAKE) linux
+	$(MAKE) linux-x11
 else
 	@echo "Unknown platform: $(UNAME_S)"
 	@echo "Trying Linux build..."
-	$(MAKE) linux
+	$(MAKE) linux-x11
 endif
 
 # Platform-specific builds
 windows: $(WINDOWS_TARGET)
 
 $(WINDOWS_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(WINDOWS_SOURCES) src/main.c
-	$(CC) $(CFLAGS) -o $@ $^ $(WINDOWS_LIBS) $(LDFLAGS)
+	x86_64-w64-mingw32-gcc $(CFLAGS) -o $@ $^ $(WINDOWS_LIBS) $(LDFLAGS)
 	@echo "Windows build complete: $(WINDOWS_TARGET)"
 
 macos: $(MACOS_TARGET)
@@ -84,11 +93,20 @@ $(MACOS_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(MACOS_SOURCES) src/main.c
 	$(CC) $(CFLAGS) -o $@ $^ $(MACOS_LIBS) $(LDFLAGS)
 	@echo "macOS build complete: $(MACOS_TARGET)"
 
-linux: $(LINUX_TARGET)
+linux-x11: $(LINUX_X11_TARGET)
 
-$(LINUX_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_SOURCES) src/main.c
-	$(CC) $(CFLAGS) -o $@ $^ $(LINUX_LIBS) $(LDFLAGS)
-	@echo "Linux build complete: $(LINUX_TARGET)"
+$(LINUX_X11_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_X11_SOURCES) src/main.c
+	$(CC) $(CFLAGS) -o $@ $^ $(LINUX_X11_LIBS) $(LDFLAGS)
+	@echo "Linux X11 build complete: $(LINUX_X11_TARGET)"
+
+linux-wayland: $(LINUX_WAYLAND_TARGET)
+
+$(LINUX_WAYLAND_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_WAYLAND_SOURCES) src/main.c
+	$(CC) $(CFLAGS) -o $@ $^ $(LINUX_WAYLAND_LIBS) $(LDFLAGS)
+	@echo "Linux Wayland build complete: $(LINUX_WAYLAND_TARGET)"
+
+# Legacy linux target for backwards compatibility
+linux: linux-x11
 
 terminal: $(NCURSES_TARGET)
 
@@ -104,10 +122,16 @@ debug-windows:
 	$(MAKE) windows DEBUG=1
 
 debug-linux:
-	$(MAKE) linux DEBUG=1
+	$(MAKE) linux-x11 DEBUG=1
+
+debug-linux-x11:
+	$(MAKE) linux-x11 DEBUG=1
+
+debug-linux-wayland:
+	$(MAKE) linux-wayland DEBUG=1
 
 # Cross-compilation targets
-windows:
+windows-cross:
 	$(MAKE) windows CC=x86_64-w64-mingw32-gcc
 
 # Code quality
@@ -129,8 +153,8 @@ format-check:
 
 # Cleanup
 clean:
-	rm -f $(WINDOWS_TARGET) $(MACOS_TARGET) $(LINUX_TARGET) $(NCURSES_TARGET)
-	rm -f npad-*.exe npad-*linux
+	rm -f $(WINDOWS_TARGET) $(MACOS_TARGET) $(LINUX_X11_TARGET) $(LINUX_WAYLAND_TARGET) $(NCURSES_TARGET)
+	rm -f npad-*.exe npad-*linux*
 	rm -f *.o src/**/*.o
 
 # Installation
@@ -138,7 +162,7 @@ install: detect-platform
 ifeq ($(OS),Windows_NT)
 	copy $(WINDOWS_TARGET) C:\Windows\System32\
 else
-	install -D $(LINUX_TARGET) $(DESTDIR)/usr/local/bin/npad
+	install -D $(LINUX_X11_TARGET) $(DESTDIR)/usr/local/bin/npad
 endif
 
 uninstall:
@@ -155,7 +179,9 @@ help:
 	@echo "Targets:"
 	@echo "  all              - Auto-detect platform and build"
 	@echo "  windows          - Build for Windows"
-	@echo "  linux            - Build for Linux"
+	@echo "  linux            - Build for Linux (X11)"
+	@echo "  linux-x11        - Build for Linux with X11"
+	@echo "  linux-wayland    - Build for Linux with Wayland"
 	@echo "  macos            - Build for macOS"
 	@echo "  terminal         - Build terminal version"
 	@echo "  debug            - Build with debug symbols"

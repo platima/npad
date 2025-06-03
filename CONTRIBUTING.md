@@ -57,7 +57,7 @@ sudo apt-get install build-essential gcc-mingw-w64 libx11-dev cppcheck clang-for
    # Test the build system
    make help
    make lint
-   make windows-x64
+   make windows
    ```
 
 3. **Open in VS Code (recommended):**
@@ -79,8 +79,7 @@ make help
 make
 
 # Cross-compile for Windows
-make windows-x64    # 64-bit Windows
-make windows-x86    # 32-bit Windows
+make windows        # Windows x64 build
 
 # Native builds
 make linux          # Linux
@@ -178,7 +177,7 @@ make format-check
    ```bash
    make lint
    make format-check
-   make clean && make windows-x64
+   make clean && make windows
    make clean && make linux
    ```
 

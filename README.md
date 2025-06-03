@@ -156,8 +156,7 @@ Download the portable EXE or installer from the [**Releases page**](https://gith
 3. **Build for your platform:**
    ```bash
    # Windows (cross-compile from Linux)
-   make windows-x64    # Recommended for most users
-   make windows-x86    # For 32-bit systems
+   make windows        # Windows x64 build
    
    # Native Linux
    make linux
@@ -229,7 +228,8 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
 ## Roadmap 🗺️
 
 - [x] Project structure and build system
-- [ ] **Windows Win32 Implementation**
+- [ ] **Windows Implementation**
+  - [ ] Initial launchable Win32 application
   - [ ] Core text editing functionality
   - [ ] File operations (New, Open, Save, Save As)
   - [ ] Find/Replace dialog with improved functionality

@@ -65,7 +65,6 @@ print_section "Installing Windows Cross-Compilation Tools"
 sudo apt-get install -y \
     gcc-mingw-w64 \
     gcc-mingw-w64-x86-64 \
-    gcc-mingw-w64-i686
 
 # Install Linux development dependencies
 print_section "Installing Linux Development Dependencies"
@@ -118,10 +117,9 @@ check_file() {
 }
 
 # Check compilers
-print_status "Checking compilers..."
+int_status "Checking compilers..."
 check_command gcc
 check_command x86_64-w64-mingw32-gcc
-check_command i686-w64-mingw32-gcc
 
 # Check development libraries
 print_status "Checking development libraries..."
@@ -153,18 +151,11 @@ else
     print_error "Native compilation: FAILED"
 fi
 
-print_status "Testing Windows x64 cross-compilation..."
+print_status "Testing Windows cross-compilation..."
 if x86_64-w64-mingw32-gcc -o "$TEST_DIR/test-win64.exe" "$TEST_DIR/test.c"; then
-    print_status "Windows x64 cross-compilation: OK"
+    print_status "Windows cross-compilation: OK"
 else
-    print_error "Windows x64 cross-compilation: FAILED"
-fi
-
-print_status "Testing Windows x86 cross-compilation..."
-if i686-w64-mingw32-gcc -o "$TEST_DIR/test-win32.exe" "$TEST_DIR/test.c"; then
-    print_status "Windows x86 cross-compilation: OK"
-else
-    print_error "Windows x86 cross-compilation: FAILED"
+    print_error "Windows cross-compilation: FAILED"
 fi
 
 # Cleanup test
@@ -177,7 +168,7 @@ print_status "To test the build system:"
 print_status "  git clone https://github.com/platima/npad.git"
 print_status "  cd npad"
 print_status "  make help"
-print_status "  make windows-x64"
+print_status "  make windows"
 print_status "  make linux"
 print_status ""
 print_status "For code quality:"
