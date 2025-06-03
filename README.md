@@ -227,19 +227,23 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
 
 ## Roadmap 🗺️
 
-- [x] Project structure and build system
-- [ ] **Windows Implementation**
-  - [ ] Initial launchable Win32 application
+- [/] **Setup**
+  - [x] GitHub repository
+  - [x] Project structure, README, etc
+  - [x] Basic code structure
+  - [/] Build, test & release pipelines
+- [/] **Windows Implementation**
+  - [X] Initial launchable Win32 application
   - [ ] Core text editing functionality
   - [ ] File operations (New, Open, Save, Save As)
   - [ ] Find/Replace dialog with improved functionality
   - [ ] Settings system with JSON storage
   - [ ] Auto-save feature (enabled by default)
   - [ ] Dark/light theme support
-  - [ ] Multi-language support
-  - [ ] Session resume / crash protection
 - [ ] **Advanced Windows Features**
   - [ ] Tabbed interface (optional)
+  - [ ] Multi-language support
+  - [ ] Session resume / crash protection
   - [ ] Full undo/redo history
   - [ ] Custom keyboard shortcuts
   - [ ] Solarized color schemes

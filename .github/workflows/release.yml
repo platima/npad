@@ -9,8 +9,14 @@ env:
   BUILD_TYPE: Release
 
 jobs:
+  # Run the main CI workflow first to ensure quality
+  ci-validation:
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
   create-release:
     runs-on: self-hosted
+    needs: ci-validation
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
       version: ${{ steps.get_version.outputs.version }}
@@ -21,51 +27,81 @@ jobs:
     
     - name: Create Release
       id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref }}
-        release_name: npad ${{ steps.get_version.outputs.version }}
+        name: npad ${{ steps.get_version.outputs.version }}
         body: |
           ## npad ${{ steps.get_version.outputs.version }}
           
           🎉 **New Release Available!**
           
           ### Downloads
-          - **Windows x64**: `npad-${{ steps.get_version.outputs.version }}-windows-x64.exe` - For Windows systems
-          - **Linux x64**: `npad-${{ steps.get_version.outputs.version }}-linux-x64` - For Linux distributions
+          
+          **Windows Builds:**
+          - `npad-${{ steps.get_version.outputs.version }}-windows-gui.exe` - GUI version for Windows
+          - `npad-${{ steps.get_version.outputs.version }}-windows-terminal.exe` - Terminal version for Windows
+          
+          **Linux Builds:**
+          - `npad-${{ steps.get_version.outputs.version }}-linux-x11` - X11/Xorg version for Linux
+          - `npad-${{ steps.get_version.outputs.version }}-linux-wayland` - Wayland version for Linux  
+          - `npad-${{ steps.get_version.outputs.version }}-linux-terminal` - Terminal version for Linux
+          
+          **Verification:**
+          - `CHECKSUMS.txt` - SHA256 checksums for all files
+          - Verify with: `sha256sum -c CHECKSUMS.txt` (Linux/macOS) or `Get-FileHash` (Windows)
           
           ### Installation
-          1. Download the appropriate file for your system
+          1. Download the appropriate file for your system from the Assets below
           2. **Windows**: Run the executable directly (portable) or place in your PATH
-          3. **Linux**: Make executable with `chmod +x` and run
+          3. **Linux**: Make executable with `chmod +x filename` and run
+          4. **Verification**: Check the file integrity using the provided checksums
           
           ### Changes
-          See the [commit history](https://github.com/platima/npad/commits/${{ github.ref }}) for detailed changes in this release.
+          See the [commit history](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}) for detailed changes in this release.
           
           ---
           
-          **Note**: This follows [Semantic Versioning](https://semver.org/) - check the version number for compatibility information.
+          **Build Info:**
+          - Commit: `${{ github.sha }}`
+          - Built: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          - [CI Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
         draft: false
-        prerelease: false
+        prerelease: ${{ contains(steps.get_version.outputs.version, '-') }}
+        generate_release_notes: true
 
   build-and-upload:
     runs-on: self-hosted
     needs: create-release
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - target: windows-x64
+          - target: windows-gui
             cc: x86_64-w64-mingw32-gcc
             make_target: windows
             output: npad.exe
-            asset_name: npad-${{ needs.create-release.outputs.version }}-windows-x64.exe
-          - target: linux-x64
+            asset_name: npad-${{ needs.create-release.outputs.version }}-windows-gui.exe
+          - target: windows-terminal
+            cc: x86_64-w64-mingw32-gcc  
+            make_target: windows
+            output: npad-win32-terminal.exe
+            asset_name: npad-${{ needs.create-release.outputs.version }}-windows-terminal.exe
+          - target: linux-x11
             cc: gcc
             make_target: linux
-            output: npad
-            asset_name: npad-${{ needs.create-release.outputs.version }}-linux-x64
+            output: npad-linux-x11
+            asset_name: npad-${{ needs.create-release.outputs.version }}-linux-x11
+          - target: linux-wayland
+            cc: gcc
+            make_target: linux
+            output: npad-linux-wayland
+            asset_name: npad-${{ needs.create-release.outputs.version }}-linux-wayland
+          - target: linux-terminal
+            cc: gcc
+            make_target: linux
+            output: npad-linux-terminal
+            asset_name: npad-${{ needs.create-release.outputs.version }}-linux-terminal
 
     steps:
     - uses: actions/checkout@v4
@@ -74,48 +110,236 @@ jobs:
       run: |
         echo "Checking for required tools..."
         which cppcheck || echo "WARNING: cppcheck not found"
+        which clang-format || echo "WARNING: clang-format not found"
         which x86_64-w64-mingw32-gcc || echo "WARNING: mingw64 not found"
         which gcc || echo "WARNING: gcc not found"
     
-    - name: Run linting
-      run: |
-        cppcheck --enable=all --std=c99 --platform=win32A \
-          --suppress=missingIncludeSystem \
-          --suppress=unusedFunction \
-          --error-exitcode=1 \
-          src/
-    
-    - name: Build ${{ matrix.target }}
+    - name: Build and validate ${{ matrix.target }}
       run: |
         make clean
         CC=${{ matrix.cc }} make ${{ matrix.make_target }}
         
         # Verify the build output exists
-        test -f ${{ matrix.output }}
+        if [ ! -f "${{ matrix.output }}" ]; then
+          echo "ERROR: Expected output file ${{ matrix.output }} not found"
+          ls -la
+          exit 1
+        fi
         
-        # Strip debugging symbols for release (if not Windows)
-        if [[ "${{ matrix.target }}" != *"windows"* ]]; then
+        echo "Build successful: ${{ matrix.output }}"
+        ls -la ${{ matrix.output }}
+        
+        # Test version output (Linux builds only, Windows cross-compiled can't run)
+        if [[ "${{ matrix.target }}" == linux-* ]]; then
+          echo "Testing version output..."
+          if timeout 10s ./${{ matrix.output }} --version; then
+            echo "✓ Version command successful"
+          else
+            echo "ERROR: Version command failed"
+            exit 1
+          fi
+          
+          # Extract version for validation if this is a tagged release
+          version_output=$(timeout 10s ./${{ matrix.output }} --version | head -1)
+          echo "Version output: $version_output"
+          
+          # Validate version matches tag (if we have a tag)
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            tag_version="${GITHUB_REF#refs/tags/}"
+            if [[ "$version_output" == *"$tag_version"* ]]; then
+              echo "✓ Version matches release tag: $tag_version"
+            else
+              echo "WARNING: Version output doesn't contain tag $tag_version"
+              echo "Version: $version_output"
+              echo "Tag: $tag_version"
+              # Don't fail here as version might be different format
+            fi
+          fi
+        fi
+        
+        # Strip debugging symbols for release (if Linux)
+        if [[ "${{ matrix.target }}" == linux-* ]]; then
           strip ${{ matrix.output }}
+          echo "Stripped debug symbols from ${{ matrix.output }}"
         fi
         
         # Rename to versioned filename
         mv ${{ matrix.output }} ${{ matrix.asset_name }}
+        
+        # Generate checksum
+        sha256sum ${{ matrix.asset_name }} > ${{ matrix.asset_name }}.sha256
+        
+        echo "Final asset: ${{ matrix.asset_name }}"
+        echo "Size: $(stat -c%s ${{ matrix.asset_name }}) bytes"
+        echo "SHA256: $(cat ${{ matrix.asset_name }}.sha256)"
     
     - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v1
       with:
-        upload_url: ${{ needs.create-release.outputs.upload_url }}
-        asset_path: ./${{ matrix.asset_name }}
-        asset_name: ${{ matrix.asset_name }}
-        asset_content_type: application/octet-stream
+        tag_name: ${{ needs.create-release.outputs.version }}
+        files: |
+          ${{ matrix.asset_name }}
+          ${{ matrix.asset_name }}.sha256
 
-  update-latest-release:
+  validate-release:
     runs-on: self-hosted
     needs: [create-release, build-and-upload]
     steps:
-    - name: Update latest release badge
+    - name: Download and validate release assets
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        echo "Release ${{ needs.create-release.outputs.version }} completed successfully"
-        # This step can be extended to update any external services or badges
+        # Get release information
+        release_id=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+          "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ needs.create-release.outputs.version }}" \
+          | jq -r '.id')
+        
+        echo "=== Validating Release Assets ==="
+        echo "Release ID: $release_id"
+        echo "Version: ${{ needs.create-release.outputs.version }}"
+        
+        # Download and test Linux executables for version validation
+        mkdir -p validation
+        cd validation
+        
+        # Download Linux X11 build for testing
+        linux_x11_url=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+          "https://api.github.com/repos/${{ github.repository }}/releases/$release_id/assets" \
+          | jq -r '.[] | select(.name | contains("linux-x11") and (endswith(".exe") == false)) | .browser_download_url')
+        
+        if [ -n "$linux_x11_url" ]; then
+          echo "Downloading Linux X11 build for validation..."
+          curl -L -s "$linux_x11_url" -o npad-linux-x11-test
+          chmod +x npad-linux-x11-test
+          
+          echo "Testing version output..."
+          if timeout 10s ./npad-linux-x11-test --version; then
+            version_output=$(timeout 10s ./npad-linux-x11-test --version | head -1)
+            echo "✓ Version command successful: $version_output"
+            
+            # Check if version output contains the tag
+            tag_version="${{ needs.create-release.outputs.version }}"
+            if [[ "$version_output" == *"$tag_version"* ]]; then
+              echo "✓ Version matches release tag: $tag_version"
+            else
+              echo "ℹ️  Version format: $version_output"
+              echo "ℹ️  Release tag: $tag_version"
+              echo "ℹ️  Note: Version format may differ from tag format"
+            fi
+          else
+            echo "ERROR: Version command failed for release build"
+            exit 1
+          fi
+          
+          echo "Testing help output..."
+          if timeout 10s ./npad-linux-x11-test --help >/dev/null 2>&1; then
+            echo "✓ Help command successful"
+          else
+            echo "ERROR: Help command failed for release build"
+            exit 1
+          fi
+        else
+          echo "WARNING: Could not find Linux X11 build for validation"
+        fi
+        
+        echo "✓ Release validation completed"
+
+  create-checksums:
+    runs-on: self-hosted
+    needs: [create-release, build-and-upload, validate-release]
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download release assets to create master checksum
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # Get all release assets
+        release_id=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+          "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ needs.create-release.outputs.version }}" \
+          | jq -r '.id')
+        
+        echo "Release ID: $release_id"
+        
+        # Download all .sha256 files
+        curl -s -H "Authorization: token $GITHUB_TOKEN" \
+          "https://api.github.com/repos/${{ github.repository }}/releases/$release_id/assets" \
+          | jq -r '.[] | select(.name | endswith(".sha256")) | .browser_download_url' \
+          | while read url; do
+            echo "Downloading checksum: $url"
+            curl -L -s "$url" >> temp_checksums.txt
+          done
+    
+    - name: Create master CHECKSUMS.txt
+      run: |
+        echo "# npad Release Checksums - ${{ needs.create-release.outputs.version }}" > CHECKSUMS.txt
+        echo "# Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> CHECKSUMS.txt
+        echo "# Release: https://github.com/${{ github.repository }}/releases/tag/${{ needs.create-release.outputs.version }}" >> CHECKSUMS.txt
+        echo "# Commit: ${{ github.sha }}" >> CHECKSUMS.txt
+        echo "" >> CHECKSUMS.txt
+        
+        # Add all checksums
+        if [ -f temp_checksums.txt ]; then
+          cat temp_checksums.txt >> CHECKSUMS.txt
+        fi
+        
+        echo "" >> CHECKSUMS.txt
+        echo "# Verification Instructions:" >> CHECKSUMS.txt
+        echo "# Linux/macOS: sha256sum -c CHECKSUMS.txt" >> CHECKSUMS.txt
+        echo "# Windows PowerShell: Get-FileHash -Algorithm SHA256 <filename>" >> CHECKSUMS.txt
+        echo "# Windows Command Prompt: certutil -hashfile <filename> SHA256" >> CHECKSUMS.txt
+        
+        echo "Master checksums file created:"
+        cat CHECKSUMS.txt
+    
+    - name: Upload master checksums
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ needs.create-release.outputs.version }}
+        files: CHECKSUMS.txt
+
+  update-release-notes:
+    runs-on: self-hosted
+    needs: [create-release, build-and-upload, validate-release, create-checksums]
+    steps:
+    - name: Update release with final info
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ needs.create-release.outputs.version }}
+        body: |
+          ## npad ${{ needs.create-release.outputs.version }}
+          
+          🎉 **New Release Available!**
+          
+          ### Downloads
+          
+          **Windows Builds:**
+          - `npad-${{ needs.create-release.outputs.version }}-windows-gui.exe` - GUI version for Windows
+          - `npad-${{ needs.create-release.outputs.version }}-windows-terminal.exe` - Terminal version for Windows
+          
+          **Linux Builds:**
+          - `npad-${{ needs.create-release.outputs.version }}-linux-x11` - X11/Xorg version for Linux
+          - `npad-${{ needs.create-release.outputs.version }}-linux-wayland` - Wayland version for Linux  
+          - `npad-${{ needs.create-release.outputs.version }}-linux-terminal` - Terminal version for Linux
+          
+          **Verification:**
+          - `CHECKSUMS.txt` - SHA256 checksums for all files
+          - Individual `.sha256` files for each binary
+          - Verify with: `sha256sum -c CHECKSUMS.txt` (Linux/macOS) or `Get-FileHash` (Windows)
+          
+          ### Installation
+          1. Download the appropriate file for your system from the Assets below
+          2. **Windows**: Run the executable directly (portable) or place in your PATH
+          3. **Linux**: Make executable with `chmod +x filename` and run
+          4. **Verification**: Check the file integrity using the provided checksums
+          
+          ### Changes
+          See the [commit history](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}) for detailed changes in this release.
+          
+          ---
+          
+          **Build Info:**
+          - Commit: `${{ github.sha }}`
+          - Built: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          - [CI Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          - All builds passed CI validation before release

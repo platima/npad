@@ -50,17 +50,37 @@ jobs:
         make clean
         make windows
     
+    - name: Verify Windows builds exist and generate checksums
+      run: |
+        echo "Verifying Windows builds were created..."
+        ls -la npad.exe npad-win32-terminal.exe
+        echo "Windows GUI size: $(stat -c%s npad.exe) bytes"
+        echo "Windows Terminal size: $(stat -c%s npad-win32-terminal.exe) bytes"
+        
+        echo "Generating checksums..."
+        sha256sum npad.exe > npad.exe.sha256
+        sha256sum npad-win32-terminal.exe > npad-win32-terminal.exe.sha256
+        
+        echo "Windows GUI SHA256: $(cat npad.exe.sha256)"
+        echo "Windows Terminal SHA256: $(cat npad-win32-terminal.exe.sha256)"
+    
     - name: Upload Windows GUI artifact
       uses: actions/upload-artifact@v4
       with:
         name: npad-windows-gui-x64
-        path: npad.exe
+        path: |
+          npad.exe
+          npad.exe.sha256
+        retention-days: 7
     
     - name: Upload Windows Terminal artifact
       uses: actions/upload-artifact@v4
       with:
         name: npad-windows-terminal-x64
-        path: npad-win32-terminal.exe
+        path: |
+          npad-win32-terminal.exe
+          npad-win32-terminal.exe.sha256
+        retention-days: 7
 
   build-linux:
     runs-on: self-hosted
@@ -79,23 +99,49 @@ jobs:
         make clean
         make linux
     
+    - name: Verify Linux builds exist and generate checksums
+      run: |
+        echo "Verifying Linux builds were created..."
+        ls -la npad-linux-x11 npad-linux-wayland npad-linux-terminal
+        echo "Linux X11 size: $(stat -c%s npad-linux-x11) bytes"
+        echo "Linux Wayland size: $(stat -c%s npad-linux-wayland) bytes"
+        echo "Linux Terminal size: $(stat -c%s npad-linux-terminal) bytes"
+        
+        echo "Generating checksums..."
+        sha256sum npad-linux-x11 > npad-linux-x11.sha256
+        sha256sum npad-linux-wayland > npad-linux-wayland.sha256
+        sha256sum npad-linux-terminal > npad-linux-terminal.sha256
+        
+        echo "Linux X11 SHA256: $(cat npad-linux-x11.sha256)"
+        echo "Linux Wayland SHA256: $(cat npad-linux-wayland.sha256)"
+        echo "Linux Terminal SHA256: $(cat npad-linux-terminal.sha256)"
+    
     - name: Upload Linux X11 artifact
       uses: actions/upload-artifact@v4
       with:
         name: npad-linux-x11-x64
-        path: npad-linux-x11
+        path: |
+          npad-linux-x11
+          npad-linux-x11.sha256
+        retention-days: 7
     
     - name: Upload Linux Wayland artifact
       uses: actions/upload-artifact@v4
       with:
         name: npad-linux-wayland-x64
-        path: npad-linux-wayland
+        path: |
+          npad-linux-wayland
+          npad-linux-wayland.sha256
+        retention-days: 7
     
     - name: Upload Linux Terminal artifact
       uses: actions/upload-artifact@v4
       with:
         name: npad-linux-terminal-x64
-        path: npad-linux-terminal
+        path: |
+          npad-linux-terminal
+          npad-linux-terminal.sha256
+        retention-days: 7
 
   test:
     runs-on: self-hosted
@@ -108,63 +154,273 @@ jobs:
       with:
         path: artifacts/
     
-    - name: Test Windows builds (basic checks)
+    - name: List downloaded artifacts
       run: |
-        echo "Basic file checks for Windows GUI build"
-        file artifacts/npad-windows-gui-x64/npad.exe || echo "file command not available"
-        test -f artifacts/npad-windows-gui-x64/npad.exe
-        
-        echo "Size checks for GUI (should be at least 50KB, less than 5MB)"
-        size_gui=$(stat -c%s artifacts/npad-windows-gui-x64/npad.exe)
-        test $size_gui -gt 50000
-        test $size_gui -lt 5000000
-        
-        echo "Basic file checks for Windows Terminal build"
-        file artifacts/npad-windows-terminal-x64/npad-win32-terminal.exe || echo "file command not available"
-        test -f artifacts/npad-windows-terminal-x64/npad-win32-terminal.exe
-        
-        echo "Size checks for Terminal"
-        size_terminal=$(stat -c%s artifacts/npad-windows-terminal-x64/npad-win32-terminal.exe)
-        test $size_terminal -gt 50000
-        test $size_terminal -lt 5000000
-        
-        echo "Windows builds passed basic checks"
+        echo "Downloaded artifacts structure:"
+        find artifacts/ -type f -exec ls -la {} \;
     
-    - name: Test Linux builds
+    - name: Verify checksums and test Windows builds
       run: |
-        echo "Restore execute permissions (lost during artifact upload/download)"
+        echo "=== Verifying Windows GUI Build ==="
+        if [ ! -f "artifacts/npad-windows-gui-x64/npad.exe" ]; then
+          echo "ERROR: Windows GUI executable not found"
+          exit 1
+        fi
+        
+        # Verify checksum
+        if [ -f "artifacts/npad-windows-gui-x64/npad.exe.sha256" ]; then
+          echo "Verifying Windows GUI checksum..."
+          cd artifacts/npad-windows-gui-x64/
+          if sha256sum -c npad.exe.sha256; then
+            echo "✓ Windows GUI checksum verified"
+          else
+            echo "ERROR: Windows GUI checksum verification failed"
+            exit 1
+          fi
+          cd ../..
+        else
+          echo "WARNING: Windows GUI checksum file not found"
+        fi
+        
+        file artifacts/npad-windows-gui-x64/npad.exe || echo "file command not available"
+        
+        size_gui=$(stat -c%s artifacts/npad-windows-gui-x64/npad.exe)
+        echo "Windows GUI size: $size_gui bytes"
+        
+        if [ "$size_gui" -le 50000 ]; then
+          echo "ERROR: Windows GUI build too small ($size_gui bytes, expected > 50000)"
+          exit 1
+        fi
+        
+        if [ "$size_gui" -ge 5000000 ]; then
+          echo "ERROR: Windows GUI build too large ($size_gui bytes, expected < 5000000)"
+          exit 1
+        fi
+        
+        echo "=== Verifying Windows Terminal Build ==="
+        if [ ! -f "artifacts/npad-windows-terminal-x64/npad-win32-terminal.exe" ]; then
+          echo "ERROR: Windows Terminal executable not found"
+          exit 1
+        fi
+        
+        # Verify checksum
+        if [ -f "artifacts/npad-windows-terminal-x64/npad-win32-terminal.exe.sha256" ]; then
+          echo "Verifying Windows Terminal checksum..."
+          cd artifacts/npad-windows-terminal-x64/
+          if sha256sum -c npad-win32-terminal.exe.sha256; then
+            echo "✓ Windows Terminal checksum verified"
+          else
+            echo "ERROR: Windows Terminal checksum verification failed"
+            exit 1
+          fi
+          cd ../..
+        else
+          echo "WARNING: Windows Terminal checksum file not found"
+        fi
+        
+        file artifacts/npad-windows-terminal-x64/npad-win32-terminal.exe || echo "file command not available"
+        
+        size_terminal=$(stat -c%s artifacts/npad-windows-terminal-x64/npad-win32-terminal.exe)
+        echo "Windows Terminal size: $size_terminal bytes"
+        
+        if [ "$size_terminal" -le 50000 ]; then
+          echo "ERROR: Windows Terminal build too small ($size_terminal bytes, expected > 50000)"
+          exit 1
+        fi
+        
+        if [ "$size_terminal" -ge 5000000 ]; then
+          echo "ERROR: Windows Terminal build too large ($size_terminal bytes, expected < 5000000)"
+          exit 1
+        fi
+        
+        echo "✓ Windows builds passed all checks"
+    
+    - name: Verify checksums and test Linux builds
+      run: |
+        echo "=== Restoring execute permissions ==="
         chmod +x artifacts/npad-linux-x11-x64/npad-linux-x11
         chmod +x artifacts/npad-linux-wayland-x64/npad-linux-wayland
         chmod +x artifacts/npad-linux-terminal-x64/npad-linux-terminal
         
-        echo "Test Linux X11 build"
-        file artifacts/npad-linux-x11-x64/npad-linux-x11 || echo "file command not available"
-        which test
-        test -x artifacts/npad-linux-x11-x64/npad-linux-x11 || echo "text command failed with $?"
-        size_x11=$(stat -c%s artifacts/npad-linux-x11-x64/npad-linux-x11)
-        test $size_x11 -gt 30000
-        test $size_x11 -lt 5000000
-        
-        echo "Test Linux Wayland build"
-        file artifacts/npad-linux-wayland-x64/npad-linux-wayland || echo "file command not available"
-        test -x artifacts/npad-linux-wayland-x64/npad-linux-wayland
-        size_wayland=$(stat -c%s artifacts/npad-linux-wayland-x64/npad-linux-wayland)
-        test $size_wayland -gt 30000
-        test $size_wayland -lt 5000000
-        
-        echo "Test Linux Terminal build"
-        file artifacts/npad-linux-terminal-x64/npad-linux-terminal || echo "file command not available"
-        test -x artifacts/npad-linux-terminal-x64/npad-linux-terminal
-        size_terminal=$(stat -c%s artifacts/npad-linux-terminal-x64/npad-linux-terminal)
-        test $size_terminal -gt 30000
-        test $size_terminal -lt 5000000
-        
-        echo "Test help output for one of the builds (should exit cleanly)"
-        echo "Testing help output..."
-        artifacts/npad-linux-x11-x64/npad-linux-x11 --help
-        if [ $? -ne 0 ]; then
-            echo "Help command failed with exit code $?"
-            exit 1
+        echo "=== Verifying Linux X11 Build ==="
+        if [ ! -f "artifacts/npad-linux-x11-x64/npad-linux-x11" ]; then
+          echo "ERROR: Linux X11 executable not found"
+          exit 1
         fi
         
-        echo "Linux builds passed basic checks"
+        # Verify checksum
+        if [ -f "artifacts/npad-linux-x11-x64/npad-linux-x11.sha256" ]; then
+          echo "Verifying Linux X11 checksum..."
+          cd artifacts/npad-linux-x11-x64/
+          if sha256sum -c npad-linux-x11.sha256; then
+            echo "✓ Linux X11 checksum verified"
+          else
+            echo "ERROR: Linux X11 checksum verification failed"
+            exit 1
+          fi
+          cd ../..
+        else
+          echo "WARNING: Linux X11 checksum file not found"
+        fi
+        
+        file artifacts/npad-linux-x11-x64/npad-linux-x11 || echo "file command not available"
+        
+        if [ ! -x "artifacts/npad-linux-x11-x64/npad-linux-x11" ]; then
+          echo "ERROR: Linux X11 executable is not executable"
+          exit 1
+        fi
+        
+        size_x11=$(stat -c%s artifacts/npad-linux-x11-x64/npad-linux-x11)
+        echo "Linux X11 size: $size_x11 bytes"
+        
+        if [ "$size_x11" -le 30000 ]; then
+          echo "ERROR: Linux X11 build too small ($size_x11 bytes, expected > 30000)"
+          exit 1
+        fi
+        
+        if [ "$size_x11" -ge 5000000 ]; then
+          echo "ERROR: Linux X11 build too large ($size_x11 bytes, expected < 5000000)"
+          exit 1
+        fi
+        
+        echo "=== Verifying Linux Wayland Build ==="
+        if [ ! -f "artifacts/npad-linux-wayland-x64/npad-linux-wayland" ]; then
+          echo "ERROR: Linux Wayland executable not found"
+          exit 1
+        fi
+        
+        # Verify checksum
+        if [ -f "artifacts/npad-linux-wayland-x64/npad-linux-wayland.sha256" ]; then
+          echo "Verifying Linux Wayland checksum..."
+          cd artifacts/npad-linux-wayland-x64/
+          if sha256sum -c npad-linux-wayland.sha256; then
+            echo "✓ Linux Wayland checksum verified"
+          else
+            echo "ERROR: Linux Wayland checksum verification failed"
+            exit 1
+          fi
+          cd ../..
+        else
+          echo "WARNING: Linux Wayland checksum file not found"
+        fi
+        
+        file artifacts/npad-linux-wayland-x64/npad-linux-wayland || echo "file command not available"
+        
+        if [ ! -x "artifacts/npad-linux-wayland-x64/npad-linux-wayland" ]; then
+          echo "ERROR: Linux Wayland executable is not executable"
+          exit 1
+        fi
+        
+        size_wayland=$(stat -c%s artifacts/npad-linux-wayland-x64/npad-linux-wayland)
+        echo "Linux Wayland size: $size_wayland bytes"
+        
+        if [ "$size_wayland" -le 30000 ]; then
+          echo "ERROR: Linux Wayland build too small ($size_wayland bytes, expected > 30000)"
+          exit 1
+        fi
+        
+        if [ "$size_wayland" -ge 5000000 ]; then
+          echo "ERROR: Linux Wayland build too large ($size_wayland bytes, expected < 5000000)"
+          exit 1
+        fi
+        
+        echo "=== Verifying Linux Terminal Build ==="
+        if [ ! -f "artifacts/npad-linux-terminal-x64/npad-linux-terminal" ]; then
+          echo "ERROR: Linux Terminal executable not found"
+          exit 1
+        fi
+        
+        # Verify checksum
+        if [ -f "artifacts/npad-linux-terminal-x64/npad-linux-terminal.sha256" ]; then
+          echo "Verifying Linux Terminal checksum..."
+          cd artifacts/npad-linux-terminal-x64/
+          if sha256sum -c npad-linux-terminal.sha256; then
+            echo "✓ Linux Terminal checksum verified"
+          else
+            echo "ERROR: Linux Terminal checksum verification failed"
+            exit 1
+          fi
+          cd ../..
+        else
+          echo "WARNING: Linux Terminal checksum file not found"
+        fi
+        
+        file artifacts/npad-linux-terminal-x64/npad-linux-terminal || echo "file command not available"
+        
+        if [ ! -x "artifacts/npad-linux-terminal-x64/npad-linux-terminal" ]; then
+          echo "ERROR: Linux Terminal executable is not executable"
+          exit 1
+        fi
+        
+        size_terminal=$(stat -c%s artifacts/npad-linux-terminal-x64/npad-linux-terminal)
+        echo "Linux Terminal size: $size_terminal bytes"
+        
+        if [ "$size_terminal" -le 30000 ]; then
+          echo "ERROR: Linux Terminal build too small ($size_terminal bytes, expected > 30000)"
+          exit 1
+        fi
+        
+        if [ "$size_terminal" -ge 5000000 ]; then
+          echo "ERROR: Linux Terminal build too large ($size_terminal bytes, expected < 5000000)"
+          exit 1
+        fi
+        
+        echo "✓ Linux builds passed all checks"
+    
+    - name: Test executable functionality
+      run: |
+        echo "=== Testing executable functionality ==="
+        
+        echo "Testing version output for Linux X11 build..."
+        if ! timeout 10s artifacts/npad-linux-x11-x64/npad-linux-x11 --version; then
+          exit_code=$?
+          echo "ERROR: Version command failed with exit code $exit_code"
+          exit 1
+        fi
+        
+        echo "Testing help output for Linux X11 build..."
+        if ! timeout 10s artifacts/npad-linux-x11-x64/npad-linux-x11 --help; then
+          exit_code=$?
+          echo "ERROR: Help command failed with exit code $exit_code"
+          exit 1
+        fi
+        
+        echo "✓ Version and help commands executed successfully"
+        echo "✓ All tests passed!"
+
+  # Create a release job that runs on tags and integrates with the separate release workflow
+  release:
+    runs-on: self-hosted
+    needs: [test]
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: release-artifacts/
+    
+    - name: Create checksums summary
+      run: |
+        cd release-artifacts
+        
+        # Create a master checksums file for CI artifacts
+        echo "# npad CI Build Checksums - $(date -u)" > CI-CHECKSUMS.txt
+        echo "# Generated on: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> CI-CHECKSUMS.txt
+        echo "# Build commit: ${GITHUB_SHA}" >> CI-CHECKSUMS.txt
+        echo "# Tag: ${GITHUB_REF#refs/tags/}" >> CI-CHECKSUMS.txt
+        echo "" >> CI-CHECKSUMS.txt
+        
+        # Collect all individual checksum files
+        find . -name "*.sha256" -exec cat {} \; >> CI-CHECKSUMS.txt
+        
+        echo "" >> CI-CHECKSUMS.txt
+        echo "# These are CI build artifacts. For official releases, use the release workflow." >> CI-CHECKSUMS.txt
+        
+        cat CI-CHECKSUMS.txt
+    
+    - name: Upload CI build bundle
+      uses: actions/upload-artifact@v4
+      with:
+        name: npad-ci-build-bundle
+        path: release-artifacts/
+        retention-days: 90  # Keep longer for tagged builds
