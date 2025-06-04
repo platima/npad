@@ -60,7 +60,8 @@ MINOR = $(shell grep '^#define NPAD_VERSION_MINOR' src/main.h | cut -d' ' -f3)
 PATCH = $(shell grep '^#define NPAD_VERSION_PATCH' src/main.h | cut -d' ' -f3)
 RELEASE = $(shell grep '^#define NPAD_VERSION_RELEASE' src/main.h | cut -d' ' -f3 | tr -d '"')
 HEADER_VERSION = v$(MAJOR).$(MINOR).$(PATCH)-$(RELEASE)
-VERSION ?= $(shell test -n "$(HEADER_VERSION)" && echo "$(HEADER_VERSION)" || git describe --tags --always --dirty 2>/dev/null || echo "v0.1.0-dev")
+GIT_COMMIT = $(shell git describe --tags --always --dirty 2>/dev/null)
+VERSION ?= $(shell test -n "$(HEADER_VERSION)" && echo "$(HEADER_VERSION) ($(GIT_COMMIT))")
 CFLAGS += -DNPAD_VERSION='"$(VERSION)"'
 
 # Debug build support
