@@ -238,6 +238,8 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] Core text editing functionality
   - [x] File operations (New, Open, Save, Save As)
   - [ ] Keyboard shortcuts
+  - [ ] Monospace toggle option
+  - [ ] Status bar details
   - [ ] Default and configurable font
   - [ ] Find/Replace dialog with improved functionality
   - [ ] Settings system with JSON storage
