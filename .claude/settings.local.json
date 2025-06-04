@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make format-check:*)",
+      "Bash(make lint)",
+      "Bash(make:*)",
+      "Bash(ls:*)",
+      "Bash(test:*)"
+    ],
+    "deny": []
+  },
+  "model": "claude-sonnet-4-20250514"
+}

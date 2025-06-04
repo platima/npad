@@ -51,8 +51,8 @@ settings.ini
 *.dSYM/
 
 # Claude Code
-CLAUDE.md
-.claude
+#CLAUDE.md
+#.claude
 
 # Executables from testing
 npad-linux-*
