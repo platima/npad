@@ -7,9 +7,11 @@
  */
 
 #include "editor.h"
+#include "error.h"
 #include "file_ops.h"
 #include "settings.h"
 #include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -105,6 +107,7 @@ bool editor_open_file(const char *filename) {
 
     g_editor.current_file = malloc(strlen(filename) + 1);
     if (!g_editor.current_file) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, filename, "Failed to allocate memory for current file path");
         return false;
     }
     strcpy(g_editor.current_file, filename);
@@ -175,6 +178,7 @@ bool editor_save_file_as(const char *filename) {
 
         g_editor.current_file = malloc(strlen(filename) + 1);
         if (!g_editor.current_file) {
+            NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, filename, "Failed to allocate memory for new file path");
             return false;
         }
         strcpy(g_editor.current_file, filename);
@@ -236,12 +240,26 @@ void editor_redo(void) {
 }
 
 bool editor_find(const char *text, bool case_sensitive, bool whole_word) {
-    if (!text || !g_editor.main_window)
+    if (!text) {
+        NPAD_ERROR_INVALID_PARAM("text");
         return false;
+    }
+    
+    if (strlen(text) == 0) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, "find operation", "Empty search text provided");
+        return false;
+    }
+    
+    if (!g_editor.main_window) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_EDITOR, 0, "find operation", "No main window available");
+        return false;
+    }
 
     char *content = ui_get_text(g_editor.main_window);
-    if (!content)
+    if (!content) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_UI, 0, "find operation", "Failed to get text content from main window");
         return false;
+    }
 
     int cursor_pos = ui_get_cursor_position(g_editor.main_window);
     char *search_start = content + cursor_pos;
@@ -296,12 +314,31 @@ bool editor_find(const char *text, bool case_sensitive, bool whole_word) {
 
 bool editor_replace(const char *find_text, const char *replace_text, bool case_sensitive,
                     bool whole_word, bool replace_all) {
-    if (!find_text || !replace_text || !g_editor.main_window)
+    if (!find_text) {
+        NPAD_ERROR_INVALID_PARAM("find_text");
         return false;
+    }
+    
+    if (!replace_text) {
+        NPAD_ERROR_INVALID_PARAM("replace_text");
+        return false;
+    }
+    
+    if (strlen(find_text) == 0) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, "replace operation", "Empty find text provided");
+        return false;
+    }
+    
+    if (!g_editor.main_window) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_EDITOR, 0, "replace operation", "No main window available");
+        return false;
+    }
 
     char *content = ui_get_text(g_editor.main_window);
-    if (!content)
+    if (!content) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_UI, 0, "replace operation", "Failed to get text content from main window");
         return false;
+    }
 
     size_t content_len = strlen(content);
     size_t find_len = strlen(find_text);
@@ -357,6 +394,7 @@ bool editor_replace(const char *find_text, const char *replace_text, bool case_s
     size_t new_size = content_len + (replacement_count * (replace_len - find_len)) + 1;
     char *new_content = malloc(new_size);
     if (!new_content) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, "replace operation", "Failed to allocate memory for replacement content (size: %zu)", new_size);
         free(content);
         return false;
     }
@@ -448,6 +486,7 @@ void editor_set_startup_file(const char *filename) {
     if (filename) {
         g_startup_file = malloc(strlen(filename) + 1);
         if (!g_startup_file) {
+            NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, filename, "Failed to allocate memory for startup file path");
             return;
         }
         strcpy(g_startup_file, filename);

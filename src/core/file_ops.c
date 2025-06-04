@@ -7,6 +7,7 @@
  */
 
 #include "file_ops.h"
+#include "error.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,19 +39,35 @@ static void set_errno_error(const char *operation, const char *filename) {
 }
 
 char *file_read_text(const char *filename) {
-    if (!filename || strlen(filename) == 0 || strlen(filename) > 1024) {
-        set_error("Invalid filename");
+    if (!filename) {
+        NPAD_ERROR_INVALID_PARAM("filename");
+        set_error("Invalid filename: NULL pointer");
+        return NULL;
+    }
+
+    size_t filename_len = strlen(filename);
+    if (filename_len == 0) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, filename, "Empty filename provided");
+        set_error("Invalid filename: empty string");
+        return NULL;
+    }
+
+    if (filename_len > 1024) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, filename, "Filename too long: %zu characters (max 1024)", filename_len);
+        set_error("Invalid filename: too long");
         return NULL;
     }
 
     // Basic path validation - prevent path traversal
     if (strstr(filename, "..") != NULL) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, 0, filename, "Path traversal attempt detected in filename");
         set_error("Path traversal not allowed");
         return NULL;
     }
 
     FILE *file = fopen(filename, "rb");
     if (!file) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, errno, filename, "Failed to open file for reading: %s", strerror(errno));
         set_errno_error("Failed to open file", filename);
         return NULL;
     }
@@ -61,6 +78,7 @@ char *file_read_text(const char *filename) {
     fseek(file, 0, SEEK_SET);
 
     if (size < 0) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, errno, filename, "Failed to get file size: %s", strerror(errno));
         set_errno_error("Failed to get file size", filename);
         fclose(file);
         return NULL;
@@ -69,6 +87,7 @@ char *file_read_text(const char *filename) {
     // Allocate buffer
     char *content = malloc(size + 1);
     if (!content) {
+        NPAD_ERROR_MEMORY_ALLOC(filename);
         set_error("Out of memory");
         fclose(file);
         return NULL;

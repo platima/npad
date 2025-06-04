@@ -16,8 +16,12 @@ CC = $(CROSS_COMPILE)gcc
 endif
 
 # Source files
-CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/thread_safety.c
+CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/thread_safety.c src/core/error.c
 SHARED_SOURCES = src/ui_interface.c
+
+# Test sources
+TEST_FRAMEWORK_SOURCES = tests/test_framework.c
+TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/thread_safety.c src/core/error.c  # Core sources without UI dependencies
 
 # Windows GUI specific
 WINDOWS_GUI_SOURCES = src/platform/ui_win32.c
@@ -50,9 +54,14 @@ LINUX_TERMINAL_LIBS = -lncurses -lpthread
 LINUX_TERMINAL_TARGET = npad-linux-terminal
 
 # Version information - use header version or fallback to git
-HEADER_VERSION = $(shell awk '/^#define NPAD_VERSION_MAJOR/ {major=$$3} /^#define NPAD_VERSION_MINOR/ {minor=$$3} /^#define NPAD_VERSION_PATCH/ {patch=$$3} /^#define NPAD_VERSION_RELEASE/ {release=$$3; gsub(/"/, "", release)} END {print "v" major "." minor "." patch "-" release}' src/main.h 2>/dev/null)
+# Not using awk here due to an issue found with awk 5.2.1 that I could not fix and was mangling strings
+MAJOR = $(shell grep '^#define NPAD_VERSION_MAJOR' src/main.h | cut -d' ' -f3)
+MINOR = $(shell grep '^#define NPAD_VERSION_MINOR' src/main.h | cut -d' ' -f3)
+PATCH = $(shell grep '^#define NPAD_VERSION_PATCH' src/main.h | cut -d' ' -f3)
+RELEASE = $(shell grep '^#define NPAD_VERSION_RELEASE' src/main.h | cut -d' ' -f3 | tr -d '"')
+HEADER_VERSION = v$(MAJOR).$(MINOR).$(PATCH)-$(RELEASE)
 VERSION ?= $(shell test -n "$(HEADER_VERSION)" && echo "$(HEADER_VERSION)" || git describe --tags --always --dirty 2>/dev/null || echo "v0.1.0-dev")
-CFLAGS += -DNPAD_VERSION=\"$(VERSION)\"
+CFLAGS += -DNPAD_VERSION='"$(VERSION)"'
 
 # Debug build support
 ifdef DEBUG
@@ -187,11 +196,32 @@ format-check:
 	@command -v clang-format >/dev/null 2>&1 || { echo "clang-format not found. Install with: sudo apt-get install clang-format"; exit 1; }
 	find src/ -name "*.c" -o -name "*.h" | xargs clang-format --dry-run --Werror
 
+# Testing targets
+test: test-file-ops test-error
+	@echo "All tests completed"
+
+test-file-ops: tests/test_file_ops
+	@echo "Running file operations tests..."
+	./tests/test_file_ops
+
+test-error: tests/test_error
+	@echo "Running error system tests..."
+	./tests/test_error
+
+tests/test_file_ops: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_file_ops.c
+	@mkdir -p tests
+	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+
+tests/test_error: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_error.c
+	@mkdir -p tests
+	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+
 # Cleanup
 clean:
 	rm -f $(WINDOWS_GUI_TARGET) $(WINDOWS_TERMINAL_TARGET) $(MACOS_TARGET) $(LINUX_X11_TARGET) $(LINUX_WAYLAND_TARGET) $(LINUX_TERMINAL_TARGET)
 	rm -f npad-*.exe npad-*linux* npad-*win32*
 	rm -f *.o src/**/*.o src/platform/npad.res
+	rm -f tests/test_file_ops tests/test_error
 
 # Installation
 install: detect-platform
@@ -230,6 +260,9 @@ help:
 	@echo "  lint             - Run code linting"
 	@echo "  format           - Format code with clang-format"
 	@echo "  format-check     - Check code formatting"
+	@echo "  test             - Run all tests"
+	@echo "  test-file-ops    - Run file operations tests"
+	@echo "  test-error       - Run error system tests"
 	@echo "  clean            - Remove build artifacts"
 	@echo "  install          - Install to system"
 	@echo "  uninstall        - Remove from system"
@@ -240,4 +273,4 @@ help:
 	@echo "  DEBUG=1          - Enable debug build"
 	@echo "  VERSION          - Version string (auto-detected from git)"
 
-.PHONY: all windows windows-gui windows-terminal linux linux-x11 linux-wayland linux-terminal terminal macos debug debug-windows debug-linux clean install uninstall lint format format-check help detect-platform
+.PHONY: all windows windows-gui windows-terminal linux linux-x11 linux-wayland linux-terminal terminal macos debug debug-windows debug-linux clean install uninstall lint format format-check test test-file-ops test-error help detect-platform

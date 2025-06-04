@@ -7,9 +7,11 @@
  */
 
 #include "settings.h"
+#include "error.h"
 #include "file_ops.h"
 #include "thread_safety.h"
 #include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -86,6 +88,7 @@ bool settings_set_string(const char *key, const char *value) {
         free(entry->value);
         entry->value = malloc(strlen(value) + 1);
         if (!entry->value) {
+            NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, key, "Failed to allocate memory for setting value");
             return false;
         }
         strcpy(entry->value, value);
@@ -460,17 +463,27 @@ static SettingEntry *find_setting(const char *key) {
 }
 
 static SettingEntry *create_setting(const char *key, const char *value) {
-    if (!key || !value)
+    if (!key) {
+        NPAD_ERROR_INVALID_PARAM("key");
         return NULL;
+    }
+    
+    if (!value) {
+        NPAD_ERROR_INVALID_PARAM("value");
+        return NULL;
+    }
 
     SettingEntry *entry = malloc(sizeof(SettingEntry));
-    if (!entry)
+    if (!entry) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, key, "Failed to allocate memory for setting entry");
         return NULL;
+    }
 
     entry->key = malloc(strlen(key) + 1);
     entry->value = malloc(strlen(value) + 1);
 
     if (!entry->key || !entry->value) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, key, "Failed to allocate memory for setting key/value strings");
         free(entry->key);
         free(entry->value);
         free(entry);

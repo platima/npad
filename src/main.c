@@ -27,6 +27,7 @@ BOOL WINAPI SetProcessDPIAware(void);
 #endif
 
 #include "core/editor.h"
+#include "core/error.h"
 #include "core/settings.h"
 #include "core/thread_safety.h"
 #include "ui_interface.h"
@@ -103,26 +104,32 @@ int main(int argc, char *argv[]) {
 
     // Initialize the UI system
     if (!ui_init()) {
-        fprintf(stderr, "Failed to initialize UI system\n");
+        NPAD_ERROR_FATAL(NPAD_ERROR_UI, 0, "main initialization", "Failed to initialize UI system");
         settings_cleanup();
+        thread_safety_cleanup();
+        npad_error_cleanup();
         return 1;
     }
 
     // Initialize the editor core
     if (!editor_init()) {
-        fprintf(stderr, "Failed to initialize editor\n");
+        NPAD_ERROR_FATAL(NPAD_ERROR_EDITOR, 0, "main initialization", "Failed to initialize editor system");
         ui_cleanup();
         settings_cleanup();
+        thread_safety_cleanup();
+        npad_error_cleanup();
         return 1;
     }
 
     // Create main window
     Window *main_window = ui_create_main_window();
     if (!main_window) {
-        fprintf(stderr, "Failed to create main window\n");
+        NPAD_ERROR_FATAL(NPAD_ERROR_UI, 0, "main initialization", "Failed to create main window");
         editor_cleanup();
         ui_cleanup();
         settings_cleanup();
+        thread_safety_cleanup();
+        npad_error_cleanup();
         return 1;
     }
 
@@ -167,6 +174,7 @@ int main(int argc, char *argv[]) {
     ui_cleanup();
     settings_cleanup();
     thread_safety_cleanup();
+    npad_error_cleanup();
 
     DEBUG_PRINT("npad shutting down");
 
@@ -186,6 +194,7 @@ static void parse_command_line(int argc, char *argv[]) {
             // Assume it's a filename to open
             editor_set_startup_file(argv[i]);
         } else {
+            NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, argv[i], "Unknown command line option: %s", argv[i]);
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
             fprintf(stderr, "Use --help for usage information\n");
             exit(1);
