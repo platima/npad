@@ -23,7 +23,7 @@
 #endif
 
 // Function declarations to avoid warnings
-BOOL WINAPI SetProcessDPIAware(void);
+__declspec(dllimport) BOOL WINAPI SetProcessDPIAware(void);
 #endif
 
 #include "core/editor.h"
