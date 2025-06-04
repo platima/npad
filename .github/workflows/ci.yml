@@ -53,16 +53,16 @@ jobs:
     - name: Verify Windows builds exist and generate checksums
       run: |
         echo "Verifying Windows builds were created..."
-        ls -la npad.exe npad-win32-terminal.exe
+        ls -la npad.exe npad-terminal.exe
         echo "Windows GUI size: $(stat -c%s npad.exe) bytes"
-        echo "Windows Terminal size: $(stat -c%s npad-win32-terminal.exe) bytes"
+        echo "Windows Terminal size: $(stat -c%s npad-terminal.exe) bytes"
         
         echo "Generating checksums..."
         sha256sum npad.exe > npad.exe.sha256
-        sha256sum npad-win32-terminal.exe > npad-win32-terminal.exe.sha256
+        sha256sum npad-terminal.exe > npad-terminal.exe.sha256
         
         echo "Windows GUI SHA256: $(cat npad.exe.sha256)"
-        echo "Windows Terminal SHA256: $(cat npad-win32-terminal.exe.sha256)"
+        echo "Windows Terminal SHA256: $(cat npad-terminal.exe.sha256)"
     
     - name: Upload Windows GUI artifact
       uses: actions/upload-artifact@v4
@@ -78,8 +78,8 @@ jobs:
       with:
         name: npad-windows-terminal-x64
         path: |
-          npad-win32-terminal.exe
-          npad-win32-terminal.exe.sha256
+          npad-terminal.exe
+          npad-terminal.exe.sha256
         retention-days: 7
 
   build-linux:
@@ -198,16 +198,16 @@ jobs:
         fi
         
         echo "=== Verifying Windows Terminal Build ==="
-        if [ ! -f "artifacts/npad-windows-terminal-x64/npad-win32-terminal.exe" ]; then
+        if [ ! -f "artifacts/npad-windows-terminal-x64/npad-terminal.exe" ]; then
           echo "ERROR: Windows Terminal executable not found"
           exit 1
         fi
         
         # Verify checksum
-        if [ -f "artifacts/npad-windows-terminal-x64/npad-win32-terminal.exe.sha256" ]; then
+        if [ -f "artifacts/npad-windows-terminal-x64/npad-terminal.exe.sha256" ]; then
           echo "Verifying Windows Terminal checksum..."
           cd artifacts/npad-windows-terminal-x64/
-          if sha256sum -c npad-win32-terminal.exe.sha256; then
+          if sha256sum -c npad-terminal.exe.sha256; then
             echo "✓ Windows Terminal checksum verified"
           else
             echo "ERROR: Windows Terminal checksum verification failed"
@@ -218,9 +218,9 @@ jobs:
           echo "WARNING: Windows Terminal checksum file not found"
         fi
         
-        file artifacts/npad-windows-terminal-x64/npad-win32-terminal.exe || echo "file command not available"
+        file artifacts/npad-windows-terminal-x64/npad-terminal.exe || echo "file command not available"
         
-        size_terminal=$(stat -c%s artifacts/npad-windows-terminal-x64/npad-win32-terminal.exe)
+        size_terminal=$(stat -c%s artifacts/npad-windows-terminal-x64/npad-terminal.exe)
         echo "Windows Terminal size: $size_terminal bytes"
         
         if [ "$size_terminal" -le 40000 ]; then

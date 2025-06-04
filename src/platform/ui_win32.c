@@ -15,6 +15,7 @@
 #include <shellscalingapi.h>
 
 #include "../ui_interface.h"
+#include "../main.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -445,7 +446,7 @@ bool ui_platform_show_message_box(Window *parent, const char *title, const char 
 }
 
 void ui_platform_show_about_dialog(Window *parent) {
-    const char *message = "npad v0.1.0\n\n"
+    const char *message = "npad " NPAD_VERSION "\n\n"
                           "A lightweight, cross-platform text editor\n"
                           "inspired by classic Windows Notepad.\n\n"
                           "Author: Platima\n"

@@ -27,7 +27,7 @@ WINDOWS_GUI_TARGET = npad.exe
 # Windows Terminal specific
 WINDOWS_TERMINAL_SOURCES = src/platform/ui_win32_terminal.c
 WINDOWS_TERMINAL_LIBS = -lkernel32
-WINDOWS_TERMINAL_TARGET = npad-win32-terminal.exe
+WINDOWS_TERMINAL_TARGET = npad-terminal.exe
 
 # macOS specific (future)
 MACOS_SOURCES = src/platform/ui_cocoa.m
@@ -49,8 +49,9 @@ LINUX_TERMINAL_SOURCES = src/platform/ui_ncurses.c
 LINUX_TERMINAL_LIBS = -lncurses -lpthread
 LINUX_TERMINAL_TARGET = npad-linux-terminal
 
-# Version information
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.1.0-dev")
+# Version information - use header version or fallback to git
+HEADER_VERSION = $(shell awk '/^#define NPAD_VERSION_MAJOR/ {major=$$3} /^#define NPAD_VERSION_MINOR/ {minor=$$3} /^#define NPAD_VERSION_PATCH/ {patch=$$3} /^#define NPAD_VERSION_RELEASE/ {release=$$3; gsub(/"/, "", release)} END {print "v" major "." minor "." patch "-" release}' src/main.h 2>/dev/null)
+VERSION ?= $(shell test -n "$(HEADER_VERSION)" && echo "$(HEADER_VERSION)" || git describe --tags --always --dirty 2>/dev/null || echo "v0.1.0-dev")
 CFLAGS += -DNPAD_VERSION=\"$(VERSION)\"
 
 # Debug build support

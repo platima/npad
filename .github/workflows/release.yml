@@ -85,7 +85,7 @@ jobs:
           - target: windows-terminal
             cc: x86_64-w64-mingw32-gcc  
             make_target: windows
-            output: npad-win32-terminal.exe
+            output: npad-terminal.exe
             asset_name: npad-${{ needs.create-release.outputs.version }}-windows-terminal.exe
           - target: linux-x11
             cc: gcc
