@@ -45,8 +45,9 @@ npad aims to recreate the beloved simplicity of original Windows Notepad while a
   - Optional tabbed interface (disabled by default, configurable)
   - Resume session / crash protection (disabled by default, configurable)
   - Dark / light theme support (follows system theme by default, configurable)
-  - Support for multiple line terminators (Windows, Linux, macOS)
+  - Improved upport for differing line terminators (Windows, Linux, macOS)
   - Open large files without hanging
+  - Additional keyboard shortcuts (Word Wrap, Go-To Line)
   - Full undo / redo history
   - Improved find and replace functionality
   - Remembers window position and size
@@ -237,8 +238,12 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
 - [ ] **Windows Implementation**
   - [x] Initial launchable Win32 application
   - [x] Core text editing functionality
-  - [x] File operations (New, Open, Save, Save As)
+  - [ ] File operations (New, Open, Save, Save As)
   - [ ] Keyboard shortcuts
+  - [ ] Status bar
+  - [ ] Zoom
+  - [ ] LTR
+  - [ ] Encoding options
   - [ ] Drag and drop
   - [ ] Word wrap
   - [ ] Monospace toggle option
@@ -251,7 +256,9 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
 - [ ] **Advanced Windows Features**
   - [ ] Tabbed interface (optional)
   - [ ] Multi-language support
+  - [ ] Go-To
   - [ ] Settings window
+  - [ ] 'Recent' menu (optional)
   - [ ] Session resume / crash protection
   - [ ] Full undo/redo history
   - [ ] Custom keyboard shortcuts
