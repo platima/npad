@@ -46,8 +46,11 @@ npad aims to recreate the beloved simplicity of original Windows Notepad while a
   - Resume session / crash protection (disabled by default, configurable)
   - Dark / light theme support (follows system theme by default, configurable)
   - Improved upport for differing line terminators (Windows, Linux, macOS)
+  - JSON settings storage
   - Open large files without hanging
-  - Additional keyboard shortcuts (Word Wrap, Go-To Line)
+  - Easy monospace toggle
+  - Additional keyboard shortcuts (Word Wrap, Go-To Line, Monospace, etc)
+  - Line ending conversiosn
   - Full undo / redo history
   - Improved find and replace functionality
   - Remembers window position and size
@@ -84,6 +87,7 @@ These items may or may not be added, and are essentially subject to my whim, but
 
 - 🎨 Optional Solarized colouring for dark and light modes
 - 🔌 Optional plugin support
+- 📃 Optional native Markdown support
 - 🔍 Optional RegEx in find and replace
 - ⌨️ Optional custom keyboard shortcuts
 
@@ -235,31 +239,49 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] Project structure, README, etc
   - [x] Basic code structure
   - [x] Build, test & release pipelines
-- [ ] **Windows Implementation**
+- [ ] **Initial Notepad features**
   - [x] Initial launchable Win32 application
   - [x] Core text editing functionality
   - [ ] File operations (New, Open, Save, Save As)
-  - [ ] Keyboard shortcuts
-  - [ ] Status bar
-  - [ ] Zoom
-  - [ ] LTR
-  - [ ] Encoding options
-  - [ ] Drag and drop
-  - [ ] Word wrap
-  - [ ] Monospace toggle option
-  - [ ] Status bar details
-  - [ ] Default and configurable font
-  - [ ] Find/Replace dialog with improved functionality
+  - [ ] Initial menu items
+  - [ ] Initial status bar
+  - [ ] Zoom via Ctrl+/-, Ctrl Scroll
+  - [ ] RTL/LTR support
+  - [ ] Encoding options in Save Dialog
+  - [ ] Drag and drop to open
+  - [ ] Word wrap support (add Alt+Z shortcut)
+  - [ ] Font chooser
+  - [ ] Find/Replace dialog
+- [ ] **Core Enhancements**
   - [ ] Settings system with JSON storage
   - [ ] Auto-save feature (enabled by default)
-  - [ ] Dark/light theme support
-- [ ] **Advanced Windows Features**
+  - [ ] Session resume / crash protection (disabled by default)
+  - [ ] Dark/light theme support (follow system by default)
+  - [ ] Unlimited Undo & Redo
+  - [ ] Improvements to Find & Replace dialogs
+    - [ ] Recent list (configurable)
+    - [ ] Show match count
+    - [ ] 'Find Previous'
+    - [ ] Wrap-around indicator
+    - [ ] Correct \[tab\] order
+  - [ ] Monospace toggle
+    - [ ] Menu / Keyboard shortcut (Ctrl+M)
+    - [ ] Status bar click
+  - [ ] Zoom improvements
+    - [ ] Menu / Keyboard shortcut (Ctrl+Z)
+    - [ ] Status bar click
+  - [ ] Go-To Line via
+    - [ ] Menu / Keyboard shortcut (Ctrl+G)
+    - [ ] Status bar click
+  - [ ] Convert line endings between LF, CR LF, CR
+    - [ ] Menu / Keyboard shortcut (Ctrl+E)
+    - [ ] Status bar click
+  - [ ] Ctrl+Drop to insert instead of open
+  - [ ] 'Recent' menu (optional)
+- [ ] **Advanced Features**
   - [ ] Tabbed interface (optional)
   - [ ] Multi-language support
-  - [ ] Go-To
   - [ ] Settings window
-  - [ ] 'Recent' menu (optional)
-  - [ ] Session resume / crash protection
   - [ ] Full undo/redo history
   - [ ] Custom keyboard shortcuts
   - [ ] Solarized color schemes
