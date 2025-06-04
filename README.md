@@ -46,6 +46,7 @@ npad aims to recreate the beloved simplicity of original Windows Notepad while a
   - Resume session / crash protection (disabled by default, configurable)
   - Dark / light theme support (follows system theme by default, configurable)
   - Support for multiple line terminators (Windows, Linux, macOS)
+  - Open large files without hanging
   - Full undo / redo history
   - Improved find and replace functionality
   - Remembers window position and size
