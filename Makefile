@@ -16,7 +16,7 @@ CC = $(CROSS_COMPILE)gcc
 endif
 
 # Source files
-CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c
+CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/thread_safety.c
 SHARED_SOURCES = src/ui_interface.c
 
 # Windows GUI specific
@@ -36,17 +36,17 @@ MACOS_TARGET = npad-macos
 
 # Linux X11 specific
 LINUX_X11_SOURCES = src/platform/ui_x11.c
-LINUX_X11_LIBS = -lX11
+LINUX_X11_LIBS = -lX11 -lpthread
 LINUX_X11_TARGET = npad-linux-x11
 
 # Linux Wayland specific (future)
 LINUX_WAYLAND_SOURCES = src/platform/ui_wayland.c
-LINUX_WAYLAND_LIBS = -lwayland-client
+LINUX_WAYLAND_LIBS = -lwayland-client -lpthread
 LINUX_WAYLAND_TARGET = npad-linux-wayland
 
 # Linux Terminal (ncurses) specific
 LINUX_TERMINAL_SOURCES = src/platform/ui_ncurses.c
-LINUX_TERMINAL_LIBS = -lncurses
+LINUX_TERMINAL_LIBS = -lncurses -lpthread
 LINUX_TERMINAL_TARGET = npad-linux-terminal
 
 # Version information

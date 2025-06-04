@@ -16,10 +16,19 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shellscalingapi.h>
+
+// DPI awareness function declarations for older SDK compatibility
+#ifndef DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+#define DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 ((DPI_AWARENESS_CONTEXT) -4)
+#endif
+
+// Function declarations to avoid warnings
+BOOL WINAPI SetProcessDPIAware(void);
 #endif
 
 #include "core/editor.h"
 #include "core/settings.h"
+#include "core/thread_safety.h"
 #include "ui_interface.h"
 
 #ifdef DEBUG
@@ -44,17 +53,23 @@ int main(int argc, char *argv[]) {
     // Windows 10 1703+ - Per-Monitor V2 (best option)
     if (user32) {
         typedef BOOL(WINAPI * SetProcessDpiAwarenessContextFunc)(DPI_AWARENESS_CONTEXT);
-        SetProcessDpiAwarenessContextFunc pSetProcessDpiAwarenessContext =
-            (SetProcessDpiAwarenessContextFunc) GetProcAddress(user32,
-                                                               "SetProcessDpiAwarenessContext");
+        SetProcessDpiAwarenessContextFunc pSetProcessDpiAwarenessContext;
+
+        // Use intermediate void* cast to suppress warning
+        FARPROC proc = GetProcAddress(user32, "SetProcessDpiAwarenessContext");
+        pSetProcessDpiAwarenessContext = (SetProcessDpiAwarenessContextFunc) (void *) proc;
+
         if (pSetProcessDpiAwarenessContext) {
             pSetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         }
         // Windows 8.1+ fallback - Per-Monitor V1
         else if (shcore) {
             typedef HRESULT(WINAPI * SetProcessDpiAwarenessFunc)(PROCESS_DPI_AWARENESS);
-            SetProcessDpiAwarenessFunc pSetProcessDpiAwareness =
-                (SetProcessDpiAwarenessFunc) GetProcAddress(shcore, "SetProcessDpiAwareness");
+            SetProcessDpiAwarenessFunc pSetProcessDpiAwareness;
+
+            proc = GetProcAddress(shcore, "SetProcessDpiAwareness");
+            pSetProcessDpiAwareness = (SetProcessDpiAwarenessFunc) (void *) proc;
+
             if (pSetProcessDpiAwareness) {
                 pSetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
             }
@@ -73,9 +88,16 @@ int main(int argc, char *argv[]) {
     // Parse command line arguments
     parse_command_line(argc, argv);
 
+    // Initialize thread safety
+    if (!thread_safety_init()) {
+        fprintf(stderr, "Failed to initialize thread safety\n");
+        return 1;
+    }
+
     // Initialize settings
     if (!settings_init()) {
         fprintf(stderr, "Failed to initialize settings\n");
+        thread_safety_cleanup();
         return 1;
     }
 
@@ -144,6 +166,7 @@ int main(int argc, char *argv[]) {
     editor_cleanup();
     ui_cleanup();
     settings_cleanup();
+    thread_safety_cleanup();
 
     DEBUG_PRINT("npad shutting down");
 

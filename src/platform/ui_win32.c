@@ -94,8 +94,12 @@ bool ui_platform_init(void) {
     if (RegOpenKeyEx(HKEY_CURRENT_USER,
                      "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", 0,
                      KEY_READ, &hkey) == ERROR_SUCCESS) {
-        RegQueryValueEx(hkey, "AppsUseLightTheme", NULL, NULL, (LPBYTE) &value, &size);
-        g_dark_mode = (value == 0);
+        DWORD type = REG_DWORD;
+        if (RegQueryValueEx(hkey, "AppsUseLightTheme", NULL, &type, (LPBYTE) &value, &size) ==
+                ERROR_SUCCESS &&
+            type == REG_DWORD && size == sizeof(DWORD)) {
+            g_dark_mode = (value == 0);
+        }
         RegCloseKey(hkey);
     }
 
@@ -328,8 +332,10 @@ int ui_platform_get_cursor_position(Window *window) {
 void ui_platform_cut(Window *window) {
     if (window && window->edit_hwnd) {
         SendMessage(window->edit_hwnd, WM_CUT, 0, 0);
-        window->is_modified = true;
-        update_title(window);
+        if (!window->is_modified) {
+            window->is_modified = true;
+            update_title(window);
+        }
     }
 }
 
@@ -342,8 +348,10 @@ void ui_platform_copy(Window *window) {
 void ui_platform_paste(Window *window) {
     if (window && window->edit_hwnd) {
         SendMessage(window->edit_hwnd, WM_PASTE, 0, 0);
-        window->is_modified = true;
-        update_title(window);
+        if (!window->is_modified) {
+            window->is_modified = true;
+            update_title(window);
+        }
     }
 }
 
@@ -576,8 +584,12 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         case WM_COMMAND: {
             if (window) {
                 if (HIWORD(wparam) == EN_CHANGE && LOWORD(wparam) == ID_EDIT_CONTROL) {
+                    // Use atomic operation to prevent race condition
+                    bool was_modified = window->is_modified;
                     window->is_modified = true;
-                    update_title(window);
+                    if (!was_modified) {
+                        update_title(window);
+                    }
                     ui_post_event(UI_EVENT_TEXT_CHANGED, window, NULL);
                 } else {
                     handle_command(window, LOWORD(wparam));
@@ -709,18 +721,27 @@ static void handle_command(Window *window, WORD command) {
 }
 
 static void update_title(Window *window) {
-    if (!window)
+    if (!window || !window->hwnd)
         return;
 
     char title[512];
-    const char *filename =
-        window->current_file ? strrchr(window->current_file, '\\') + 1 : "Untitled";
+    const char *filename = "Untitled";
 
-    if (!filename || filename == (char *) 1) {
-        filename = window->current_file ? window->current_file : "Untitled";
+    if (window->current_file) {
+        const char *separator = strrchr(window->current_file, '\\');
+        if (separator && separator != window->current_file) {
+            filename = separator + 1;
+        } else {
+            filename = window->current_file;
+        }
+
+        // Validate filename is not empty
+        if (!filename || strlen(filename) == 0) {
+            filename = "Untitled";
+        }
     }
 
-    snprintf(title, sizeof(title), "%s%s - npad", window->is_modified ? "*" : "", filename);
+    snprintf(title, sizeof(title), "%s%.400s - npad", window->is_modified ? "*" : "", filename);
 
     SetWindowText(window->hwnd, title);
 }

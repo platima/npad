@@ -33,13 +33,19 @@ static void set_error(const char *message) {
 }
 
 static void set_errno_error(const char *operation, const char *filename) {
-    snprintf(g_last_error, sizeof(g_last_error), "%s '%s': %s", operation, filename,
-             strerror(errno));
+    snprintf(g_last_error, sizeof(g_last_error), "%.100s '%.200s': %.150s",
+             operation ? operation : "Unknown", filename ? filename : "Unknown", strerror(errno));
 }
 
 char *file_read_text(const char *filename) {
-    if (!filename) {
+    if (!filename || strlen(filename) == 0 || strlen(filename) > 1024) {
         set_error("Invalid filename");
+        return NULL;
+    }
+
+    // Basic path validation - prevent path traversal
+    if (strstr(filename, "..") != NULL) {
+        set_error("Path traversal not allowed");
         return NULL;
     }
 
@@ -83,8 +89,14 @@ char *file_read_text(const char *filename) {
 }
 
 bool file_read_binary(const char *filename, void **data, size_t *size) {
-    if (!filename || !data || !size) {
+    if (!filename || !data || !size || strlen(filename) == 0 || strlen(filename) > 1024) {
         set_error("Invalid parameters");
+        return false;
+    }
+
+    // Basic path validation - prevent path traversal
+    if (strstr(filename, "..") != NULL) {
+        set_error("Path traversal not allowed");
         return false;
     }
 
@@ -129,8 +141,14 @@ bool file_read_binary(const char *filename, void **data, size_t *size) {
 }
 
 bool file_write_text(const char *filename, const char *content) {
-    if (!filename || !content) {
+    if (!filename || !content || strlen(filename) == 0 || strlen(filename) > 1024) {
         set_error("Invalid parameters");
+        return false;
+    }
+
+    // Basic path validation - prevent path traversal
+    if (strstr(filename, "..") != NULL) {
+        set_error("Path traversal not allowed");
         return false;
     }
 
@@ -153,8 +171,14 @@ bool file_write_text(const char *filename, const char *content) {
 }
 
 bool file_write_binary(const char *filename, const void *data, size_t size) {
-    if (!filename || !data) {
+    if (!filename || !data || strlen(filename) == 0 || strlen(filename) > 1024) {
         set_error("Invalid parameters");
+        return false;
+    }
+
+    // Basic path validation - prevent path traversal
+    if (strstr(filename, "..") != NULL) {
+        set_error("Path traversal not allowed");
         return false;
     }
 
@@ -252,12 +276,18 @@ char *file_get_directory(const char *filepath) {
     if (!separator) {
         // No directory separator found, return current directory
         char *result = malloc(2);
+        if (!result) {
+            return NULL;
+        }
         strcpy(result, ".");
         return result;
     }
 
     size_t dir_length = separator - filepath;
     char *directory = malloc(dir_length + 1);
+    if (!directory) {
+        return NULL;
+    }
     strncpy(directory, filepath, dir_length);
     directory[dir_length] = '\0';
 
@@ -275,6 +305,9 @@ char *file_get_filename(const char *filepath) {
     const char *filename = separator ? (separator + 1) : filepath;
 
     char *result = malloc(strlen(filename) + 1);
+    if (!result) {
+        return NULL;
+    }
     strcpy(result, filename);
     return result;
 }
@@ -300,11 +333,17 @@ char *file_get_extension(const char *filepath) {
     if (!dot || dot == filename) {
         // No extension or hidden file
         char *result = malloc(1);
+        if (!result) {
+            return NULL;
+        }
         result[0] = '\0';
         return result;
     }
 
     char *result = malloc(strlen(dot + 1) + 1);
+    if (!result) {
+        return NULL;
+    }
     strcpy(result, dot + 1);
     return result;
 }
@@ -319,6 +358,9 @@ char *file_join_paths(const char *dir, const char *filename) {
 
     size_t total_len = dir_len + filename_len + (needs_separator ? 1 : 0) + 1;
     char *result = malloc(total_len);
+    if (!result) {
+        return NULL;
+    }
 
     strcpy(result, dir);
     if (needs_separator) {

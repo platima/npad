@@ -8,6 +8,7 @@
 
 #include "settings.h"
 #include "file_ops.h"
+#include "thread_safety.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,11 +79,15 @@ bool settings_set_string(const char *key, const char *value) {
     if (!key || !value)
         return false;
 
+    npad_mutex_lock(&g_settings_mutex);
     SettingEntry *entry = find_setting(key);
     if (entry) {
         // Update existing entry
         free(entry->value);
         entry->value = malloc(strlen(value) + 1);
+        if (!entry->value) {
+            return false;
+        }
         strcpy(entry->value, value);
     } else {
         // Create new entry
@@ -95,6 +100,7 @@ bool settings_set_string(const char *key, const char *value) {
         g_settings_head = entry;
     }
 
+    npad_mutex_unlock(&g_settings_mutex);
     return true;
 }
 
@@ -102,19 +108,27 @@ char *settings_get_string(const char *key, const char *default_value) {
     if (!key)
         return NULL;
 
+    npad_mutex_lock(&g_settings_mutex);
     SettingEntry *entry = find_setting(key);
     if (entry && entry->value) {
         char *result = malloc(strlen(entry->value) + 1);
+        if (!result) {
+            return NULL;
+        }
         strcpy(result, entry->value);
         return result;
     }
 
     if (default_value) {
         char *result = malloc(strlen(default_value) + 1);
+        if (!result) {
+            return NULL;
+        }
         strcpy(result, default_value);
         return result;
     }
 
+    npad_mutex_unlock(&g_settings_mutex);
     return NULL;
 }
 
@@ -284,17 +298,41 @@ bool settings_add_recent_file(const char *filepath) {
 
     // Create new list with the file at the top
     char **new_list = malloc(MAX_RECENT_FILES * sizeof(char *));
+    if (!new_list) {
+        if (recent_files) {
+            settings_free_recent_files(recent_files, count);
+        }
+        return false;
+    }
     int new_count = 0;
 
     // Add the new file first
-    new_list[new_count++] = malloc(strlen(filepath) + 1);
-    strcpy(new_list[new_count - 1], filepath);
+    new_list[new_count] = malloc(strlen(filepath) + 1);
+    if (!new_list[new_count]) {
+        free(new_list);
+        if (recent_files) {
+            settings_free_recent_files(recent_files, count);
+        }
+        return false;
+    }
+    strcpy(new_list[new_count], filepath);
+    new_count++;
 
     // Add existing files (except the one we're moving to top)
     for (int i = 0; i < count && new_count < MAX_RECENT_FILES; i++) {
-        if (i != existing_index) {
-            new_list[new_count++] = malloc(strlen(recent_files[i]) + 1);
-            strcpy(new_list[new_count - 1], recent_files[i]);
+        if (i != existing_index && recent_files && recent_files[i]) {
+            new_list[new_count] = malloc(strlen(recent_files[i]) + 1);
+            if (!new_list[new_count]) {
+                // Cleanup on failure
+                for (int j = 0; j < new_count; j++) {
+                    free(new_list[j]);
+                }
+                free(new_list);
+                settings_free_recent_files(recent_files, count);
+                return false;
+            }
+            strcpy(new_list[new_count], recent_files[i]);
+            new_count++;
         }
     }
 
@@ -318,9 +356,7 @@ bool settings_add_recent_file(const char *filepath) {
     }
     free(new_list);
 
-    if (recent_files) {
-        settings_free_recent_files(recent_files, count);
-    }
+    settings_free_recent_files(recent_files, count);
 
     return true;
 }
@@ -330,6 +366,10 @@ char **settings_get_recent_files(int *count) {
         return NULL;
 
     char **files = malloc(MAX_RECENT_FILES * sizeof(char *));
+    if (!files) {
+        *count = 0;
+        return NULL;
+    }
     *count = 0;
 
     for (int i = 0; i < MAX_RECENT_FILES; i++) {
@@ -551,41 +591,100 @@ static bool parse_settings_file(const char *content) {
 }
 
 static char *serialize_settings(void) {
-    // Calculate required buffer size
+    // Calculate required buffer size more accurately
     size_t total_size = 100; // Base size for JSON structure
     SettingEntry *current = g_settings_head;
+    int entry_count = 0;
 
     while (current) {
-        // "key": "value", (with quotes and escaping)
-        total_size += strlen(current->key) + strlen(current->value) + 10;
+        // "key": "value", (with quotes, escaping, and safety margin)
+        size_t key_len = current->key ? strlen(current->key) : 0;
+        size_t value_len = current->value ? strlen(current->value) : 0;
+        total_size += key_len * 2 + value_len * 2 + 20; // Double for potential escaping + overhead
+        entry_count++;
         current = current->next;
     }
+
+    // Add margin for commas and newlines
+    total_size += entry_count * 10;
 
     char *content = malloc(total_size);
     if (!content)
         return NULL;
 
-    strcpy(content, "{\n");
+    size_t written = 0;
+    int ret = snprintf(content, total_size, "{\n");
+    if (ret < 0 || (size_t) ret >= total_size - written) {
+        free(content);
+        return NULL;
+    }
+    written += ret;
 
     current = g_settings_head;
     bool first = true;
 
-    while (current) {
+    while (current && written < total_size - 50) { // Leave margin for closing
         if (!first) {
-            strcat(content, ",\n");
+            ret = snprintf(content + written, total_size - written, ",\n");
+            if (ret < 0 || (size_t) ret >= total_size - written) {
+                free(content);
+                return NULL;
+            }
+            written += ret;
         }
         first = false;
 
-        strcat(content, "  \"");
-        strcat(content, current->key);
-        strcat(content, "\": \"");
-        strcat(content, current->value);
-        strcat(content, "\"");
+        // Escape quotes in key and value
+        char *escaped_key = malloc(strlen(current->key) * 2 + 1);
+        char *escaped_value = malloc(strlen(current->value) * 2 + 1);
+        if (!escaped_key || !escaped_value) {
+            free(escaped_key);
+            free(escaped_value);
+            free(content);
+            return NULL;
+        }
+
+        // Simple quote escaping
+        const char *src = current->key;
+        char *dst = escaped_key;
+        while (*src) {
+            if (*src == '"' || *src == '\\') {
+                *dst++ = '\\';
+            }
+            *dst++ = *src++;
+        }
+        *dst = '\0';
+
+        src = current->value;
+        dst = escaped_value;
+        while (*src) {
+            if (*src == '"' || *src == '\\') {
+                *dst++ = '\\';
+            }
+            *dst++ = *src++;
+        }
+        *dst = '\0';
+
+        ret = snprintf(content + written, total_size - written, "  \"%s\": \"%s\"", escaped_key,
+                       escaped_value);
+
+        free(escaped_key);
+        free(escaped_value);
+
+        if (ret < 0 || (size_t) ret >= total_size - written) {
+            free(content);
+            return NULL;
+        }
+        written += ret;
 
         current = current->next;
     }
 
-    strcat(content, "\n}\n");
+    ret = snprintf(content + written, total_size - written, "\n}\n");
+    if (ret < 0 || (size_t) ret >= total_size - written) {
+        free(content);
+        return NULL;
+    }
 
     return content;
 }
