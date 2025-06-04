@@ -238,6 +238,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] Core text editing functionality
   - [x] File operations (New, Open, Save, Save As)
   - [ ] Keyboard shortcuts
+  - [ ] Drag and drop
   - [ ] Word wrap
   - [ ] Monospace toggle option
   - [ ] Status bar details
