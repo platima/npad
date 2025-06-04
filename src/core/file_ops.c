@@ -53,21 +53,24 @@ char *file_read_text(const char *filename) {
     }
 
     if (filename_len > 1024) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, filename, "Filename too long: %zu characters (max 1024)", filename_len);
+        NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, filename,
+                         "Filename too long: %zu characters (max 1024)", filename_len);
         set_error("Invalid filename: too long");
         return NULL;
     }
 
     // Basic path validation - prevent path traversal
     if (strstr(filename, "..") != NULL) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, 0, filename, "Path traversal attempt detected in filename");
+        NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, 0, filename,
+                         "Path traversal attempt detected in filename");
         set_error("Path traversal not allowed");
         return NULL;
     }
 
     FILE *file = fopen(filename, "rb");
     if (!file) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, errno, filename, "Failed to open file for reading: %s", strerror(errno));
+        NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, errno, filename, "Failed to open file for reading: %s",
+                         strerror(errno));
         set_errno_error("Failed to open file", filename);
         return NULL;
     }
@@ -78,7 +81,8 @@ char *file_read_text(const char *filename) {
     fseek(file, 0, SEEK_SET);
 
     if (size < 0) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, errno, filename, "Failed to get file size: %s", strerror(errno));
+        NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, errno, filename, "Failed to get file size: %s",
+                         strerror(errno));
         set_errno_error("Failed to get file size", filename);
         fclose(file);
         return NULL;

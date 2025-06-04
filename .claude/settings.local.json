@@ -1,15 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(make format-check:*)",
-      "Bash(make lint)",
-      "Bash(make:*)",
-      "Bash(ls:*)",
-      "Bash(test:*)",
-      "Bash(git add:*)"
+      "Bash(grep:*)",
+      "Bash(awk:*)",
+      "Bash(sed:*)"
     ],
     "deny": []
-  },
-  "model": "claude-sonnet-4-20250514"
-  "includeCoAuthoredBy": false
+  }
 }

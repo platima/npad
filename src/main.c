@@ -113,7 +113,8 @@ int main(int argc, char *argv[]) {
 
     // Initialize the editor core
     if (!editor_init()) {
-        NPAD_ERROR_FATAL(NPAD_ERROR_EDITOR, 0, "main initialization", "Failed to initialize editor system");
+        NPAD_ERROR_FATAL(NPAD_ERROR_EDITOR, 0, "main initialization",
+                         "Failed to initialize editor system");
         ui_cleanup();
         settings_cleanup();
         thread_safety_cleanup();
@@ -194,7 +195,8 @@ static void parse_command_line(int argc, char *argv[]) {
             // Assume it's a filename to open
             editor_set_startup_file(argv[i]);
         } else {
-            NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, argv[i], "Unknown command line option: %s", argv[i]);
+            NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, argv[i],
+                             "Unknown command line option: %s", argv[i]);
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
             fprintf(stderr, "Use --help for usage information\n");
             exit(1);

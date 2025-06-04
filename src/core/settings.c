@@ -88,7 +88,8 @@ bool settings_set_string(const char *key, const char *value) {
         free(entry->value);
         entry->value = malloc(strlen(value) + 1);
         if (!entry->value) {
-            NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, key, "Failed to allocate memory for setting value");
+            NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, key,
+                             "Failed to allocate memory for setting value");
             return false;
         }
         strcpy(entry->value, value);
@@ -467,7 +468,7 @@ static SettingEntry *create_setting(const char *key, const char *value) {
         NPAD_ERROR_INVALID_PARAM("key");
         return NULL;
     }
-    
+
     if (!value) {
         NPAD_ERROR_INVALID_PARAM("value");
         return NULL;
@@ -475,7 +476,8 @@ static SettingEntry *create_setting(const char *key, const char *value) {
 
     SettingEntry *entry = malloc(sizeof(SettingEntry));
     if (!entry) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, key, "Failed to allocate memory for setting entry");
+        NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, key,
+                         "Failed to allocate memory for setting entry");
         return NULL;
     }
 
@@ -483,7 +485,8 @@ static SettingEntry *create_setting(const char *key, const char *value) {
     entry->value = malloc(strlen(value) + 1);
 
     if (!entry->key || !entry->value) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, key, "Failed to allocate memory for setting key/value strings");
+        NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, key,
+                         "Failed to allocate memory for setting key/value strings");
         free(entry->key);
         free(entry->value);
         free(entry);

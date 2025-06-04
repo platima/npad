@@ -107,7 +107,8 @@ bool editor_open_file(const char *filename) {
 
     g_editor.current_file = malloc(strlen(filename) + 1);
     if (!g_editor.current_file) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, filename, "Failed to allocate memory for current file path");
+        NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, filename,
+                         "Failed to allocate memory for current file path");
         return false;
     }
     strcpy(g_editor.current_file, filename);
@@ -178,7 +179,8 @@ bool editor_save_file_as(const char *filename) {
 
         g_editor.current_file = malloc(strlen(filename) + 1);
         if (!g_editor.current_file) {
-            NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, filename, "Failed to allocate memory for new file path");
+            NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, filename,
+                             "Failed to allocate memory for new file path");
             return false;
         }
         strcpy(g_editor.current_file, filename);
@@ -244,12 +246,13 @@ bool editor_find(const char *text, bool case_sensitive, bool whole_word) {
         NPAD_ERROR_INVALID_PARAM("text");
         return false;
     }
-    
+
     if (strlen(text) == 0) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, "find operation", "Empty search text provided");
+        NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, "find operation",
+                         "Empty search text provided");
         return false;
     }
-    
+
     if (!g_editor.main_window) {
         NPAD_ERROR_ERROR(NPAD_ERROR_EDITOR, 0, "find operation", "No main window available");
         return false;
@@ -257,7 +260,8 @@ bool editor_find(const char *text, bool case_sensitive, bool whole_word) {
 
     char *content = ui_get_text(g_editor.main_window);
     if (!content) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_UI, 0, "find operation", "Failed to get text content from main window");
+        NPAD_ERROR_ERROR(NPAD_ERROR_UI, 0, "find operation",
+                         "Failed to get text content from main window");
         return false;
     }
 
@@ -318,17 +322,18 @@ bool editor_replace(const char *find_text, const char *replace_text, bool case_s
         NPAD_ERROR_INVALID_PARAM("find_text");
         return false;
     }
-    
+
     if (!replace_text) {
         NPAD_ERROR_INVALID_PARAM("replace_text");
         return false;
     }
-    
+
     if (strlen(find_text) == 0) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, "replace operation", "Empty find text provided");
+        NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, "replace operation",
+                         "Empty find text provided");
         return false;
     }
-    
+
     if (!g_editor.main_window) {
         NPAD_ERROR_ERROR(NPAD_ERROR_EDITOR, 0, "replace operation", "No main window available");
         return false;
@@ -336,7 +341,8 @@ bool editor_replace(const char *find_text, const char *replace_text, bool case_s
 
     char *content = ui_get_text(g_editor.main_window);
     if (!content) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_UI, 0, "replace operation", "Failed to get text content from main window");
+        NPAD_ERROR_ERROR(NPAD_ERROR_UI, 0, "replace operation",
+                         "Failed to get text content from main window");
         return false;
     }
 
@@ -394,7 +400,8 @@ bool editor_replace(const char *find_text, const char *replace_text, bool case_s
     size_t new_size = content_len + (replacement_count * (replace_len - find_len)) + 1;
     char *new_content = malloc(new_size);
     if (!new_content) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, "replace operation", "Failed to allocate memory for replacement content (size: %zu)", new_size);
+        NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, "replace operation",
+                         "Failed to allocate memory for replacement content (size: %zu)", new_size);
         free(content);
         return false;
     }
@@ -486,7 +493,8 @@ void editor_set_startup_file(const char *filename) {
     if (filename) {
         g_startup_file = malloc(strlen(filename) + 1);
         if (!g_startup_file) {
-            NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, filename, "Failed to allocate memory for startup file path");
+            NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, filename,
+                             "Failed to allocate memory for startup file path");
             return;
         }
         strcpy(g_startup_file, filename);
