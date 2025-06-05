@@ -16,6 +16,7 @@
 
 #include "../ui_interface.h"
 #include "../main.h"
+#include "../core/error.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -135,16 +136,19 @@ int ui_platform_message_loop(void) {
     MSG msg;
 
     while (GetMessage(&msg, NULL, 0, 0)) {
-        // Check for accelerator keys
+        // Check for accelerator keys first, before any other processing
         bool accelerator_handled = false;
-        if (g_main_window && g_main_window->haccel) {
+        if (g_main_window && g_main_window->haccel && g_main_window->hwnd) {
             accelerator_handled =
                 TranslateAccelerator(g_main_window->hwnd, g_main_window->haccel, &msg);
         }
 
         if (!accelerator_handled) {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
+            // Handle dialog messages for modal dialogs
+            if (!IsDialogMessage(g_main_window ? g_main_window->hwnd : NULL, &msg)) {
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            }
         }
     }
 
@@ -186,8 +190,12 @@ Window *ui_platform_create_main_window(void) {
         return NULL;
     }
 
-    // Set font to system fixed font (like original Notepad)
-    HFONT font = (HFONT) GetStockObject(ANSI_FIXED_FONT);
+    // Set font to system default GUI font (TrueType)
+    HFONT font = (HFONT) GetStockObject(DEFAULT_GUI_FONT);
+    if (!font) {
+        // Fallback to system font
+        font = (HFONT) GetStockObject(SYSTEM_FONT);
+    }
     SendMessage(window->edit_hwnd, WM_SETFONT, (WPARAM) font, TRUE);
 
     // Configure RichEdit for plain text behavior
@@ -209,8 +217,8 @@ Window *ui_platform_create_main_window(void) {
         return NULL;
     }
 
-    // Configure status bar parts (from right to left: encoding, line endings, zoom, line/col)
-    int status_parts[] = { -1, -150, -100, -50 }; // -1 means remaining space
+    // Configure status bar parts (from left to right: message, line/col, zoom, encoding)
+    int status_parts[] = { 200, 350, 450, -1 }; // -1 means remaining space for last part
     SendMessage(window->status_hwnd, SB_SETPARTS, 4, (LPARAM) status_parts);
 
     // Initialize status bar text
@@ -218,6 +226,10 @@ Window *ui_platform_create_main_window(void) {
     SendMessage(window->status_hwnd, SB_SETTEXT, 1, (LPARAM) "Ln 1, Col 1");
     SendMessage(window->status_hwnd, SB_SETTEXT, 2, (LPARAM) "100%");
     SendMessage(window->status_hwnd, SB_SETTEXT, 3, (LPARAM) "UTF-8");
+
+    // Force status bar to be visible and properly sized
+    ShowWindow(window->status_hwnd, SW_SHOW);
+    UpdateWindow(window->status_hwnd);
 
     // Initialize window state
     window->word_wrap_enabled = false;
@@ -240,6 +252,13 @@ Window *ui_platform_create_main_window(void) {
                       { FCONTROL | FVIRTKEY, 'G', ID_EDIT_GOTO_LINE },
                       { FALT | FVIRTKEY, 'Z', ID_VIEW_WORD_WRAP } };
     window->haccel = CreateAcceleratorTable(accel, sizeof(accel) / sizeof(accel[0]));
+    
+    // Verify accelerator table was created
+    if (!window->haccel) {
+        npad_error_report(NPAD_ERROR_WARNING, NPAD_ERROR_SYSTEM, GetLastError(),
+                         __FILE__, __LINE__, "ui_platform_create_main_window", 
+                         "Win32 UI", "Failed to create accelerator table - keyboard shortcuts will not work");
+    }
 
     // Apply theme
     apply_theme(window);
@@ -484,6 +503,57 @@ char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *param
     return NULL;
 }
 
+// Dialog hook procedure for save dialog to add encoding dropdown
+static UINT_PTR CALLBACK SaveDialogHookProc(HWND hdlg, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
+    (void) wParam;  // Unused parameter
+    (void) lParam;  // Unused parameter
+    static HWND hComboEncoding = NULL;
+    
+    switch (uiMsg) {
+        case WM_INITDIALOG: {
+            // Get the parent dialog dimensions
+            RECT dlgRect;
+            GetClientRect(hdlg, &dlgRect);
+            
+            // Create encoding label and combobox below the file controls
+            HWND hLabelEncoding = CreateWindow("STATIC", "Encoding:", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                              12, dlgRect.bottom - 60, 60, 16, hdlg, 
+                                              (HMENU)2001, g_hinstance, NULL);
+            (void) hLabelEncoding; // Used for display only
+            
+            hComboEncoding = CreateWindow("COMBOBOX", "", 
+                                        WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+                                        80, dlgRect.bottom - 62, 120, 100, hdlg,
+                                        (HMENU)2002, g_hinstance, NULL);
+            
+            if (hComboEncoding) {
+                // Add encoding options
+                SendMessage(hComboEncoding, CB_ADDSTRING, 0, (LPARAM)"UTF-8");
+                SendMessage(hComboEncoding, CB_ADDSTRING, 0, (LPARAM)"UTF-8 with BOM");
+                SendMessage(hComboEncoding, CB_ADDSTRING, 0, (LPARAM)"UTF-16 LE");
+                SendMessage(hComboEncoding, CB_ADDSTRING, 0, (LPARAM)"UTF-16 BE");
+                SendMessage(hComboEncoding, CB_ADDSTRING, 0, (LPARAM)"ANSI");
+                
+                // Default to UTF-8
+                SendMessage(hComboEncoding, CB_SETCURSEL, 0, 0);
+            }
+            break;
+        }
+        
+        case WM_SIZE: {
+            // Reposition controls when dialog is resized
+            if (hComboEncoding) {
+                RECT dlgRect;
+                GetClientRect(hdlg, &dlgRect);
+                SetWindowPos(GetDlgItem(hdlg, 2001), NULL, 12, dlgRect.bottom - 60, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+                SetWindowPos(hComboEncoding, NULL, 80, dlgRect.bottom - 62, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+            }
+            break;
+        }
+    }
+    return 0;
+}
+
 char *ui_platform_show_save_dialog(Window *parent, const FileDialogParams *params) {
     (void) params;
     OPENFILENAME ofn;
@@ -499,7 +569,8 @@ char *ui_platform_show_save_dialog(Window *parent, const FileDialogParams *param
     ofn.lpstrFileTitle = NULL;
     ofn.nMaxFileTitle = 0;
     ofn.lpstrInitialDir = NULL;
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_ENABLEHOOK | OFN_EXPLORER;
+    ofn.lpfnHook = SaveDialogHookProc;
 
     if (GetSaveFileName(&ofn)) {
         char *result = malloc(strlen(filename) + 1);
@@ -840,6 +911,11 @@ static void handle_command(Window *window, WORD command) {
                 // Disable word wrap
                 SendMessage(window->edit_hwnd, EM_SETTARGETDEVICE, 0, 1);
             }
+            // Update menu checkmark
+            if (window->hmenu) {
+                CheckMenuItem(window->hmenu, ID_VIEW_WORD_WRAP, 
+                             window->word_wrap_enabled ? MF_CHECKED : MF_UNCHECKED);
+            }
             break;
         case ID_VIEW_DARK_MODE:
             ui_post_event(UI_EVENT_VIEW_TOGGLE_DARK_MODE, window, NULL);
@@ -1008,21 +1084,28 @@ static bool InputBox(HWND parent, const char *title, const char *prompt, char *b
     if (!dialog)
         return false;
 
-    // Create controls
-    HWND label = CreateWindow("STATIC", prompt, WS_CHILD | WS_VISIBLE | SS_LEFT, 10, 10, 280, 20,
+    // Get system dialog font
+    HFONT dialog_font = (HFONT) GetStockObject(DEFAULT_GUI_FONT);
+    if (!dialog_font) {
+        dialog_font = (HFONT) GetStockObject(SYSTEM_FONT);
+    }
+
+    // Create controls with proper spacing and system font
+    HWND label = CreateWindow("STATIC", prompt, WS_CHILD | WS_VISIBLE | SS_LEFT, 12, 12, 260, 16,
                               dialog, (HMENU) 1000, g_hinstance, NULL);
-    (void) label; // Used for display only
+    SendMessage(label, WM_SETFONT, (WPARAM) dialog_font, TRUE);
 
-    HWND edit = CreateWindow("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 10, 35,
-                             200, 20, dialog, (HMENU) 1001, g_hinstance, NULL);
+    HWND edit = CreateWindow("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 12, 35,
+                             190, 21, dialog, (HMENU) 1001, g_hinstance, NULL);
+    SendMessage(edit, WM_SETFONT, (WPARAM) dialog_font, TRUE);
 
-    HWND ok_button = CreateWindow("BUTTON", "OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 220, 35,
-                                  60, 25, dialog, (HMENU) IDOK, g_hinstance, NULL);
-    (void) ok_button; // Managed by dialog system
+    HWND ok_button = CreateWindow("BUTTON", "OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 210, 35,
+                                  70, 23, dialog, (HMENU) IDOK, g_hinstance, NULL);
+    SendMessage(ok_button, WM_SETFONT, (WPARAM) dialog_font, TRUE);
 
     HWND cancel_button = CreateWindow("BUTTON", "Cancel", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                      220, 65, 60, 25, dialog, (HMENU) IDCANCEL, g_hinstance, NULL);
-    (void) cancel_button; // Managed by dialog system
+                                      210, 65, 70, 23, dialog, (HMENU) IDCANCEL, g_hinstance, NULL);
+    SendMessage(cancel_button, WM_SETFONT, (WPARAM) dialog_font, TRUE);
 
     // Set up dialog data
     InputBoxData data = { buffer, buffer_size, prompt };
