@@ -92,7 +92,8 @@ bool ui_platform_init(void) {
     InitCommonControlsEx(&icex);
 
     // Load Rich Edit library
-    LoadLibrary(TEXT("riched20.dll"));
+    HMODULE richedit_lib = LoadLibrary(TEXT("riched20.dll"));
+    (void) richedit_lib; // Library will be freed automatically on process exit
 
     // Register window class
     if (!register_window_class()) {
@@ -1007,18 +1008,21 @@ static bool InputBox(HWND parent, const char *title, const char *prompt, char *b
     if (!dialog)
         return false;
 
-    // Create controls - store handles to avoid warnings
-    CreateWindow("STATIC", prompt, WS_CHILD | WS_VISIBLE | SS_LEFT, 10, 10, 280, 20, dialog,
-                 (HMENU) 1000, g_hinstance, NULL);
+    // Create controls
+    HWND label = CreateWindow("STATIC", prompt, WS_CHILD | WS_VISIBLE | SS_LEFT, 10, 10, 280, 20, dialog,
+                             (HMENU) 1000, g_hinstance, NULL);
+    (void) label; // Used for display only
 
     HWND edit = CreateWindow("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 10, 35,
                              200, 20, dialog, (HMENU) 1001, g_hinstance, NULL);
 
-    CreateWindow("BUTTON", "OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 220, 35, 60, 25, dialog,
-                 (HMENU) IDOK, g_hinstance, NULL);
+    HWND ok_button = CreateWindow("BUTTON", "OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 220, 35, 60, 25, dialog,
+                                 (HMENU) IDOK, g_hinstance, NULL);
+    (void) ok_button; // Managed by dialog system
 
-    CreateWindow("BUTTON", "Cancel", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 220, 65, 60, 25, dialog,
-                 (HMENU) IDCANCEL, g_hinstance, NULL);
+    HWND cancel_button = CreateWindow("BUTTON", "Cancel", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 220, 65, 60, 25, dialog,
+                                     (HMENU) IDCANCEL, g_hinstance, NULL);
+    (void) cancel_button; // Managed by dialog system
 
     // Set up dialog data
     InputBoxData data = { buffer, buffer_size, prompt };
