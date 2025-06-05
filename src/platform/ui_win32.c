@@ -1009,19 +1009,19 @@ static bool InputBox(HWND parent, const char *title, const char *prompt, char *b
         return false;
 
     // Create controls
-    HWND label = CreateWindow("STATIC", prompt, WS_CHILD | WS_VISIBLE | SS_LEFT, 10, 10, 280, 20, dialog,
-                             (HMENU) 1000, g_hinstance, NULL);
+    HWND label = CreateWindow("STATIC", prompt, WS_CHILD | WS_VISIBLE | SS_LEFT, 10, 10, 280, 20,
+                              dialog, (HMENU) 1000, g_hinstance, NULL);
     (void) label; // Used for display only
 
     HWND edit = CreateWindow("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 10, 35,
                              200, 20, dialog, (HMENU) 1001, g_hinstance, NULL);
 
-    HWND ok_button = CreateWindow("BUTTON", "OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 220, 35, 60, 25, dialog,
-                                 (HMENU) IDOK, g_hinstance, NULL);
+    HWND ok_button = CreateWindow("BUTTON", "OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 220, 35,
+                                  60, 25, dialog, (HMENU) IDOK, g_hinstance, NULL);
     (void) ok_button; // Managed by dialog system
 
-    HWND cancel_button = CreateWindow("BUTTON", "Cancel", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 220, 65, 60, 25, dialog,
-                                     (HMENU) IDCANCEL, g_hinstance, NULL);
+    HWND cancel_button = CreateWindow("BUTTON", "Cancel", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                      220, 65, 60, 25, dialog, (HMENU) IDCANCEL, g_hinstance, NULL);
     (void) cancel_button; // Managed by dialog system
 
     // Set up dialog data
