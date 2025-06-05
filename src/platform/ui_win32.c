@@ -25,6 +25,7 @@
 
 // Control IDs
 #define ID_EDIT_CONTROL 1001
+#define ID_STATUS_BAR 1002
 #define ID_FILE_NEW 2001
 #define ID_FILE_OPEN 2002
 #define ID_FILE_SAVE 2003
@@ -38,16 +39,22 @@
 #define ID_EDIT_SELECT_ALL 2106
 #define ID_EDIT_FIND 2107
 #define ID_EDIT_REPLACE 2108
+#define ID_EDIT_GOTO_LINE 2109
 #define ID_VIEW_DARK_MODE 2201
+#define ID_VIEW_WORD_WRAP 2202
 #define ID_HELP_ABOUT 2301
 
 // Window structure
 typedef struct Window {
     HWND hwnd;
     HWND edit_hwnd;
+    HWND status_hwnd;
     HMENU hmenu;
+    HACCEL haccel;
     bool is_modified;
     char *current_file;
+    bool word_wrap_enabled;
+    int zoom_level;
 } Window;
 
 // Dialog structure
@@ -66,8 +73,11 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 static void create_menu(Window *window);
 static void handle_command(Window *window, WORD command);
 static void update_title(Window *window);
+static void update_status_bar(Window *window);
 static bool register_window_class(void);
 static void apply_theme(Window *window);
+static bool InputBox(HWND parent, const char *title, const char *prompt, char *buffer,
+                     int buffer_size);
 
 // Platform initialization
 bool ui_platform_init(void) {
@@ -80,6 +90,9 @@ bool ui_platform_init(void) {
     icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
     icex.dwICC = ICC_WIN95_CLASSES;
     InitCommonControlsEx(&icex);
+
+    // Load Rich Edit library
+    LoadLibrary(TEXT("riched20.dll"));
 
     // Register window class
     if (!register_window_class()) {
@@ -121,8 +134,17 @@ int ui_platform_message_loop(void) {
     MSG msg;
 
     while (GetMessage(&msg, NULL, 0, 0)) {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
+        // Check for accelerator keys
+        bool accelerator_handled = false;
+        if (g_main_window && g_main_window->haccel) {
+            accelerator_handled =
+                TranslateAccelerator(g_main_window->hwnd, g_main_window->haccel, &msg);
+        }
+
+        if (!accelerator_handled) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
     }
 
     return (int) msg.wParam;
@@ -141,19 +163,20 @@ Window *ui_platform_create_main_window(void) {
 
     // Create main window
     window->hwnd =
-        CreateWindowEx(WS_EX_CLIENTEDGE, NPAD_WINDOW_CLASS, "npad", WS_OVERLAPPEDWINDOW,
-                       CW_USEDEFAULT, CW_USEDEFAULT, 800, 600, NULL, NULL, g_hinstance, window);
+        CreateWindowEx(WS_EX_CLIENTEDGE, NPAD_WINDOW_CLASS, "npad",
+                       WS_EX_ACCEPTFILES | WS_EX_WINDOWEDGE | WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
+                       CW_USEDEFAULT, 800, 600, NULL, NULL, g_hinstance, window);
 
     if (!window->hwnd) {
         free(window);
         return NULL;
     }
 
-    // Create edit control
+    // Create rich edit control (but keep it in plain text mode)
     window->edit_hwnd =
-        CreateWindowEx(0, "EDIT", "",
+        CreateWindowEx(0, RICHEDIT_CLASS, "",
                        WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE |
-                           ES_AUTOVSCROLL | ES_AUTOHSCROLL,
+                           ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_NOHIDESEL,
                        0, 0, 0, 0, window->hwnd, (HMENU) ID_EDIT_CONTROL, g_hinstance, NULL);
 
     if (!window->edit_hwnd) {
@@ -166,8 +189,56 @@ Window *ui_platform_create_main_window(void) {
     HFONT font = (HFONT) GetStockObject(ANSI_FIXED_FONT);
     SendMessage(window->edit_hwnd, WM_SETFONT, (WPARAM) font, TRUE);
 
-    // Create menu
+    // Configure RichEdit for plain text behavior
+    SendMessage(window->edit_hwnd, EM_SETTEXTMODE, TM_PLAINTEXT, 0);
+    SendMessage(window->edit_hwnd, EM_SETOPTIONS, ECOOP_OR, ECO_NOHIDESEL);
+
+    // Set unlimited text length
+    SendMessage(window->edit_hwnd, EM_LIMITTEXT, 0, 0);
+
+    // Create status bar
+    window->status_hwnd =
+        CreateWindowEx(0, STATUSCLASSNAME, NULL, WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP, 0, 0, 0, 0,
+                       window->hwnd, (HMENU) ID_STATUS_BAR, g_hinstance, NULL);
+
+    if (!window->status_hwnd) {
+        DestroyWindow(window->edit_hwnd);
+        DestroyWindow(window->hwnd);
+        free(window);
+        return NULL;
+    }
+
+    // Configure status bar parts (from right to left: encoding, line endings, zoom, line/col)
+    int status_parts[] = { -1, -150, -100, -50 }; // -1 means remaining space
+    SendMessage(window->status_hwnd, SB_SETPARTS, 4, (LPARAM) status_parts);
+
+    // Initialize status bar text
+    SendMessage(window->status_hwnd, SB_SETTEXT, 0, (LPARAM) "Ready");
+    SendMessage(window->status_hwnd, SB_SETTEXT, 1, (LPARAM) "Ln 1, Col 1");
+    SendMessage(window->status_hwnd, SB_SETTEXT, 2, (LPARAM) "100%");
+    SendMessage(window->status_hwnd, SB_SETTEXT, 3, (LPARAM) "UTF-8");
+
+    // Initialize window state
+    window->word_wrap_enabled = false;
+    window->zoom_level = 100;
+
+    // Create menu and accelerators
     create_menu(window);
+
+    // Create accelerator table
+    ACCEL accel[] = { { FCONTROL | FVIRTKEY, 'N', ID_FILE_NEW },
+                      { FCONTROL | FVIRTKEY, 'O', ID_FILE_OPEN },
+                      { FCONTROL | FVIRTKEY, 'S', ID_FILE_SAVE },
+                      { FCONTROL | FVIRTKEY, 'Z', ID_EDIT_UNDO },
+                      { FCONTROL | FVIRTKEY, 'X', ID_EDIT_CUT },
+                      { FCONTROL | FVIRTKEY, 'C', ID_EDIT_COPY },
+                      { FCONTROL | FVIRTKEY, 'V', ID_EDIT_PASTE },
+                      { FCONTROL | FVIRTKEY, 'A', ID_EDIT_SELECT_ALL },
+                      { FCONTROL | FVIRTKEY, 'F', ID_EDIT_FIND },
+                      { FCONTROL | FVIRTKEY, 'H', ID_EDIT_REPLACE },
+                      { FCONTROL | FVIRTKEY, 'G', ID_EDIT_GOTO_LINE },
+                      { FALT | FVIRTKEY, 'Z', ID_VIEW_WORD_WRAP } };
+    window->haccel = CreateAcceleratorTable(accel, sizeof(accel) / sizeof(accel[0]));
 
     // Apply theme
     apply_theme(window);
@@ -184,6 +255,10 @@ void ui_platform_destroy_window(Window *window) {
 
     if (window->current_file) {
         free(window->current_file);
+    }
+
+    if (window->haccel) {
+        DestroyAcceleratorTable(window->haccel);
     }
 
     if (window->hwnd) {
@@ -574,10 +649,21 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         }
 
         case WM_SIZE: {
-            if (window && window->edit_hwnd) {
+            if (window && window->edit_hwnd && window->status_hwnd) {
                 RECT rect;
                 GetClientRect(hwnd, &rect);
-                SetWindowPos(window->edit_hwnd, NULL, 0, 0, rect.right, rect.bottom, SWP_NOZORDER);
+
+                // Resize status bar first - it will auto-position itself at bottom
+                SendMessage(window->status_hwnd, WM_SIZE, 0, 0);
+
+                // Get status bar height
+                RECT status_rect;
+                GetWindowRect(window->status_hwnd, &status_rect);
+                int status_height = status_rect.bottom - status_rect.top;
+
+                // Position edit control above status bar
+                SetWindowPos(window->edit_hwnd, NULL, 0, 0, rect.right, rect.bottom - status_height,
+                             SWP_NOZORDER);
             }
             return 0;
         }
@@ -591,7 +677,11 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                     if (!was_modified) {
                         update_title(window);
                     }
+                    update_status_bar(window);
                     ui_post_event(UI_EVENT_TEXT_CHANGED, window, NULL);
+                } else if (HIWORD(wparam) == EN_SELCHANGE && LOWORD(wparam) == ID_EDIT_CONTROL) {
+                    // Update status bar when cursor position changes
+                    update_status_bar(window);
                 } else {
                     handle_command(window, LOWORD(wparam));
                 }
@@ -657,8 +747,11 @@ static void create_menu(Window *window) {
     AppendMenu(hedit, MF_SEPARATOR, 0, NULL);
     AppendMenu(hedit, MF_STRING, ID_EDIT_FIND, "&Find...\tCtrl+F");
     AppendMenu(hedit, MF_STRING, ID_EDIT_REPLACE, "&Replace...\tCtrl+H");
+    AppendMenu(hedit, MF_STRING, ID_EDIT_GOTO_LINE, "&Go to Line...\tCtrl+G");
 
     // View menu
+    AppendMenu(hview, MF_STRING, ID_VIEW_WORD_WRAP, "&Word Wrap\tAlt+Z");
+    AppendMenu(hview, MF_SEPARATOR, 0, NULL);
     AppendMenu(hview, MF_STRING, ID_VIEW_DARK_MODE, "&Dark Mode");
 
     // Help menu
@@ -712,6 +805,41 @@ static void handle_command(Window *window, WORD command) {
         case ID_EDIT_REPLACE:
             ui_post_event(UI_EVENT_EDIT_REPLACE, window, NULL);
             break;
+        case ID_EDIT_GOTO_LINE: {
+            // Show Go to Line dialog
+            char line_buffer[32] = "";
+            if (InputBox(window->hwnd, "Go to Line", "Line number:", line_buffer,
+                         sizeof(line_buffer))) {
+                int line_number = atoi(line_buffer);
+                if (line_number > 0) {
+                    // Convert to zero-based line index
+                    int line_index = line_number - 1;
+
+                    // Get the character index for the start of the line
+                    int char_index = SendMessage(window->edit_hwnd, EM_LINEINDEX, line_index, 0);
+                    if (char_index >= 0) {
+                        // Set cursor to the beginning of the line
+                        SendMessage(window->edit_hwnd, EM_SETSEL, char_index, char_index);
+                        // Scroll to make sure the line is visible
+                        SendMessage(window->edit_hwnd, EM_SCROLLCARET, 0, 0);
+                        // Update status bar
+                        update_status_bar(window);
+                    }
+                }
+            }
+            break;
+        }
+        case ID_VIEW_WORD_WRAP:
+            // Toggle word wrap
+            window->word_wrap_enabled = !window->word_wrap_enabled;
+            if (window->word_wrap_enabled) {
+                // Enable word wrap
+                SendMessage(window->edit_hwnd, EM_SETTARGETDEVICE, 0, 0);
+            } else {
+                // Disable word wrap
+                SendMessage(window->edit_hwnd, EM_SETTARGETDEVICE, 0, 1);
+            }
+            break;
         case ID_VIEW_DARK_MODE:
             ui_post_event(UI_EVENT_VIEW_TOGGLE_DARK_MODE, window, NULL);
             break;
@@ -763,4 +891,185 @@ static void apply_theme(Window *window) {
     if (window->hmenu) {
         CheckMenuItem(window->hmenu, ID_VIEW_DARK_MODE, g_dark_mode ? MF_CHECKED : MF_UNCHECKED);
     }
+}
+
+static void update_status_bar(Window *window) {
+    if (!window || !window->status_hwnd || !window->edit_hwnd)
+        return;
+
+    // Get cursor position
+    DWORD start, end;
+    SendMessage(window->edit_hwnd, EM_GETSEL, (WPARAM) &start, (WPARAM) &end);
+
+    // Calculate line and column
+    int line = SendMessage(window->edit_hwnd, EM_LINEFROMCHAR, start, 0) + 1;
+    int line_start = SendMessage(window->edit_hwnd, EM_LINEINDEX, line - 1, 0);
+    int column = start - line_start + 1;
+
+    // Update line/column display
+    char line_col_text[64];
+    snprintf(line_col_text, sizeof(line_col_text), "Ln %d, Col %d", line, column);
+    SendMessage(window->status_hwnd, SB_SETTEXT, 1, (LPARAM) line_col_text);
+
+    // Update zoom level
+    char zoom_text[32];
+    snprintf(zoom_text, sizeof(zoom_text), "%d%%", window->zoom_level);
+    SendMessage(window->status_hwnd, SB_SETTEXT, 2, (LPARAM) zoom_text);
+
+    // Update encoding (for now, always UTF-8)
+    SendMessage(window->status_hwnd, SB_SETTEXT, 3, (LPARAM) "UTF-8");
+
+    // Update line endings info in the first (leftmost) part
+    const char *line_ending = "Windows (CRLF)"; // Default for Windows
+    if (window->current_file) {
+        // In a real implementation, we'd detect the actual line endings
+        // For now, assume Windows line endings
+    }
+
+    char status_text[256];
+    if (window->is_modified) {
+        snprintf(status_text, sizeof(status_text), "Modified - %s", line_ending);
+    } else {
+        snprintf(status_text, sizeof(status_text), "%s", line_ending);
+    }
+    SendMessage(window->status_hwnd, SB_SETTEXT, 0, (LPARAM) status_text);
+}
+
+// Input dialog data structure
+typedef struct {
+    char *buffer;
+    int buffer_size;
+    const char *prompt;
+} InputBoxData;
+
+// Input box dialog procedure
+static INT_PTR CALLBACK InputBoxProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    InputBoxData *data = (InputBoxData *) GetWindowLongPtr(hwnd, GWLP_USERDATA);
+
+    switch (msg) {
+        case WM_INITDIALOG:
+            data = (InputBoxData *) lparam;
+            SetWindowLongPtr(hwnd, GWLP_USERDATA, lparam);
+
+            // Set the prompt text
+            SetDlgItemText(hwnd, 1000, data->prompt);
+
+            // Set default value "1" for line number
+            SetDlgItemText(hwnd, 1001, "1");
+
+            // Focus on the edit control and select all text
+            SetFocus(GetDlgItem(hwnd, 1001));
+            SendDlgItemMessage(hwnd, 1001, EM_SETSEL, 0, -1);
+            return FALSE;
+
+        case WM_COMMAND:
+            switch (LOWORD(wparam)) {
+                case IDOK:
+                    if (data && data->buffer) {
+                        GetDlgItemText(hwnd, 1001, data->buffer, data->buffer_size);
+                    }
+                    EndDialog(hwnd, IDOK);
+                    return TRUE;
+
+                case IDCANCEL:
+                    EndDialog(hwnd, IDCANCEL);
+                    return TRUE;
+
+                case 1001: // Edit control
+                    if (HIWORD(wparam) == EN_CHANGE) {
+                        // Enable/disable OK button based on whether there's text
+                        char temp[32];
+                        GetDlgItemText(hwnd, 1001, temp, sizeof(temp));
+                        EnableWindow(GetDlgItem(hwnd, IDOK), strlen(temp) > 0);
+                    }
+                    break;
+            }
+            break;
+
+        case WM_CLOSE:
+            EndDialog(hwnd, IDCANCEL);
+            return TRUE;
+    }
+    return FALSE;
+}
+
+// Create an input box dialog
+static bool InputBox(HWND parent, const char *title, const char *prompt, char *buffer,
+                     int buffer_size) {
+    // Create a modal dialog window
+    HWND dialog = CreateWindowEx(
+        WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
+        "#32770", // Dialog class
+        title, DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+        (GetSystemMetrics(SM_CXSCREEN) - 300) / 2, (GetSystemMetrics(SM_CYSCREEN) - 120) / 2, 300,
+        120, parent, NULL, g_hinstance, NULL);
+
+    if (!dialog)
+        return false;
+
+    // Create controls - store handles to avoid warnings
+    CreateWindow("STATIC", prompt, WS_CHILD | WS_VISIBLE | SS_LEFT, 10, 10, 280, 20, dialog,
+                 (HMENU) 1000, g_hinstance, NULL);
+
+    HWND edit = CreateWindow("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 10, 35,
+                             200, 20, dialog, (HMENU) 1001, g_hinstance, NULL);
+
+    CreateWindow("BUTTON", "OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 220, 35, 60, 25, dialog,
+                 (HMENU) IDOK, g_hinstance, NULL);
+
+    CreateWindow("BUTTON", "Cancel", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 220, 65, 60, 25, dialog,
+                 (HMENU) IDCANCEL, g_hinstance, NULL);
+
+    // Set up dialog data
+    InputBoxData data = { buffer, buffer_size, prompt };
+    SetWindowLongPtr(dialog, GWLP_USERDATA, (LONG_PTR) &data);
+
+    // Set dialog proc
+    SetWindowLongPtr(dialog, DWLP_DLGPROC, (LONG_PTR) InputBoxProc);
+
+    // Initialize dialog
+    SendMessage(dialog, WM_INITDIALOG, 0, (LPARAM) &data);
+
+    // Run modal loop
+    MSG msg;
+    bool result = false;
+    bool done = false;
+
+    EnableWindow(parent, FALSE);
+
+    while (!done && GetMessage(&msg, NULL, 0, 0)) {
+        if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE) {
+            done = true;
+            result = false;
+        } else if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN) {
+            SendMessage(dialog, WM_COMMAND, IDOK, 0);
+            done = true;
+            result = true;
+        } else if (msg.message == WM_COMMAND) {
+            if (msg.hwnd == dialog) {
+                if (LOWORD(msg.wParam) == IDOK) {
+                    GetWindowText(edit, buffer, buffer_size);
+                    done = true;
+                    result = true;
+                } else if (LOWORD(msg.wParam) == IDCANCEL) {
+                    done = true;
+                    result = false;
+                }
+            }
+        } else if (msg.message == WM_CLOSE && msg.hwnd == dialog) {
+            done = true;
+            result = false;
+        }
+
+        if (!done) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+    }
+
+    EnableWindow(parent, TRUE);
+    SetForegroundWindow(parent);
+    DestroyWindow(dialog);
+
+    return result;
 }

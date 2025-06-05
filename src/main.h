@@ -10,7 +10,6 @@
 #define MAIN_H
 
 #define STRINGIFY(x) #x
-#define TOSTRING(x) STRINGIFY(x)
 
 #define NPAD_VERSION_MAJOR 0
 #define NPAD_VERSION_MINOR 1
