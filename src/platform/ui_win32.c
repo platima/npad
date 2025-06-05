@@ -252,12 +252,12 @@ Window *ui_platform_create_main_window(void) {
                       { FCONTROL | FVIRTKEY, 'G', ID_EDIT_GOTO_LINE },
                       { FALT | FVIRTKEY, 'Z', ID_VIEW_WORD_WRAP } };
     window->haccel = CreateAcceleratorTable(accel, sizeof(accel) / sizeof(accel[0]));
-    
+
     // Verify accelerator table was created
     if (!window->haccel) {
-        npad_error_report(NPAD_ERROR_WARNING, NPAD_ERROR_SYSTEM, GetLastError(),
-                         __FILE__, __LINE__, "ui_platform_create_main_window", 
-                         "Win32 UI", "Failed to create accelerator table - keyboard shortcuts will not work");
+        npad_error_report(NPAD_ERROR_WARNING, NPAD_ERROR_SYSTEM, GetLastError(), __FILE__, __LINE__,
+                          "ui_platform_create_main_window", "Win32 UI",
+                          "Failed to create accelerator table - keyboard shortcuts will not work");
     }
 
     // Apply theme
@@ -505,48 +505,49 @@ char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *param
 
 // Dialog hook procedure for save dialog to add encoding dropdown
 static UINT_PTR CALLBACK SaveDialogHookProc(HWND hdlg, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
-    (void) wParam;  // Unused parameter
-    (void) lParam;  // Unused parameter
+    (void) wParam; // Unused parameter
+    (void) lParam; // Unused parameter
     static HWND hComboEncoding = NULL;
-    
+
     switch (uiMsg) {
         case WM_INITDIALOG: {
             // Get the parent dialog dimensions
             RECT dlgRect;
             GetClientRect(hdlg, &dlgRect);
-            
+
             // Create encoding label and combobox below the file controls
-            HWND hLabelEncoding = CreateWindow("STATIC", "Encoding:", WS_CHILD | WS_VISIBLE | SS_LEFT,
-                                              12, dlgRect.bottom - 60, 60, 16, hdlg, 
-                                              (HMENU)2001, g_hinstance, NULL);
+            HWND hLabelEncoding =
+                CreateWindow("STATIC", "Encoding:", WS_CHILD | WS_VISIBLE | SS_LEFT, 12,
+                             dlgRect.bottom - 60, 60, 16, hdlg, (HMENU) 2001, g_hinstance, NULL);
             (void) hLabelEncoding; // Used for display only
-            
-            hComboEncoding = CreateWindow("COMBOBOX", "", 
-                                        WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-                                        80, dlgRect.bottom - 62, 120, 100, hdlg,
-                                        (HMENU)2002, g_hinstance, NULL);
-            
+
+            hComboEncoding = CreateWindow(
+                "COMBOBOX", "", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 80,
+                dlgRect.bottom - 62, 120, 100, hdlg, (HMENU) 2002, g_hinstance, NULL);
+
             if (hComboEncoding) {
                 // Add encoding options
-                SendMessage(hComboEncoding, CB_ADDSTRING, 0, (LPARAM)"UTF-8");
-                SendMessage(hComboEncoding, CB_ADDSTRING, 0, (LPARAM)"UTF-8 with BOM");
-                SendMessage(hComboEncoding, CB_ADDSTRING, 0, (LPARAM)"UTF-16 LE");
-                SendMessage(hComboEncoding, CB_ADDSTRING, 0, (LPARAM)"UTF-16 BE");
-                SendMessage(hComboEncoding, CB_ADDSTRING, 0, (LPARAM)"ANSI");
-                
+                SendMessage(hComboEncoding, CB_ADDSTRING, 0, (LPARAM) "UTF-8");
+                SendMessage(hComboEncoding, CB_ADDSTRING, 0, (LPARAM) "UTF-8 with BOM");
+                SendMessage(hComboEncoding, CB_ADDSTRING, 0, (LPARAM) "UTF-16 LE");
+                SendMessage(hComboEncoding, CB_ADDSTRING, 0, (LPARAM) "UTF-16 BE");
+                SendMessage(hComboEncoding, CB_ADDSTRING, 0, (LPARAM) "ANSI");
+
                 // Default to UTF-8
                 SendMessage(hComboEncoding, CB_SETCURSEL, 0, 0);
             }
             break;
         }
-        
+
         case WM_SIZE: {
             // Reposition controls when dialog is resized
             if (hComboEncoding) {
                 RECT dlgRect;
                 GetClientRect(hdlg, &dlgRect);
-                SetWindowPos(GetDlgItem(hdlg, 2001), NULL, 12, dlgRect.bottom - 60, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
-                SetWindowPos(hComboEncoding, NULL, 80, dlgRect.bottom - 62, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+                SetWindowPos(GetDlgItem(hdlg, 2001), NULL, 12, dlgRect.bottom - 60, 0, 0,
+                             SWP_NOSIZE | SWP_NOZORDER);
+                SetWindowPos(hComboEncoding, NULL, 80, dlgRect.bottom - 62, 0, 0,
+                             SWP_NOSIZE | SWP_NOZORDER);
             }
             break;
         }
@@ -913,8 +914,8 @@ static void handle_command(Window *window, WORD command) {
             }
             // Update menu checkmark
             if (window->hmenu) {
-                CheckMenuItem(window->hmenu, ID_VIEW_WORD_WRAP, 
-                             window->word_wrap_enabled ? MF_CHECKED : MF_UNCHECKED);
+                CheckMenuItem(window->hmenu, ID_VIEW_WORD_WRAP,
+                              window->word_wrap_enabled ? MF_CHECKED : MF_UNCHECKED);
             }
             break;
         case ID_VIEW_DARK_MODE:
