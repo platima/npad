@@ -247,6 +247,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [ ] Initial status bar
   - [ ] Zoom via Ctrl+/-, Ctrl Scroll
   - [ ] RTL/LTR support
+  - [ ] High DPI support
   - [ ] Encoding options in Save Dialog
   - [ ] Drag and drop to open
   - [ ] Word wrap support (add Alt+Z shortcut)
