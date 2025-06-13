@@ -1,3 +1,4 @@
+<img align="right" src="https://visitor-badge.laobi.icu/badge?page_id=platima.npad" height="20" />
 # npad 📝
 
 [![Build Status](https://github.com/platima/npad/workflows/CI/badge.svg)](https://github.com/platima/npad/actions/workflows/ci.yml)
