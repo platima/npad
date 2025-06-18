@@ -528,7 +528,6 @@ bool editor_replace(const char *find_text, const char *replace_text, bool case_s
     // Perform replacements
     char *src = content;
     char *dst = new_content;
-    char *dst_end = new_content + new_size - 1; // Leave space for null terminator
     int replacements_done = 0;
 
     while (*src && (replace_all || replacements_done == 0)) {
