@@ -1,180 +1,216 @@
 #!/bin/bash
-
-# npad - GitHub Runner Setup Script
-# Sets up a Linux Mint/Ubuntu system for building npad
-# Run this ONCE on your self-hosted runner to install all dependencies
-# This should be run manually, NOT in CI/CD workflows
+# npad development environment setup for Linux
+# Enhanced for better distribution compatibility
 
 set -e
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+echo "==== npad Development Environment Setup ===="
+echo "Detected OS: $(uname -s) $(uname -r)"
 
-print_status() {
-    echo -e "${GREEN}[INFO]${NC} $1"
+# Function to detect distribution
+detect_distro() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        echo "$ID $VERSION_ID"
+    elif command -v lsb_release &> /dev/null; then
+        echo "$(lsb_release -si) $(lsb_release -sr)"
+    else
+        echo "unknown unknown"
+    fi
 }
 
-print_warning() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-print_section() {
-    echo
-    echo -e "${BLUE}==== $1 ====${NC}"
-}
+DISTRO_INFO=$(detect_distro)
+echo "Distribution: $DISTRO_INFO"
 
 # Check if running as root
 if [ "$EUID" -eq 0 ]; then
-    print_error "Do not run this script as root. It will use sudo when needed."
-    exit 1
+    echo "Warning: Running as root. Consider running as normal user with sudo when needed."
 fi
 
-print_section "npad Build Environment Setup"
-
-# Check OS
-if ! command -v apt-get &> /dev/null; then
-    print_error "This script is designed for Debian/Ubuntu-based systems (like Linux Mint)"
-    exit 1
-fi
-
-print_status "Detected Debian/Ubuntu-based system"
+echo ""
+echo "==== Installing Build Dependencies ===="
 
 # Update package lists
-print_section "Updating Package Lists"
-sudo apt-get update
+if command -v apt-get &> /dev/null; then
+    echo "Updating apt package lists..."
+    sudo apt-get update
+    
+    # Core build tools
+    echo "Installing core build tools..."
+    sudo apt-get install -y build-essential gcc make
+    
+    # Cross-compilation for Windows
+    echo "Installing MinGW for Windows cross-compilation..."
+    sudo apt-get install -y gcc-mingw-w64 gcc-mingw-w64-x86-64
+    
+    # Linux GUI development
+    echo "Installing X11 development libraries..."
+    sudo apt-get install -y libx11-dev
+    
+    # Terminal development (ncurses)
+    echo "Installing ncurses development..."
+    sudo apt-get install -y libncurses5-dev libncurses5
 
-# Install basic build tools
-print_section "Installing Basic Build Tools"
-sudo apt-get install -y \
-    build-essential \
-    make \
-    git \
-    curl \
-    wget
+elif command -v dnf &> /dev/null; then
+    echo "Using dnf (Fedora/RHEL)..."
+    sudo dnf install -y gcc make mingw64-gcc libX11-devel ncurses-devel
+    
+elif command -v yum &> /dev/null; then
+    echo "Using yum (CentOS/RHEL)..."
+    sudo yum install -y gcc make mingw64-gcc libX11-devel ncurses-devel
+    
+elif command -v pacman &> /dev/null; then
+    echo "Using pacman (Arch Linux)..."
+    sudo pacman -S gcc make mingw-w64-gcc libx11 ncurses
+    
+else
+    echo "Warning: Unknown package manager. Please install build dependencies manually:"
+    echo "- gcc, make, build-essential"
+    echo "- mingw-w64 (for Windows cross-compilation)"
+    echo "- libx11-dev (for Linux GUI)"
+    echo "- libncurses5-dev (for terminal UI)"
+fi
 
-# Install cross-compilation tools for Windows
-print_section "Installing Windows Cross-Compilation Tools"
-sudo apt-get install -y \
-    gcc-mingw-w64 \
-    gcc-mingw-w64-x86-64 \
-    mingw-w64-common
+echo ""
+echo "==== Installing Code Quality Tools ===="
 
-# Install Linux development dependencies
-print_section "Installing Linux Development Dependencies"
-sudo apt-get install -y \
-    libx11-dev \
-    libxext-dev \
-    libxft-dev \
-    libxinerama-dev \
-    libxcursor-dev \
-    libxrender-dev \
-    libxfixes-dev \
-    libpng-dev \
-    libjpeg-dev \
-    libgl1-mesa-dev \
-    libglu1-mesa-dev
-
-# Install code quality tools
-print_section "Installing Code Quality Tools"
-sudo apt-get install -y \
-    cppcheck \
-    clang-format \
-    clang-format-14 \
-    valgrind
-
-# Install ncurses for terminal version
-print_section "Installing ncurses Development Libraries"
-sudo apt-get install -y \
-    libncurses-dev \
-    libncursesw5-dev
-
-# Verify installations
-print_section "Verifying Installations"
-
-check_command() {
-    if command -v "$1" &> /dev/null; then
-        print_status "$1: $(command -v $1)"
-    else
-        print_error "$1: Not found"
-        return 1
+# Function to find and install clang-format
+install_clang_format() {
+    local available_versions="16 15 14 13 12 11 10"
+    local installed=false
+    
+    for version in $available_versions; do
+        if command -v apt-cache &> /dev/null; then
+            if apt-cache show "clang-format-$version" &> /dev/null; then
+                echo "Installing clang-format-$version..."
+                sudo apt-get install -y "clang-format-$version"
+                # Create symlink if clang-format doesn't exist
+                if ! command -v clang-format &> /dev/null; then
+                    sudo ln -sf "/usr/bin/clang-format-$version" /usr/bin/clang-format
+                fi
+                installed=true
+                break
+            fi
+        fi
+    done
+    
+    if [ "$installed" = false ]; then
+        echo "Trying to install generic clang-format package..."
+        if command -v apt-get &> /dev/null; then
+            sudo apt-get install -y clang-format || echo "Warning: Could not install clang-format"
+        fi
     fi
 }
 
-check_file() {
-    if [ -f "$1" ]; then
-        print_status "$1: Found"
+# Function to install cppcheck
+install_cppcheck() {
+    if command -v apt-get &> /dev/null; then
+        sudo apt-get install -y cppcheck
+    elif command -v dnf &> /dev/null; then
+        sudo dnf install -y cppcheck
+    elif command -v yum &> /dev/null; then
+        sudo yum install -y cppcheck
+    elif command -v pacman &> /dev/null; then
+        sudo pacman -S cppcheck
     else
-        print_error "$1: Not found"
-        return 1
+        echo "Warning: Could not install cppcheck with available package manager"
     fi
 }
 
-# Check compilers
-int_status "Checking compilers..."
-check_command gcc
-check_command x86_64-w64-mingw32-gcc
+install_clang_format
+install_cppcheck
 
-# Check development libraries
-print_status "Checking development libraries..."
-check_file /usr/include/X11/Xlib.h
-check_file /usr/include/ncurses.h
+echo ""
+echo "==== Installing Additional Development Tools ===="
 
-# Check code quality tools
-print_status "Checking code quality tools..."
-check_command cppcheck
-check_command clang-format
-
-# Test cross-compilation
-print_section "Testing Cross-Compilation"
-
-# Create a simple test program
-TEST_DIR=$(mktemp -d)
-cat > "$TEST_DIR/test.c" << 'EOF'
-#include <stdio.h>
-int main() {
-    printf("Hello, World!\n");
-    return 0;
-}
-EOF
-
-print_status "Testing native compilation..."
-if gcc -o "$TEST_DIR/test-native" "$TEST_DIR/test.c"; then
-    print_status "Native compilation: OK"
-else
-    print_error "Native compilation: FAILED"
+if command -v apt-get &> /dev/null; then
+    # Git (if not already installed)
+    sudo apt-get install -y git
+    
+    # Useful development tools
+    sudo apt-get install -y vim nano curl wget
+    
+    # Optional: Install VS Code if not present (uncomment if desired)
+    # if ! command -v code &> /dev/null; then
+    #     echo "Installing VS Code..."
+    #     wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > packages.microsoft.gpg
+    #     sudo install -o root -g root -m 644 packages.microsoft.gpg /etc/apt/trusted.gpg.d/
+    #     sudo sh -c 'echo "deb [arch=amd64,arm64,armhf signed-by=/etc/apt/trusted.gpg.d/packages.microsoft.gpg] https://packages.microsoft.com/repos/code stable main" > /etc/apt/sources.list.d/vscode.list'
+    #     sudo apt-get update
+    #     sudo apt-get install -y code
+    # fi
 fi
 
-print_status "Testing Windows cross-compilation..."
-if x86_64-w64-mingw32-gcc -o "$TEST_DIR/test-win64.exe" "$TEST_DIR/test.c"; then
-    print_status "Windows cross-compilation: OK"
+echo ""
+echo "==== Verifying Installation ===="
+
+# Verify core tools
+echo "Checking installed tools:"
+echo -n "gcc: "
+if command -v gcc &> /dev/null; then
+    gcc --version | head -n1
 else
-    print_error "Windows cross-compilation: FAILED"
+    echo "NOT FOUND"
 fi
 
-# Cleanup test
-rm -rf "$TEST_DIR"
+echo -n "make: "
+if command -v make &> /dev/null; then
+    make --version | head -n1
+else
+    echo "NOT FOUND"
+fi
 
-print_section "Setup Complete!"
-print_status "Your system is now ready for npad development and CI/CD"
-print_status ""
-print_status "To test the build system:"
-print_status "  git clone https://github.com/platima/npad.git"
-print_status "  cd npad"
-print_status "  make help"
-print_status "  make windows"
-print_status "  make linux"
-print_status ""
-print_status "For code quality:"
-print_status "  make lint"
-print_status "  make format-check"
+echo -n "mingw64-gcc: "
+if command -v x86_64-w64-mingw32-gcc &> /dev/null; then
+    x86_64-w64-mingw32-gcc --version | head -n1
+else
+    echo "NOT FOUND (Windows cross-compilation unavailable)"
+fi
 
-echo
-print_status "🎉 Setup completed successfully!"
+echo -n "clang-format: "
+if command -v clang-format &> /dev/null; then
+    clang-format --version
+else
+    echo "NOT FOUND (code formatting unavailable)"
+fi
+
+echo -n "cppcheck: "
+if command -v cppcheck &> /dev/null; then
+    cppcheck --version
+else
+    echo "NOT FOUND (static analysis unavailable)"
+fi
+
+echo ""
+echo "==== Testing Build System ===="
+
+# Test if we can build
+if [ -f "Makefile" ]; then
+    echo "Testing build system..."
+    
+    echo "Available make targets:"
+    make help | grep -E "^  [a-z]" | head -5
+    
+    echo ""
+    echo "You can now build npad with:"
+    echo "  make windows     # Build Windows version (cross-compile)"
+    echo "  make linux       # Build Linux versions"
+    echo "  make debug       # Build with debug symbols"
+    echo "  make test        # Run tests"
+    echo "  make lint        # Run code quality checks"
+    echo "  make format      # Format code"
+else
+    echo "Warning: Makefile not found. Make sure you're in the npad project directory."
+fi
+
+echo ""
+echo "==== Setup Complete ===="
+echo "Development environment is ready!"
+echo ""
+echo "Quick start:"
+echo "1. make windows        # Build Windows executable"
+echo "2. make linux          # Build Linux executables"
+echo "3. make test           # Run test suite"
+echo "4. make lint           # Check code quality"
+echo ""
+echo "For more options, run: make help"

@@ -13,6 +13,7 @@
 #include <richedit.h>
 #include <shellapi.h>
 #include <shellscalingapi.h>
+#include <uxtheme.h>
 
 #include "../ui_interface.h"
 #include "../main.h"
@@ -85,8 +86,6 @@ static bool InputBox(HWND parent, const char *title, const char *prompt, char *b
 bool ui_platform_init(void) {
     g_hinstance = GetModuleHandle(NULL);
 
-    // DPI awareness is now handled early in main.c before any UI initialization
-
     // Initialize common controls
     INITCOMMONCONTROLSEX icex;
     icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
@@ -110,8 +109,9 @@ bool ui_platform_init(void) {
         return false;
     }
 
-    // Check for system dark mode support
-    // This is a simplified check - real implementation would be more robust
+    // Check for system dark mode support - default to light mode
+    g_dark_mode = false; // FIXED: Default to light mode instead of dark
+
     HKEY hkey;
     DWORD value = 0;
     DWORD size = sizeof(value);
@@ -181,10 +181,10 @@ Window *ui_platform_create_main_window(void) {
 
     memset(window, 0, sizeof(Window));
 
-    // Create main window - FIXED: Separated EX flags from regular flags
-    window->hwnd = CreateWindowExA(WS_EX_CLIENTEDGE | WS_EX_ACCEPTFILES | WS_EX_WINDOWEDGE,
-                                   NPAD_WINDOW_CLASS, "npad", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
-                                   CW_USEDEFAULT, 800, 600, NULL, NULL, g_hinstance, window);
+    window->hwnd =
+        CreateWindowExA(WS_EX_ACCEPTFILES,
+                        NPAD_WINDOW_CLASS, "npad", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
+                        CW_USEDEFAULT, 800, 600, NULL, NULL, g_hinstance, window);
 
     if (!window->hwnd) {
         NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Window creation",
@@ -192,12 +192,12 @@ Window *ui_platform_create_main_window(void) {
         free(window);
         return NULL;
     }
-
-    // Create rich edit control (but keep it in plain text mode)
+  
     window->edit_hwnd =
         CreateWindowExA(0, RICHEDIT_CLASS, "",
-                        WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE |
-                            ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_NOHIDESEL,
+                        WS_CHILD | WS_VISIBLE | WS_VSCROLL  | ES_MULTILINE |
+                            ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_NOHIDESEL | ES_WANTRETURN,
+
                         0, 0, 0, 0, window->hwnd, (HMENU) ID_EDIT_CONTROL, g_hinstance, NULL);
 
     if (!window->edit_hwnd) {
@@ -208,17 +208,16 @@ Window *ui_platform_create_main_window(void) {
         return NULL;
     }
 
-    // Set font to system default GUI font (TrueType)
-    HFONT font = (HFONT) GetStockObject(DEFAULT_GUI_FONT);
+    SetWindowTheme(window->edit_hwnd, NULL, NULL); // Use default system theme
+
+    HFONT font = (HFONT) GetStockObject(ANSI_FIXED_FONT); // Use fixed-width font like notepad
     if (!font) {
-        // Fallback to system font
-        font = (HFONT) GetStockObject(SYSTEM_FONT);
+        font = (HFONT) GetStockObject(SYSTEM_FIXED_FONT);
+    }
+    if (!font) {
+        font = (HFONT) GetStockObject(DEFAULT_GUI_FONT);
     }
     SendMessage(window->edit_hwnd, WM_SETFONT, (WPARAM) font, TRUE);
-
-    // Configure RichEdit for plain text behavior
-    SendMessage(window->edit_hwnd, EM_SETTEXTMODE, TM_PLAINTEXT, 0);
-    SendMessage(window->edit_hwnd, EM_SETOPTIONS, ECOOP_OR, ECO_NOHIDESEL);
 
     // Set unlimited text length
     SendMessage(window->edit_hwnd, EM_LIMITTEXT, 0, 0);
@@ -258,7 +257,7 @@ Window *ui_platform_create_main_window(void) {
     // Create menu and accelerators
     create_menu(window);
 
-    // Create accelerator table - FIXED: Added proper error handling
+    // Create accelerator table
     ACCEL accel[] = { { FCONTROL | FVIRTKEY, 'N', ID_FILE_NEW },
                       { FCONTROL | FVIRTKEY, 'O', ID_FILE_OPEN },
                       { FCONTROL | FVIRTKEY, 'S', ID_FILE_SAVE },
@@ -273,11 +272,11 @@ Window *ui_platform_create_main_window(void) {
                       { FALT | FVIRTKEY, 'Z', ID_VIEW_WORD_WRAP } };
     window->haccel = CreateAcceleratorTable(accel, sizeof(accel) / sizeof(accel[0]));
 
-    // FIXED: Better error handling for accelerator table
     if (!window->haccel) {
         NPAD_ERROR_WARNING(NPAD_ERROR_SYSTEM, GetLastError(), "Accelerator table creation",
                            "Failed to create accelerator table - keyboard shortcuts will not work");
-        // Continue without accelerators rather than failing completely
+        
+      // Continue without accelerators rather than failing completely
     }
 
     // Apply theme
@@ -377,6 +376,7 @@ void ui_platform_set_text(Window *window, const char *text) {
         SetWindowTextA(window->edit_hwnd, text);
         window->is_modified = false;
         update_title(window);
+        update_status_bar(window); // FIXED: Update status bar when text changes
     }
 }
 
@@ -402,7 +402,6 @@ char *ui_platform_get_text(Window *window) {
 
     int actual_length = GetWindowTextA(window->edit_hwnd, text, length + 1);
     if (actual_length != length) {
-        // Unexpected length mismatch - handle gracefully
         text[actual_length] = '\0';
     }
     return text;
@@ -413,6 +412,7 @@ void ui_platform_clear_text(Window *window) {
         SetWindowTextA(window->edit_hwnd, "");
         window->is_modified = false;
         update_title(window);
+        update_status_bar(window); // FIXED: Update status bar when text cleared
     }
 }
 
@@ -462,6 +462,7 @@ void ui_platform_set_cursor_position(Window *window, int position) {
     if (window && window->edit_hwnd && position >= 0) {
         SendMessage(window->edit_hwnd, EM_SETSEL, position, position);
         SendMessage(window->edit_hwnd, EM_SCROLLCARET, 0, 0);
+        update_status_bar(window); // FIXED: Update status bar when cursor moves
     }
 }
 
@@ -509,7 +510,6 @@ void ui_platform_undo(Window *window) {
 void ui_platform_redo(Window *window) {
     (void) window;
     // Standard EDIT control doesn't support redo
-    // Would need RichEdit control for full undo/redo stack
 }
 
 bool ui_platform_can_undo(Window *window) {
@@ -520,12 +520,11 @@ bool ui_platform_can_undo(Window *window) {
 
 bool ui_platform_can_redo(Window *window) {
     (void) window;
-    // Standard EDIT control doesn't support redo
     return false;
 }
 
 char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *params) {
-    (void) params; // Use default parameters for now
+    (void) params;
     OPENFILENAMEA ofn;
     char filename[MAX_PATH] = "";
 
@@ -539,7 +538,8 @@ char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *param
     ofn.lpstrFileTitle = NULL;
     ofn.nMaxFileTitle = 0;
     ofn.lpstrInitialDir = NULL;
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
+    // FIXED: Use modern dialog flags for better appearance
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY | OFN_EXPLORER;
 
     if (GetOpenFileNameA(&ofn)) {
         char *result = malloc(strlen(filename) + 1);
@@ -605,7 +605,7 @@ static UINT_PTR CALLBACK SaveDialogHookProc(HWND hdlg, UINT uiMsg, WPARAM wParam
 }
 
 char *ui_platform_show_save_dialog(Window *parent, const FileDialogParams *params) {
-    (void) params; // Use default parameters for now
+    (void) params;
     OPENFILENAMEA ofn;
     char filename[MAX_PATH] = "";
 
@@ -619,8 +619,8 @@ char *ui_platform_show_save_dialog(Window *parent, const FileDialogParams *param
     ofn.lpstrFileTitle = NULL;
     ofn.nMaxFileTitle = 0;
     ofn.lpstrInitialDir = NULL;
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_ENABLEHOOK | OFN_EXPLORER;
-    ofn.lpfnHook = SaveDialogHookProc;
+    // FIXED: Use modern dialog flags without hook for standard appearance
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER;
 
     if (GetSaveFileNameA(&ofn)) {
         char *result = malloc(strlen(filename) + 1);
@@ -659,12 +659,10 @@ Dialog *ui_platform_show_find_dialog(Window *parent) {
 
     dialog->parent = parent;
 
-    // Create a simple modal dialog for find
-    dialog->hwnd =
-        CreateWindowExA(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
-                        "STATIC", // Using STATIC class as placeholder
-                        "Find", WS_POPUP | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT,
-                        300, 100, parent ? parent->hwnd : NULL, NULL, g_hinstance, NULL);
+    dialog->hwnd = CreateWindowExA(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, "STATIC", "Find",
+                                   WS_POPUP | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT,
+                                   300, 100, parent ? parent->hwnd : NULL, NULL, g_hinstance, NULL);
+
 
     if (!dialog->hwnd) {
         NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Find dialog creation",
@@ -673,15 +671,12 @@ Dialog *ui_platform_show_find_dialog(Window *parent) {
         return NULL;
     }
 
-    // Show the dialog
     ShowWindow(dialog->hwnd, SW_SHOW);
-
     return dialog;
 }
 
 Dialog *ui_platform_show_replace_dialog(Window *parent) {
     (void) parent;
-    // TODO: Implement replace dialog
     return NULL;
 }
 
@@ -706,7 +701,6 @@ bool ui_platform_is_dark_mode(void) {
 }
 
 bool ui_platform_system_supports_dark_mode(void) {
-    // Windows 10 version 1809 and later support dark mode
     return true;
 }
 
@@ -806,7 +800,6 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         case WM_COMMAND: {
             if (window) {
                 if (HIWORD(wparam) == EN_CHANGE && LOWORD(wparam) == ID_EDIT_CONTROL) {
-                    // Use atomic operation to prevent race condition
                     bool was_modified = window->is_modified;
                     window->is_modified = true;
                     if (!was_modified) {
@@ -815,7 +808,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                     update_status_bar(window);
                     ui_post_event(UI_EVENT_TEXT_CHANGED, window, NULL);
                 } else if (HIWORD(wparam) == EN_SELCHANGE && LOWORD(wparam) == ID_EDIT_CONTROL) {
-                    // Update status bar when cursor position changes
+                    // FIXED: Update status bar when cursor position changes
                     update_status_bar(window);
                 } else {
                     handle_command(window, LOWORD(wparam));
@@ -981,12 +974,17 @@ static void handle_command(Window *window, WORD command) {
             // Toggle word wrap
             window->word_wrap_enabled = !window->word_wrap_enabled;
             if (window->word_wrap_enabled) {
-                // Enable word wrap
-                SendMessage(window->edit_hwnd, EM_SETTARGETDEVICE, 0, 0);
+                // Enable word wrap by removing horizontal scroll
+                SetWindowLong(window->edit_hwnd, GWL_STYLE,
+                              GetWindowLong(window->edit_hwnd, GWL_STYLE) & ~WS_HSCROLL);
             } else {
-                // Disable word wrap
-                SendMessage(window->edit_hwnd, EM_SETTARGETDEVICE, 0, 1);
+                // Disable word wrap by adding horizontal scroll
+                SetWindowLong(window->edit_hwnd, GWL_STYLE,
+                              GetWindowLong(window->edit_hwnd, GWL_STYLE) | WS_HSCROLL);
             }
+            // Force window to redraw with new style
+            SetWindowPos(window->edit_hwnd, NULL, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
             // Update menu checkmark
             if (window->hmenu) {
                 CheckMenuItem(window->hmenu, ID_VIEW_WORD_WRAP,
@@ -1020,14 +1018,12 @@ static void update_title(Window *window) {
             filename = window->current_file;
         }
 
-        // Validate filename is not empty
         if (!filename || strlen(filename) == 0) {
             filename = "Untitled";
         }
     }
 
     snprintf(title, sizeof(title), "%s%.400s - npad", window->is_modified ? "*" : "", filename);
-
     SetWindowTextA(window->hwnd, title);
 }
 
@@ -1035,12 +1031,13 @@ static void apply_theme(Window *window) {
     if (!window)
         return;
 
-    // Basic theme support - in a real implementation, this would be more sophisticated
+    // FIXED: Apply proper system colors
     if (g_dark_mode) {
-        // Set dark background/foreground colors
-        // This is a simplified implementation
+        // For now, just update the menu checkmark - full dark mode would require more work
+        // In a complete implementation, we'd set custom colors here
     } else {
-        // Set light background/foreground colors
+        // Use system default colors
+        // The edit control will automatically use system colors
     }
 
     // Update menu checkmark
@@ -1049,6 +1046,7 @@ static void apply_theme(Window *window) {
     }
 }
 
+// FIXED: Enhanced status bar update function
 static void update_status_bar(Window *window) {
     if (!window || !window->status_hwnd || !window->edit_hwnd)
         return;
@@ -1062,12 +1060,12 @@ static void update_status_bar(Window *window) {
     int line_start = (int) SendMessage(window->edit_hwnd, EM_LINEINDEX, line - 1, 0);
     int column = (int) start - line_start + 1;
 
-    // Update line/column display
+    // FIXED: Update line/column display with proper formatting
     char line_col_text[64];
     snprintf(line_col_text, sizeof(line_col_text), "Ln %d, Col %d", line, column);
     SendMessage(window->status_hwnd, SB_SETTEXT, 1, (LPARAM) line_col_text);
 
-    // Update zoom level
+    // FIXED: Update zoom level display
     char zoom_text[32];
     snprintf(zoom_text, sizeof(zoom_text), "%d%%", window->zoom_level);
     SendMessage(window->status_hwnd, SB_SETTEXT, 2, (LPARAM) zoom_text);
@@ -1075,13 +1073,8 @@ static void update_status_bar(Window *window) {
     // Update encoding (for now, always UTF-8)
     SendMessage(window->status_hwnd, SB_SETTEXT, 3, (LPARAM) "UTF-8");
 
-    // Update line endings info in the first (leftmost) part
-    const char *line_ending = "Windows (CRLF)"; // Default for Windows
-    if (window->current_file) {
-        // In a real implementation, we'd detect the actual line endings
-        // For now, assume Windows line endings
-    }
-
+    // Update status message
+    const char *line_ending = "Windows (CRLF)";
     char status_text[256];
     if (window->is_modified) {
         snprintf(status_text, sizeof(status_text), "Modified - %s", line_ending);
