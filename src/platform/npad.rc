@@ -25,12 +25,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Platima"
             VALUE "FileDescription", "npad - Lightweight Text Editor"
-            VALUE "FileVersion", "0.1.6.0"
+            VALUE "FileVersion", "0.1.7.0"
             VALUE "InternalName", "npad"
             VALUE "LegalCopyright", "Copyright © 2025 Platima"
             VALUE "OriginalFilename", "npad.exe"
             VALUE "ProductName", "npad"
-            VALUE "ProductVersion", "0.1.6.0"
+            VALUE "ProductVersion", "0.1.7.0"
         END
     END
     BLOCK "VarFileInfo"

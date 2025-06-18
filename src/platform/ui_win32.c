@@ -18,6 +18,7 @@
 #include "../ui_interface.h"
 #include "../main.h"
 #include "../core/error.h"
+#include "resource.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -192,11 +193,18 @@ Window *ui_platform_create_main_window(void) {
         return NULL;
     }
 
+    // Set window icon
+    HICON icon = LoadIcon(g_hinstance, MAKEINTRESOURCE(IDI_NPAD));
+    if (icon) {
+        SendMessage(window->hwnd, WM_SETICON, ICON_BIG, (LPARAM) icon);
+        SendMessage(window->hwnd, WM_SETICON, ICON_SMALL, (LPARAM) icon);
+    }
+
+    // FIXED: Always show vertical scrollbar, horizontal scrollbar controlled by word wrap
     window->edit_hwnd =
         CreateWindowExA(0, RICHEDIT_CLASS, "",
-                        WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL |
-                            ES_AUTOHSCROLL | ES_NOHIDESEL | ES_WANTRETURN,
-
+                        WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE | 
+                        ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_NOHIDESEL | ES_WANTRETURN,
                         0, 0, 0, 0, window->hwnd, (HMENU) ID_EDIT_CONTROL, g_hinstance, NULL);
 
     if (!window->edit_hwnd) {
@@ -207,16 +215,39 @@ Window *ui_platform_create_main_window(void) {
         return NULL;
     }
 
-    SetWindowTheme(window->edit_hwnd, NULL, NULL); // Use default system theme
+    // FIXED: Use proper Windows system font instead of fixed-width font
+    // For RichEdit, we need to set the default character format
+    CHARFORMAT2A cf;
+    ZeroMemory(&cf, sizeof(cf));
+    cf.cbSize = sizeof(cf);
+    cf.dwMask = CFM_FACE | CFM_SIZE | CFM_CHARSET;
+    cf.dwEffects = 0;
+    cf.yHeight = 200; // 10 point font (20 twips per point)
+    cf.bCharSet = DEFAULT_CHARSET;
+    
+    // Get the system UI font name
+    NONCLIENTMETRICSA ncm;
+    ncm.cbSize = sizeof(ncm);
+    if (SystemParametersInfoA(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0)) {
+        // Use the system message font (same as used in dialogs/UI)
+        strncpy(cf.szFaceName, ncm.lfMessageFont.lfFaceName, LF_FACESIZE - 1);
+        cf.szFaceName[LF_FACESIZE - 1] = '\0';
+        // Convert font height from logical units to twips
+        HDC hdc = GetDC(window->edit_hwnd);
+        int logPixelsY = GetDeviceCaps(hdc, LOGPIXELSY);
+        cf.yHeight = -MulDiv(ncm.lfMessageFont.lfHeight, 1440, logPixelsY);
+        ReleaseDC(window->edit_hwnd, hdc);
+    } else {
+        // Fallback to a common system font
+        strncpy(cf.szFaceName, "Segoe UI", LF_FACESIZE - 1);
+        cf.szFaceName[LF_FACESIZE - 1] = '\0';
+    }
+    
+    SendMessage(window->edit_hwnd, EM_SETCHARFORMAT, SCF_ALL, (LPARAM) &cf);
 
-    HFONT font = (HFONT) GetStockObject(ANSI_FIXED_FONT); // Use fixed-width font like notepad
-    if (!font) {
-        font = (HFONT) GetStockObject(SYSTEM_FIXED_FONT);
-    }
-    if (!font) {
-        font = (HFONT) GetStockObject(DEFAULT_GUI_FONT);
-    }
-    SendMessage(window->edit_hwnd, WM_SETFONT, (WPARAM) font, TRUE);
+    // FIXED: Set proper margins like Windows Notepad (4 pixels left and right)
+    SendMessage(window->edit_hwnd, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, 
+                MAKELPARAM(4, 4));
 
     // Set unlimited text length
     SendMessage(window->edit_hwnd, EM_LIMITTEXT, 0, 0);
@@ -249,7 +280,7 @@ Window *ui_platform_create_main_window(void) {
     ShowWindow(window->status_hwnd, SW_SHOW);
     UpdateWindow(window->status_hwnd);
 
-    // Initialize window state
+    // Initialize window state - FIXED: Default to word wrap disabled (horizontal scroll visible)
     window->word_wrap_enabled = false;
     window->zoom_level = 100;
 
@@ -274,8 +305,6 @@ Window *ui_platform_create_main_window(void) {
     if (!window->haccel) {
         NPAD_ERROR_WARNING(NPAD_ERROR_SYSTEM, GetLastError(), "Accelerator table creation",
                            "Failed to create accelerator table - keyboard shortcuts will not work");
-
-        // Continue without accelerators rather than failing completely
     }
 
     // Apply theme
@@ -375,7 +404,7 @@ void ui_platform_set_text(Window *window, const char *text) {
         SetWindowTextA(window->edit_hwnd, text);
         window->is_modified = false;
         update_title(window);
-        update_status_bar(window); // FIXED: Update status bar when text changes
+        update_status_bar(window);
     }
 }
 
@@ -411,7 +440,7 @@ void ui_platform_clear_text(Window *window) {
         SetWindowTextA(window->edit_hwnd, "");
         window->is_modified = false;
         update_title(window);
-        update_status_bar(window); // FIXED: Update status bar when text cleared
+        update_status_bar(window);
     }
 }
 
@@ -461,7 +490,7 @@ void ui_platform_set_cursor_position(Window *window, int position) {
     if (window && window->edit_hwnd && position >= 0) {
         SendMessage(window->edit_hwnd, EM_SETSEL, position, position);
         SendMessage(window->edit_hwnd, EM_SCROLLCARET, 0, 0);
-        update_status_bar(window); // FIXED: Update status bar when cursor moves
+        update_status_bar(window);
     }
 }
 
@@ -537,7 +566,6 @@ char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *param
     ofn.lpstrFileTitle = NULL;
     ofn.nMaxFileTitle = 0;
     ofn.lpstrInitialDir = NULL;
-    // FIXED: Use modern dialog flags for better appearance
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY | OFN_EXPLORER;
 
     if (GetOpenFileNameA(&ofn)) {
@@ -566,7 +594,6 @@ char *ui_platform_show_save_dialog(Window *parent, const FileDialogParams *param
     ofn.lpstrFileTitle = NULL;
     ofn.nMaxFileTitle = 0;
     ofn.lpstrInitialDir = NULL;
-    // FIXED: Use modern dialog flags without hook for standard appearance
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER;
 
     if (GetSaveFileNameA(&ofn)) {
@@ -697,12 +724,12 @@ static bool register_window_class(void) {
     wc.cbClsExtra = 0;
     wc.cbWndExtra = 0;
     wc.hInstance = g_hinstance;
-    wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+    wc.hIcon = LoadIcon(g_hinstance, MAKEINTRESOURCE(IDI_NPAD));
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH) (COLOR_WINDOW + 1);
     wc.lpszMenuName = NULL;
     wc.lpszClassName = NPAD_WINDOW_CLASS;
-    wc.hIconSm = LoadIcon(NULL, IDI_APPLICATION);
+    wc.hIconSm = LoadIcon(g_hinstance, MAKEINTRESOURCE(IDI_NPAD));
 
     ATOM result = RegisterClassExA(&wc);
     if (result == 0) {
@@ -754,7 +781,6 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                     update_status_bar(window);
                     ui_post_event(UI_EVENT_TEXT_CHANGED, window, NULL);
                 } else if (HIWORD(wparam) == EN_SELCHANGE && LOWORD(wparam) == ID_EDIT_CONTROL) {
-                    // FIXED: Update status bar when cursor position changes
                     update_status_bar(window);
                 } else {
                     handle_command(window, LOWORD(wparam));
@@ -917,7 +943,7 @@ static void handle_command(Window *window, WORD command) {
             break;
         }
         case ID_VIEW_WORD_WRAP:
-            // Toggle word wrap
+            // FIXED: Toggle word wrap and horizontal scrollbar correctly
             window->word_wrap_enabled = !window->word_wrap_enabled;
             if (window->word_wrap_enabled) {
                 // Enable word wrap by removing horizontal scroll
@@ -946,6 +972,7 @@ static void handle_command(Window *window, WORD command) {
     }
 }
 
+// FIXED: Improved title update function with proper modified state handling
 static void update_title(Window *window) {
     if (!window || !window->hwnd)
         return;
@@ -977,7 +1004,7 @@ static void apply_theme(Window *window) {
     if (!window)
         return;
 
-    // FIXED: Apply proper system colors
+    // Apply proper system colors
     if (g_dark_mode) {
         // For now, just update the menu checkmark - full dark mode would require more work
         // In a complete implementation, we'd set custom colors here
@@ -992,7 +1019,6 @@ static void apply_theme(Window *window) {
     }
 }
 
-// FIXED: Enhanced status bar update function
 static void update_status_bar(Window *window) {
     if (!window || !window->status_hwnd || !window->edit_hwnd)
         return;
@@ -1006,12 +1032,12 @@ static void update_status_bar(Window *window) {
     int line_start = (int) SendMessage(window->edit_hwnd, EM_LINEINDEX, line - 1, 0);
     int column = (int) start - line_start + 1;
 
-    // FIXED: Update line/column display with proper formatting
+    // Update line/column display with proper formatting
     char line_col_text[64];
     snprintf(line_col_text, sizeof(line_col_text), "Ln %d, Col %d", line, column);
     SendMessage(window->status_hwnd, SB_SETTEXT, 1, (LPARAM) line_col_text);
 
-    // FIXED: Update zoom level display
+    // Update zoom level display
     char zoom_text[32];
     snprintf(zoom_text, sizeof(zoom_text), "%d%%", window->zoom_level);
     SendMessage(window->status_hwnd, SB_SETTEXT, 2, (LPARAM) zoom_text);
