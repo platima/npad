@@ -13,6 +13,7 @@
 #include <richedit.h>
 #include <shellapi.h>
 #include <shellscalingapi.h>
+#include <uxtheme.h>
 
 #include "../ui_interface.h"
 #include "../main.h"
