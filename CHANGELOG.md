@@ -5,6 +5,46 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2025-06-18
+
+### 🐛 Bug Fixes
+- **CRITICAL**: Fixed window title bar sizing and positioning issues
+- **CRITICAL**: Fixed edit control appearance to match standard Windows Notepad behaviour
+- **CRITICAL**: Fixed Enter key not creating new lines in text editor
+- Fixed status bar line/column tracking that was not updating properly
+- Fixed status bar zoom level display functionality
+- Fixed file dialog appearance to use modern Windows UI instead of legacy interface
+- Fixed dark mode being enabled by default (now defaults to system light mode)
+- Removed sunken border appearance from edit control for authentic notepad look
+- Fixed edit control to use proper system colours and theming
+
+### ✨ Features
+- **Enhanced Windows UI fidelity with authentic notepad appearance**
+  - Switched from RichEdit to standard EDIT control for true notepad behaviour
+  - Applied proper system theming and colour schemes
+  - Improved window styling to match classic Windows Notepad exactly
+  - Enhanced status bar updates for real-time cursor position tracking
+  - Added proper Enter key handling for multiline text input (ES_WANTRETURN flag)
+
+### 🔧 Technical Improvements
+- Improved window creation with cleaner styling flags
+- Enhanced status bar update mechanism with proper cursor tracking
+- Better system font selection matching Windows Notepad defaults
+- Removed unnecessary window edge styling for cleaner appearance
+- Updated file dialogs to use modern Windows Explorer-style interface
+- Enhanced edit control configuration for optimal text editing experience
+
+### 📋 UI/UX Improvements
+- Title bar now properly sized and positioned relative to menu bar
+- Edit control appearance matches Windows Notepad (flat, not sunken)
+- Status bar properly updates line and column numbers in real-time
+- File dialogs use modern Windows appearance instead of legacy UI
+- Default theme properly follows system settings (light mode default)
+- Text editor now properly handles Enter key for new line creation
+
+### ⚠️ Breaking Changes
+None - all fixes maintain backward compatibility whilst improving user experience
+
 ## [0.1.5] - 2025-06-18
 
 ### 🔒 Security
@@ -171,7 +211,10 @@ None - all fixes maintain backward compatibility
 
 ## Development Milestones
 
-### Security & Stability Focus (v0.1.2-0.1.4)
+### UI Fidelity Focus (v0.1.6)
+Major improvements to Windows UI authenticity, fixing visual inconsistencies and ensuring npad matches classic Windows Notepad appearance and behaviour exactly. Enhanced real-time status tracking and modern dialog interfaces.
+
+### Security & Stability Focus (v0.1.2-0.1.5)
 Major emphasis on security hardening, thread safety, and comprehensive testing. Addressed critical vulnerabilities whilst building a robust testing framework.
 
 ### UI Enhancement Phase (v0.1.3-0.1.4)  
