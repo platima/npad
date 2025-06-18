@@ -92,15 +92,16 @@ bool ui_platform_init(void) {
     icex.dwICC = ICC_WIN95_CLASSES;
     if (!InitCommonControlsEx(&icex)) {
         NPAD_ERROR_ERROR(NPAD_ERROR_SYSTEM, GetLastError(), "UI initialization",
-                        "Failed to initialize common controls");
+                         "Failed to initialize common controls");
         return false;
     }
 
     // Load Rich Edit library
     g_richedit_lib = LoadLibrary(TEXT("riched20.dll"));
     if (!g_richedit_lib) {
-        NPAD_ERROR_WARNING(NPAD_ERROR_SYSTEM, GetLastError(), "UI initialization",
-                        "Failed to load Rich Edit library - falling back to standard edit control");
+        NPAD_ERROR_WARNING(
+            NPAD_ERROR_SYSTEM, GetLastError(), "UI initialization",
+            "Failed to load Rich Edit library - falling back to standard edit control");
     }
 
     // Register window class
@@ -109,8 +110,8 @@ bool ui_platform_init(void) {
     }
 
     // Check for system dark mode support - default to light mode
-    g_dark_mode = false;  // FIXED: Default to light mode instead of dark
-    
+    g_dark_mode = false; // FIXED: Default to light mode instead of dark
+
     HKEY hkey;
     DWORD value = 0;
     DWORD size = sizeof(value);
@@ -138,7 +139,7 @@ void ui_platform_cleanup(void) {
         free(g_main_window);
         g_main_window = NULL;
     }
-    
+
     // Free Rich Edit library
     if (g_richedit_lib) {
         FreeLibrary(g_richedit_lib);
@@ -182,39 +183,37 @@ Window *ui_platform_create_main_window(void) {
 
     // FIXED: Adjusted window styles to match notepad more closely
     window->hwnd =
-        CreateWindowExA(WS_EX_ACCEPTFILES,  // Removed extra window edge styles for cleaner look
-                       NPAD_WINDOW_CLASS, "npad",
-                       WS_OVERLAPPEDWINDOW, 
-                       CW_USEDEFAULT, CW_USEDEFAULT, 800, 600, 
-                       NULL, NULL, g_hinstance, window);
+        CreateWindowExA(WS_EX_ACCEPTFILES, // Removed extra window edge styles for cleaner look
+                        NPAD_WINDOW_CLASS, "npad", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
+                        CW_USEDEFAULT, 800, 600, NULL, NULL, g_hinstance, window);
 
     if (!window->hwnd) {
         NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Window creation",
-                        "Failed to create main window");
+                         "Failed to create main window");
         free(window);
         return NULL;
     }
 
     // FIXED: Use regular EDIT control instead of RichEdit for better compatibility
     window->edit_hwnd =
-        CreateWindowExA(0, "EDIT", "",  // Use standard EDIT class for true notepad behavior
-                       WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE |
-                           ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_NOHIDESEL | ES_WANTRETURN,
-                       0, 0, 0, 0, window->hwnd, (HMENU) ID_EDIT_CONTROL, g_hinstance, NULL);
+        CreateWindowExA(0, "EDIT", "", // Use standard EDIT class for true notepad behavior
+                        WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE |
+                            ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_NOHIDESEL | ES_WANTRETURN,
+                        0, 0, 0, 0, window->hwnd, (HMENU) ID_EDIT_CONTROL, g_hinstance, NULL);
 
     if (!window->edit_hwnd) {
         NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Edit control creation",
-                        "Failed to create edit control");
+                         "Failed to create edit control");
         DestroyWindow(window->hwnd);
         free(window);
         return NULL;
     }
 
     // FIXED: Set system colors to match Windows theme
-    SetWindowTheme(window->edit_hwnd, NULL, NULL);  // Use default system theme
-    
+    SetWindowTheme(window->edit_hwnd, NULL, NULL); // Use default system theme
+
     // FIXED: Use system font that matches notepad
-    HFONT font = (HFONT) GetStockObject(ANSI_FIXED_FONT);  // Use fixed-width font like notepad
+    HFONT font = (HFONT) GetStockObject(ANSI_FIXED_FONT); // Use fixed-width font like notepad
     if (!font) {
         font = (HFONT) GetStockObject(SYSTEM_FIXED_FONT);
     }
@@ -228,12 +227,12 @@ Window *ui_platform_create_main_window(void) {
 
     // Create status bar
     window->status_hwnd =
-        CreateWindowExA(0, STATUSCLASSNAME, NULL, WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP, 0, 0, 0, 0,
-                       window->hwnd, (HMENU) ID_STATUS_BAR, g_hinstance, NULL);
+        CreateWindowExA(0, STATUSCLASSNAME, NULL, WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP, 0, 0, 0,
+                        0, window->hwnd, (HMENU) ID_STATUS_BAR, g_hinstance, NULL);
 
     if (!window->status_hwnd) {
         NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Status bar creation",
-                        "Failed to create status bar");
+                         "Failed to create status bar");
         DestroyWindow(window->edit_hwnd);
         DestroyWindow(window->hwnd);
         free(window);
@@ -278,7 +277,7 @@ Window *ui_platform_create_main_window(void) {
 
     if (!window->haccel) {
         NPAD_ERROR_WARNING(NPAD_ERROR_SYSTEM, GetLastError(), "Accelerator table creation",
-                          "Failed to create accelerator table - keyboard shortcuts will not work");
+                           "Failed to create accelerator table - keyboard shortcuts will not work");
     }
 
     // Apply theme
@@ -378,7 +377,7 @@ void ui_platform_set_text(Window *window, const char *text) {
         SetWindowTextA(window->edit_hwnd, text);
         window->is_modified = false;
         update_title(window);
-        update_status_bar(window);  // FIXED: Update status bar when text changes
+        update_status_bar(window); // FIXED: Update status bar when text changes
     }
 }
 
@@ -398,7 +397,7 @@ char *ui_platform_get_text(Window *window) {
     char *text = malloc(length + 1);
     if (!text) {
         NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, 0, "Text retrieval",
-                        "Failed to allocate memory for text buffer");
+                         "Failed to allocate memory for text buffer");
         return NULL;
     }
 
@@ -414,7 +413,7 @@ void ui_platform_clear_text(Window *window) {
         SetWindowTextA(window->edit_hwnd, "");
         window->is_modified = false;
         update_title(window);
-        update_status_bar(window);  // FIXED: Update status bar when text cleared
+        update_status_bar(window); // FIXED: Update status bar when text cleared
     }
 }
 
@@ -441,7 +440,7 @@ char *ui_platform_get_selected_text(Window *window) {
     char *text = malloc(length + 1);
     if (!text) {
         NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, 0, "Selected text retrieval",
-                        "Failed to allocate memory for selected text");
+                         "Failed to allocate memory for selected text");
         return NULL;
     }
 
@@ -450,7 +449,7 @@ char *ui_platform_get_selected_text(Window *window) {
         free(text);
         return NULL;
     }
-    
+
     return text;
 }
 
@@ -464,7 +463,7 @@ void ui_platform_set_cursor_position(Window *window, int position) {
     if (window && window->edit_hwnd && position >= 0) {
         SendMessage(window->edit_hwnd, EM_SETSEL, position, position);
         SendMessage(window->edit_hwnd, EM_SCROLLCARET, 0, 0);
-        update_status_bar(window);  // FIXED: Update status bar when cursor moves
+        update_status_bar(window); // FIXED: Update status bar when cursor moves
     }
 }
 
@@ -609,15 +608,13 @@ Dialog *ui_platform_show_find_dialog(Window *parent) {
 
     dialog->parent = parent;
 
-    dialog->hwnd =
-        CreateWindowExA(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
-                       "STATIC",
-                       "Find", WS_POPUP | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT,
-                       300, 100, parent ? parent->hwnd : NULL, NULL, g_hinstance, NULL);
+    dialog->hwnd = CreateWindowExA(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, "STATIC", "Find",
+                                   WS_POPUP | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT,
+                                   300, 100, parent ? parent->hwnd : NULL, NULL, g_hinstance, NULL);
 
     if (!dialog->hwnd) {
         NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Find dialog creation",
-                        "Failed to create find dialog");
+                         "Failed to create find dialog");
         free(dialog);
         return NULL;
     }
@@ -674,8 +671,10 @@ int ui_platform_get_line_count(Window *window) {
 
 void ui_platform_get_cursor_line_column(Window *window, int *line, int *column) {
     if (!window || !window->edit_hwnd || !line || !column) {
-        if (line) *line = 0;
-        if (column) *column = 0;
+        if (line)
+            *line = 0;
+        if (column)
+            *column = 0;
         return;
     }
 
@@ -710,7 +709,7 @@ static bool register_window_class(void) {
     ATOM result = RegisterClassExA(&wc);
     if (result == 0) {
         NPAD_ERROR_ERROR(NPAD_ERROR_SYSTEM, GetLastError(), "Window class registration",
-                        "Failed to register window class");
+                         "Failed to register window class");
         return false;
     }
     return true;
@@ -769,7 +768,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         case WM_CLOSE: {
             if (window && window->is_modified) {
                 int result = MessageBoxA(hwnd, "Do you want to save changes to this document?",
-                                        "npad", MB_YESNOCANCEL | MB_ICONQUESTION);
+                                         "npad", MB_YESNOCANCEL | MB_ICONQUESTION);
 
                 if (result == IDCANCEL) {
                     return 0; // Don't close
@@ -806,7 +805,7 @@ static void create_menu(Window *window) {
 
     if (!hmenu || !hfile || !hedit || !hview || !hhelp) {
         NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Menu creation",
-                        "Failed to create menu components");
+                         "Failed to create menu components");
         return;
     }
 
@@ -848,11 +847,11 @@ static void create_menu(Window *window) {
 
     if (!SetMenu(window->hwnd, hmenu)) {
         NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Menu attachment",
-                        "Failed to attach menu to window");
+                         "Failed to attach menu to window");
         DestroyMenu(hmenu);
         return;
     }
-    
+
     window->hmenu = hmenu;
 }
 
@@ -905,7 +904,8 @@ static void handle_command(Window *window, WORD command) {
                     int line_index = line_number - 1;
 
                     // Get the character index for the start of the line
-                    int char_index = (int)SendMessage(window->edit_hwnd, EM_LINEINDEX, line_index, 0);
+                    int char_index =
+                        (int) SendMessage(window->edit_hwnd, EM_LINEINDEX, line_index, 0);
                     if (char_index >= 0) {
                         // Set cursor to the beginning of the line
                         SendMessage(window->edit_hwnd, EM_SETSEL, char_index, char_index);
@@ -923,16 +923,16 @@ static void handle_command(Window *window, WORD command) {
             window->word_wrap_enabled = !window->word_wrap_enabled;
             if (window->word_wrap_enabled) {
                 // Enable word wrap by removing horizontal scroll
-                SetWindowLong(window->edit_hwnd, GWL_STYLE, 
-                    GetWindowLong(window->edit_hwnd, GWL_STYLE) & ~WS_HSCROLL);
+                SetWindowLong(window->edit_hwnd, GWL_STYLE,
+                              GetWindowLong(window->edit_hwnd, GWL_STYLE) & ~WS_HSCROLL);
             } else {
                 // Disable word wrap by adding horizontal scroll
-                SetWindowLong(window->edit_hwnd, GWL_STYLE, 
-                    GetWindowLong(window->edit_hwnd, GWL_STYLE) | WS_HSCROLL);
+                SetWindowLong(window->edit_hwnd, GWL_STYLE,
+                              GetWindowLong(window->edit_hwnd, GWL_STYLE) | WS_HSCROLL);
             }
             // Force window to redraw with new style
-            SetWindowPos(window->edit_hwnd, NULL, 0, 0, 0, 0, 
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+            SetWindowPos(window->edit_hwnd, NULL, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
             // Update menu checkmark
             if (window->hmenu) {
                 CheckMenuItem(window->hmenu, ID_VIEW_WORD_WRAP,
@@ -1004,9 +1004,9 @@ static void update_status_bar(Window *window) {
     SendMessage(window->edit_hwnd, EM_GETSEL, (WPARAM) &start, (WPARAM) &end);
 
     // Calculate line and column
-    int line = (int)SendMessage(window->edit_hwnd, EM_LINEFROMCHAR, start, 0) + 1;
-    int line_start = (int)SendMessage(window->edit_hwnd, EM_LINEINDEX, line - 1, 0);
-    int column = (int)start - line_start + 1;
+    int line = (int) SendMessage(window->edit_hwnd, EM_LINEFROMCHAR, start, 0) + 1;
+    int line_start = (int) SendMessage(window->edit_hwnd, EM_LINEINDEX, line - 1, 0);
+    int column = (int) start - line_start + 1;
 
     // FIXED: Update line/column display with proper formatting
     char line_col_text[64];
@@ -1107,7 +1107,7 @@ static bool InputBox(HWND parent, const char *title, const char *prompt, char *b
 
     if (!dialog) {
         NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Input dialog creation",
-                        "Failed to create input dialog");
+                         "Failed to create input dialog");
         return false;
     }
 
@@ -1119,19 +1119,20 @@ static bool InputBox(HWND parent, const char *title, const char *prompt, char *b
 
     // Create controls with proper spacing and system font
     HWND label = CreateWindowA("STATIC", prompt, WS_CHILD | WS_VISIBLE | SS_LEFT, 12, 12, 260, 16,
-                              dialog, (HMENU) 1000, g_hinstance, NULL);
+                               dialog, (HMENU) 1000, g_hinstance, NULL);
     SendMessage(label, WM_SETFONT, (WPARAM) dialog_font, TRUE);
 
-    HWND edit = CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 12, 35,
-                             190, 21, dialog, (HMENU) 1001, g_hinstance, NULL);
+    HWND edit = CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 12,
+                              35, 190, 21, dialog, (HMENU) 1001, g_hinstance, NULL);
     SendMessage(edit, WM_SETFONT, (WPARAM) dialog_font, TRUE);
 
-    HWND ok_button = CreateWindowA("BUTTON", "OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 210, 35,
-                                  70, 23, dialog, (HMENU) IDOK, g_hinstance, NULL);
+    HWND ok_button = CreateWindowA("BUTTON", "OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 210,
+                                   35, 70, 23, dialog, (HMENU) IDOK, g_hinstance, NULL);
     SendMessage(ok_button, WM_SETFONT, (WPARAM) dialog_font, TRUE);
 
-    HWND cancel_button = CreateWindowA("BUTTON", "Cancel", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                      210, 65, 70, 23, dialog, (HMENU) IDCANCEL, g_hinstance, NULL);
+    HWND cancel_button =
+        CreateWindowA("BUTTON", "Cancel", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 210, 65, 70, 23,
+                      dialog, (HMENU) IDCANCEL, g_hinstance, NULL);
     SendMessage(cancel_button, WM_SETFONT, (WPARAM) dialog_font, TRUE);
 
     // Set up dialog data
