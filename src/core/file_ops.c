@@ -38,7 +38,7 @@ static void set_errno_error(const char *operation, const char *filename) {
              operation ? operation : "Unknown", filename ? filename : "Unknown", strerror(errno));
 }
 
-// FIXED: Enhanced path validation to prevent directory traversal
+// FIXED: Enhanced path validation that allows legitimate file paths while preventing traversal
 static bool is_safe_path(const char *filename) {
     if (!filename || strlen(filename) == 0) {
         return false;
@@ -49,24 +49,39 @@ static bool is_safe_path(const char *filename) {
         return false; // Path too long
     }
 
-    // Check for various path traversal patterns
-    if (strstr(filename, "..") != NULL) {
-        return false; // Any ".." is suspicious
+    // FIXED: Allow absolute paths but check for directory traversal patterns
+    // Check for various path traversal patterns but allow legitimate paths
+    const char *pos = filename;
+    while ((pos = strstr(pos, "..")) != NULL) {
+        // Check if ".." is part of a legitimate filename (not a directory traversal)
+        bool is_traversal = false;
+
+        // Check if ".." is at start of path or preceded by path separator
+        if (pos == filename || pos[-1] == '/' || pos[-1] == '\\') {
+            // Check if ".." is followed by path separator or end of string
+            if (pos[2] == '\0' || pos[2] == '/' || pos[2] == '\\') {
+                is_traversal = true;
+            }
+        }
+
+        if (is_traversal) {
+            return false; // This is a directory traversal attempt
+        }
+
+        pos += 2; // Move past this ".." to continue checking
     }
 
-// Check for absolute paths that might escape sandbox
 #ifdef _WIN32
-    // Check for drive letters or UNC paths
-    if ((len >= 3 && filename[1] == ':') ||
+    // Allow Windows absolute paths (C:\, D:\, etc.) and UNC paths (\\server\share)
+    // These are legitimate for file dialogs
+    if ((len >= 3 && filename[1] == ':' && (filename[2] == '\\' || filename[2] == '/')) ||
         (len >= 2 && filename[0] == '\\' && filename[1] == '\\')) {
-        // For now, reject absolute paths - in a real app, you'd validate they're in allowed
-        // directories
-        return false;
+        // This is a legitimate absolute Windows path
     }
 #else
-    // Check for absolute paths starting with /
+    // Allow Unix absolute paths starting with /
     if (filename[0] == '/') {
-        return false;
+        // This is a legitimate absolute Unix path
     }
 #endif
 
@@ -77,6 +92,8 @@ static bool is_safe_path(const char *filename) {
         }
     }
 
+    // FIXED: Allow legitimate file paths - the main concern is preventing "../" traversal
+    // which we've already checked above. Other restrictions were too aggressive.
     return true;
 }
 

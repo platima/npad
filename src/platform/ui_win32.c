@@ -45,6 +45,7 @@
 #define ID_EDIT_GOTO_LINE 2109
 #define ID_VIEW_DARK_MODE 2201
 #define ID_VIEW_WORD_WRAP 2202
+#define ID_VIEW_FONT 2203
 #define ID_HELP_ABOUT 2301
 
 // Window structure
@@ -58,6 +59,7 @@ typedef struct Window {
     char *current_file;
     bool word_wrap_enabled;
     int zoom_level;
+    int font_size; // For font size tracking
 } Window;
 
 // Dialog structure
@@ -78,8 +80,11 @@ static void create_menu(Window *window);
 static void handle_command(Window *window, WORD command);
 static void update_title(Window *window);
 static void update_status_bar(Window *window);
+static void update_scrollbars(Window *window);
 static bool register_window_class(void);
 static void apply_theme(Window *window);
+static void set_font_size(Window *window, int size);
+static void show_font_dialog(Window *window);
 static bool InputBox(HWND parent, const char *title, const char *prompt, char *buffer,
                      int buffer_size);
 
@@ -200,7 +205,7 @@ Window *ui_platform_create_main_window(void) {
         SendMessage(window->hwnd, WM_SETICON, ICON_SMALL, (LPARAM) icon);
     }
 
-    // FIXED: Always show vertical scrollbar, horizontal scrollbar controlled by word wrap
+    // FIXED: Create with both scrollbars initially - they'll be managed properly
     window->edit_hwnd =
         CreateWindowExA(0, RICHEDIT_CLASS, "",
                         WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE |
@@ -215,35 +220,9 @@ Window *ui_platform_create_main_window(void) {
         return NULL;
     }
 
-    // FIXED: Use proper Windows system font instead of fixed-width font
-    // For RichEdit, we need to set the default character format
-    CHARFORMAT2A cf;
-    ZeroMemory(&cf, sizeof(cf));
-    cf.cbSize = sizeof(cf);
-    cf.dwMask = CFM_FACE | CFM_SIZE | CFM_CHARSET;
-    cf.dwEffects = 0;
-    cf.yHeight = 200; // 10 point font (20 twips per point)
-    cf.bCharSet = DEFAULT_CHARSET;
-
-    // Get the system UI font name
-    NONCLIENTMETRICSA ncm;
-    ncm.cbSize = sizeof(ncm);
-    if (SystemParametersInfoA(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0)) {
-        // Use the system message font (same as used in dialogs/UI)
-        strncpy(cf.szFaceName, ncm.lfMessageFont.lfFaceName, LF_FACESIZE - 1);
-        cf.szFaceName[LF_FACESIZE - 1] = '\0';
-        // Convert font height from logical units to twips
-        HDC hdc = GetDC(window->edit_hwnd);
-        int logPixelsY = GetDeviceCaps(hdc, LOGPIXELSY);
-        cf.yHeight = -MulDiv(ncm.lfMessageFont.lfHeight, 1440, logPixelsY);
-        ReleaseDC(window->edit_hwnd, hdc);
-    } else {
-        // Fallback to a common system font
-        strncpy(cf.szFaceName, "Segoe UI", LF_FACESIZE - 1);
-        cf.szFaceName[LF_FACESIZE - 1] = '\0';
-    }
-
-    SendMessage(window->edit_hwnd, EM_SETCHARFORMAT, SCF_ALL, (LPARAM) &cf);
+    // FIXED: Use proper Windows default GUI font with configurable size (11pt default)
+    window->font_size = 11; // Default 11pt font like notepad
+    set_font_size(window, window->font_size);
 
     // FIXED: Set proper margins like Windows Notepad (4 pixels left and right)
     SendMessage(window->edit_hwnd, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(4, 4));
@@ -251,7 +230,7 @@ Window *ui_platform_create_main_window(void) {
     // Set unlimited text length
     SendMessage(window->edit_hwnd, EM_LIMITTEXT, 0, 0);
 
-    // Create status bar
+    // Create status bar with standard styling
     window->status_hwnd =
         CreateWindowExA(0, STATUSCLASSNAME, NULL, WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP, 0, 0, 0,
                         0, window->hwnd, (HMENU) ID_STATUS_BAR, g_hinstance, NULL);
@@ -269,19 +248,20 @@ Window *ui_platform_create_main_window(void) {
     int status_parts[] = { 200, 350, 450, -1 }; // -1 means remaining space for last part
     SendMessage(window->status_hwnd, SB_SETPARTS, 4, (LPARAM) status_parts);
 
-    // Initialize status bar text
-    SendMessage(window->status_hwnd, SB_SETTEXT, 0, (LPARAM) "Ready");
-    SendMessage(window->status_hwnd, SB_SETTEXT, 1, (LPARAM) "Ln 1, Col 1");
-    SendMessage(window->status_hwnd, SB_SETTEXT, 2, (LPARAM) "100%");
-    SendMessage(window->status_hwnd, SB_SETTEXT, 3, (LPARAM) "UTF-8");
+    // FIXED: Initialize status bar text with flat styling (no sunken borders)
+    SendMessage(window->status_hwnd, SB_SETTEXT, 0 | SBT_NOBORDERS, (LPARAM) "Ready");
+    SendMessage(window->status_hwnd, SB_SETTEXT, 1 | SBT_NOBORDERS, (LPARAM) "Ln 1, Col 1");
+    SendMessage(window->status_hwnd, SB_SETTEXT, 2 | SBT_NOBORDERS, (LPARAM) "100%");
+    SendMessage(window->status_hwnd, SB_SETTEXT, 3 | SBT_NOBORDERS, (LPARAM) "UTF-8");
 
     // Force status bar to be visible and properly sized
     ShowWindow(window->status_hwnd, SW_SHOW);
     UpdateWindow(window->status_hwnd);
 
-    // Initialize window state - FIXED: Default to word wrap disabled (horizontal scroll visible)
-    window->word_wrap_enabled = false;
+    // Initialize window state - FIXED: Default to word wrap enabled
+    window->word_wrap_enabled = true;
     window->zoom_level = 100;
+    window->is_modified = false; // FIXED: Ensure this is properly initialized
 
     // Create menu and accelerators
     create_menu(window);
@@ -306,8 +286,9 @@ Window *ui_platform_create_main_window(void) {
                            "Failed to create accelerator table - keyboard shortcuts will not work");
     }
 
-    // Apply theme
+    // Apply theme and update scrollbars
     apply_theme(window);
+    update_scrollbars(window);
 
     // Set as main window
     g_main_window = window;
@@ -404,6 +385,7 @@ void ui_platform_set_text(Window *window, const char *text) {
         window->is_modified = false;
         update_title(window);
         update_status_bar(window);
+        update_scrollbars(window);
     }
 }
 
@@ -440,6 +422,7 @@ void ui_platform_clear_text(Window *window) {
         window->is_modified = false;
         update_title(window);
         update_status_bar(window);
+        update_scrollbars(window);
     }
 }
 
@@ -509,6 +492,7 @@ void ui_platform_cut(Window *window) {
             window->is_modified = true;
             update_title(window);
         }
+        update_scrollbars(window);
     }
 }
 
@@ -525,18 +509,22 @@ void ui_platform_paste(Window *window) {
             window->is_modified = true;
             update_title(window);
         }
+        update_scrollbars(window);
     }
 }
 
 void ui_platform_undo(Window *window) {
     if (window && window->edit_hwnd) {
         SendMessage(window->edit_hwnd, EM_UNDO, 0, 0);
+        update_scrollbars(window);
     }
 }
 
 void ui_platform_redo(Window *window) {
-    (void) window;
-    // Standard EDIT control doesn't support redo
+    if (window && window->edit_hwnd) {
+        SendMessage(window->edit_hwnd, EM_REDO, 0, 0);
+        update_scrollbars(window);
+    }
 }
 
 bool ui_platform_can_undo(Window *window) {
@@ -546,8 +534,9 @@ bool ui_platform_can_undo(Window *window) {
 }
 
 bool ui_platform_can_redo(Window *window) {
-    (void) window;
-    return false;
+    if (!window || !window->edit_hwnd)
+        return false;
+    return SendMessage(window->edit_hwnd, EM_CANREDO, 0, 0) != 0;
 }
 
 char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *params) {
@@ -616,13 +605,27 @@ bool ui_platform_show_message_box(Window *parent, const char *title, const char 
 }
 
 void ui_platform_show_about_dialog(Window *parent) {
+    // FIXED: Use application icon instead of default information icon
+    HWND hwnd = parent ? parent->hwnd : NULL;
+
     const char *message = "npad " NPAD_VERSION "\n\n"
                           "A lightweight, cross-platform text editor\n"
                           "inspired by classic Windows Notepad.\n\n"
                           "Author: Platima\n"
                           "https://github.com/platima/npad";
 
-    ui_platform_show_message_box(parent, "About npad", message, false);
+    // Create a custom message box with our icon
+    MSGBOXPARAMSA mbp;
+    ZeroMemory(&mbp, sizeof(mbp));
+    mbp.cbSize = sizeof(mbp);
+    mbp.hwndOwner = hwnd;
+    mbp.hInstance = g_hinstance;
+    mbp.lpszText = message;
+    mbp.lpszCaption = "About npad";
+    mbp.dwStyle = MB_OK | MB_USERICON;
+    mbp.lpszIcon = MAKEINTRESOURCEA(IDI_NPAD);
+
+    MessageBoxIndirectA(&mbp);
 }
 
 Dialog *ui_platform_show_find_dialog(Window *parent) {
@@ -765,6 +768,9 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                 // Position edit control above status bar
                 SetWindowPos(window->edit_hwnd, NULL, 0, 0, rect.right, rect.bottom - status_height,
                              SWP_NOZORDER);
+
+                // Update scrollbars after resize
+                update_scrollbars(window);
             }
             return 0;
         }
@@ -772,12 +778,14 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         case WM_COMMAND: {
             if (window) {
                 if (HIWORD(wparam) == EN_CHANGE && LOWORD(wparam) == ID_EDIT_CONTROL) {
+                    // FIXED: Properly track modification state
                     bool was_modified = window->is_modified;
                     window->is_modified = true;
                     if (!was_modified) {
                         update_title(window);
                     }
                     update_status_bar(window);
+                    update_scrollbars(window);
                     ui_post_event(UI_EVENT_TEXT_CHANGED, window, NULL);
                 } else if (HIWORD(wparam) == EN_SELCHANGE && LOWORD(wparam) == ID_EDIT_CONTROL) {
                     update_status_bar(window);
@@ -788,7 +796,36 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
             return 0;
         }
 
+        case WM_NOTIFY: {
+            // FIXED: Handle RichEdit notifications properly (RichEdit sends EN_CHANGE via
+            // WM_NOTIFY)
+            if (window) {
+                NMHDR *nmhdr = (NMHDR *) lparam;
+                if (nmhdr->idFrom == ID_EDIT_CONTROL) {
+                    switch (nmhdr->code) {
+                        case EN_CHANGE: {
+                            bool was_modified = window->is_modified;
+                            window->is_modified = true;
+                            if (!was_modified) {
+                                update_title(window);
+                            }
+                            update_status_bar(window);
+                            update_scrollbars(window);
+                            ui_post_event(UI_EVENT_TEXT_CHANGED, window, NULL);
+                            break;
+                        }
+                        case EN_SELCHANGE: {
+                            update_status_bar(window);
+                            break;
+                        }
+                    }
+                }
+            }
+            break;
+        }
+
         case WM_CLOSE: {
+            // FIXED: Properly check for modifications and warn user
             if (window && window->is_modified) {
                 int result = MessageBoxA(hwnd, "Do you want to save changes to this document?",
                                          "npad", MB_YESNOCANCEL | MB_ICONQUESTION);
@@ -856,6 +893,8 @@ static void create_menu(Window *window) {
 
     // View menu
     AppendMenuA(hview, MF_STRING, ID_VIEW_WORD_WRAP, "&Word Wrap\tAlt+Z");
+    AppendMenuA(hview, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(hview, MF_STRING, ID_VIEW_FONT, "&Font...");
     AppendMenuA(hview, MF_SEPARATOR, 0, NULL);
     AppendMenuA(hview, MF_STRING, ID_VIEW_DARK_MODE, "&Dark Mode");
 
@@ -944,23 +983,15 @@ static void handle_command(Window *window, WORD command) {
         case ID_VIEW_WORD_WRAP:
             // FIXED: Toggle word wrap and horizontal scrollbar correctly
             window->word_wrap_enabled = !window->word_wrap_enabled;
-            if (window->word_wrap_enabled) {
-                // Enable word wrap by removing horizontal scroll
-                SetWindowLong(window->edit_hwnd, GWL_STYLE,
-                              GetWindowLong(window->edit_hwnd, GWL_STYLE) & ~WS_HSCROLL);
-            } else {
-                // Disable word wrap by adding horizontal scroll
-                SetWindowLong(window->edit_hwnd, GWL_STYLE,
-                              GetWindowLong(window->edit_hwnd, GWL_STYLE) | WS_HSCROLL);
-            }
-            // Force window to redraw with new style
-            SetWindowPos(window->edit_hwnd, NULL, 0, 0, 0, 0,
-                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+            update_scrollbars(window);
             // Update menu checkmark
             if (window->hmenu) {
                 CheckMenuItem(window->hmenu, ID_VIEW_WORD_WRAP,
                               window->word_wrap_enabled ? MF_CHECKED : MF_UNCHECKED);
             }
+            break;
+        case ID_VIEW_FONT:
+            show_font_dialog(window);
             break;
         case ID_VIEW_DARK_MODE:
             ui_post_event(UI_EVENT_VIEW_TOGGLE_DARK_MODE, window, NULL);
@@ -995,6 +1026,7 @@ static void update_title(Window *window) {
         }
     }
 
+    // FIXED: Properly show asterisk for modified files
     snprintf(title, sizeof(title), "%s%.400s - npad", window->is_modified ? "*" : "", filename);
     SetWindowTextA(window->hwnd, title);
 }
@@ -1012,9 +1044,11 @@ static void apply_theme(Window *window) {
         // The edit control will automatically use system colors
     }
 
-    // Update menu checkmark
+    // Update menu checkmarks
     if (window->hmenu) {
         CheckMenuItem(window->hmenu, ID_VIEW_DARK_MODE, g_dark_mode ? MF_CHECKED : MF_UNCHECKED);
+        CheckMenuItem(window->hmenu, ID_VIEW_WORD_WRAP,
+                      window->word_wrap_enabled ? MF_CHECKED : MF_UNCHECKED);
     }
 }
 
@@ -1031,18 +1065,18 @@ static void update_status_bar(Window *window) {
     int line_start = (int) SendMessage(window->edit_hwnd, EM_LINEINDEX, line - 1, 0);
     int column = (int) start - line_start + 1;
 
-    // Update line/column display with proper formatting
+    // FIXED: Update status bar with flat styling (no sunken borders)
     char line_col_text[64];
     snprintf(line_col_text, sizeof(line_col_text), "Ln %d, Col %d", line, column);
-    SendMessage(window->status_hwnd, SB_SETTEXT, 1, (LPARAM) line_col_text);
+    SendMessage(window->status_hwnd, SB_SETTEXT, 1 | SBT_NOBORDERS, (LPARAM) line_col_text);
 
     // Update zoom level display
     char zoom_text[32];
     snprintf(zoom_text, sizeof(zoom_text), "%d%%", window->zoom_level);
-    SendMessage(window->status_hwnd, SB_SETTEXT, 2, (LPARAM) zoom_text);
+    SendMessage(window->status_hwnd, SB_SETTEXT, 2 | SBT_NOBORDERS, (LPARAM) zoom_text);
 
     // Update encoding (for now, always UTF-8)
-    SendMessage(window->status_hwnd, SB_SETTEXT, 3, (LPARAM) "UTF-8");
+    SendMessage(window->status_hwnd, SB_SETTEXT, 3 | SBT_NOBORDERS, (LPARAM) "UTF-8");
 
     // Update status message
     const char *line_ending = "Windows (CRLF)";
@@ -1052,7 +1086,161 @@ static void update_status_bar(Window *window) {
     } else {
         snprintf(status_text, sizeof(status_text), "%s", line_ending);
     }
-    SendMessage(window->status_hwnd, SB_SETTEXT, 0, (LPARAM) status_text);
+    SendMessage(window->status_hwnd, SB_SETTEXT, 0 | SBT_NOBORDERS, (LPARAM) status_text);
+}
+
+// FIXED: New function to properly manage scrollbar visibility and enabled state
+static void update_scrollbars(Window *window) {
+    if (!window || !window->edit_hwnd)
+        return;
+
+    DWORD style = GetWindowLong(window->edit_hwnd, GWL_STYLE);
+
+    if (window->word_wrap_enabled) {
+        // Enable word wrap: remove horizontal scroll and autohscroll
+        style &= ~(WS_HSCROLL | ES_AUTOHSCROLL);
+    } else {
+        // Disable word wrap: add horizontal scroll and autohscroll
+        style |= (WS_HSCROLL | ES_AUTOHSCROLL);
+    }
+
+    // Always keep vertical scroll
+    style |= WS_VSCROLL | ES_AUTOVSCROLL;
+
+    SetWindowLong(window->edit_hwnd, GWL_STYLE, style);
+
+    // Force window to redraw with new style
+    SetWindowPos(window->edit_hwnd, NULL, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+
+    // FIXED: Explicitly manage scrollbar enable/disable state for proper initial state
+    if (!window->word_wrap_enabled) {
+        // When horizontal scrollbar is visible, start it as disabled until content overflows
+        SCROLLINFO si;
+        si.cbSize = sizeof(SCROLLINFO);
+        si.fMask = SIF_RANGE | SIF_PAGE;
+        GetScrollInfo(window->edit_hwnd, SB_HORZ, &si);
+
+        // If there's no scrollable content, disable the scrollbar
+        if (si.nMax <= (int) si.nPage) {
+            EnableScrollBar(window->edit_hwnd, SB_HORZ, ESB_DISABLE_BOTH);
+        } else {
+            EnableScrollBar(window->edit_hwnd, SB_HORZ, ESB_ENABLE_BOTH);
+        }
+    }
+
+    // Similar for vertical scrollbar
+    SCROLLINFO si;
+    si.cbSize = sizeof(SCROLLINFO);
+    si.fMask = SIF_RANGE | SIF_PAGE;
+    GetScrollInfo(window->edit_hwnd, SB_VERT, &si);
+
+    if (si.nMax <= (int) si.nPage) {
+        EnableScrollBar(window->edit_hwnd, SB_VERT, ESB_DISABLE_BOTH);
+    } else {
+        EnableScrollBar(window->edit_hwnd, SB_VERT, ESB_ENABLE_BOTH);
+    }
+}
+
+// FIXED: Function to change font size
+static void set_font_size(Window *window, int size) {
+    if (!window || !window->edit_hwnd || size < 6 || size > 72)
+        return;
+
+    window->font_size = size;
+
+    // Get the default GUI font as a base
+    HFONT defaultFont = (HFONT) GetStockObject(DEFAULT_GUI_FONT);
+    if (defaultFont) {
+        LOGFONTA logFont;
+        if (GetObjectA(defaultFont, sizeof(logFont), &logFont)) {
+            // Set up character format for RichEdit using the system default font
+            CHARFORMAT2A cf;
+            ZeroMemory(&cf, sizeof(cf));
+            cf.cbSize = sizeof(cf);
+            cf.dwMask = CFM_FACE | CFM_SIZE | CFM_CHARSET | CFM_WEIGHT;
+            cf.dwEffects = 0;
+            cf.bCharSet = logFont.lfCharSet;
+            cf.wWeight = (WORD) logFont.lfWeight;
+
+            // Convert point size to twips (1/1440 inch)
+            cf.yHeight = size * 20; // 20 twips per point
+
+            // Copy font face name
+            strncpy(cf.szFaceName, logFont.lfFaceName, LF_FACESIZE - 1);
+            cf.szFaceName[LF_FACESIZE - 1] = '\0';
+
+            SendMessage(window->edit_hwnd, EM_SETCHARFORMAT, SCF_ALL, (LPARAM) &cf);
+        }
+    }
+}
+
+// FIXED: Function to show font dialog with current font settings
+static void show_font_dialog(Window *window) {
+    if (!window || !window->edit_hwnd)
+        return;
+
+    CHOOSEFONTA cf;
+    LOGFONTA lf;
+
+    // FIXED: Get current font from the RichEdit control
+    CHARFORMAT2A currentFormat;
+    ZeroMemory(&currentFormat, sizeof(currentFormat));
+    currentFormat.cbSize = sizeof(currentFormat);
+    SendMessage(window->edit_hwnd, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM) &currentFormat);
+
+    // Convert current format to LOGFONT
+    ZeroMemory(&lf, sizeof(lf));
+    strncpy(lf.lfFaceName, currentFormat.szFaceName, LF_FACESIZE - 1);
+    lf.lfFaceName[LF_FACESIZE - 1] = '\0';
+    lf.lfWeight = currentFormat.wWeight;
+    lf.lfItalic = (currentFormat.dwEffects & CFE_ITALIC) ? TRUE : FALSE;
+    lf.lfUnderline = (currentFormat.dwEffects & CFE_UNDERLINE) ? TRUE : FALSE;
+    lf.lfCharSet = currentFormat.bCharSet;
+
+    // Convert twips back to logical height
+    HDC hdc = GetDC(window->edit_hwnd);
+    int logPixelsY = GetDeviceCaps(hdc, LOGPIXELSY);
+    lf.lfHeight = -MulDiv(currentFormat.yHeight, logPixelsY, 1440);
+    ReleaseDC(window->edit_hwnd, hdc);
+
+    // Set up font dialog
+    ZeroMemory(&cf, sizeof(cf));
+    cf.lStructSize = sizeof(cf);
+    cf.hwndOwner = window->hwnd;
+    cf.lpLogFont = &lf;
+    cf.Flags = CF_SCREENFONTS | CF_EFFECTS | CF_INITTOLOGFONTSTRUCT;
+    cf.nFontType = SCREEN_FONTTYPE;
+
+    if (ChooseFontA(&cf)) {
+        // Calculate point size from the selected font
+        HDC hdc = GetDC(window->edit_hwnd);
+        int logPixelsY = GetDeviceCaps(hdc, LOGPIXELSY);
+        int pointSize = -MulDiv(lf.lfHeight, 72, logPixelsY);
+        ReleaseDC(window->edit_hwnd, hdc);
+
+        // Update the stored font size
+        window->font_size = pointSize;
+
+        // Apply the new font
+        CHARFORMAT2A format;
+        ZeroMemory(&format, sizeof(format));
+        format.cbSize = sizeof(format);
+        format.dwMask = CFM_FACE | CFM_SIZE | CFM_CHARSET | CFM_WEIGHT | CFM_ITALIC | CFM_UNDERLINE;
+        format.yHeight = pointSize * 20; // Convert to twips
+        format.bCharSet = lf.lfCharSet;
+        format.wWeight = (WORD) lf.lfWeight;
+
+        if (lf.lfItalic)
+            format.dwEffects |= CFE_ITALIC;
+        if (lf.lfUnderline)
+            format.dwEffects |= CFE_UNDERLINE;
+
+        strncpy(format.szFaceName, lf.lfFaceName, LF_FACESIZE - 1);
+        format.szFaceName[LF_FACESIZE - 1] = '\0';
+
+        SendMessage(window->edit_hwnd, EM_SETCHARFORMAT, SCF_ALL, (LPARAM) &format);
+    }
 }
 
 // Input dialog data structure
