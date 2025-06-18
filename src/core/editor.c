@@ -531,7 +531,7 @@ bool editor_replace(const char *find_text, const char *replace_text, bool case_s
     char *dst_end = new_content + new_size - 1; // Leave space for null terminator
     int replacements_done = 0;
 
-    while (*src && (replace_all || replacements_done == 0) && dst < dst_end) {
+    while (*src && (replace_all || replacements_done == 0)) {
         char *match = NULL;
         if (case_sensitive) {
             match = strstr(src, find_text);
@@ -553,36 +553,28 @@ bool editor_replace(const char *find_text, const char *replace_text, bool case_s
                 bool is_start = (match == content || !isalnum((unsigned char)*(match - 1)));
                 bool is_end = !isalnum((unsigned char)*(match + find_len));
                 if (!is_start || !is_end) {
-                    if (dst < dst_end) {
-                        *dst++ = *src++;
-                    }
+                    *dst++ = *src++;
                     continue;
                 }
             }
 
             // Copy text before match
-            while (src < match && dst < dst_end) {
+            while (src < match) {
                 *dst++ = *src++;
             }
 
-            // Copy replacement text
-            size_t copy_len = replace_len;
-            if (dst + copy_len >= dst_end) {
-                copy_len = dst_end - dst;
-            }
-            strncpy(dst, replace_text, copy_len);
-            dst += copy_len;
+            // Copy replacement text - we've pre-calculated buffer size so this should fit
+            strncpy(dst, replace_text, replace_len);
+            dst += replace_len;
             src += find_len;
             replacements_done++;
         } else {
-            if (dst < dst_end) {
-                *dst++ = *src++;
-            }
+            *dst++ = *src++;
         }
     }
 
     // Copy remaining text
-    while (*src && dst < dst_end) {
+    while (*src) {
         *dst++ = *src++;
     }
     *dst = '\0';
