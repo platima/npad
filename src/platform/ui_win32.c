@@ -110,7 +110,7 @@ bool ui_platform_init(void) {
     }
 
     // Check for system dark mode support - default to light mode
-    g_dark_mode = false; // FIXED: Default to light mode instead of dark
+    g_dark_mode = false;
 
     HKEY hkey;
     DWORD value = 0;
@@ -182,9 +182,8 @@ Window *ui_platform_create_main_window(void) {
     memset(window, 0, sizeof(Window));
 
     window->hwnd =
-        CreateWindowExA(WS_EX_ACCEPTFILES,
-                        NPAD_WINDOW_CLASS, "npad", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
-                        CW_USEDEFAULT, 800, 600, NULL, NULL, g_hinstance, window);
+        CreateWindowExA(WS_EX_ACCEPTFILES, NPAD_WINDOW_CLASS, "npad", WS_OVERLAPPEDWINDOW,
+                        CW_USEDEFAULT, CW_USEDEFAULT, 800, 600, NULL, NULL, g_hinstance, window);
 
     if (!window->hwnd) {
         NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Window creation",
@@ -192,11 +191,11 @@ Window *ui_platform_create_main_window(void) {
         free(window);
         return NULL;
     }
-  
+
     window->edit_hwnd =
         CreateWindowExA(0, RICHEDIT_CLASS, "",
-                        WS_CHILD | WS_VISIBLE | WS_VSCROLL  | ES_MULTILINE |
-                            ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_NOHIDESEL | ES_WANTRETURN,
+                        WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL |
+                            ES_AUTOHSCROLL | ES_NOHIDESEL | ES_WANTRETURN,
 
                         0, 0, 0, 0, window->hwnd, (HMENU) ID_EDIT_CONTROL, g_hinstance, NULL);
 
@@ -275,8 +274,8 @@ Window *ui_platform_create_main_window(void) {
     if (!window->haccel) {
         NPAD_ERROR_WARNING(NPAD_ERROR_SYSTEM, GetLastError(), "Accelerator table creation",
                            "Failed to create accelerator table - keyboard shortcuts will not work");
-        
-      // Continue without accelerators rather than failing completely
+
+        // Continue without accelerators rather than failing completely
     }
 
     // Apply theme
@@ -610,7 +609,6 @@ Dialog *ui_platform_show_find_dialog(Window *parent) {
     dialog->hwnd = CreateWindowExA(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, "STATIC", "Find",
                                    WS_POPUP | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT,
                                    300, 100, parent ? parent->hwnd : NULL, NULL, g_hinstance, NULL);
-
 
     if (!dialog->hwnd) {
         NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Find dialog creation",
