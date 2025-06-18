@@ -1,3 +1,4 @@
+<img align="right" src="https://visitor-badge.laobi.icu/badge?page_id=platima.npad" height="20" />
 # npad 📝
 
 [![Build Status](https://github.com/platima/npad/workflows/CI/badge.svg)](https://github.com/platima/npad/actions/workflows/ci.yml)
@@ -247,6 +248,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [ ] Initial status bar
   - [ ] Zoom via Ctrl+/-, Ctrl Scroll
   - [ ] RTL/LTR support
+  - [ ] High DPI support
   - [ ] Encoding options in Save Dialog
   - [ ] Drag and drop to open
   - [ ] Word wrap support (add Alt+Z shortcut)
