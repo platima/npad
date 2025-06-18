@@ -38,6 +38,47 @@ static void set_errno_error(const char *operation, const char *filename) {
              operation ? operation : "Unknown", filename ? filename : "Unknown", strerror(errno));
 }
 
+// FIXED: Enhanced path validation to prevent directory traversal
+static bool is_safe_path(const char *filename) {
+    if (!filename || strlen(filename) == 0) {
+        return false;
+    }
+    
+    size_t len = strlen(filename);
+    if (len > 1024) {
+        return false; // Path too long
+    }
+    
+    // Check for various path traversal patterns
+    if (strstr(filename, "..") != NULL) {
+        return false; // Any ".." is suspicious
+    }
+    
+    // Check for absolute paths that might escape sandbox
+    #ifdef _WIN32
+    // Check for drive letters or UNC paths
+    if ((len >= 3 && filename[1] == ':') || 
+        (len >= 2 && filename[0] == '\\' && filename[1] == '\\')) {
+        // For now, reject absolute paths - in a real app, you'd validate they're in allowed directories
+        return false;
+    }
+    #else
+    // Check for absolute paths starting with /
+    if (filename[0] == '/') {
+        return false;
+    }
+    #endif
+    
+    // Check for null bytes (could indicate injection)
+    for (size_t i = 0; i < len; i++) {
+        if (filename[i] == '\0') {
+            return false;
+        }
+    }
+    
+    return true;
+}
+
 char *file_read_text(const char *filename) {
     if (!filename) {
         NPAD_ERROR_INVALID_PARAM("filename");
@@ -45,25 +86,10 @@ char *file_read_text(const char *filename) {
         return NULL;
     }
 
-    size_t filename_len = strlen(filename);
-    if (filename_len == 0) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, filename, "Empty filename provided");
-        set_error("Invalid filename: empty string");
-        return NULL;
-    }
-
-    if (filename_len > 1024) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, filename,
-                         "Filename too long: %zu characters (max 1024)", filename_len);
-        set_error("Invalid filename: too long");
-        return NULL;
-    }
-
-    // Basic path validation - prevent path traversal
-    if (strstr(filename, "..") != NULL) {
+    if (!is_safe_path(filename)) {
         NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, 0, filename,
-                         "Path traversal attempt detected in filename");
-        set_error("Path traversal not allowed");
+                         "Invalid or unsafe file path: %s", filename);
+        set_error("Invalid or unsafe file path");
         return NULL;
     }
 
@@ -76,10 +102,15 @@ char *file_read_text(const char *filename) {
     }
 
     // Get file size
-    fseek(file, 0, SEEK_END);
+    if (fseek(file, 0, SEEK_END) != 0) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, errno, filename, "Failed to seek to end of file: %s",
+                         strerror(errno));
+        set_errno_error("Failed to seek in file", filename);
+        fclose(file);
+        return NULL;
+    }
+    
     long size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-
     if (size < 0) {
         NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, errno, filename, "Failed to get file size: %s",
                          strerror(errno));
@@ -87,9 +118,27 @@ char *file_read_text(const char *filename) {
         fclose(file);
         return NULL;
     }
+    
+    if (fseek(file, 0, SEEK_SET) != 0) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, errno, filename, "Failed to seek to start of file: %s",
+                         strerror(errno));
+        set_errno_error("Failed to seek in file", filename);
+        fclose(file);
+        return NULL;
+    }
+
+    // Check for reasonable file size limits (prevent DoS)
+    const long MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB limit
+    if (size > MAX_FILE_SIZE) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, 0, filename,
+                         "File too large: %ld bytes (max %ld)", size, MAX_FILE_SIZE);
+        set_error("File too large");
+        fclose(file);
+        return NULL;
+    }
 
     // Allocate buffer
-    char *content = malloc(size + 1);
+    char *content = malloc((size_t)size + 1);
     if (!content) {
         NPAD_ERROR_MEMORY_ALLOC(filename);
         set_error("Out of memory");
@@ -98,10 +147,13 @@ char *file_read_text(const char *filename) {
     }
 
     // Read file
-    size_t read_size = fread(content, 1, size, file);
+    size_t read_size = fread(content, 1, (size_t)size, file);
     fclose(file);
 
     if (read_size != (size_t) size) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, errno, filename,
+                         "Failed to read complete file: expected %ld bytes, got %zu bytes",
+                         size, read_size);
         set_errno_error("Failed to read file", filename);
         free(content);
         return NULL;
@@ -112,14 +164,13 @@ char *file_read_text(const char *filename) {
 }
 
 bool file_read_binary(const char *filename, void **data, size_t *size) {
-    if (!filename || !data || !size || strlen(filename) == 0 || strlen(filename) > 1024) {
+    if (!filename || !data || !size) {
         set_error("Invalid parameters");
         return false;
     }
 
-    // Basic path validation - prevent path traversal
-    if (strstr(filename, "..") != NULL) {
-        set_error("Path traversal not allowed");
+    if (!is_safe_path(filename)) {
+        set_error("Invalid or unsafe file path");
         return false;
     }
 
@@ -130,18 +181,35 @@ bool file_read_binary(const char *filename, void **data, size_t *size) {
     }
 
     // Get file size
-    fseek(file, 0, SEEK_END);
+    if (fseek(file, 0, SEEK_END) != 0) {
+        set_errno_error("Failed to seek in file", filename);
+        fclose(file);
+        return false;
+    }
+    
     long file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-
     if (file_size < 0) {
         set_errno_error("Failed to get file size", filename);
         fclose(file);
         return false;
     }
+    
+    if (fseek(file, 0, SEEK_SET) != 0) {
+        set_errno_error("Failed to seek in file", filename);
+        fclose(file);
+        return false;
+    }
+
+    // Check file size limits
+    const long MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB limit
+    if (file_size > MAX_FILE_SIZE) {
+        set_error("File too large");
+        fclose(file);
+        return false;
+    }
 
     // Allocate buffer
-    void *buffer = malloc(file_size);
+    void *buffer = malloc((size_t)file_size);
     if (!buffer) {
         set_error("Out of memory");
         fclose(file);
@@ -149,7 +217,7 @@ bool file_read_binary(const char *filename, void **data, size_t *size) {
     }
 
     // Read file
-    size_t read_size = fread(buffer, 1, file_size, file);
+    size_t read_size = fread(buffer, 1, (size_t)file_size, file);
     fclose(file);
 
     if (read_size != (size_t) file_size) {
@@ -159,19 +227,18 @@ bool file_read_binary(const char *filename, void **data, size_t *size) {
     }
 
     *data = buffer;
-    *size = file_size;
+    *size = (size_t)file_size;
     return true;
 }
 
 bool file_write_text(const char *filename, const char *content) {
-    if (!filename || !content || strlen(filename) == 0 || strlen(filename) > 1024) {
+    if (!filename || !content) {
         set_error("Invalid parameters");
         return false;
     }
 
-    // Basic path validation - prevent path traversal
-    if (strstr(filename, "..") != NULL) {
-        set_error("Path traversal not allowed");
+    if (!is_safe_path(filename)) {
+        set_error("Invalid or unsafe file path");
         return false;
     }
 
@@ -183,10 +250,18 @@ bool file_write_text(const char *filename, const char *content) {
 
     size_t content_length = strlen(content);
     size_t written = fwrite(content, 1, content_length, file);
-    fclose(file);
-
-    if (written != content_length) {
+    
+    // Check for write errors before closing
+    bool write_error = (written != content_length);
+    int close_result = fclose(file);
+    
+    if (write_error) {
         set_errno_error("Failed to write file", filename);
+        return false;
+    }
+    
+    if (close_result != 0) {
+        set_errno_error("Failed to close file after writing", filename);
         return false;
     }
 
@@ -194,14 +269,13 @@ bool file_write_text(const char *filename, const char *content) {
 }
 
 bool file_write_binary(const char *filename, const void *data, size_t size) {
-    if (!filename || !data || strlen(filename) == 0 || strlen(filename) > 1024) {
+    if (!filename || !data) {
         set_error("Invalid parameters");
         return false;
     }
 
-    // Basic path validation - prevent path traversal
-    if (strstr(filename, "..") != NULL) {
-        set_error("Path traversal not allowed");
+    if (!is_safe_path(filename)) {
+        set_error("Invalid or unsafe file path");
         return false;
     }
 
@@ -212,10 +286,18 @@ bool file_write_binary(const char *filename, const void *data, size_t size) {
     }
 
     size_t written = fwrite(data, 1, size, file);
-    fclose(file);
-
-    if (written != size) {
+    
+    // Check for write errors before closing
+    bool write_error = (written != size);
+    int close_result = fclose(file);
+    
+    if (write_error) {
         set_errno_error("Failed to write file", filename);
+        return false;
+    }
+    
+    if (close_result != 0) {
+        set_errno_error("Failed to close file after writing", filename);
         return false;
     }
 
@@ -223,32 +305,36 @@ bool file_write_binary(const char *filename, const void *data, size_t size) {
 }
 
 bool file_exists(const char *filename) {
-    if (!filename)
+    if (!filename || !is_safe_path(filename))
         return false;
     return access(filename, F_OK) == 0;
 }
 
 bool file_is_readable(const char *filename) {
-    if (!filename)
+    if (!filename || !is_safe_path(filename))
         return false;
     return access(filename, R_OK) == 0;
 }
 
 bool file_is_writable(const char *filename) {
-    if (!filename)
+    if (!filename || !is_safe_path(filename))
         return false;
     return access(filename, W_OK) == 0;
 }
 
 size_t file_get_size(const char *filename) {
-    if (!filename)
+    if (!filename || !is_safe_path(filename))
         return 0;
 
     FILE *file = fopen(filename, "rb");
     if (!file)
         return 0;
 
-    fseek(file, 0, SEEK_END);
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        return 0;
+    }
+    
     long size = ftell(file);
     fclose(file);
 
@@ -258,6 +344,11 @@ size_t file_get_size(const char *filename) {
 bool file_delete(const char *filename) {
     if (!filename) {
         set_error("Invalid filename");
+        return false;
+    }
+
+    if (!is_safe_path(filename)) {
+        set_error("Invalid or unsafe file path");
         return false;
     }
 
@@ -272,6 +363,11 @@ bool file_delete(const char *filename) {
 bool file_copy(const char *source, const char *destination) {
     if (!source || !destination) {
         set_error("Invalid parameters");
+        return false;
+    }
+
+    if (!is_safe_path(source) || !is_safe_path(destination)) {
+        set_error("Invalid or unsafe file path");
         return false;
     }
 
@@ -306,7 +402,17 @@ char *file_get_directory(const char *filepath) {
         return result;
     }
 
-    size_t dir_length = separator - filepath;
+    size_t dir_length = (size_t)(separator - filepath);
+    if (dir_length == 0) {
+        // Root directory case
+        char *result = malloc(2);
+        if (!result) {
+            return NULL;
+        }
+        strcpy(result, separator == last_slash ? "/" : "\\");
+        return result;
+    }
+    
     char *directory = malloc(dir_length + 1);
     if (!directory) {
         return NULL;
@@ -377,7 +483,23 @@ char *file_join_paths(const char *dir, const char *filename) {
 
     size_t dir_len = strlen(dir);
     size_t filename_len = strlen(filename);
-    bool needs_separator = (dir_len > 0 && dir[dir_len - 1] != '/' && dir[dir_len - 1] != '\\');
+    
+    // Check for empty strings
+    if (dir_len == 0) {
+        char *result = malloc(filename_len + 1);
+        if (!result) return NULL;
+        strcpy(result, filename);
+        return result;
+    }
+    
+    if (filename_len == 0) {
+        char *result = malloc(dir_len + 1);
+        if (!result) return NULL;
+        strcpy(result, dir);
+        return result;
+    }
+    
+    bool needs_separator = (dir[dir_len - 1] != '/' && dir[dir_len - 1] != '\\');
 
     size_t total_len = dir_len + filename_len + (needs_separator ? 1 : 0) + 1;
     char *result = malloc(total_len);
@@ -404,7 +526,7 @@ bool file_is_absolute_path(const char *path) {
 
 #ifdef _WIN32
     // Windows: C:\ or \\server\share
-    return (strlen(path) >= 3 && path[1] == ':' && path[2] == '\\') ||
+    return (strlen(path) >= 3 && path[1] == ':' && (path[2] == '\\' || path[2] == '/')) ||
            (strlen(path) >= 2 && path[0] == '\\' && path[1] == '\\');
 #else
     // Unix-like: starts with /

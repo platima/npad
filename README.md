@@ -302,6 +302,11 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [ ] Plugin system evaluation
   - [ ] RegEx find/replace option
 
+  
+## Changelog 🛠
+
+See [CHANGELOG.md](CHANGELOG.md) file for details.
+
 ## License 📄
 
 MIT License - See [LICENSE](LICENSE) file for details.

@@ -13,7 +13,7 @@
 
 #define NPAD_VERSION_MAJOR 0
 #define NPAD_VERSION_MINOR 1
-#define NPAD_VERSION_PATCH 4
+#define NPAD_VERSION_PATCH 5
 #define NPAD_VERSION_RELEASE "dev"
 
 // Version information

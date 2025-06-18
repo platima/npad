@@ -10,6 +10,7 @@
 #include "error.h"
 #include "file_ops.h"
 #include "settings.h"
+#include "thread_safety.h"
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
@@ -28,11 +29,14 @@ EditorState g_editor = { 0 };
 char *g_startup_file = NULL;
 
 bool editor_init(void) {
+    npad_mutex_lock(&g_editor_mutex);
     memset(&g_editor, 0, sizeof(EditorState));
 
     // Load settings
     g_editor.auto_save_enabled = settings_get_bool("auto_save_enabled", true); // Enabled by default
     g_editor.auto_save_interval = settings_get_int("auto_save_interval", 300); // 5 minutes default
+
+    npad_mutex_unlock(&g_editor_mutex);
 
     // Set event handler
     ui_set_event_handler(editor_handle_event);
@@ -41,10 +45,14 @@ bool editor_init(void) {
 }
 
 void editor_cleanup(void) {
+    npad_mutex_lock(&g_editor_mutex);
+    
     if (g_editor.current_file) {
         free(g_editor.current_file);
         g_editor.current_file = NULL;
     }
+
+    npad_mutex_unlock(&g_editor_mutex);
 
     if (g_startup_file) {
         free(g_startup_file);
@@ -58,6 +66,8 @@ bool editor_new_file(void) {
         return false; // User cancelled
     }
 
+    npad_mutex_lock(&g_editor_mutex);
+
     // Clear the editor
     if (g_editor.main_window) {
         ui_clear_text(g_editor.main_window);
@@ -70,6 +80,9 @@ bool editor_new_file(void) {
     }
 
     g_editor.is_modified = false;
+    
+    npad_mutex_unlock(&g_editor_mutex);
+    
     editor_update_title();
 
     return true;
@@ -88,10 +101,13 @@ bool editor_open_file(const char *filename) {
     char *content = file_read_text(filename);
     if (!content) {
         char error_msg[512];
-        snprintf(error_msg, sizeof(error_msg), "Could not open file: %s", filename);
+        snprintf(error_msg, sizeof(error_msg), "Could not open file: %s\nError: %s", 
+                filename, file_get_last_error());
         ui_show_message_box(g_editor.main_window, "Error", error_msg, false);
         return false;
     }
+
+    npad_mutex_lock(&g_editor_mutex);
 
     // Set content in editor
     if (g_editor.main_window) {
@@ -109,10 +125,13 @@ bool editor_open_file(const char *filename) {
     if (!g_editor.current_file) {
         NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, filename,
                          "Failed to allocate memory for current file path");
+        npad_mutex_unlock(&g_editor_mutex);
         return false;
     }
     strcpy(g_editor.current_file, filename);
     g_editor.is_modified = false;
+
+    npad_mutex_unlock(&g_editor_mutex);
 
     editor_update_title();
 
@@ -120,7 +139,11 @@ bool editor_open_file(const char *filename) {
 }
 
 bool editor_save_file(void) {
+    npad_mutex_lock(&g_editor_mutex);
+    
     if (!g_editor.current_file) {
+        npad_mutex_unlock(&g_editor_mutex);
+        
         // No current file, prompt for save as
         FileDialogParams params = { .title = "Save As",
                                     .default_filename = "Untitled.txt",
@@ -138,25 +161,48 @@ bool editor_save_file(void) {
     }
 
     // Save to current file
-    if (!g_editor.main_window)
+    if (!g_editor.main_window) {
+        npad_mutex_unlock(&g_editor_mutex);
         return false;
+    }
+
+    npad_mutex_unlock(&g_editor_mutex);
 
     char *content = ui_get_text(g_editor.main_window);
     if (!content)
         return false;
 
-    bool success = file_write_text(g_editor.current_file, content);
+    npad_mutex_lock(&g_editor_mutex);
+    char *current_file_copy = NULL;
+    if (g_editor.current_file) {
+        current_file_copy = malloc(strlen(g_editor.current_file) + 1);
+        if (current_file_copy) {
+            strcpy(current_file_copy, g_editor.current_file);
+        }
+    }
+    npad_mutex_unlock(&g_editor_mutex);
+
+    if (!current_file_copy) {
+        free(content);
+        return false;
+    }
+
+    bool success = file_write_text(current_file_copy, content);
     free(content);
 
     if (success) {
+        npad_mutex_lock(&g_editor_mutex);
         g_editor.is_modified = false;
+        npad_mutex_unlock(&g_editor_mutex);
         editor_update_title();
     } else {
         char error_msg[512];
-        snprintf(error_msg, sizeof(error_msg), "Could not save file: %s", g_editor.current_file);
+        snprintf(error_msg, sizeof(error_msg), "Could not save file: %s\nError: %s", 
+                current_file_copy, file_get_last_error());
         ui_show_message_box(g_editor.main_window, "Error", error_msg, false);
     }
 
+    free(current_file_copy);
     return success;
 }
 
@@ -172,6 +218,8 @@ bool editor_save_file_as(const char *filename) {
     free(content);
 
     if (success) {
+        npad_mutex_lock(&g_editor_mutex);
+        
         // Update current file
         if (g_editor.current_file) {
             free(g_editor.current_file);
@@ -181,15 +229,19 @@ bool editor_save_file_as(const char *filename) {
         if (!g_editor.current_file) {
             NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, filename,
                              "Failed to allocate memory for new file path");
+            npad_mutex_unlock(&g_editor_mutex);
             return false;
         }
         strcpy(g_editor.current_file, filename);
         g_editor.is_modified = false;
 
+        npad_mutex_unlock(&g_editor_mutex);
+
         editor_update_title();
     } else {
         char error_msg[512];
-        snprintf(error_msg, sizeof(error_msg), "Could not save file: %s", filename);
+        snprintf(error_msg, sizeof(error_msg), "Could not save file: %s\nError: %s", 
+                filename, file_get_last_error());
         ui_show_message_box(g_editor.main_window, "Error", error_msg, false);
     }
 
@@ -266,6 +318,15 @@ bool editor_find(const char *text, bool case_sensitive, bool whole_word) {
     }
 
     int cursor_pos = ui_get_cursor_position(g_editor.main_window);
+    size_t content_len = strlen(content);
+    
+    // Bounds checking
+    if (cursor_pos < 0) cursor_pos = 0;
+    if ((size_t)cursor_pos >= content_len) {
+        free(content);
+        return false;
+    }
+    
     char *search_start = content + cursor_pos;
     char *found = NULL;
 
@@ -273,10 +334,11 @@ bool editor_find(const char *text, bool case_sensitive, bool whole_word) {
         if (whole_word) {
             // Case-sensitive whole word search
             char *pos = search_start;
+            size_t text_len = strlen(text);
             while ((pos = strstr(pos, text)) != NULL) {
                 // Check if it's a whole word
-                bool is_start = (pos == content || !isalnum(*(pos - 1)));
-                bool is_end = !isalnum(*(pos + strlen(text)));
+                bool is_start = (pos == content || !isalnum((unsigned char)*(pos - 1)));
+                bool is_end = !isalnum((unsigned char)*(pos + text_len));
                 if (is_start && is_end) {
                     found = pos;
                     break;
@@ -291,10 +353,13 @@ bool editor_find(const char *text, bool case_sensitive, bool whole_word) {
         // Case-insensitive search - simplified implementation
         size_t text_len = strlen(text);
         char *pos = search_start;
-        while (*pos) {
+        char *content_end = content + content_len;
+        
+        while (pos <= content_end - text_len) {
             if (strnicmp(pos, text, text_len) == 0) {
                 if (!whole_word ||
-                    ((pos == content || !isalnum(*(pos - 1))) && !isalnum(*(pos + text_len)))) {
+                    ((pos == content || !isalnum((unsigned char)*(pos - 1))) && 
+                     !isalnum((unsigned char)*(pos + text_len)))) {
                     found = pos;
                     break;
                 }
@@ -305,10 +370,10 @@ bool editor_find(const char *text, bool case_sensitive, bool whole_word) {
 
     bool result = false;
     if (found) {
-        int found_pos = found - content;
+        int found_pos = (int)(found - content);
         ui_set_cursor_position(g_editor.main_window, found_pos);
         // Select the found text
-        ui_set_cursor_position(g_editor.main_window, found_pos + strlen(text));
+        ui_set_cursor_position(g_editor.main_window, found_pos + (int)strlen(text));
         result = true;
     }
 
@@ -316,6 +381,7 @@ bool editor_find(const char *text, bool case_sensitive, bool whole_word) {
     return result;
 }
 
+// FIXED: Enhanced replace function with better bounds checking and overflow protection
 bool editor_replace(const char *find_text, const char *replace_text, bool case_sensitive,
                     bool whole_word, bool replace_all) {
     if (!find_text) {
@@ -350,21 +416,32 @@ bool editor_replace(const char *find_text, const char *replace_text, bool case_s
     size_t find_len = strlen(find_text);
     size_t replace_len = strlen(replace_text);
 
-    // Calculate new content size
+    // Prevent potential integer overflow in size calculations
+    const size_t MAX_CONTENT_SIZE = 50 * 1024 * 1024; // 50MB limit
+    if (content_len > MAX_CONTENT_SIZE) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, "replace operation",
+                         "Content too large for replace operation");
+        free(content);
+        return false;
+    }
+
+    // Count replacements needed first
     int replacement_count = 0;
     char *pos = content;
+    char *content_end = content + content_len;
 
-    // Count replacements needed
-    while (*pos) {
+    while (pos <= content_end - find_len) {
         char *match = NULL;
         if (case_sensitive) {
             match = strstr(pos, find_text);
+            if (match && match < pos) break; // Sanity check
         } else {
-            // Simple case-insensitive search
-            for (char *p = pos; *p; p++) {
+            // Case-insensitive search
+            for (char *p = pos; p <= content_end - find_len; p++) {
                 if (strnicmp(p, find_text, find_len) == 0) {
                     if (!whole_word ||
-                        ((p == content || !isalnum(*(p - 1))) && !isalnum(*(p + find_len)))) {
+                        ((p == content || !isalnum((unsigned char)*(p - 1))) && 
+                         !isalnum((unsigned char)*(p + find_len)))) {
                         match = p;
                         break;
                     }
@@ -372,11 +449,11 @@ bool editor_replace(const char *find_text, const char *replace_text, bool case_s
             }
         }
 
-        if (match) {
+        if (match && match >= pos && match <= content_end - find_len) {
             if (whole_word && case_sensitive) {
                 // Check word boundaries
-                bool is_start = (match == content || !isalnum(*(match - 1)));
-                bool is_end = !isalnum(*(match + find_len));
+                bool is_start = (match == content || !isalnum((unsigned char)*(match - 1)));
+                bool is_end = !isalnum((unsigned char)*(match + find_len));
                 if (!is_start || !is_end) {
                     pos = match + 1;
                     continue;
@@ -389,6 +466,14 @@ bool editor_replace(const char *find_text, const char *replace_text, bool case_s
         } else {
             break;
         }
+        
+        // Prevent infinite loops
+        if (replacement_count > 100000) {
+            NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, "replace operation",
+                             "Too many replacements requested (limit: 100000)");
+            free(content);
+            return false;
+        }
     }
 
     if (replacement_count == 0) {
@@ -396,8 +481,42 @@ bool editor_replace(const char *find_text, const char *replace_text, bool case_s
         return false;
     }
 
+    // Calculate new content size with overflow protection
+    size_t size_diff = 0;
+    if (replace_len >= find_len) {
+        size_diff = (replace_len - find_len) * replacement_count;
+        // Check for overflow
+        if (size_diff / replacement_count != (replace_len - find_len)) {
+            NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, "replace operation",
+                             "Replace operation would cause size overflow");
+            free(content);
+            return false;
+        }
+    } else {
+        size_diff = (find_len - replace_len) * replacement_count;
+    }
+    
+    size_t new_size;
+    if (replace_len >= find_len) {
+        new_size = content_len + size_diff + 1;
+        if (new_size < content_len) { // Overflow check
+            NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, "replace operation",
+                             "Replace operation would cause size overflow");
+            free(content);
+            return false;
+        }
+    } else {
+        new_size = content_len - size_diff + 1;
+    }
+    
+    if (new_size > MAX_CONTENT_SIZE) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, "replace operation",
+                         "Result would be too large");
+        free(content);
+        return false;
+    }
+
     // Allocate new content buffer
-    size_t new_size = content_len + (replacement_count * (replace_len - find_len)) + 1;
     char *new_content = malloc(new_size);
     if (!new_content) {
         NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, "replace operation",
@@ -409,17 +528,19 @@ bool editor_replace(const char *find_text, const char *replace_text, bool case_s
     // Perform replacements
     char *src = content;
     char *dst = new_content;
+    char *dst_end = new_content + new_size - 1; // Leave space for null terminator
     int replacements_done = 0;
 
-    while (*src && (replace_all || replacements_done == 0)) {
+    while (*src && (replace_all || replacements_done == 0) && dst < dst_end) {
         char *match = NULL;
         if (case_sensitive) {
             match = strstr(src, find_text);
         } else {
-            for (char *p = src; *p; p++) {
+            for (char *p = src; *p && p <= content_end - find_len; p++) {
                 if (strnicmp(p, find_text, find_len) == 0) {
                     if (!whole_word ||
-                        ((p == content || !isalnum(*(p - 1))) && !isalnum(*(p + find_len)))) {
+                        ((p == content || !isalnum((unsigned char)*(p - 1))) && 
+                         !isalnum((unsigned char)*(p + find_len)))) {
                         match = p;
                         break;
                     }
@@ -427,40 +548,52 @@ bool editor_replace(const char *find_text, const char *replace_text, bool case_s
             }
         }
 
-        if (match) {
+        if (match && match >= src) {
             if (whole_word && case_sensitive) {
-                bool is_start = (match == content || !isalnum(*(match - 1)));
-                bool is_end = !isalnum(*(match + find_len));
+                bool is_start = (match == content || !isalnum((unsigned char)*(match - 1)));
+                bool is_end = !isalnum((unsigned char)*(match + find_len));
                 if (!is_start || !is_end) {
-                    *dst++ = *src++;
+                    if (dst < dst_end) {
+                        *dst++ = *src++;
+                    }
                     continue;
                 }
             }
 
             // Copy text before match
-            while (src < match) {
+            while (src < match && dst < dst_end) {
                 *dst++ = *src++;
             }
 
             // Copy replacement text
-            strcpy(dst, replace_text);
-            dst += replace_len;
+            size_t copy_len = replace_len;
+            if (dst + copy_len >= dst_end) {
+                copy_len = dst_end - dst;
+            }
+            strncpy(dst, replace_text, copy_len);
+            dst += copy_len;
             src += find_len;
             replacements_done++;
         } else {
-            *dst++ = *src++;
+            if (dst < dst_end) {
+                *dst++ = *src++;
+            }
         }
     }
 
     // Copy remaining text
-    while (*src) {
+    while (*src && dst < dst_end) {
         *dst++ = *src++;
     }
     *dst = '\0';
 
     // Update editor content
     ui_set_text(g_editor.main_window, new_content);
+    
+    npad_mutex_lock(&g_editor_mutex);
     g_editor.is_modified = true;
+    npad_mutex_unlock(&g_editor_mutex);
+    
     editor_update_title();
 
     free(content);
@@ -473,7 +606,10 @@ bool editor_is_modified(void) {
 }
 
 void editor_set_modified(bool modified) {
+    npad_mutex_lock(&g_editor_mutex);
     g_editor.is_modified = modified;
+    npad_mutex_unlock(&g_editor_mutex);
+    
     if (g_editor.main_window) {
         ui_set_text_modified(g_editor.main_window, modified);
     }
@@ -502,7 +638,9 @@ void editor_set_startup_file(const char *filename) {
 }
 
 void editor_enable_auto_save(bool enabled) {
+    npad_mutex_lock(&g_editor_mutex);
     g_editor.auto_save_enabled = enabled;
+    npad_mutex_unlock(&g_editor_mutex);
     settings_set_bool("auto_save_enabled", enabled);
 }
 
@@ -511,7 +649,9 @@ bool editor_is_auto_save_enabled(void) {
 }
 
 void editor_set_auto_save_interval(int seconds) {
+    npad_mutex_lock(&g_editor_mutex);
     g_editor.auto_save_interval = seconds;
+    npad_mutex_unlock(&g_editor_mutex);
     settings_set_int("auto_save_interval", seconds);
 }
 
@@ -604,7 +744,9 @@ bool editor_handle_event(const UIEvent *event) {
             return true;
 
         case UI_EVENT_TEXT_CHANGED:
+            npad_mutex_lock(&g_editor_mutex);
             g_editor.is_modified = true;
+            npad_mutex_unlock(&g_editor_mutex);
             editor_update_title();
             return true;
 
@@ -621,10 +763,21 @@ bool editor_prompt_save_changes(void) {
     if (!g_editor.is_modified)
         return true;
 
+    npad_mutex_lock(&g_editor_mutex);
     const char *filename = g_editor.current_file ? g_editor.current_file : "Untitled";
+    char *filename_copy = malloc(strlen(filename) + 1);
+    if (filename_copy) {
+        strcpy(filename_copy, filename);
+    }
+    npad_mutex_unlock(&g_editor_mutex);
+
+    if (!filename_copy) {
+        return true; // Fail gracefully
+    }
 
     char message[512];
-    snprintf(message, sizeof(message), "Do you want to save changes to %.400s?", filename);
+    snprintf(message, sizeof(message), "Do you want to save changes to %.400s?", filename_copy);
+    free(filename_copy);
 
     // This should return: true for Yes/No, false for Cancel
     // For now, we'll use a simple message box
@@ -635,12 +788,25 @@ void editor_update_title(void) {
     if (!g_editor.main_window)
         return;
 
+    npad_mutex_lock(&g_editor_mutex);
+    
     const char *filename = g_editor.current_file ? g_editor.current_file : "Untitled";
+    bool is_modified = g_editor.is_modified;
+    
+    // Create copies to work with outside the mutex
+    char *filename_copy = malloc(strlen(filename) + 1);
+    if (!filename_copy) {
+        npad_mutex_unlock(&g_editor_mutex);
+        return;
+    }
+    strcpy(filename_copy, filename);
+    
+    npad_mutex_unlock(&g_editor_mutex);
 
     // Extract just the filename from the full path
-    const char *display_name = filename;
-    const char *last_slash = strrchr(filename, '/');
-    const char *last_backslash = strrchr(filename, '\\');
+    const char *display_name = filename_copy;
+    const char *last_slash = strrchr(filename_copy, '/');
+    const char *last_backslash = strrchr(filename_copy, '\\');
 
     if (last_slash || last_backslash) {
         const char *separator = (last_slash > last_backslash) ? last_slash : last_backslash;
@@ -648,8 +814,8 @@ void editor_update_title(void) {
     }
 
     char title[512];
-    snprintf(title, sizeof(title), "%s%.400s - npad", g_editor.is_modified ? "*" : "",
-             display_name);
+    snprintf(title, sizeof(title), "%s%.400s - npad", is_modified ? "*" : "", display_name);
 
     ui_set_window_title(g_editor.main_window, title);
+    free(filename_copy);
 }

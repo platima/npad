@@ -69,7 +69,9 @@ bool settings_init(void) {
 }
 
 void settings_cleanup(void) {
+    npad_mutex_lock(&g_settings_mutex);
     free_settings_list();
+    npad_mutex_unlock(&g_settings_mutex);
 
     if (g_settings_file_path) {
         free(g_settings_file_path);
@@ -82,22 +84,27 @@ bool settings_set_string(const char *key, const char *value) {
         return false;
 
     npad_mutex_lock(&g_settings_mutex);
+    
     SettingEntry *entry = find_setting(key);
     if (entry) {
         // Update existing entry
-        free(entry->value);
-        entry->value = malloc(strlen(value) + 1);
-        if (!entry->value) {
+        char *new_value = malloc(strlen(value) + 1);
+        if (!new_value) {
             NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, key,
                              "Failed to allocate memory for setting value");
+            npad_mutex_unlock(&g_settings_mutex);
             return false;
         }
-        strcpy(entry->value, value);
+        strcpy(new_value, value);
+        free(entry->value);
+        entry->value = new_value;
     } else {
         // Create new entry
         entry = create_setting(key, value);
-        if (!entry)
+        if (!entry) {
+            npad_mutex_unlock(&g_settings_mutex);
             return false;
+        }
 
         // Add to front of list
         entry->next = g_settings_head;
@@ -114,26 +121,22 @@ char *settings_get_string(const char *key, const char *default_value) {
 
     npad_mutex_lock(&g_settings_mutex);
     SettingEntry *entry = find_setting(key);
+    char *result = NULL;
+    
     if (entry && entry->value) {
-        char *result = malloc(strlen(entry->value) + 1);
-        if (!result) {
-            return NULL;
+        result = malloc(strlen(entry->value) + 1);
+        if (result) {
+            strcpy(result, entry->value);
         }
-        strcpy(result, entry->value);
-        return result;
-    }
-
-    if (default_value) {
-        char *result = malloc(strlen(default_value) + 1);
-        if (!result) {
-            return NULL;
+    } else if (default_value) {
+        result = malloc(strlen(default_value) + 1);
+        if (result) {
+            strcpy(result, default_value);
         }
-        strcpy(result, default_value);
-        return result;
     }
-
+    
     npad_mutex_unlock(&g_settings_mutex);
-    return NULL;
+    return result;
 }
 
 bool settings_set_int(const char *key, int value) {
@@ -183,15 +186,24 @@ double settings_get_double(const char *key, double default_value) {
 }
 
 bool settings_has_key(const char *key) {
-    return find_setting(key) != NULL;
+    if (!key)
+        return false;
+        
+    npad_mutex_lock(&g_settings_mutex);
+    SettingEntry *entry = find_setting(key);
+    npad_mutex_unlock(&g_settings_mutex);
+    return entry != NULL;
 }
 
 bool settings_remove_key(const char *key) {
     if (!key)
         return false;
 
+    npad_mutex_lock(&g_settings_mutex);
+    
     SettingEntry *prev = NULL;
     SettingEntry *current = g_settings_head;
+    bool found = false;
 
     while (current) {
         if (strcmp(current->key, key) == 0) {
@@ -205,18 +217,22 @@ bool settings_remove_key(const char *key) {
             free(current->key);
             free(current->value);
             free(current);
-            return true;
+            found = true;
+            break;
         }
 
         prev = current;
         current = current->next;
     }
 
-    return false;
+    npad_mutex_unlock(&g_settings_mutex);
+    return found;
 }
 
 bool settings_clear_all(void) {
+    npad_mutex_lock(&g_settings_mutex);
     free_settings_list();
+    npad_mutex_unlock(&g_settings_mutex);
     return true;
 }
 
@@ -516,10 +532,11 @@ static bool parse_settings_file(const char *content) {
     if (!content)
         return false;
 
-    // Simple JSON parser for our basic key-value needs
-    // This is a minimal implementation - a full JSON parser would be more robust
-
-    char *content_copy = malloc(strlen(content) + 1);
+    size_t content_len = strlen(content);
+    char *content_copy = malloc(content_len + 1);
+    if (!content_copy)
+        return false;
+    
     strcpy(content_copy, content);
 
     // Remove whitespace and find the opening brace
@@ -530,12 +547,13 @@ static bool parse_settings_file(const char *content) {
     }
 
     char *current = json_start + 1;
+    char *content_end = content_copy + content_len;
 
-    while (*current && *current != '}') {
+    while (current < content_end && *current && *current != '}') {
         // Skip whitespace
-        while (*current && isspace(*current))
+        while (current < content_end && *current && isspace(*current))
             current++;
-        if (*current == '}' || *current == '\0')
+        if (current >= content_end || *current == '}' || *current == '\0')
             break;
 
         // Parse key
@@ -548,57 +566,64 @@ static bool parse_settings_file(const char *content) {
         char *key_start = current;
 
         // Find end of key
-        while (*current && *current != '"')
-            current++;
-        if (!*current)
+        while (current < content_end && *current && *current != '"') {
+            if (*current == '\\' && current + 1 < content_end) {
+                current += 2; // Skip escaped character
+            } else {
+                current++;
+            }
+        }
+        if (current >= content_end || !*current)
             break;
 
         *current = '\0'; // Null-terminate key
         current++;       // Skip closing quote
 
         // Skip whitespace and colon
-        while (*current && (isspace(*current) || *current == ':'))
+        while (current < content_end && *current && (isspace(*current) || *current == ':'))
             current++;
 
         // Parse value
-        if (*current == '"') {
+        if (current < content_end && *current == '"') {
             // String value
             current++; // Skip opening quote
             char *value_start = current;
 
             // Find end of value, handling escaped quotes
-            while (*current && *current != '"') {
-                if (*current == '\\' && *(current + 1) == '"') {
-                    current += 2;
+            while (current < content_end && *current && *current != '"') {
+                if (*current == '\\' && current + 1 < content_end) {
+                    current += 2; // Skip escaped character
                 } else {
                     current++;
                 }
             }
 
-            if (*current == '"') {
+            if (current < content_end && *current == '"') {
                 *current = '\0'; // Null-terminate value
                 settings_set_string(key_start, value_start);
                 current++; // Skip closing quote
             }
-        } else {
+        } else if (current < content_end) {
             // Non-string value (number, boolean, etc.)
             char *value_start = current;
 
             // Find end of value
-            while (*current && *current != ',' && *current != '}' && !isspace(*current)) {
+            while (current < content_end && *current && *current != ',' && *current != '}' && !isspace(*current)) {
                 current++;
             }
 
-            char old_char = *current;
-            *current = '\0'; // Null-terminate value
-            settings_set_string(key_start, value_start);
-            *current = old_char;
+            if (current < content_end) {
+                char old_char = *current;
+                *current = '\0'; // Null-terminate value
+                settings_set_string(key_start, value_start);
+                *current = old_char;
+            }
         }
 
         // Skip to next key-value pair
-        while (*current && *current != ',' && *current != '}')
+        while (current < content_end && *current && *current != ',' && *current != '}')
             current++;
-        if (*current == ',')
+        if (current < content_end && *current == ',')
             current++;
     }
 
@@ -607,31 +632,58 @@ static bool parse_settings_file(const char *content) {
 }
 
 static char *serialize_settings(void) {
+    npad_mutex_lock(&g_settings_mutex);
+    
     // Calculate required buffer size more accurately
     size_t total_size = 100; // Base size for JSON structure
     SettingEntry *current = g_settings_head;
     int entry_count = 0;
 
     while (current) {
-        // "key": "value", (with quotes, escaping, and safety margin)
+        // Calculate exact size needed for this entry
         size_t key_len = current->key ? strlen(current->key) : 0;
         size_t value_len = current->value ? strlen(current->value) : 0;
-        total_size += key_len * 2 + value_len * 2 + 20; // Double for potential escaping + overhead
+        
+        // Count characters that need escaping
+        size_t key_escaped_len = key_len;
+        size_t value_escaped_len = value_len;
+        
+        if (current->key) {
+            for (size_t i = 0; i < key_len; i++) {
+                if (current->key[i] == '"' || current->key[i] == '\\') {
+                    key_escaped_len++;
+                }
+            }
+        }
+        
+        if (current->value) {
+            for (size_t i = 0; i < value_len; i++) {
+                if (current->value[i] == '"' || current->value[i] == '\\') {
+                    value_escaped_len++;
+                }
+            }
+        }
+        
+        // "key": "value", plus quotes, colon, space, comma, newline
+        total_size += key_escaped_len + value_escaped_len + 20;
         entry_count++;
         current = current->next;
     }
 
-    // Add margin for commas and newlines
-    total_size += entry_count * 10;
+    // Add margin for structure and final newlines
+    total_size += 50;
 
     char *content = malloc(total_size);
-    if (!content)
+    if (!content) {
+        npad_mutex_unlock(&g_settings_mutex);
         return NULL;
+    }
 
     size_t written = 0;
     int ret = snprintf(content, total_size, "{\n");
     if (ret < 0 || (size_t) ret >= total_size - written) {
         free(content);
+        npad_mutex_unlock(&g_settings_mutex);
         return NULL;
     }
     written += ret;
@@ -644,23 +696,28 @@ static char *serialize_settings(void) {
             ret = snprintf(content + written, total_size - written, ",\n");
             if (ret < 0 || (size_t) ret >= total_size - written) {
                 free(content);
+                npad_mutex_unlock(&g_settings_mutex);
                 return NULL;
             }
             written += ret;
         }
         first = false;
 
-        // Escape quotes in key and value
-        char *escaped_key = malloc(strlen(current->key) * 2 + 1);
-        char *escaped_value = malloc(strlen(current->value) * 2 + 1);
+        // Escape quotes in key and value - calculate exact size needed
+        size_t key_len = strlen(current->key);
+        size_t value_len = strlen(current->value);
+        
+        char *escaped_key = malloc(key_len * 2 + 1);
+        char *escaped_value = malloc(value_len * 2 + 1);
         if (!escaped_key || !escaped_value) {
             free(escaped_key);
             free(escaped_value);
             free(content);
+            npad_mutex_unlock(&g_settings_mutex);
             return NULL;
         }
 
-        // Simple quote escaping
+        // Escape key
         const char *src = current->key;
         char *dst = escaped_key;
         while (*src) {
@@ -671,6 +728,7 @@ static char *serialize_settings(void) {
         }
         *dst = '\0';
 
+        // Escape value
         src = current->value;
         dst = escaped_value;
         while (*src) {
@@ -689,6 +747,7 @@ static char *serialize_settings(void) {
 
         if (ret < 0 || (size_t) ret >= total_size - written) {
             free(content);
+            npad_mutex_unlock(&g_settings_mutex);
             return NULL;
         }
         written += ret;
@@ -699,8 +758,10 @@ static char *serialize_settings(void) {
     ret = snprintf(content + written, total_size - written, "\n}\n");
     if (ret < 0 || (size_t) ret >= total_size - written) {
         free(content);
+        npad_mutex_unlock(&g_settings_mutex);
         return NULL;
     }
 
+    npad_mutex_unlock(&g_settings_mutex);
     return content;
 }
