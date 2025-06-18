@@ -1,30 +1,36 @@
+//
+// npad - Windows Resource File
+// Dialog definitions for Find and Replace functionality
+//
+// Author: Platima  
+// https://github.com/platima/npad
+//
+
 #include <windows.h>
+#include "resource.h"
 
-// Embed the manifest for DPI awareness
-1 24 "npad.manifest"
-
-// Version information
+// Version Information
 1 VERSIONINFO
-FILEVERSION 1,0,0,0
-PRODUCTVERSION 1,0,0,0
-FILEFLAGSMASK 0x3fL
+FILEVERSION 0,1,7,0
+PRODUCTVERSION 0,1,7,0
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0x0L
-FILEOS 0x40004L
-FILETYPE 0x1L
-FILESUBTYPE 0x0L
+FILEOS VOS__WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE VFT2_UNKNOWN
 BEGIN
     BLOCK "StringFileInfo"
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName", "npad Project"
+            VALUE "CompanyName", "Platima"
             VALUE "FileDescription", "npad - Lightweight Text Editor"
-            VALUE "FileVersion", "1.0.0.0"
+            VALUE "FileVersion", "0.1.6.0"
             VALUE "InternalName", "npad"
-            VALUE "LegalCopyright", "Copyright (c) 2024"
+            VALUE "LegalCopyright", "Copyright © 2025 Platima"
             VALUE "OriginalFilename", "npad.exe"
             VALUE "ProductName", "npad"
-            VALUE "ProductVersion", "1.0.0.0"
+            VALUE "ProductVersion", "0.1.6.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -33,5 +39,43 @@ BEGIN
     END
 END
 
-// Application icon (placeholder - would need actual icon file)
-// IDI_APPLICATION ICON "npad.ico"
+// Application Icon
+IDI_NPAD ICON "npad.ico"
+
+// Find Dialog
+IDD_FIND DIALOGEX 0, 0, 250, 120
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Find"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "Find &what:", IDC_STATIC, 9, 15, 48, 8
+    EDITTEXT        ID_FIND_TEXT, 65, 12, 120, 14, ES_AUTOHSCROLL
+    DEFPUSHBUTTON   "&Find Next", ID_FIND_NEXT, 195, 12, 50, 14
+    PUSHBUTTON      "Cancel", ID_FIND_CANCEL, 195, 30, 50, 14
+    CONTROL         "&Match case", ID_FIND_CASE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 9, 42, 64, 10
+    CONTROL         "Match &whole word only", ID_FIND_WHOLE_WORD, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 9, 56, 132, 10
+    GROUPBOX        "Direction", IDC_STATIC, 9, 75, 75, 35
+    CONTROL         "&Up", IDC_RADIO_UP, "Button", BS_AUTORADIOBUTTON | WS_GROUP, 15, 87, 25, 10
+    CONTROL         "&Down", IDC_RADIO_DOWN, "Button", BS_AUTORADIOBUTTON, 50, 87, 30, 10
+END
+
+// Replace Dialog  
+IDD_REPLACE DIALOGEX 0, 0, 270, 140
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Replace"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "Find &what:", IDC_STATIC, 9, 15, 48, 8
+    EDITTEXT        ID_FIND_TEXT, 65, 12, 120, 14, ES_AUTOHSCROLL
+    LTEXT           "Re&place with:", IDC_STATIC, 9, 35, 48, 8
+    EDITTEXT        ID_REPLACE_WITH, 65, 32, 120, 14, ES_AUTOHSCROLL
+    DEFPUSHBUTTON   "&Find Next", ID_FIND_NEXT, 195, 12, 70, 14
+    PUSHBUTTON      "&Replace", ID_REPLACE_NEXT, 195, 30, 70, 14
+    PUSHBUTTON      "Replace &All", ID_REPLACE_ALL, 195, 48, 70, 14
+    PUSHBUTTON      "Cancel", ID_FIND_CANCEL, 195, 66, 70, 14
+    CONTROL         "&Match case", ID_FIND_CASE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 9, 62, 64, 10
+    CONTROL         "Match &whole word only", ID_FIND_WHOLE_WORD, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 9, 76, 132, 10
+    GROUPBOX        "Direction", IDC_STATIC, 9, 95, 75, 35
+    CONTROL         "&Up", IDC_RADIO_UP, "Button", BS_AUTORADIOBUTTON | WS_GROUP, 15, 107, 25, 10
+    CONTROL         "&Down", IDC_RADIO_DOWN, "Button", BS_AUTORADIOBUTTON, 50, 107, 30, 10
+END
