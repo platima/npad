@@ -43,39 +43,40 @@ static bool is_safe_path(const char *filename) {
     if (!filename || strlen(filename) == 0) {
         return false;
     }
-    
+
     size_t len = strlen(filename);
     if (len > 1024) {
         return false; // Path too long
     }
-    
+
     // Check for various path traversal patterns
     if (strstr(filename, "..") != NULL) {
         return false; // Any ".." is suspicious
     }
-    
-    // Check for absolute paths that might escape sandbox
-    #ifdef _WIN32
+
+// Check for absolute paths that might escape sandbox
+#ifdef _WIN32
     // Check for drive letters or UNC paths
-    if ((len >= 3 && filename[1] == ':') || 
+    if ((len >= 3 && filename[1] == ':') ||
         (len >= 2 && filename[0] == '\\' && filename[1] == '\\')) {
-        // For now, reject absolute paths - in a real app, you'd validate they're in allowed directories
+        // For now, reject absolute paths - in a real app, you'd validate they're in allowed
+        // directories
         return false;
     }
-    #else
+#else
     // Check for absolute paths starting with /
     if (filename[0] == '/') {
         return false;
     }
-    #endif
-    
+#endif
+
     // Check for null bytes (could indicate injection)
     for (size_t i = 0; i < len; i++) {
         if (filename[i] == '\0') {
             return false;
         }
     }
-    
+
     return true;
 }
 
@@ -87,8 +88,8 @@ char *file_read_text(const char *filename) {
     }
 
     if (!is_safe_path(filename)) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, 0, filename,
-                         "Invalid or unsafe file path: %s", filename);
+        NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, 0, filename, "Invalid or unsafe file path: %s",
+                         filename);
         set_error("Invalid or unsafe file path");
         return NULL;
     }
@@ -109,7 +110,7 @@ char *file_read_text(const char *filename) {
         fclose(file);
         return NULL;
     }
-    
+
     long size = ftell(file);
     if (size < 0) {
         NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, errno, filename, "Failed to get file size: %s",
@@ -118,7 +119,7 @@ char *file_read_text(const char *filename) {
         fclose(file);
         return NULL;
     }
-    
+
     if (fseek(file, 0, SEEK_SET) != 0) {
         NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, errno, filename, "Failed to seek to start of file: %s",
                          strerror(errno));
@@ -130,15 +131,15 @@ char *file_read_text(const char *filename) {
     // Check for reasonable file size limits (prevent DoS)
     const long MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB limit
     if (size > MAX_FILE_SIZE) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, 0, filename,
-                         "File too large: %ld bytes (max %ld)", size, MAX_FILE_SIZE);
+        NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, 0, filename, "File too large: %ld bytes (max %ld)",
+                         size, MAX_FILE_SIZE);
         set_error("File too large");
         fclose(file);
         return NULL;
     }
 
     // Allocate buffer
-    char *content = malloc((size_t)size + 1);
+    char *content = malloc((size_t) size + 1);
     if (!content) {
         NPAD_ERROR_MEMORY_ALLOC(filename);
         set_error("Out of memory");
@@ -147,13 +148,13 @@ char *file_read_text(const char *filename) {
     }
 
     // Read file
-    size_t read_size = fread(content, 1, (size_t)size, file);
+    size_t read_size = fread(content, 1, (size_t) size, file);
     fclose(file);
 
     if (read_size != (size_t) size) {
         NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, errno, filename,
-                         "Failed to read complete file: expected %ld bytes, got %zu bytes",
-                         size, read_size);
+                         "Failed to read complete file: expected %ld bytes, got %zu bytes", size,
+                         read_size);
         set_errno_error("Failed to read file", filename);
         free(content);
         return NULL;
@@ -186,14 +187,14 @@ bool file_read_binary(const char *filename, void **data, size_t *size) {
         fclose(file);
         return false;
     }
-    
+
     long file_size = ftell(file);
     if (file_size < 0) {
         set_errno_error("Failed to get file size", filename);
         fclose(file);
         return false;
     }
-    
+
     if (fseek(file, 0, SEEK_SET) != 0) {
         set_errno_error("Failed to seek in file", filename);
         fclose(file);
@@ -209,7 +210,7 @@ bool file_read_binary(const char *filename, void **data, size_t *size) {
     }
 
     // Allocate buffer
-    void *buffer = malloc((size_t)file_size);
+    void *buffer = malloc((size_t) file_size);
     if (!buffer) {
         set_error("Out of memory");
         fclose(file);
@@ -217,7 +218,7 @@ bool file_read_binary(const char *filename, void **data, size_t *size) {
     }
 
     // Read file
-    size_t read_size = fread(buffer, 1, (size_t)file_size, file);
+    size_t read_size = fread(buffer, 1, (size_t) file_size, file);
     fclose(file);
 
     if (read_size != (size_t) file_size) {
@@ -227,7 +228,7 @@ bool file_read_binary(const char *filename, void **data, size_t *size) {
     }
 
     *data = buffer;
-    *size = (size_t)file_size;
+    *size = (size_t) file_size;
     return true;
 }
 
@@ -250,16 +251,16 @@ bool file_write_text(const char *filename, const char *content) {
 
     size_t content_length = strlen(content);
     size_t written = fwrite(content, 1, content_length, file);
-    
+
     // Check for write errors before closing
     bool write_error = (written != content_length);
     int close_result = fclose(file);
-    
+
     if (write_error) {
         set_errno_error("Failed to write file", filename);
         return false;
     }
-    
+
     if (close_result != 0) {
         set_errno_error("Failed to close file after writing", filename);
         return false;
@@ -286,16 +287,16 @@ bool file_write_binary(const char *filename, const void *data, size_t size) {
     }
 
     size_t written = fwrite(data, 1, size, file);
-    
+
     // Check for write errors before closing
     bool write_error = (written != size);
     int close_result = fclose(file);
-    
+
     if (write_error) {
         set_errno_error("Failed to write file", filename);
         return false;
     }
-    
+
     if (close_result != 0) {
         set_errno_error("Failed to close file after writing", filename);
         return false;
@@ -334,7 +335,7 @@ size_t file_get_size(const char *filename) {
         fclose(file);
         return 0;
     }
-    
+
     long size = ftell(file);
     fclose(file);
 
@@ -402,7 +403,7 @@ char *file_get_directory(const char *filepath) {
         return result;
     }
 
-    size_t dir_length = (size_t)(separator - filepath);
+    size_t dir_length = (size_t) (separator - filepath);
     if (dir_length == 0) {
         // Root directory case
         char *result = malloc(2);
@@ -412,7 +413,7 @@ char *file_get_directory(const char *filepath) {
         strcpy(result, separator == last_slash ? "/" : "\\");
         return result;
     }
-    
+
     char *directory = malloc(dir_length + 1);
     if (!directory) {
         return NULL;
@@ -483,22 +484,24 @@ char *file_join_paths(const char *dir, const char *filename) {
 
     size_t dir_len = strlen(dir);
     size_t filename_len = strlen(filename);
-    
+
     // Check for empty strings
     if (dir_len == 0) {
         char *result = malloc(filename_len + 1);
-        if (!result) return NULL;
+        if (!result)
+            return NULL;
         strcpy(result, filename);
         return result;
     }
-    
+
     if (filename_len == 0) {
         char *result = malloc(dir_len + 1);
-        if (!result) return NULL;
+        if (!result)
+            return NULL;
         strcpy(result, dir);
         return result;
     }
-    
+
     bool needs_separator = (dir[dir_len - 1] != '/' && dir[dir_len - 1] != '\\');
 
     size_t total_len = dir_len + filename_len + (needs_separator ? 1 : 0) + 1;
