@@ -203,8 +203,8 @@ Window *ui_platform_create_main_window(void) {
     // FIXED: Always show vertical scrollbar, horizontal scrollbar controlled by word wrap
     window->edit_hwnd =
         CreateWindowExA(0, RICHEDIT_CLASS, "",
-                        WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE | 
-                        ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_NOHIDESEL | ES_WANTRETURN,
+                        WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE |
+                            ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_NOHIDESEL | ES_WANTRETURN,
                         0, 0, 0, 0, window->hwnd, (HMENU) ID_EDIT_CONTROL, g_hinstance, NULL);
 
     if (!window->edit_hwnd) {
@@ -224,7 +224,7 @@ Window *ui_platform_create_main_window(void) {
     cf.dwEffects = 0;
     cf.yHeight = 200; // 10 point font (20 twips per point)
     cf.bCharSet = DEFAULT_CHARSET;
-    
+
     // Get the system UI font name
     NONCLIENTMETRICSA ncm;
     ncm.cbSize = sizeof(ncm);
@@ -242,12 +242,11 @@ Window *ui_platform_create_main_window(void) {
         strncpy(cf.szFaceName, "Segoe UI", LF_FACESIZE - 1);
         cf.szFaceName[LF_FACESIZE - 1] = '\0';
     }
-    
+
     SendMessage(window->edit_hwnd, EM_SETCHARFORMAT, SCF_ALL, (LPARAM) &cf);
 
     // FIXED: Set proper margins like Windows Notepad (4 pixels left and right)
-    SendMessage(window->edit_hwnd, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, 
-                MAKELPARAM(4, 4));
+    SendMessage(window->edit_hwnd, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(4, 4));
 
     // Set unlimited text length
     SendMessage(window->edit_hwnd, EM_LIMITTEXT, 0, 0);
