@@ -181,9 +181,8 @@ Window *ui_platform_create_main_window(void) {
 
     memset(window, 0, sizeof(Window));
 
-    // FIXED: Adjusted window styles to match notepad more closely
     window->hwnd =
-        CreateWindowExA(WS_EX_ACCEPTFILES, // Removed extra window edge styles for cleaner look
+        CreateWindowExA(WS_EX_ACCEPTFILES,
                         NPAD_WINDOW_CLASS, "npad", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
                         CW_USEDEFAULT, 800, 600, NULL, NULL, g_hinstance, window);
 
@@ -193,12 +192,12 @@ Window *ui_platform_create_main_window(void) {
         free(window);
         return NULL;
     }
-
-    // FIXED: Use regular EDIT control instead of RichEdit for better compatibility
+  
     window->edit_hwnd =
-        CreateWindowExA(0, "EDIT", "", // Use standard EDIT class for true notepad behavior
-                        WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE |
+        CreateWindowExA(0, RICHEDIT_CLASS, "",
+                        WS_CHILD | WS_VISIBLE | WS_VSCROLL  | ES_MULTILINE |
                             ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_NOHIDESEL | ES_WANTRETURN,
+
                         0, 0, 0, 0, window->hwnd, (HMENU) ID_EDIT_CONTROL, g_hinstance, NULL);
 
     if (!window->edit_hwnd) {
@@ -209,10 +208,8 @@ Window *ui_platform_create_main_window(void) {
         return NULL;
     }
 
-    // FIXED: Set system colors to match Windows theme
     SetWindowTheme(window->edit_hwnd, NULL, NULL); // Use default system theme
 
-    // FIXED: Use system font that matches notepad
     HFONT font = (HFONT) GetStockObject(ANSI_FIXED_FONT); // Use fixed-width font like notepad
     if (!font) {
         font = (HFONT) GetStockObject(SYSTEM_FIXED_FONT);
@@ -278,6 +275,8 @@ Window *ui_platform_create_main_window(void) {
     if (!window->haccel) {
         NPAD_ERROR_WARNING(NPAD_ERROR_SYSTEM, GetLastError(), "Accelerator table creation",
                            "Failed to create accelerator table - keyboard shortcuts will not work");
+        
+      // Continue without accelerators rather than failing completely
     }
 
     // Apply theme
@@ -553,6 +552,58 @@ char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *param
     return NULL;
 }
 
+// Dialog hook procedure for save dialog to add encoding dropdown
+static UINT_PTR CALLBACK SaveDialogHookProc(HWND hdlg, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
+    (void) wParam; // Unused parameter
+    (void) lParam; // Unused parameter
+    static HWND hComboEncoding = NULL;
+
+    switch (uiMsg) {
+        case WM_INITDIALOG: {
+            // Get the parent dialog dimensions
+            RECT dlgRect;
+            GetClientRect(hdlg, &dlgRect);
+
+            // Create encoding label and combobox below the file controls
+            HWND hLabelEncoding =
+                CreateWindowA("STATIC", "Encoding:", WS_CHILD | WS_VISIBLE | SS_LEFT, 12,
+                              dlgRect.bottom - 60, 60, 16, hdlg, (HMENU) 2001, g_hinstance, NULL);
+            (void) hLabelEncoding; // Used for display only
+
+            hComboEncoding = CreateWindowA(
+                "COMBOBOX", "", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 80,
+                dlgRect.bottom - 62, 120, 100, hdlg, (HMENU) 2002, g_hinstance, NULL);
+
+            if (hComboEncoding) {
+                // Add encoding options
+                SendMessage(hComboEncoding, CB_ADDSTRING, 0, (LPARAM) "UTF-8");
+                SendMessage(hComboEncoding, CB_ADDSTRING, 0, (LPARAM) "UTF-8 with BOM");
+                SendMessage(hComboEncoding, CB_ADDSTRING, 0, (LPARAM) "UTF-16 LE");
+                SendMessage(hComboEncoding, CB_ADDSTRING, 0, (LPARAM) "UTF-16 BE");
+                SendMessage(hComboEncoding, CB_ADDSTRING, 0, (LPARAM) "ANSI");
+
+                // Default to UTF-8
+                SendMessage(hComboEncoding, CB_SETCURSEL, 0, 0);
+            }
+            break;
+        }
+
+        case WM_SIZE: {
+            // Reposition controls when dialog is resized
+            if (hComboEncoding) {
+                RECT dlgRect;
+                GetClientRect(hdlg, &dlgRect);
+                SetWindowPos(GetDlgItem(hdlg, 2001), NULL, 12, dlgRect.bottom - 60, 0, 0,
+                             SWP_NOSIZE | SWP_NOZORDER);
+                SetWindowPos(hComboEncoding, NULL, 80, dlgRect.bottom - 62, 0, 0,
+                             SWP_NOSIZE | SWP_NOZORDER);
+            }
+            break;
+        }
+    }
+    return 0;
+}
+
 char *ui_platform_show_save_dialog(Window *parent, const FileDialogParams *params) {
     (void) params;
     OPENFILENAMEA ofn;
@@ -611,6 +662,7 @@ Dialog *ui_platform_show_find_dialog(Window *parent) {
     dialog->hwnd = CreateWindowExA(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, "STATIC", "Find",
                                    WS_POPUP | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT,
                                    300, 100, parent ? parent->hwnd : NULL, NULL, g_hinstance, NULL);
+
 
     if (!dialog->hwnd) {
         NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Find dialog creation",
