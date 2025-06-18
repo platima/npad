@@ -68,6 +68,7 @@ typedef struct Dialog {
 static HINSTANCE g_hinstance = NULL;
 static bool g_dark_mode = false;
 static Window *g_main_window = NULL;
+static HMODULE g_richedit_lib = NULL;
 
 // Forward declarations
 static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
@@ -97,10 +98,10 @@ bool ui_platform_init(void) {
     }
 
     // Load Rich Edit library
-    HMODULE richedit_lib = LoadLibrary(TEXT("riched20.dll"));
-    if (!richedit_lib) {
+    g_richedit_lib = LoadLibrary(TEXT("riched20.dll"));
+    if (!g_richedit_lib) {
         NPAD_ERROR_WARNING(NPAD_ERROR_SYSTEM, GetLastError(), "UI initialization",
-                          "Failed to load Rich Edit library - falling back to standard edit control");
+                        "Failed to load Rich Edit library - falling back to standard edit control");
     }
 
     // Register window class
@@ -136,6 +137,12 @@ void ui_platform_cleanup(void) {
         }
         free(g_main_window);
         g_main_window = NULL;
+    }
+    
+    // Free Rich Edit library
+    if (g_richedit_lib) {
+        FreeLibrary(g_richedit_lib);
+        g_richedit_lib = NULL;
     }
 }
 
