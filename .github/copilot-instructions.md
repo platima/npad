@@ -80,6 +80,7 @@ See Project README.md
 - Ensure suggestions align with classic Notepad behavior
 - Code format must abide by the rules in .clang-format
 - Do not add "// FIXED" comments to code
+- Do not stray from the users request or make changes that were not asked for
 
 ## Files & Structure Context
 - Settings: JSON format in `%APPDATA%\Platima\npad\settings.json` (Windows)
