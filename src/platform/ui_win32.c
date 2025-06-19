@@ -23,6 +23,19 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Define constants for older Windows SDKs
+#ifndef WM_DPICHANGED
+#define WM_DPICHANGED 0x02E0
+#endif
+
+// Function prototypes for DPI-aware functions (Windows 10+)
+typedef UINT (WINAPI *GetDpiForWindowFunc)(HWND);
+typedef BOOL (WINAPI *SystemParametersInfoForDpiFunc)(UINT, UINT, PVOID, UINT, UINT);
+
+// Function pointer instances
+static GetDpiForWindowFunc g_GetDpiForWindow = NULL;
+static SystemParametersInfoForDpiFunc g_SystemParametersInfoForDpi = NULL;
+
 // Window class name
 #define NPAD_WINDOW_CLASS "NpadMainWindow"
 
@@ -92,6 +105,19 @@ static void show_font_dialog(Window *window);
 static bool InputBox(HWND parent, const char *title, const char *prompt, char *buffer,
                      int buffer_size);
 
+// Helper function to get current DPI for a window
+static UINT get_window_dpi(HWND hwnd) {
+    if (hwnd && g_GetDpiForWindow) {
+        return g_GetDpiForWindow(hwnd);
+    }
+    
+    // Fallback to system DPI
+    HDC hdc = GetDC(NULL);
+    UINT dpi = GetDeviceCaps(hdc, LOGPIXELSX);
+    ReleaseDC(NULL, hdc);
+    return dpi;
+}
+
 // Platform initialization
 bool ui_platform_init(void) {
     g_hinstance = GetModuleHandle(NULL);
@@ -104,14 +130,23 @@ bool ui_platform_init(void) {
         NPAD_ERROR_ERROR(NPAD_ERROR_SYSTEM, GetLastError(), "UI initialization",
                          "Failed to initialize common controls");
         return false;
-    }
-
-    // Load Rich Edit library
+    }    // Load Rich Edit library
     g_richedit_lib = LoadLibrary(TEXT("riched20.dll"));
     if (!g_richedit_lib) {
         NPAD_ERROR_WARNING(
             NPAD_ERROR_SYSTEM, GetLastError(), "UI initialization",
             "Failed to load Rich Edit library - falling back to standard edit control");
+    }    // Load DPI-aware functions for Windows 10+
+    HMODULE user32 = GetModuleHandle(TEXT("user32.dll"));
+    if (user32) {
+        // Use union to avoid function pointer cast warnings
+        union { FARPROC proc; GetDpiForWindowFunc func; } getDpiForWindow;
+        getDpiForWindow.proc = GetProcAddress(user32, "GetDpiForWindow");
+        g_GetDpiForWindow = getDpiForWindow.func;
+        
+        union { FARPROC proc; SystemParametersInfoForDpiFunc func; } sysParamsForDpi;
+        sysParamsForDpi.proc = GetProcAddress(user32, "SystemParametersInfoForDpi");
+        g_SystemParametersInfoForDpi = sysParamsForDpi.func;
     }
 
     // Register window class
@@ -814,8 +849,41 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                         }
                     }
                 }
+            }            break;
+        }        case WM_DPICHANGED: {
+            if (window) {
+                WORD newDpi = HIWORD(wparam);
+                
+                // Get DPI-aware system metrics
+                NONCLIENTMETRICS ncm = { 0 };
+                ncm.cbSize = sizeof(ncm);
+                
+                // Try to get DPI-aware metrics
+                if (g_SystemParametersInfoForDpi && !g_SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0, newDpi)) {
+                    NPAD_ERROR_WARNING(NPAD_ERROR_SYSTEM, GetLastError(), "DPI change handling",
+                                     "Failed to get DPI-aware metrics, falling back to system defaults");
+                }
+                
+                // Recalculate and apply font size for new DPI
+                set_font_size(window, window->font_size);
+                
+                // Resize controls to match new DPI
+                resize_controls(window);
+                
+                // Update status bar for new DPI
+                update_status_bar(window);
+                
+                // Get suggested window rectangle from system
+                RECT *suggested_rect = (RECT*)lparam;
+                if (suggested_rect) {
+                    SetWindowPos(window->hwnd, NULL,
+                                suggested_rect->left, suggested_rect->top,
+                                suggested_rect->right - suggested_rect->left,
+                                suggested_rect->bottom - suggested_rect->top,
+                                SWP_NOZORDER | SWP_NOACTIVATE);
+                }
             }
-            break;
+            return 0;
         }
 
         case WM_CLOSE: {
@@ -1138,14 +1206,22 @@ static void set_font_size(Window *window, int size) {
 
     window->font_size = size;
 
-    // TODO If there is a setting saved for user chosen font then load it here
-
-    // This can maybe be moved into a new function
+    // TODO If there is a setting saved for user chosen font then load it here    // This can maybe be moved into a new function
     NONCLIENTMETRICS ncm;
     HFONT defaultFont;
     ZeroMemory(&ncm, sizeof(NONCLIENTMETRICS));
     ncm.cbSize = sizeof(NONCLIENTMETRICS);
-    SystemParametersInfo(SPI_GETNONCLIENTMETRICS, sizeof(NONCLIENTMETRICS), &ncm, 0);
+      // Get current DPI and use DPI-aware system parameters if available
+    UINT dpi = get_window_dpi(window->hwnd);
+    
+    // Try DPI-aware version first (Windows 10+)
+    if (g_SystemParametersInfoForDpi && g_SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(NONCLIENTMETRICS), &ncm, 0, dpi)) {
+        // Successfully got DPI-aware metrics
+    } else {
+        // Fallback to regular system parameters
+        SystemParametersInfo(SPI_GETNONCLIENTMETRICS, sizeof(NONCLIENTMETRICS), &ncm, 0);
+    }
+    
     defaultFont = CreateFontIndirect(&ncm.lfMessageFont);
 
     if (defaultFont) {
