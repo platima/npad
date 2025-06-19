@@ -50,10 +50,6 @@ settings.ini
 *.pdb
 *.dSYM/
 
-# Claude Code
-#CLAUDE.md
-#.claude
-
 # Executables from testing
 npad-linux-*
 unpad*.exe
