@@ -242,13 +242,11 @@ bool settings_save(void) {
 
     char *content = serialize_settings();
     if (!content)
-        return false;
-
-    // Ensure directory exists
+        return false;    // Ensure directory exists
     char *dir = file_get_directory(g_settings_file_path);
     if (dir) {
 #ifdef _WIN32
-        CreateDirectoryA(dir, NULL);
+        CreateDirectory(dir, NULL);
 #else
         mkdir(dir, 0755);
 #endif
@@ -437,7 +435,7 @@ bool settings_clear_recent_files(void) {
 static char *get_settings_directory(void) {
 #ifdef _WIN32
     char path[MAX_PATH];
-    if (SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, path) == S_OK) {
+    if (SHGetFolderPath(NULL, CSIDL_APPDATA, NULL, 0, path) == S_OK) {
         char *platima_dir = file_join_paths(path, "Platima");
         char *npad_dir = file_join_paths(platima_dir, "npad");
         free(platima_dir);

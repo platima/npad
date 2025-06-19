@@ -538,7 +538,7 @@ bool ui_platform_can_redo(Window *window) {
 
 char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *params) {
     (void) params;
-    OPENFILENAMEA ofn;
+    OPENFILENAME ofn;
     char filename[MAX_PATH] = "";
 
     ZeroMemory(&ofn, sizeof(ofn));
@@ -566,7 +566,7 @@ char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *param
 
 char *ui_platform_show_save_dialog(Window *parent, const FileDialogParams *params) {
     (void) params;
-    OPENFILENAMEA ofn;
+    OPENFILENAME ofn;
     char filename[MAX_PATH] = "";
 
     ZeroMemory(&ofn, sizeof(ofn));
@@ -608,10 +608,8 @@ void ui_platform_show_about_dialog(Window *parent) {
                           "A lightweight, cross-platform text editor\n"
                           "inspired by classic Windows Notepad.\n\n"
                           "Author: Platima\n"
-                          "https://github.com/platima/npad";
-
-    // Create a custom message box with our icon
-    MSGBOXPARAMSA mbp;
+                          "https://github.com/platima/npad";    // Create a custom message box with our icon
+    MSGBOXPARAMS mbp;
     ZeroMemory(&mbp, sizeof(mbp));
     mbp.cbSize = sizeof(mbp);
     mbp.hwndOwner = hwnd;
@@ -714,9 +712,9 @@ void *ui_platform_get_native_handle(Window *window) {
 // Helper functions
 
 static bool register_window_class(void) {
-    WNDCLASSEXA wc;
+    WNDCLASSEX wc;
 
-    wc.cbSize = sizeof(WNDCLASSEXA);
+    wc.cbSize = sizeof(WNDCLASSEX);
     wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = window_proc;
     wc.cbClsExtra = 0;
