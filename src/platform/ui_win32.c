@@ -187,9 +187,9 @@ Window *ui_platform_create_main_window(void) {
 
     memset(window, 0, sizeof(Window));
 
-    window->hwnd =
-        CreateWindowExA(WS_EX_ACCEPTFILES, NPAD_WINDOW_CLASS, "npad", WS_OVERLAPPEDWINDOW,
-                        CW_USEDEFAULT, CW_USEDEFAULT, 800, 600, NULL, NULL, g_hinstance, window);
+    window->hwnd = CreateWindowEx(WS_EX_ACCEPTFILES | WS_EX_WINDOWEDGE, NPAD_WINDOW_CLASS, "npad",
+                                  WS_OVERLAPPEDWINDOW | WS_CLIPSIBLINGS, CW_USEDEFAULT,
+                                  CW_USEDEFAULT, 800, 600, NULL, NULL, g_hinstance, window);
 
     if (!window->hwnd) {
         NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Window creation",
@@ -205,12 +205,11 @@ Window *ui_platform_create_main_window(void) {
         SendMessage(window->hwnd, WM_SETICON, ICON_SMALL, (LPARAM) icon);
     }
 
-    // FIXED: Create with both scrollbars initially - they'll be managed properly
     window->edit_hwnd =
-        CreateWindowExA(0, RICHEDIT_CLASS, "",
-                        WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE |
-                            ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_NOHIDESEL | ES_WANTRETURN,
-                        0, 0, 0, 0, window->hwnd, (HMENU) ID_EDIT_CONTROL, g_hinstance, NULL);
+        CreateWindowEx(0, RICHEDIT_CLASS, "",
+                       WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_AUTOVSCROLL | ES_AUTOHSCROLL |
+                           ES_MULTILINE | ES_NOHIDESEL,
+                       0, 0, 0, 0, window->hwnd, (HMENU) ID_EDIT_CONTROL, g_hinstance, NULL);
 
     if (!window->edit_hwnd) {
         NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Edit control creation",
@@ -220,11 +219,9 @@ Window *ui_platform_create_main_window(void) {
         return NULL;
     }
 
-    // FIXED: Use proper Windows default GUI font with configurable size (11pt default)
     window->font_size = 11; // Default 11pt font like notepad
     set_font_size(window, window->font_size);
 
-    // FIXED: Set proper margins like Windows Notepad (4 pixels left and right)
     SendMessage(window->edit_hwnd, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(4, 4));
 
     // Set unlimited text length
@@ -232,8 +229,8 @@ Window *ui_platform_create_main_window(void) {
 
     // Create status bar with standard styling
     window->status_hwnd =
-        CreateWindowExA(0, STATUSCLASSNAME, NULL, WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP, 0, 0, 0,
-                        0, window->hwnd, (HMENU) ID_STATUS_BAR, g_hinstance, NULL);
+        CreateWindowEx(0, STATUSCLASSNAME, NULL, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, 0, 0, 0,
+                       0, window->hwnd, (HMENU) ID_STATUS_BAR, g_hinstance, NULL);
 
     if (!window->status_hwnd) {
         NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Status bar creation",
@@ -248,20 +245,19 @@ Window *ui_platform_create_main_window(void) {
     int status_parts[] = { 200, 350, 450, -1 }; // -1 means remaining space for last part
     SendMessage(window->status_hwnd, SB_SETPARTS, 4, (LPARAM) status_parts);
 
-    // FIXED: Initialize status bar text with flat styling (no sunken borders)
-    SendMessage(window->status_hwnd, SB_SETTEXT, 0 | SBT_NOBORDERS, (LPARAM) "Ready");
-    SendMessage(window->status_hwnd, SB_SETTEXT, 1 | SBT_NOBORDERS, (LPARAM) "Ln 1, Col 1");
-    SendMessage(window->status_hwnd, SB_SETTEXT, 2 | SBT_NOBORDERS, (LPARAM) "100%");
-    SendMessage(window->status_hwnd, SB_SETTEXT, 3 | SBT_NOBORDERS, (LPARAM) "UTF-8");
+    SendMessage(window->status_hwnd, SB_SETTEXT, 0, (LPARAM) "Ready");
+    SendMessage(window->status_hwnd, SB_SETTEXT, 1, (LPARAM) "Ln 1, Col 1");
+    SendMessage(window->status_hwnd, SB_SETTEXT, 2, (LPARAM) "100%");
+    SendMessage(window->status_hwnd, SB_SETTEXT, 3, (LPARAM) "UTF-8");
 
     // Force status bar to be visible and properly sized
     ShowWindow(window->status_hwnd, SW_SHOW);
     UpdateWindow(window->status_hwnd);
 
-    // Initialize window state - FIXED: Default to word wrap enabled
+    // Initialize window state
     window->word_wrap_enabled = true;
     window->zoom_level = 100;
-    window->is_modified = false; // FIXED: Ensure this is properly initialized
+    window->is_modified = false;
 
     // Create menu and accelerators
     create_menu(window);
@@ -288,6 +284,7 @@ Window *ui_platform_create_main_window(void) {
 
     // Apply theme and update scrollbars
     apply_theme(window);
+
     update_scrollbars(window);
 
     // Set as main window
@@ -337,7 +334,7 @@ void ui_platform_hide_window(Window *window) {
 
 void ui_platform_set_window_title(Window *window, const char *title) {
     if (window && window->hwnd && title) {
-        SetWindowTextA(window->hwnd, title);
+        SetWindowText(window->hwnd, title);
     }
 }
 
@@ -381,7 +378,7 @@ void ui_platform_set_window_position(Window *window, int x, int y) {
 
 void ui_platform_set_text(Window *window, const char *text) {
     if (window && window->edit_hwnd && text) {
-        SetWindowTextA(window->edit_hwnd, text);
+        SetWindowText(window->edit_hwnd, text);
         window->is_modified = false;
         update_title(window);
         update_status_bar(window);
@@ -393,7 +390,7 @@ char *ui_platform_get_text(Window *window) {
     if (!window || !window->edit_hwnd)
         return NULL;
 
-    int length = GetWindowTextLengthA(window->edit_hwnd);
+    int length = GetWindowTextLength(window->edit_hwnd);
     if (length == 0) {
         char *empty = malloc(1);
         if (empty) {
@@ -409,7 +406,7 @@ char *ui_platform_get_text(Window *window) {
         return NULL;
     }
 
-    int actual_length = GetWindowTextA(window->edit_hwnd, text, length + 1);
+    int actual_length = GetWindowText(window->edit_hwnd, text, length + 1);
     if (actual_length != length) {
         text[actual_length] = '\0';
     }
@@ -418,7 +415,7 @@ char *ui_platform_get_text(Window *window) {
 
 void ui_platform_clear_text(Window *window) {
     if (window && window->edit_hwnd) {
-        SetWindowTextA(window->edit_hwnd, "");
+        SetWindowText(window->edit_hwnd, "");
         window->is_modified = false;
         update_title(window);
         update_status_bar(window);
@@ -556,7 +553,7 @@ char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *param
     ofn.lpstrInitialDir = NULL;
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY | OFN_EXPLORER;
 
-    if (GetOpenFileNameA(&ofn)) {
+    if (GetOpenFileName(&ofn)) {
         char *result = malloc(strlen(filename) + 1);
         if (result) {
             strcpy(result, filename);
@@ -584,7 +581,7 @@ char *ui_platform_show_save_dialog(Window *parent, const FileDialogParams *param
     ofn.lpstrInitialDir = NULL;
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER;
 
-    if (GetSaveFileNameA(&ofn)) {
+    if (GetSaveFileName(&ofn)) {
         char *result = malloc(strlen(filename) + 1);
         if (result) {
             strcpy(result, filename);
@@ -600,12 +597,11 @@ bool ui_platform_show_message_box(Window *parent, const char *title, const char 
     HWND hwnd = parent ? parent->hwnd : NULL;
     UINT type = is_question ? (MB_YESNO | MB_ICONQUESTION) : (MB_OK | MB_ICONINFORMATION);
 
-    int result = MessageBoxA(hwnd, message, title, type);
+    int result = MessageBox(hwnd, message, title, type);
     return is_question ? (result == IDYES) : true;
 }
 
 void ui_platform_show_about_dialog(Window *parent) {
-    // FIXED: Use application icon instead of default information icon
     HWND hwnd = parent ? parent->hwnd : NULL;
 
     const char *message = "npad " NPAD_VERSION "\n\n"
@@ -623,9 +619,9 @@ void ui_platform_show_about_dialog(Window *parent) {
     mbp.lpszText = message;
     mbp.lpszCaption = "About npad";
     mbp.dwStyle = MB_OK | MB_USERICON;
-    mbp.lpszIcon = MAKEINTRESOURCEA(IDI_NPAD);
+    mbp.lpszIcon = MAKEINTRESOURCE(IDI_NPAD);
 
-    MessageBoxIndirectA(&mbp);
+    MessageBoxIndirect(&mbp);
 }
 
 Dialog *ui_platform_show_find_dialog(Window *parent) {
@@ -635,9 +631,9 @@ Dialog *ui_platform_show_find_dialog(Window *parent) {
 
     dialog->parent = parent;
 
-    dialog->hwnd = CreateWindowExA(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, "STATIC", "Find",
-                                   WS_POPUP | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT,
-                                   300, 100, parent ? parent->hwnd : NULL, NULL, g_hinstance, NULL);
+    dialog->hwnd = CreateWindowEx(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, "STATIC", "Find",
+                                  WS_POPUP | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT,
+                                  300, 100, parent ? parent->hwnd : NULL, NULL, g_hinstance, NULL);
 
     if (!dialog->hwnd) {
         NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Find dialog creation",
@@ -733,7 +729,7 @@ static bool register_window_class(void) {
     wc.lpszClassName = NPAD_WINDOW_CLASS;
     wc.hIconSm = LoadIcon(g_hinstance, MAKEINTRESOURCE(IDI_NPAD));
 
-    ATOM result = RegisterClassExA(&wc);
+    ATOM result = RegisterClassEx(&wc);
     if (result == 0) {
         NPAD_ERROR_ERROR(NPAD_ERROR_SYSTEM, GetLastError(), "Window class registration",
                          "Failed to register window class");
@@ -778,7 +774,6 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         case WM_COMMAND: {
             if (window) {
                 if (HIWORD(wparam) == EN_CHANGE && LOWORD(wparam) == ID_EDIT_CONTROL) {
-                    // FIXED: Properly track modification state
                     bool was_modified = window->is_modified;
                     window->is_modified = true;
                     if (!was_modified) {
@@ -797,8 +792,6 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         }
 
         case WM_NOTIFY: {
-            // FIXED: Handle RichEdit notifications properly (RichEdit sends EN_CHANGE via
-            // WM_NOTIFY)
             if (window) {
                 NMHDR *nmhdr = (NMHDR *) lparam;
                 if (nmhdr->idFrom == ID_EDIT_CONTROL) {
@@ -825,10 +818,9 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         }
 
         case WM_CLOSE: {
-            // FIXED: Properly check for modifications and warn user
             if (window && window->is_modified) {
-                int result = MessageBoxA(hwnd, "Do you want to save changes to this document?",
-                                         "npad", MB_YESNOCANCEL | MB_ICONQUESTION);
+                int result = MessageBox(hwnd, "Do you want to save changes to this document?",
+                                        "npad", MB_YESNOCANCEL | MB_ICONQUESTION);
 
                 if (result == IDCANCEL) {
                     return 0; // Don't close
@@ -870,42 +862,42 @@ static void create_menu(Window *window) {
     }
 
     // File menu
-    AppendMenuA(hfile, MF_STRING, ID_FILE_NEW, "&New\tCtrl+N");
-    AppendMenuA(hfile, MF_STRING, ID_FILE_OPEN, "&Open...\tCtrl+O");
-    AppendMenuA(hfile, MF_SEPARATOR, 0, NULL);
-    AppendMenuA(hfile, MF_STRING, ID_FILE_SAVE, "&Save\tCtrl+S");
-    AppendMenuA(hfile, MF_STRING, ID_FILE_SAVE_AS, "Save &As...");
-    AppendMenuA(hfile, MF_SEPARATOR, 0, NULL);
-    AppendMenuA(hfile, MF_STRING, ID_FILE_EXIT, "E&xit");
+    AppendMenu(hfile, MF_STRING, ID_FILE_NEW, "&New\tCtrl+N");
+    AppendMenu(hfile, MF_STRING, ID_FILE_OPEN, "&Open...\tCtrl+O");
+    AppendMenu(hfile, MF_SEPARATOR, 0, NULL);
+    AppendMenu(hfile, MF_STRING, ID_FILE_SAVE, "&Save\tCtrl+S");
+    AppendMenu(hfile, MF_STRING, ID_FILE_SAVE_AS, "Save &As...");
+    AppendMenu(hfile, MF_SEPARATOR, 0, NULL);
+    AppendMenu(hfile, MF_STRING, ID_FILE_EXIT, "E&xit");
 
     // Edit menu
-    AppendMenuA(hedit, MF_STRING, ID_EDIT_UNDO, "&Undo\tCtrl+Z");
-    AppendMenuA(hedit, MF_SEPARATOR, 0, NULL);
-    AppendMenuA(hedit, MF_STRING, ID_EDIT_CUT, "Cu&t\tCtrl+X");
-    AppendMenuA(hedit, MF_STRING, ID_EDIT_COPY, "&Copy\tCtrl+C");
-    AppendMenuA(hedit, MF_STRING, ID_EDIT_PASTE, "&Paste\tCtrl+V");
-    AppendMenuA(hedit, MF_SEPARATOR, 0, NULL);
-    AppendMenuA(hedit, MF_STRING, ID_EDIT_SELECT_ALL, "Select &All\tCtrl+A");
-    AppendMenuA(hedit, MF_SEPARATOR, 0, NULL);
-    AppendMenuA(hedit, MF_STRING, ID_EDIT_FIND, "&Find...\tCtrl+F");
-    AppendMenuA(hedit, MF_STRING, ID_EDIT_REPLACE, "&Replace...\tCtrl+H");
-    AppendMenuA(hedit, MF_STRING, ID_EDIT_GOTO_LINE, "&Go to Line...\tCtrl+G");
+    AppendMenu(hedit, MF_STRING, ID_EDIT_UNDO, "&Undo\tCtrl+Z");
+    AppendMenu(hedit, MF_SEPARATOR, 0, NULL);
+    AppendMenu(hedit, MF_STRING, ID_EDIT_CUT, "Cu&t\tCtrl+X");
+    AppendMenu(hedit, MF_STRING, ID_EDIT_COPY, "&Copy\tCtrl+C");
+    AppendMenu(hedit, MF_STRING, ID_EDIT_PASTE, "&Paste\tCtrl+V");
+    AppendMenu(hedit, MF_SEPARATOR, 0, NULL);
+    AppendMenu(hedit, MF_STRING, ID_EDIT_SELECT_ALL, "Select &All\tCtrl+A");
+    AppendMenu(hedit, MF_SEPARATOR, 0, NULL);
+    AppendMenu(hedit, MF_STRING, ID_EDIT_FIND, "&Find...\tCtrl+F");
+    AppendMenu(hedit, MF_STRING, ID_EDIT_REPLACE, "&Replace...\tCtrl+H");
+    AppendMenu(hedit, MF_STRING, ID_EDIT_GOTO_LINE, "&Go to Line...\tCtrl+G");
 
     // View menu
-    AppendMenuA(hview, MF_STRING, ID_VIEW_WORD_WRAP, "&Word Wrap\tAlt+Z");
-    AppendMenuA(hview, MF_SEPARATOR, 0, NULL);
-    AppendMenuA(hview, MF_STRING, ID_VIEW_FONT, "&Font...");
-    AppendMenuA(hview, MF_SEPARATOR, 0, NULL);
-    AppendMenuA(hview, MF_STRING, ID_VIEW_DARK_MODE, "&Dark Mode");
+    AppendMenu(hview, MF_STRING, ID_VIEW_WORD_WRAP, "&Word Wrap\tAlt+Z");
+    AppendMenu(hview, MF_SEPARATOR, 0, NULL);
+    AppendMenu(hview, MF_STRING, ID_VIEW_FONT, "&Font...");
+    AppendMenu(hview, MF_SEPARATOR, 0, NULL);
+    AppendMenu(hview, MF_STRING, ID_VIEW_DARK_MODE, "&Dark Mode");
 
     // Help menu
-    AppendMenuA(hhelp, MF_STRING, ID_HELP_ABOUT, "&About npad");
+    AppendMenu(hhelp, MF_STRING, ID_HELP_ABOUT, "&About npad");
 
     // Add to main menu
-    AppendMenuA(hmenu, MF_STRING | MF_POPUP, (UINT_PTR) hfile, "&File");
-    AppendMenuA(hmenu, MF_STRING | MF_POPUP, (UINT_PTR) hedit, "&Edit");
-    AppendMenuA(hmenu, MF_STRING | MF_POPUP, (UINT_PTR) hview, "&View");
-    AppendMenuA(hmenu, MF_STRING | MF_POPUP, (UINT_PTR) hhelp, "&Help");
+    AppendMenu(hmenu, MF_STRING | MF_POPUP, (UINT_PTR) hfile, "&File");
+    AppendMenu(hmenu, MF_STRING | MF_POPUP, (UINT_PTR) hedit, "&Edit");
+    AppendMenu(hmenu, MF_STRING | MF_POPUP, (UINT_PTR) hview, "&View");
+    AppendMenu(hmenu, MF_STRING | MF_POPUP, (UINT_PTR) hhelp, "&Help");
 
     if (!SetMenu(window->hwnd, hmenu)) {
         NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Menu attachment",
@@ -981,7 +973,6 @@ static void handle_command(Window *window, WORD command) {
             break;
         }
         case ID_VIEW_WORD_WRAP:
-            // FIXED: Toggle word wrap and horizontal scrollbar correctly
             window->word_wrap_enabled = !window->word_wrap_enabled;
             update_scrollbars(window);
             // Update menu checkmark
@@ -1002,7 +993,6 @@ static void handle_command(Window *window, WORD command) {
     }
 }
 
-// FIXED: Improved title update function with proper modified state handling
 static void update_title(Window *window) {
     if (!window || !window->hwnd)
         return;
@@ -1026,9 +1016,8 @@ static void update_title(Window *window) {
         }
     }
 
-    // FIXED: Properly show asterisk for modified files
     snprintf(title, sizeof(title), "%s%.400s - npad", window->is_modified ? "*" : "", filename);
-    SetWindowTextA(window->hwnd, title);
+    SetWindowText(window->hwnd, title);
 }
 
 static void apply_theme(Window *window) {
@@ -1065,18 +1054,17 @@ static void update_status_bar(Window *window) {
     int line_start = (int) SendMessage(window->edit_hwnd, EM_LINEINDEX, line - 1, 0);
     int column = (int) start - line_start + 1;
 
-    // FIXED: Update status bar with flat styling (no sunken borders)
     char line_col_text[64];
     snprintf(line_col_text, sizeof(line_col_text), "Ln %d, Col %d", line, column);
-    SendMessage(window->status_hwnd, SB_SETTEXT, 1 | SBT_NOBORDERS, (LPARAM) line_col_text);
+    SendMessage(window->status_hwnd, SB_SETTEXT, 1, (LPARAM) line_col_text);
 
     // Update zoom level display
     char zoom_text[32];
     snprintf(zoom_text, sizeof(zoom_text), "%d%%", window->zoom_level);
-    SendMessage(window->status_hwnd, SB_SETTEXT, 2 | SBT_NOBORDERS, (LPARAM) zoom_text);
+    SendMessage(window->status_hwnd, SB_SETTEXT, 2, (LPARAM) zoom_text);
 
     // Update encoding (for now, always UTF-8)
-    SendMessage(window->status_hwnd, SB_SETTEXT, 3 | SBT_NOBORDERS, (LPARAM) "UTF-8");
+    SendMessage(window->status_hwnd, SB_SETTEXT, 3, (LPARAM) "UTF-8");
 
     // Update status message
     const char *line_ending = "Windows (CRLF)";
@@ -1086,10 +1074,9 @@ static void update_status_bar(Window *window) {
     } else {
         snprintf(status_text, sizeof(status_text), "%s", line_ending);
     }
-    SendMessage(window->status_hwnd, SB_SETTEXT, 0 | SBT_NOBORDERS, (LPARAM) status_text);
+    SendMessage(window->status_hwnd, SB_SETTEXT, 0, (LPARAM) status_text);
 }
 
-// FIXED: New function to properly manage scrollbar visibility and enabled state
 static void update_scrollbars(Window *window) {
     if (!window || !window->edit_hwnd)
         return;
@@ -1113,89 +1100,79 @@ static void update_scrollbars(Window *window) {
     SetWindowPos(window->edit_hwnd, NULL, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 
-    // FIXED: Explicitly manage scrollbar enable/disable state for proper initial state
-    if (!window->word_wrap_enabled) {
-        // When horizontal scrollbar is visible, start it as disabled until content overflows
-        SCROLLINFO si;
-        si.cbSize = sizeof(SCROLLINFO);
-        si.fMask = SIF_RANGE | SIF_PAGE;
-        GetScrollInfo(window->edit_hwnd, SB_HORZ, &si);
-
-        // If there's no scrollable content, disable the scrollbar
-        if (si.nMax <= (int) si.nPage) {
-            EnableScrollBar(window->edit_hwnd, SB_HORZ, ESB_DISABLE_BOTH);
-        } else {
-            EnableScrollBar(window->edit_hwnd, SB_HORZ, ESB_ENABLE_BOTH);
-        }
-    }
-
-    // Similar for vertical scrollbar
     SCROLLINFO si;
-    si.cbSize = sizeof(SCROLLINFO);
-    si.fMask = SIF_RANGE | SIF_PAGE;
-    GetScrollInfo(window->edit_hwnd, SB_VERT, &si);
 
-    if (si.nMax <= (int) si.nPage) {
-        EnableScrollBar(window->edit_hwnd, SB_VERT, ESB_DISABLE_BOTH);
-    } else {
-        EnableScrollBar(window->edit_hwnd, SB_VERT, ESB_ENABLE_BOTH);
+    // Configure vertical scrollbar to be visible but auto-disabled when not needed
+    si.cbSize = sizeof(SCROLLINFO);
+    si.fMask = SIF_RANGE | SIF_PAGE | SIF_DISABLENOSCROLL;
+    GetScrollInfo(window->edit_hwnd, SB_VERT, &si);
+    si.fMask = SIF_RANGE | SIF_PAGE | SIF_DISABLENOSCROLL;
+    SetScrollInfo(window->edit_hwnd, SB_VERT, &si, TRUE);
+
+    // Configure horizontal scrollbar similarly when visible
+    if (!window->word_wrap_enabled) {
+        si.cbSize = sizeof(SCROLLINFO);
+        si.fMask = SIF_RANGE | SIF_PAGE | SIF_DISABLENOSCROLL;
+        GetScrollInfo(window->edit_hwnd, SB_HORZ, &si);
+        si.fMask = SIF_RANGE | SIF_PAGE | SIF_DISABLENOSCROLL;
+        SetScrollInfo(window->edit_hwnd, SB_HORZ, &si, TRUE);
     }
 }
 
-// FIXED: Function to change font size
 static void set_font_size(Window *window, int size) {
     if (!window || !window->edit_hwnd || size < 6 || size > 72)
         return;
 
     window->font_size = size;
 
-    // Get the default GUI font as a base
-    HFONT defaultFont = (HFONT) GetStockObject(DEFAULT_GUI_FONT);
+    // TODO If there is a setting saved for user chosen font then load it here
+
+    // This can maybe be moved into a new function
+    NONCLIENTMETRICS ncm;
+    HFONT defaultFont;
+    ZeroMemory(&ncm, sizeof(NONCLIENTMETRICS));
+    ncm.cbSize = sizeof(NONCLIENTMETRICS);
+    SystemParametersInfo(SPI_GETNONCLIENTMETRICS, sizeof(NONCLIENTMETRICS), &ncm, 0);
+    defaultFont = CreateFontIndirect(&ncm.lfMessageFont);
+
     if (defaultFont) {
-        LOGFONTA logFont;
-        if (GetObjectA(defaultFont, sizeof(logFont), &logFont)) {
+        LOGFONT logFont;
+        if (GetObject(defaultFont, sizeof(logFont), &logFont)) {
             // Set up character format for RichEdit using the system default font
-            CHARFORMAT2A cf;
+            CHARFORMAT2 cf;
             ZeroMemory(&cf, sizeof(cf));
             cf.cbSize = sizeof(cf);
-            cf.dwMask = CFM_FACE | CFM_SIZE | CFM_CHARSET | CFM_WEIGHT;
+            cf.dwMask = CFM_ALL;
             cf.dwEffects = 0;
+            cf.yHeight = size * 20; // 20 twips per point TBC
             cf.bCharSet = logFont.lfCharSet;
-            cf.wWeight = (WORD) logFont.lfWeight;
-
-            // Convert point size to twips (1/1440 inch)
-            cf.yHeight = size * 20; // 20 twips per point
-
-            // Copy font face name
             strncpy(cf.szFaceName, logFont.lfFaceName, LF_FACESIZE - 1);
             cf.szFaceName[LF_FACESIZE - 1] = '\0';
+            cf.wWeight = (WORD) logFont.lfWeight;
 
             SendMessage(window->edit_hwnd, EM_SETCHARFORMAT, SCF_ALL, (LPARAM) &cf);
         }
     }
 }
 
-// FIXED: Function to show font dialog with current font settings
 static void show_font_dialog(Window *window) {
     if (!window || !window->edit_hwnd)
         return;
 
-    CHOOSEFONTA cf;
-    LOGFONTA lf;
+    CHOOSEFONT cf;
+    LOGFONT lf;
 
-    // FIXED: Get current font from the RichEdit control
-    CHARFORMAT2A currentFormat;
+    CHARFORMAT2 currentFormat;
     ZeroMemory(&currentFormat, sizeof(currentFormat));
     currentFormat.cbSize = sizeof(currentFormat);
+    currentFormat.dwMask = CFM_ALL;
     SendMessage(window->edit_hwnd, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM) &currentFormat);
 
-    // Convert current format to LOGFONT
+    // Convert current format to LOGFONT properly
     ZeroMemory(&lf, sizeof(lf));
     strncpy(lf.lfFaceName, currentFormat.szFaceName, LF_FACESIZE - 1);
     lf.lfFaceName[LF_FACESIZE - 1] = '\0';
     lf.lfWeight = currentFormat.wWeight;
-    lf.lfItalic = (currentFormat.dwEffects & CFE_ITALIC) ? TRUE : FALSE;
-    lf.lfUnderline = (currentFormat.dwEffects & CFE_UNDERLINE) ? TRUE : FALSE;
     lf.lfCharSet = currentFormat.bCharSet;
 
     // Convert twips back to logical height
@@ -1204,37 +1181,31 @@ static void show_font_dialog(Window *window) {
     lf.lfHeight = -MulDiv(currentFormat.yHeight, logPixelsY, 1440);
     ReleaseDC(window->edit_hwnd, hdc);
 
-    // Set up font dialog
+    // Set up font dialog with current color
     ZeroMemory(&cf, sizeof(cf));
     cf.lStructSize = sizeof(cf);
     cf.hwndOwner = window->hwnd;
     cf.lpLogFont = &lf;
-    cf.Flags = CF_SCREENFONTS | CF_EFFECTS | CF_INITTOLOGFONTSTRUCT;
+    cf.Flags = CF_SCREENFONTS | CF_INITTOLOGFONTSTRUCT;
     cf.nFontType = SCREEN_FONTTYPE;
 
-    if (ChooseFontA(&cf)) {
+    if (ChooseFont(&cf)) {
         // Calculate point size from the selected font
-        HDC hdc = GetDC(window->edit_hwnd);
-        int logPixelsY = GetDeviceCaps(hdc, LOGPIXELSY);
         int pointSize = -MulDiv(lf.lfHeight, 72, logPixelsY);
         ReleaseDC(window->edit_hwnd, hdc);
 
         // Update the stored font size
         window->font_size = pointSize;
 
-        // Apply the new font
-        CHARFORMAT2A format;
+        // Apply the new font with ALL characteristics
+        CHARFORMAT2 format;
         ZeroMemory(&format, sizeof(format));
         format.cbSize = sizeof(format);
-        format.dwMask = CFM_FACE | CFM_SIZE | CFM_CHARSET | CFM_WEIGHT | CFM_ITALIC | CFM_UNDERLINE;
+        format.dwMask = CFM_ALL;
         format.yHeight = pointSize * 20; // Convert to twips
         format.bCharSet = lf.lfCharSet;
         format.wWeight = (WORD) lf.lfWeight;
-
-        if (lf.lfItalic)
-            format.dwEffects |= CFE_ITALIC;
-        if (lf.lfUnderline)
-            format.dwEffects |= CFE_UNDERLINE;
+        format.dwEffects = 0;
 
         strncpy(format.szFaceName, lf.lfFaceName, LF_FACESIZE - 1);
         format.szFaceName[LF_FACESIZE - 1] = '\0';
@@ -1260,10 +1231,10 @@ static INT_PTR CALLBACK InputBoxProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
             SetWindowLongPtr(hwnd, GWLP_USERDATA, lparam);
 
             // Set the prompt text
-            SetDlgItemTextA(hwnd, 1000, data->prompt);
+            SetDlgItemText(hwnd, 1000, data->prompt);
 
             // Set default value "1" for line number
-            SetDlgItemTextA(hwnd, 1001, "1");
+            SetDlgItemText(hwnd, 1001, "1");
 
             // Focus on the edit control and select all text
             SetFocus(GetDlgItem(hwnd, 1001));
@@ -1274,7 +1245,7 @@ static INT_PTR CALLBACK InputBoxProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
             switch (LOWORD(wparam)) {
                 case IDOK:
                     if (data && data->buffer) {
-                        GetDlgItemTextA(hwnd, 1001, data->buffer, data->buffer_size);
+                        GetDlgItemText(hwnd, 1001, data->buffer, data->buffer_size);
                     }
                     EndDialog(hwnd, IDOK);
                     return TRUE;
@@ -1287,7 +1258,7 @@ static INT_PTR CALLBACK InputBoxProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
                     if (HIWORD(wparam) == EN_CHANGE) {
                         // Enable/disable OK button based on whether there's text
                         char temp[32];
-                        GetDlgItemTextA(hwnd, 1001, temp, sizeof(temp));
+                        GetDlgItemText(hwnd, 1001, temp, sizeof(temp));
                         EnableWindow(GetDlgItem(hwnd, IDOK), strlen(temp) > 0);
                     }
                     break;
@@ -1309,7 +1280,7 @@ static bool InputBox(HWND parent, const char *title, const char *prompt, char *b
     }
 
     // Create a modal dialog window
-    HWND dialog = CreateWindowExA(
+    HWND dialog = CreateWindowEx(
         WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
         "#32770", // Dialog class
         title, DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
@@ -1329,21 +1300,20 @@ static bool InputBox(HWND parent, const char *title, const char *prompt, char *b
     }
 
     // Create controls with proper spacing and system font
-    HWND label = CreateWindowA("STATIC", prompt, WS_CHILD | WS_VISIBLE | SS_LEFT, 12, 12, 260, 16,
-                               dialog, (HMENU) 1000, g_hinstance, NULL);
+    HWND label = CreateWindow("STATIC", prompt, WS_CHILD | WS_VISIBLE | SS_LEFT, 12, 12, 260, 16,
+                              dialog, (HMENU) 1000, g_hinstance, NULL);
     SendMessage(label, WM_SETFONT, (WPARAM) dialog_font, TRUE);
 
-    HWND edit = CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 12,
-                              35, 190, 21, dialog, (HMENU) 1001, g_hinstance, NULL);
+    HWND edit = CreateWindow("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 12, 35,
+                             190, 21, dialog, (HMENU) 1001, g_hinstance, NULL);
     SendMessage(edit, WM_SETFONT, (WPARAM) dialog_font, TRUE);
 
-    HWND ok_button = CreateWindowA("BUTTON", "OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 210,
-                                   35, 70, 23, dialog, (HMENU) IDOK, g_hinstance, NULL);
+    HWND ok_button = CreateWindow("BUTTON", "OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 210, 35,
+                                  70, 23, dialog, (HMENU) IDOK, g_hinstance, NULL);
     SendMessage(ok_button, WM_SETFONT, (WPARAM) dialog_font, TRUE);
 
-    HWND cancel_button =
-        CreateWindowA("BUTTON", "Cancel", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 210, 65, 70, 23,
-                      dialog, (HMENU) IDCANCEL, g_hinstance, NULL);
+    HWND cancel_button = CreateWindow("BUTTON", "Cancel", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                      210, 65, 70, 23, dialog, (HMENU) IDCANCEL, g_hinstance, NULL);
     SendMessage(cancel_button, WM_SETFONT, (WPARAM) dialog_font, TRUE);
 
     // Set up dialog data
@@ -1376,7 +1346,7 @@ static bool InputBox(HWND parent, const char *title, const char *prompt, char *b
         } else if (msg.message == WM_COMMAND) {
             if (msg.hwnd == dialog) {
                 if (LOWORD(msg.wParam) == IDOK) {
-                    GetWindowTextA(edit, buffer, buffer_size);
+                    GetWindowText(edit, buffer, buffer_size);
                     done = true;
                     result = true;
                 } else if (LOWORD(msg.wParam) == IDCANCEL) {

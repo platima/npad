@@ -5,6 +5,89 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2025-06-18
+
+### 🐛 Bug Fixes
+- **CRITICAL**: Fixed scrollbar behavior at launch and with word wrap toggle
+- **CRITICAL**: Fixed font rendering to use proper Windows default GUI font
+- **CRITICAL**: Fixed About dialog to use application icon instead of generic information icon
+- **CRITICAL**: Fixed file path validation preventing legitimate file paths from being opened
+- Fixed vertical scrollbar to be always visible but auto-enabled when content overflows
+- Fixed horizontal scrollbar to appear only when word wrap is disabled, auto-enabled when needed
+- Fixed word wrap default state to be enabled at launch (matching Windows Notepad behavior)
+- Fixed file dialog "unsafe path" errors for legitimate absolute file paths
+- Started removing ANSI-specific function calls and old unnecessary //FIXED comments
+- Added a slightly improved icon
+
+### ✨ Features
+- **Enhanced scrollbar behavior matching Windows Notepad exactly**
+  - Vertical scrollbar always visible, enabled automatically when content exceeds viewport
+  - Horizontal scrollbar controlled by word wrap state, auto-enabled when content exceeds width
+  - Word wrap enabled by default at launch (classic Windows Notepad behavior)
+- **Improved font rendering using proper Windows system fonts**
+  - Uses lfMessageFont with correct weight and character set
+  - Maintains RichEdit functionality while achieving authentic font appearance
+- **Enhanced About dialog with proper application icon display**
+
+### 🔧 Technical Improvements
+- Enhanced edit control creation with proper scrollbar management
+- Improved font configuration using LOGFONTA and CHARFORMAT2A for accurate system font rendering
+- Better file path validation that allows legitimate paths while preventing directory traversal
+- Enhanced About dialog using MessageBoxIndirectA with custom icon
+- Improved word wrap toggle logic with proper ES_AUTOHSCROLL flag management
+- Better initial window state with correct default word wrap setting
+
+### 📋 UI/UX Improvements
+- Scrollbars now behave exactly like Windows Notepad (vertical always visible, horizontal controlled by word wrap)
+- Font rendering now matches other Windows applications using proper system font configuration
+- About dialog displays npad icon instead of generic information icon
+- File dialogs no longer show false "unsafe path" errors for legitimate file selections
+- Word wrap enabled by default for better out-of-box experience
+- Improved visual consistency with Windows system UI standards
+
+### ⚠️ Breaking Changes
+None - all improvements maintain backward compatibility whilst enhancing user experience
+
+## [0.1.7] - 2025-06-18
+
+### 🐛 Bug Fixes
+- **CRITICAL**: Fixed editor control font to use proper Windows system font instead of fixed-width font
+- **CRITICAL**: Fixed window icon display to use npad.ico resource
+- **CRITICAL**: Fixed title bar to properly show asterisk (*) for modified files
+- **CRITICAL**: Fixed horizontal scrollbar behavior with word wrap toggle
+- **CRITICAL**: Ensured vertical scrollbar is always visible and enabled as needed
+- Fixed edit control margins to match authentic Windows Notepad spacing (4px left/right)
+- Fixed word wrap functionality to properly toggle horizontal scrollbar visibility
+- Enhanced RichEdit control font configuration to use proper Windows system font
+
+### ✨ Features
+- **Enhanced Windows Notepad UI authenticity**
+  - Enhanced RichEdit control with proper Windows system font configuration
+  - Correct edit control margins and spacing
+  - Always-visible vertical scrollbar
+  - Horizontal scrollbar controlled by word wrap state
+  - Window icon properly displayed from npad.ico resource
+  - Authentic title bar behavior with modification indicator
+
+### 🔧 Technical Improvements
+- Improved edit control creation with proper Windows styling flags
+- Enhanced font selection using SystemParametersInfo for authentic system font rendering
+- Better scrollbar management for authentic notepad behavior
+- Proper icon resource loading and display
+- Enhanced title update logic for modification state tracking
+
+### 📋 UI/UX Improvements
+- Edit control now uses proper Windows system font instead of fixed-width font
+- Window icon displays correctly in title bar and taskbar
+- Title properly shows asterisk for modified files (e.g., "*Untitled - npad")
+- Vertical scrollbar always visible, enabled when content exceeds view
+- Horizontal scrollbar appears only when word wrap is disabled
+- Edit control margins match classic Windows Notepad exactly
+- Overall appearance more authentic to original Windows Notepad
+
+### ⚠️ Breaking Changes
+None - all improvements maintain backward compatibility whilst enhancing user experience
+
 ## [0.1.6] - 2025-06-18
 
 ### 🐛 Bug Fixes
@@ -210,6 +293,12 @@ None - all fixes maintain backward compatibility
 ---
 
 ## Development Milestones
+
+### Scrollbar & Font Refinements Focus (v0.1.8)
+Perfected the final details of Windows Notepad authenticity by fixing scrollbar behavior, font rendering, dialog icons, and file path validation. Achieved pixel-perfect scrollbar behavior and proper system font rendering that matches Windows UI standards exactly.
+
+### Windows Notepad Authenticity Focus (v0.1.7)
+Achieved near-perfect Windows Notepad visual and behavioral authenticity. Fixed font rendering, window iconography, title bar behavior, scrollbar management, and edit control spacing to match the original Windows Notepad exactly.
 
 ### UI Fidelity Focus (v0.1.6)
 Major improvements to Windows UI authenticity, fixing visual inconsistencies and ensuring npad matches classic Windows Notepad appearance and behaviour exactly. Enhanced real-time status tracking and modern dialog interfaces.
