@@ -29,8 +29,8 @@
 #endif
 
 // Function prototypes for DPI-aware functions (Windows 10+)
-typedef UINT (WINAPI *GetDpiForWindowFunc)(HWND);
-typedef BOOL (WINAPI *SystemParametersInfoForDpiFunc)(UINT, UINT, PVOID, UINT, UINT);
+typedef UINT(WINAPI *GetDpiForWindowFunc)(HWND);
+typedef BOOL(WINAPI *SystemParametersInfoForDpiFunc)(UINT, UINT, PVOID, UINT, UINT);
 
 // Function pointer instances
 static GetDpiForWindowFunc g_GetDpiForWindow = NULL;
@@ -110,7 +110,7 @@ static UINT get_window_dpi(HWND hwnd) {
     if (hwnd && g_GetDpiForWindow) {
         return g_GetDpiForWindow(hwnd);
     }
-    
+
     // Fallback to system DPI
     HDC hdc = GetDC(NULL);
     UINT dpi = GetDeviceCaps(hdc, LOGPIXELSX);
@@ -130,21 +130,27 @@ bool ui_platform_init(void) {
         NPAD_ERROR_ERROR(NPAD_ERROR_SYSTEM, GetLastError(), "UI initialization",
                          "Failed to initialize common controls");
         return false;
-    }    // Load Rich Edit library
+    } // Load Rich Edit library
     g_richedit_lib = LoadLibrary(TEXT("riched20.dll"));
     if (!g_richedit_lib) {
         NPAD_ERROR_WARNING(
             NPAD_ERROR_SYSTEM, GetLastError(), "UI initialization",
             "Failed to load Rich Edit library - falling back to standard edit control");
-    }    // Load DPI-aware functions for Windows 10+
+    } // Load DPI-aware functions for Windows 10+
     HMODULE user32 = GetModuleHandle(TEXT("user32.dll"));
     if (user32) {
         // Use union to avoid function pointer cast warnings
-        union { FARPROC proc; GetDpiForWindowFunc func; } getDpiForWindow;
+        union {
+            FARPROC proc;
+            GetDpiForWindowFunc func;
+        } getDpiForWindow;
         getDpiForWindow.proc = GetProcAddress(user32, "GetDpiForWindow");
         g_GetDpiForWindow = getDpiForWindow.func;
-        
-        union { FARPROC proc; SystemParametersInfoForDpiFunc func; } sysParamsForDpi;
+
+        union {
+            FARPROC proc;
+            SystemParametersInfoForDpiFunc func;
+        } sysParamsForDpi;
         sysParamsForDpi.proc = GetProcAddress(user32, "SystemParametersInfoForDpi");
         g_SystemParametersInfoForDpi = sysParamsForDpi.func;
     }
@@ -259,8 +265,11 @@ Window *ui_platform_create_main_window(void) {
     }
 
     window->font_size = 11; // Default 11pt font like notepad
-    set_font_size(window, window->font_size);    SendMessage(window->edit_hwnd, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(4, 4));    // Set unlimited text length
-    SendMessage(window->edit_hwnd, EM_LIMITTEXT, 0, 0);    // Enable change notifications for RichEdit control
+    set_font_size(window, window->font_size);
+    SendMessage(window->edit_hwnd, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
+                MAKELPARAM(4, 4)); // Set unlimited text length
+    SendMessage(window->edit_hwnd, EM_LIMITTEXT, 0,
+                0); // Enable change notifications for RichEdit control
     SendMessage(window->edit_hwnd, EM_SETEVENTMASK, 0, ENM_CHANGE | ENM_SELCHANGE);
 
     // Set to plain text mode (not RTF) to behave like a standard text editor
@@ -291,12 +300,12 @@ Window *ui_platform_create_main_window(void) {
 
     // Force status bar to be visible and properly sized
     ShowWindow(window->status_hwnd, SW_SHOW);
-    UpdateWindow(window->status_hwnd);    // Initialize window state
+    UpdateWindow(window->status_hwnd); // Initialize window state
     window->word_wrap_enabled = true;
     window->status_bar_visible = true;
     window->zoom_level = 100;
     window->is_modified = false;
-    window->setting_text_programmatically = false;// Create menu and accelerators
+    window->setting_text_programmatically = false; // Create menu and accelerators
     create_menu(window);
 
     // Update initial menu checkmarks
@@ -653,11 +662,12 @@ bool ui_platform_show_message_box(Window *parent, const char *title, const char 
 void ui_platform_show_about_dialog(Window *parent) {
     HWND hwnd = parent ? parent->hwnd : NULL;
 
-    const char *message = "npad " NPAD_VERSION "\n\n"
-                          "A lightweight, cross-platform text editor\n"
-                          "inspired by classic Windows Notepad.\n\n"
-                          "Author: Platima\n"
-                          "https://github.com/platima/npad";    // Create a custom message box with our icon
+    const char *message =
+        "npad " NPAD_VERSION "\n\n"
+        "A lightweight, cross-platform text editor\n"
+        "inspired by classic Windows Notepad.\n\n"
+        "Author: Platima\n"
+        "https://github.com/platima/npad"; // Create a custom message box with our icon
     MSGBOXPARAMS mbp;
     ZeroMemory(&mbp, sizeof(mbp));
     mbp.cbSize = sizeof(mbp);
@@ -793,16 +803,18 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
             CREATESTRUCT *cs = (CREATESTRUCT *) lparam;
             SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR) cs->lpCreateParams);
             return 0;
-        }        case WM_SIZE: {
+        }
+        case WM_SIZE: {
             if (window) {
                 resize_controls(window);
             }
             return 0;
-        }        case WM_COMMAND: {
+        }
+        case WM_COMMAND: {
             if (window) {
                 WORD notification = HIWORD(wparam);
                 WORD control_id = LOWORD(wparam);
-                
+
                 if (control_id == ID_EDIT_CONTROL) {
                     if (notification == EN_CHANGE) {
                         // Ignore change notifications during programmatic text setting
@@ -824,7 +836,8 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                 }
             }
             return 0;
-        }        case WM_NOTIFY: {
+        }
+        case WM_NOTIFY: {
             if (window) {
                 NMHDR *nmhdr = (NMHDR *) lparam;
                 if (nmhdr->idFrom == ID_EDIT_CONTROL) {
@@ -849,38 +862,42 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                         }
                     }
                 }
-            }            break;
-        }        case WM_DPICHANGED: {
+            }
+            break;
+        }
+        case WM_DPICHANGED: {
             if (window) {
                 WORD newDpi = HIWORD(wparam);
-                
+
                 // Get DPI-aware system metrics
                 NONCLIENTMETRICS ncm = { 0 };
                 ncm.cbSize = sizeof(ncm);
-                
+
                 // Try to get DPI-aware metrics
-                if (g_SystemParametersInfoForDpi && !g_SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0, newDpi)) {
-                    NPAD_ERROR_WARNING(NPAD_ERROR_SYSTEM, GetLastError(), "DPI change handling",
-                                     "Failed to get DPI-aware metrics, falling back to system defaults");
+                if (g_SystemParametersInfoForDpi &&
+                    !g_SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0,
+                                                  newDpi)) {
+                    NPAD_ERROR_WARNING(
+                        NPAD_ERROR_SYSTEM, GetLastError(), "DPI change handling",
+                        "Failed to get DPI-aware metrics, falling back to system defaults");
                 }
-                
+
                 // Recalculate and apply font size for new DPI
                 set_font_size(window, window->font_size);
-                
+
                 // Resize controls to match new DPI
                 resize_controls(window);
-                
+
                 // Update status bar for new DPI
                 update_status_bar(window);
-                
+
                 // Get suggested window rectangle from system
-                RECT *suggested_rect = (RECT*)lparam;
+                RECT *suggested_rect = (RECT *) lparam;
                 if (suggested_rect) {
-                    SetWindowPos(window->hwnd, NULL,
-                                suggested_rect->left, suggested_rect->top,
-                                suggested_rect->right - suggested_rect->left,
-                                suggested_rect->bottom - suggested_rect->top,
-                                SWP_NOZORDER | SWP_NOACTIVATE);
+                    SetWindowPos(window->hwnd, NULL, suggested_rect->left, suggested_rect->top,
+                                 suggested_rect->right - suggested_rect->left,
+                                 suggested_rect->bottom - suggested_rect->top,
+                                 SWP_NOZORDER | SWP_NOACTIVATE);
                 }
             }
             return 0;
@@ -946,7 +963,8 @@ static void create_menu(Window *window) {
     AppendMenu(hedit, MF_STRING, ID_EDIT_CUT, "Cu&t\tCtrl+X");
     AppendMenu(hedit, MF_STRING, ID_EDIT_COPY, "&Copy\tCtrl+C");
     AppendMenu(hedit, MF_STRING, ID_EDIT_PASTE, "&Paste\tCtrl+V");
-    AppendMenu(hedit, MF_SEPARATOR, 0, NULL);    AppendMenu(hedit, MF_STRING, ID_EDIT_SELECT_ALL, "Select &All\tCtrl+A");
+    AppendMenu(hedit, MF_SEPARATOR, 0, NULL);
+    AppendMenu(hedit, MF_STRING, ID_EDIT_SELECT_ALL, "Select &All\tCtrl+A");
     AppendMenu(hedit, MF_SEPARATOR, 0, NULL);
     AppendMenu(hedit, MF_STRING, ID_EDIT_FIND, "&Find...\tCtrl+F");
     AppendMenu(hedit, MF_STRING, ID_EDIT_REPLACE, "&Replace...\tCtrl+H");
@@ -959,10 +977,11 @@ static void create_menu(Window *window) {
 
     // View menu
     AppendMenu(hview, MF_STRING, ID_VIEW_STATUS_BAR, "&Status Bar");
-    // AppendMenu(hview, MF_STRING, ID_VIEW_DARK_MODE, "&Dark Mode");  // Commented out - not yet implemented
+    // AppendMenu(hview, MF_STRING, ID_VIEW_DARK_MODE, "&Dark Mode");  // Commented out - not yet
+    // implemented
 
     // Help menu
-    AppendMenu(hhelp, MF_STRING, ID_HELP_ABOUT, "&About npad");    // Add to main menu
+    AppendMenu(hhelp, MF_STRING, ID_HELP_ABOUT, "&About npad"); // Add to main menu
     AppendMenu(hmenu, MF_STRING | MF_POPUP, (UINT_PTR) hfile, "&File");
     AppendMenu(hmenu, MF_STRING | MF_POPUP, (UINT_PTR) hedit, "&Edit");
     AppendMenu(hmenu, MF_STRING | MF_POPUP, (UINT_PTR) hformat, "F&ormat");
@@ -1041,7 +1060,8 @@ static void handle_command(Window *window, WORD command) {
                 }
             }
             break;
-        }        case ID_FORMAT_WORD_WRAP:
+        }
+        case ID_FORMAT_WORD_WRAP:
             window->word_wrap_enabled = !window->word_wrap_enabled;
             update_scrollbars(window);
             // Update menu checkmark
@@ -1112,9 +1132,10 @@ static void apply_theme(Window *window) {
     } else {
         // Use system default colors
         // The edit control will automatically use system colors
-    }    // Update menu checkmarks
+    } // Update menu checkmarks
     if (window->hmenu) {
-        // CheckMenuItem(window->hmenu, ID_VIEW_DARK_MODE, g_dark_mode ? MF_CHECKED : MF_UNCHECKED);  // Commented out - not yet implemented
+        // CheckMenuItem(window->hmenu, ID_VIEW_DARK_MODE, g_dark_mode ? MF_CHECKED : MF_UNCHECKED);
+        // // Commented out - not yet implemented
         CheckMenuItem(window->hmenu, ID_FORMAT_WORD_WRAP,
                       window->word_wrap_enabled ? MF_CHECKED : MF_UNCHECKED);
         CheckMenuItem(window->hmenu, ID_VIEW_STATUS_BAR,
@@ -1206,22 +1227,25 @@ static void set_font_size(Window *window, int size) {
 
     window->font_size = size;
 
-    // TODO If there is a setting saved for user chosen font then load it here    // This can maybe be moved into a new function
+    // TODO If there is a setting saved for user chosen font then load it here    // This can maybe
+    // be moved into a new function
     NONCLIENTMETRICS ncm;
     HFONT defaultFont;
     ZeroMemory(&ncm, sizeof(NONCLIENTMETRICS));
     ncm.cbSize = sizeof(NONCLIENTMETRICS);
-      // Get current DPI and use DPI-aware system parameters if available
+    // Get current DPI and use DPI-aware system parameters if available
     UINT dpi = get_window_dpi(window->hwnd);
-    
+
     // Try DPI-aware version first (Windows 10+)
-    if (g_SystemParametersInfoForDpi && g_SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(NONCLIENTMETRICS), &ncm, 0, dpi)) {
+    if (g_SystemParametersInfoForDpi &&
+        g_SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(NONCLIENTMETRICS), &ncm, 0,
+                                     dpi)) {
         // Successfully got DPI-aware metrics
     } else {
         // Fallback to regular system parameters
         SystemParametersInfo(SPI_GETNONCLIENTMETRICS, sizeof(NONCLIENTMETRICS), &ncm, 0);
     }
-    
+
     defaultFont = CreateFontIndirect(&ncm.lfMessageFont);
 
     if (defaultFont) {

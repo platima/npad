@@ -19,11 +19,11 @@ typedef struct {
     bool auto_save_enabled;
     int auto_save_interval; // seconds
     Window *main_window;
-    
+
     // Memory management
-    size_t max_file_size;        // Maximum file size in bytes
-    size_t max_memory_usage;     // Maximum total memory usage in bytes
-    size_t current_text_size;    // Current text content size
+    size_t max_file_size;       // Maximum file size in bytes
+    size_t max_memory_usage;    // Maximum total memory usage in bytes
+    size_t current_text_size;   // Current text content size
     bool memory_limit_warnings; // Show warnings when approaching limits
 } EditorState;
 

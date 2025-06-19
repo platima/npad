@@ -242,7 +242,7 @@ bool settings_save(void) {
 
     char *content = serialize_settings();
     if (!content)
-        return false;    // Ensure directory exists
+        return false; // Ensure directory exists
     char *dir = file_get_directory(g_settings_file_path);
     if (dir) {
 #ifdef _WIN32

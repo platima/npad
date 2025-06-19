@@ -29,10 +29,10 @@
 #endif
 
 // Memory limit constants
-#define DEFAULT_MAX_FILE_SIZE    (100 * 1024 * 1024)  // 100MB
-#define DEFAULT_MAX_MEMORY       (200 * 1024 * 1024)  // 200MB
-#define MEMORY_WARNING_THRESHOLD (0.8)                // Warn at 80% usage
-#define MEMORY_SAFETY_MARGIN     (4 * 1024 * 1024)   // 4MB safety margin
+#define DEFAULT_MAX_FILE_SIZE (100 * 1024 * 1024) // 100MB
+#define DEFAULT_MAX_MEMORY (200 * 1024 * 1024)    // 200MB
+#define MEMORY_WARNING_THRESHOLD (0.8)            // Warn at 80% usage
+#define MEMORY_SAFETY_MARGIN (4 * 1024 * 1024)    // 4MB safety margin
 
 // Global editor state
 EditorState g_editor = { 0 };
@@ -68,31 +68,30 @@ static size_t estimate_text_memory_usage(size_t text_length) {
 // Check if operation would exceed memory limits
 bool editor_check_memory_limits(size_t additional_bytes) {
     npad_mutex_lock(&g_editor_mutex);
-    
+
     size_t current_process_memory = get_process_memory_usage();
     size_t estimated_new_usage = current_process_memory + additional_bytes;
-    
+
     bool within_limits = (estimated_new_usage + MEMORY_SAFETY_MARGIN <= g_editor.max_memory_usage);
-    
+
     // Check for warning threshold
     if (within_limits && g_editor.memory_limit_warnings) {
-        double usage_ratio = (double)estimated_new_usage / g_editor.max_memory_usage;
+        double usage_ratio = (double) estimated_new_usage / g_editor.max_memory_usage;
         if (usage_ratio >= MEMORY_WARNING_THRESHOLD) {
             npad_mutex_unlock(&g_editor_mutex);
-            
+
             char warning_msg[512];
             snprintf(warning_msg, sizeof(warning_msg),
                      "Memory usage is approaching limits:\n"
                      "Current: %.1f MB / %.1f MB (%.1f%%)\n"
                      "Continue with this operation?",
                      estimated_new_usage / (1024.0 * 1024.0),
-                     g_editor.max_memory_usage / (1024.0 * 1024.0),
-                     usage_ratio * 100.0);
-            
+                     g_editor.max_memory_usage / (1024.0 * 1024.0), usage_ratio * 100.0);
+
             return ui_show_message_box(g_editor.main_window, "Memory Warning", warning_msg, true);
         }
     }
-    
+
     npad_mutex_unlock(&g_editor_mutex);
     return within_limits;
 }
@@ -102,29 +101,28 @@ bool editor_validate_file_size(const char *filename) {
     if (!filename) {
         return false;
     }
-    
+
     size_t file_size = file_get_size(filename);
     if (file_size == 0) {
         return true; // Empty file or size check failed, allow it
     }
-    
+
     npad_mutex_lock(&g_editor_mutex);
     bool size_ok = (file_size <= g_editor.max_file_size);
     npad_mutex_unlock(&g_editor_mutex);
-    
+
     if (!size_ok) {
         char error_msg[512];
         snprintf(error_msg, sizeof(error_msg),
                  "File is too large to open:\n"
                  "File size: %.2f MB\n"
                  "Maximum allowed: %.2f MB",
-                 file_size / (1024.0 * 1024.0),
-                 g_editor.max_file_size / (1024.0 * 1024.0));
-        
+                 file_size / (1024.0 * 1024.0), g_editor.max_file_size / (1024.0 * 1024.0));
+
         ui_show_message_box(g_editor.main_window, "File Too Large", error_msg, false);
         return false;
     }
-    
+
     // Check if loading this file would exceed memory limits
     size_t estimated_memory = estimate_text_memory_usage(file_size);
     if (!editor_check_memory_limits(estimated_memory)) {
@@ -137,11 +135,11 @@ bool editor_validate_file_size(const char *filename) {
                  estimated_memory / (1024.0 * 1024.0),
                  get_process_memory_usage() / (1024.0 * 1024.0),
                  g_editor.max_memory_usage / (1024.0 * 1024.0));
-        
+
         ui_show_message_box(g_editor.main_window, "Memory Limit Exceeded", error_msg, false);
         return false;
     }
-    
+
     return true;
 }
 
@@ -155,12 +153,12 @@ size_t editor_get_text_length(void) {
     if (!g_editor.main_window) {
         return 0;
     }
-    
+
     char *text = ui_get_text(g_editor.main_window);
     if (!text) {
         return 0;
     }
-    
+
     size_t length = strlen(text);
     free(text);
     return length;
@@ -171,16 +169,16 @@ bool editor_set_memory_limits(size_t max_file_size, size_t max_memory_usage) {
     if (max_file_size == 0 || max_memory_usage == 0) {
         return false;
     }
-    
+
     npad_mutex_lock(&g_editor_mutex);
     g_editor.max_file_size = max_file_size;
     g_editor.max_memory_usage = max_memory_usage;
     npad_mutex_unlock(&g_editor_mutex);
-    
+
     // Save to settings
-    settings_set_int("max_file_size_mb", (int)(max_file_size / (1024 * 1024)));
-    settings_set_int("max_memory_usage_mb", (int)(max_memory_usage / (1024 * 1024)));
-    
+    settings_set_int("max_file_size_mb", (int) (max_file_size / (1024 * 1024)));
+    settings_set_int("max_memory_usage_mb", (int) (max_memory_usage / (1024 * 1024)));
+
     return true;
 }
 
@@ -191,15 +189,16 @@ bool editor_init(void) {
     // Load settings
     g_editor.auto_save_enabled = settings_get_bool("auto_save_enabled", true); // Enabled by default
     g_editor.auto_save_interval = settings_get_int("auto_save_interval", 300); // 5 minutes default
-    
+
     // Load memory limit settings
-    int max_file_size_mb = settings_get_int("max_file_size_mb", DEFAULT_MAX_FILE_SIZE / (1024 * 1024));
+    int max_file_size_mb =
+        settings_get_int("max_file_size_mb", DEFAULT_MAX_FILE_SIZE / (1024 * 1024));
     int max_memory_mb = settings_get_int("max_memory_usage_mb", DEFAULT_MAX_MEMORY / (1024 * 1024));
-    g_editor.max_file_size = (size_t)max_file_size_mb * 1024 * 1024;
-    g_editor.max_memory_usage = (size_t)max_memory_mb * 1024 * 1024;
+    g_editor.max_file_size = (size_t) max_file_size_mb * 1024 * 1024;
+    g_editor.max_memory_usage = (size_t) max_memory_mb * 1024 * 1024;
     g_editor.memory_limit_warnings = settings_get_bool("memory_limit_warnings", true);
     g_editor.current_text_size = 0;
-    
+
     // Validate memory limits
     if (g_editor.max_file_size < 1024 * 1024) { // Minimum 1MB
         g_editor.max_file_size = DEFAULT_MAX_FILE_SIZE;
@@ -288,7 +287,7 @@ bool editor_open_file(const char *filename) {
     // Final memory check with actual content size
     size_t content_length = strlen(content);
     size_t estimated_memory = estimate_text_memory_usage(content_length);
-    
+
     if (!editor_check_memory_limits(estimated_memory)) {
         free(content);
         char error_msg[512];
@@ -296,8 +295,7 @@ bool editor_open_file(const char *filename) {
                  "Cannot load file: would exceed memory limits\n"
                  "File size: %.2f MB\n"
                  "Estimated memory usage: %.2f MB",
-                 content_length / (1024.0 * 1024.0),
-                 estimated_memory / (1024.0 * 1024.0));
+                 content_length / (1024.0 * 1024.0), estimated_memory / (1024.0 * 1024.0));
         ui_show_message_box(g_editor.main_window, "Memory Limit", error_msg, false);
         return false;
     }
@@ -308,7 +306,7 @@ bool editor_open_file(const char *filename) {
     if (g_editor.main_window) {
         ui_set_text(g_editor.main_window, content);
     }
-    
+
     // Update current text size
     g_editor.current_text_size = content_length;
 
@@ -471,59 +469,57 @@ void editor_paste(void) {
     if (!g_editor.main_window) {
         return;
     }
-    
+
     // Get current text length before paste
     size_t current_length = editor_get_text_length();
-    
+
     // Proceed with paste operation
     ui_paste(g_editor.main_window);
-    
+
     // Check new text length after paste
     size_t new_length = editor_get_text_length();
-    
+
     // Validate the new size
     npad_mutex_lock(&g_editor_mutex);
     bool within_file_limit = (new_length <= g_editor.max_file_size);
     g_editor.current_text_size = new_length;
     npad_mutex_unlock(&g_editor_mutex);
-    
+
     if (!within_file_limit) {
         // Undo the paste operation
         ui_undo(g_editor.main_window);
-        
+
         char error_msg[512];
         snprintf(error_msg, sizeof(error_msg),
                  "Paste operation exceeded file size limit\n"
                  "Operation has been undone.\n"
                  "Current text: %.2f MB\n"
                  "Maximum allowed: %.2f MB",
-                 new_length / (1024.0 * 1024.0),
-                 g_editor.max_file_size / (1024.0 * 1024.0));
+                 new_length / (1024.0 * 1024.0), g_editor.max_file_size / (1024.0 * 1024.0));
         ui_show_message_box(g_editor.main_window, "File Size Limit", error_msg, false);
-        
+
         // Update size after undo
         npad_mutex_lock(&g_editor_mutex);
         g_editor.current_text_size = current_length;
         npad_mutex_unlock(&g_editor_mutex);
         return;
     }
-    
+
     // Check memory usage
     size_t estimated_memory = estimate_text_memory_usage(new_length);
     if (!editor_check_memory_limits(0)) { // Check current usage
         // Undo the paste operation
         ui_undo(g_editor.main_window);
-        
+
         char error_msg[512];
         snprintf(error_msg, sizeof(error_msg),
                  "Paste operation exceeded memory limits\n"
                  "Operation has been undone.\n"
                  "Text size: %.2f MB\n"
                  "Estimated memory: %.2f MB",
-                 new_length / (1024.0 * 1024.0),
-                 estimated_memory / (1024.0 * 1024.0));
+                 new_length / (1024.0 * 1024.0), estimated_memory / (1024.0 * 1024.0));
         ui_show_message_box(g_editor.main_window, "Memory Limit", error_msg, false);
-        
+
         // Update size after undo
         npad_mutex_lock(&g_editor_mutex);
         g_editor.current_text_size = current_length;
@@ -986,7 +982,8 @@ bool editor_handle_event(const UIEvent *event) {
 
         case UI_EVENT_VIEW_TOGGLE_DARK_MODE:
             ui_set_dark_mode(!ui_is_dark_mode());
-            return true;        case UI_EVENT_TEXT_CHANGED:
+            return true;
+        case UI_EVENT_TEXT_CHANGED:
             npad_mutex_lock(&g_editor_mutex);
             g_editor.is_modified = true;
             // Update current text size tracking
@@ -1069,15 +1066,15 @@ void editor_update_title(void) {
 void editor_show_memory_status(void) {
     size_t current_memory = get_process_memory_usage();
     size_t current_text_size = editor_get_text_length();
-    
+
     npad_mutex_lock(&g_editor_mutex);
     size_t max_memory = g_editor.max_memory_usage;
     size_t max_file_size = g_editor.max_file_size;
     npad_mutex_unlock(&g_editor_mutex);
-    
-    double memory_usage_percent = (double)current_memory / max_memory * 100.0;
-    double file_size_percent = (double)current_text_size / max_file_size * 100.0;
-    
+
+    double memory_usage_percent = (double) current_memory / max_memory * 100.0;
+    double file_size_percent = (double) current_text_size / max_file_size * 100.0;
+
     char status_msg[1024];
     snprintf(status_msg, sizeof(status_msg),
              "Memory Usage Status:\n\n"
@@ -1087,27 +1084,23 @@ void editor_show_memory_status(void) {
              "- Maximum file size: %.2f MB\n"
              "- Maximum memory usage: %.2f MB\n"
              "- Memory warnings: %s",
-             current_memory / (1024.0 * 1024.0),
-             max_memory / (1024.0 * 1024.0),
-             memory_usage_percent,
-             current_text_size / (1024.0 * 1024.0),
-             max_file_size / (1024.0 * 1024.0),
-             file_size_percent,
-             max_file_size / (1024.0 * 1024.0),
-             max_memory / (1024.0 * 1024.0),
+             current_memory / (1024.0 * 1024.0), max_memory / (1024.0 * 1024.0),
+             memory_usage_percent, current_text_size / (1024.0 * 1024.0),
+             max_file_size / (1024.0 * 1024.0), file_size_percent,
+             max_file_size / (1024.0 * 1024.0), max_memory / (1024.0 * 1024.0),
              g_editor.memory_limit_warnings ? "Enabled" : "Disabled");
-    
+
     ui_show_message_box(g_editor.main_window, "Memory Status", status_msg, false);
 }
 
 // Check if approaching memory limits
 bool editor_is_approaching_memory_limit(void) {
     size_t current_memory = get_process_memory_usage();
-    
+
     npad_mutex_lock(&g_editor_mutex);
     size_t max_memory = g_editor.max_memory_usage;
     npad_mutex_unlock(&g_editor_mutex);
-    
-    double usage_ratio = (double)current_memory / max_memory;
+
+    double usage_ratio = (double) current_memory / max_memory;
     return usage_ratio >= MEMORY_WARNING_THRESHOLD;
 }
