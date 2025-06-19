@@ -43,10 +43,11 @@
 #define ID_EDIT_FIND 2107
 #define ID_EDIT_REPLACE 2108
 #define ID_EDIT_GOTO_LINE 2109
-#define ID_VIEW_DARK_MODE 2201
-#define ID_VIEW_WORD_WRAP 2202
-#define ID_VIEW_FONT 2203
-#define ID_HELP_ABOUT 2301
+#define ID_FORMAT_WORD_WRAP 2201
+#define ID_FORMAT_FONT 2202
+#define ID_VIEW_STATUS_BAR 2301
+// #define ID_VIEW_DARK_MODE 2302  // Commented out - not yet implemented
+#define ID_HELP_ABOUT 2401
 
 // Window structure
 typedef struct Window {
@@ -56,8 +57,10 @@ typedef struct Window {
     HMENU hmenu;
     HACCEL haccel;
     bool is_modified;
+    bool setting_text_programmatically; // Flag to prevent spurious change notifications
     char *current_file;
     bool word_wrap_enabled;
+    bool status_bar_visible;
     int zoom_level;
     int font_size; // For font size tracking
 } Window;
@@ -81,6 +84,7 @@ static void handle_command(Window *window, WORD command);
 static void update_title(Window *window);
 static void update_status_bar(Window *window);
 static void update_scrollbars(Window *window);
+static void resize_controls(Window *window);
 static bool register_window_class(void);
 static void apply_theme(Window *window);
 static void set_font_size(Window *window, int size);
@@ -220,12 +224,14 @@ Window *ui_platform_create_main_window(void) {
     }
 
     window->font_size = 11; // Default 11pt font like notepad
-    set_font_size(window, window->font_size);
-
-    SendMessage(window->edit_hwnd, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(4, 4));
-
-    // Set unlimited text length
+    set_font_size(window, window->font_size);    SendMessage(window->edit_hwnd, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(4, 4));    // Set unlimited text length
     SendMessage(window->edit_hwnd, EM_LIMITTEXT, 0, 0);
+
+    // Enable change notifications for RichEdit control
+    SendMessage(window->edit_hwnd, EM_SETEVENTMASK, 0, ENM_CHANGE | ENM_SELCHANGE);
+
+    // Set to plain text mode (not RTF) to behave like a standard text editor
+    SendMessage(window->edit_hwnd, EM_SETTEXTMODE, TM_PLAINTEXT, 0);
 
     // Create status bar with standard styling
     window->status_hwnd =
@@ -252,15 +258,21 @@ Window *ui_platform_create_main_window(void) {
 
     // Force status bar to be visible and properly sized
     ShowWindow(window->status_hwnd, SW_SHOW);
-    UpdateWindow(window->status_hwnd);
-
-    // Initialize window state
+    UpdateWindow(window->status_hwnd);    // Initialize window state
     window->word_wrap_enabled = true;
+    window->status_bar_visible = true;
     window->zoom_level = 100;
     window->is_modified = false;
-
-    // Create menu and accelerators
+    window->setting_text_programmatically = false;// Create menu and accelerators
     create_menu(window);
+
+    // Update initial menu checkmarks
+    if (window->hmenu) {
+        CheckMenuItem(window->hmenu, ID_FORMAT_WORD_WRAP,
+                      window->word_wrap_enabled ? MF_CHECKED : MF_UNCHECKED);
+        CheckMenuItem(window->hmenu, ID_VIEW_STATUS_BAR,
+                      window->status_bar_visible ? MF_CHECKED : MF_UNCHECKED);
+    }
 
     // Create accelerator table
     ACCEL accel[] = { { FCONTROL | FVIRTKEY, 'N', ID_FILE_NEW },
@@ -274,7 +286,7 @@ Window *ui_platform_create_main_window(void) {
                       { FCONTROL | FVIRTKEY, 'F', ID_EDIT_FIND },
                       { FCONTROL | FVIRTKEY, 'H', ID_EDIT_REPLACE },
                       { FCONTROL | FVIRTKEY, 'G', ID_EDIT_GOTO_LINE },
-                      { FALT | FVIRTKEY, 'Z', ID_VIEW_WORD_WRAP } };
+                      { FALT | FVIRTKEY, 'Z', ID_FORMAT_WORD_WRAP } };
     window->haccel = CreateAcceleratorTable(accel, sizeof(accel) / sizeof(accel[0]));
 
     if (!window->haccel) {
@@ -378,7 +390,9 @@ void ui_platform_set_window_position(Window *window, int x, int y) {
 
 void ui_platform_set_text(Window *window, const char *text) {
     if (window && window->edit_hwnd && text) {
+        window->setting_text_programmatically = true;
         SetWindowText(window->edit_hwnd, text);
+        window->setting_text_programmatically = false;
         window->is_modified = false;
         update_title(window);
         update_status_bar(window);
@@ -415,7 +429,9 @@ char *ui_platform_get_text(Window *window) {
 
 void ui_platform_clear_text(Window *window) {
     if (window && window->edit_hwnd) {
+        window->setting_text_programmatically = true;
         SetWindowText(window->edit_hwnd, "");
+        window->setting_text_programmatically = false;
         window->is_modified = false;
         update_title(window);
         update_status_bar(window);
@@ -744,43 +760,16 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
             CREATESTRUCT *cs = (CREATESTRUCT *) lparam;
             SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR) cs->lpCreateParams);
             return 0;
-        }
-
-        case WM_SIZE: {
-            if (window && window->edit_hwnd && window->status_hwnd) {
-                RECT rect;
-                GetClientRect(hwnd, &rect);
-
-                // Resize status bar first - it will auto-position itself at bottom
-                SendMessage(window->status_hwnd, WM_SIZE, 0, 0);
-
-                // Get status bar height
-                RECT status_rect;
-                GetWindowRect(window->status_hwnd, &status_rect);
-                int status_height = status_rect.bottom - status_rect.top;
-
-                // Position edit control above status bar
-                SetWindowPos(window->edit_hwnd, NULL, 0, 0, rect.right, rect.bottom - status_height,
-                             SWP_NOZORDER);
-
-                // Update scrollbars after resize
-                update_scrollbars(window);
+        }        case WM_SIZE: {
+            if (window) {
+                resize_controls(window);
             }
             return 0;
-        }
-
-        case WM_COMMAND: {
+        }        case WM_COMMAND: {
             if (window) {
-                if (HIWORD(wparam) == EN_CHANGE && LOWORD(wparam) == ID_EDIT_CONTROL) {
-                    bool was_modified = window->is_modified;
-                    window->is_modified = true;
-                    if (!was_modified) {
-                        update_title(window);
-                    }
-                    update_status_bar(window);
-                    update_scrollbars(window);
-                    ui_post_event(UI_EVENT_TEXT_CHANGED, window, NULL);
-                } else if (HIWORD(wparam) == EN_SELCHANGE && LOWORD(wparam) == ID_EDIT_CONTROL) {
+                // For RichEdit controls, change notifications come via WM_NOTIFY
+                // Only handle selection changes via WM_COMMAND for compatibility
+                if (HIWORD(wparam) == EN_SELCHANGE && LOWORD(wparam) == ID_EDIT_CONTROL) {
                     update_status_bar(window);
                 } else {
                     handle_command(window, LOWORD(wparam));
@@ -793,8 +782,11 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
             if (window) {
                 NMHDR *nmhdr = (NMHDR *) lparam;
                 if (nmhdr->idFrom == ID_EDIT_CONTROL) {
-                    switch (nmhdr->code) {
-                        case EN_CHANGE: {
+                    switch (nmhdr->code) {                        case EN_CHANGE: {
+                            // Ignore change notifications during programmatic text setting
+                            if (window->setting_text_programmatically) {
+                                break;
+                            }
                             bool was_modified = window->is_modified;
                             window->is_modified = true;
                             if (!was_modified) {
@@ -850,10 +842,11 @@ static void create_menu(Window *window) {
     HMENU hmenu = CreateMenu();
     HMENU hfile = CreatePopupMenu();
     HMENU hedit = CreatePopupMenu();
+    HMENU hformat = CreatePopupMenu();
     HMENU hview = CreatePopupMenu();
     HMENU hhelp = CreatePopupMenu();
 
-    if (!hmenu || !hfile || !hedit || !hview || !hhelp) {
+    if (!hmenu || !hfile || !hedit || !hformat || !hview || !hhelp) {
         NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Menu creation",
                          "Failed to create menu components");
         return;
@@ -874,26 +867,26 @@ static void create_menu(Window *window) {
     AppendMenu(hedit, MF_STRING, ID_EDIT_CUT, "Cu&t\tCtrl+X");
     AppendMenu(hedit, MF_STRING, ID_EDIT_COPY, "&Copy\tCtrl+C");
     AppendMenu(hedit, MF_STRING, ID_EDIT_PASTE, "&Paste\tCtrl+V");
-    AppendMenu(hedit, MF_SEPARATOR, 0, NULL);
-    AppendMenu(hedit, MF_STRING, ID_EDIT_SELECT_ALL, "Select &All\tCtrl+A");
+    AppendMenu(hedit, MF_SEPARATOR, 0, NULL);    AppendMenu(hedit, MF_STRING, ID_EDIT_SELECT_ALL, "Select &All\tCtrl+A");
     AppendMenu(hedit, MF_SEPARATOR, 0, NULL);
     AppendMenu(hedit, MF_STRING, ID_EDIT_FIND, "&Find...\tCtrl+F");
     AppendMenu(hedit, MF_STRING, ID_EDIT_REPLACE, "&Replace...\tCtrl+H");
     AppendMenu(hedit, MF_STRING, ID_EDIT_GOTO_LINE, "&Go to Line...\tCtrl+G");
 
+    // Format menu
+    AppendMenu(hformat, MF_STRING, ID_FORMAT_WORD_WRAP, "&Word Wrap\tAlt+Z");
+    AppendMenu(hformat, MF_SEPARATOR, 0, NULL);
+    AppendMenu(hformat, MF_STRING, ID_FORMAT_FONT, "&Font...");
+
     // View menu
-    AppendMenu(hview, MF_STRING, ID_VIEW_WORD_WRAP, "&Word Wrap\tAlt+Z");
-    AppendMenu(hview, MF_SEPARATOR, 0, NULL);
-    AppendMenu(hview, MF_STRING, ID_VIEW_FONT, "&Font...");
-    AppendMenu(hview, MF_SEPARATOR, 0, NULL);
-    AppendMenu(hview, MF_STRING, ID_VIEW_DARK_MODE, "&Dark Mode");
+    AppendMenu(hview, MF_STRING, ID_VIEW_STATUS_BAR, "&Status Bar");
+    // AppendMenu(hview, MF_STRING, ID_VIEW_DARK_MODE, "&Dark Mode");  // Commented out - not yet implemented
 
     // Help menu
-    AppendMenu(hhelp, MF_STRING, ID_HELP_ABOUT, "&About npad");
-
-    // Add to main menu
+    AppendMenu(hhelp, MF_STRING, ID_HELP_ABOUT, "&About npad");    // Add to main menu
     AppendMenu(hmenu, MF_STRING | MF_POPUP, (UINT_PTR) hfile, "&File");
     AppendMenu(hmenu, MF_STRING | MF_POPUP, (UINT_PTR) hedit, "&Edit");
+    AppendMenu(hmenu, MF_STRING | MF_POPUP, (UINT_PTR) hformat, "F&ormat");
     AppendMenu(hmenu, MF_STRING | MF_POPUP, (UINT_PTR) hview, "&View");
     AppendMenu(hmenu, MF_STRING | MF_POPUP, (UINT_PTR) hhelp, "&Help");
 
@@ -969,22 +962,33 @@ static void handle_command(Window *window, WORD command) {
                 }
             }
             break;
-        }
-        case ID_VIEW_WORD_WRAP:
+        }        case ID_FORMAT_WORD_WRAP:
             window->word_wrap_enabled = !window->word_wrap_enabled;
             update_scrollbars(window);
             // Update menu checkmark
             if (window->hmenu) {
-                CheckMenuItem(window->hmenu, ID_VIEW_WORD_WRAP,
+                CheckMenuItem(window->hmenu, ID_FORMAT_WORD_WRAP,
                               window->word_wrap_enabled ? MF_CHECKED : MF_UNCHECKED);
             }
             break;
-        case ID_VIEW_FONT:
+        case ID_FORMAT_FONT:
             show_font_dialog(window);
             break;
+        case ID_VIEW_STATUS_BAR:
+            window->status_bar_visible = !window->status_bar_visible;
+            ShowWindow(window->status_hwnd, window->status_bar_visible ? SW_SHOW : SW_HIDE);
+            resize_controls(window);
+            // Update menu checkmark
+            if (window->hmenu) {
+                CheckMenuItem(window->hmenu, ID_VIEW_STATUS_BAR,
+                              window->status_bar_visible ? MF_CHECKED : MF_UNCHECKED);
+            }
+            break;
+        /*
         case ID_VIEW_DARK_MODE:
             ui_post_event(UI_EVENT_VIEW_TOGGLE_DARK_MODE, window, NULL);
             break;
+        */
         case ID_HELP_ABOUT:
             ui_platform_show_about_dialog(window);
             break;
@@ -1029,13 +1033,13 @@ static void apply_theme(Window *window) {
     } else {
         // Use system default colors
         // The edit control will automatically use system colors
-    }
-
-    // Update menu checkmarks
+    }    // Update menu checkmarks
     if (window->hmenu) {
-        CheckMenuItem(window->hmenu, ID_VIEW_DARK_MODE, g_dark_mode ? MF_CHECKED : MF_UNCHECKED);
-        CheckMenuItem(window->hmenu, ID_VIEW_WORD_WRAP,
+        // CheckMenuItem(window->hmenu, ID_VIEW_DARK_MODE, g_dark_mode ? MF_CHECKED : MF_UNCHECKED);  // Commented out - not yet implemented
+        CheckMenuItem(window->hmenu, ID_FORMAT_WORD_WRAP,
                       window->word_wrap_enabled ? MF_CHECKED : MF_UNCHECKED);
+        CheckMenuItem(window->hmenu, ID_VIEW_STATUS_BAR,
+                      window->status_bar_visible ? MF_CHECKED : MF_UNCHECKED);
     }
 }
 
@@ -1370,4 +1374,30 @@ static bool InputBox(HWND parent, const char *title, const char *prompt, char *b
     DestroyWindow(dialog);
 
     return result;
+}
+
+static void resize_controls(Window *window) {
+    if (!window || !window->hwnd || !window->edit_hwnd || !window->status_hwnd)
+        return;
+
+    RECT rect;
+    GetClientRect(window->hwnd, &rect);
+
+    // Resize status bar first - it will auto-position itself at bottom
+    SendMessage(window->status_hwnd, WM_SIZE, 0, 0);
+
+    // Get status bar height if it's visible
+    int status_height = 0;
+    if (window->status_bar_visible) {
+        RECT status_rect;
+        GetWindowRect(window->status_hwnd, &status_rect);
+        status_height = status_rect.bottom - status_rect.top;
+    }
+
+    // Position edit control above status bar (or use full height if status bar is hidden)
+    SetWindowPos(window->edit_hwnd, NULL, 0, 0, rect.right, rect.bottom - status_height,
+                 SWP_NOZORDER);
+
+    // Update scrollbars after resize
+    update_scrollbars(window);
 }
