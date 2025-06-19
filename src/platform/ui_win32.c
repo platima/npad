@@ -225,9 +225,7 @@ Window *ui_platform_create_main_window(void) {
 
     window->font_size = 11; // Default 11pt font like notepad
     set_font_size(window, window->font_size);    SendMessage(window->edit_hwnd, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(4, 4));    // Set unlimited text length
-    SendMessage(window->edit_hwnd, EM_LIMITTEXT, 0, 0);
-
-    // Enable change notifications for RichEdit control
+    SendMessage(window->edit_hwnd, EM_LIMITTEXT, 0, 0);    // Enable change notifications for RichEdit control
     SendMessage(window->edit_hwnd, EM_SETEVENTMASK, 0, ENM_CHANGE | ENM_SELCHANGE);
 
     // Set to plain text mode (not RTF) to behave like a standard text editor
@@ -767,26 +765,13 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
             return 0;
         }        case WM_COMMAND: {
             if (window) {
-                // For RichEdit controls, change notifications come via WM_NOTIFY
-                // Only handle selection changes via WM_COMMAND for compatibility
-                if (HIWORD(wparam) == EN_SELCHANGE && LOWORD(wparam) == ID_EDIT_CONTROL) {
-                    update_status_bar(window);
-                } else {
-                    handle_command(window, LOWORD(wparam));
-                }
-            }
-            return 0;
-        }
-
-        case WM_NOTIFY: {
-            if (window) {
-                NMHDR *nmhdr = (NMHDR *) lparam;
-                if (nmhdr->idFrom == ID_EDIT_CONTROL) {
-                    switch (nmhdr->code) {                        case EN_CHANGE: {
-                            // Ignore change notifications during programmatic text setting
-                            if (window->setting_text_programmatically) {
-                                break;
-                            }
+                WORD notification = HIWORD(wparam);
+                WORD control_id = LOWORD(wparam);
+                
+                if (control_id == ID_EDIT_CONTROL) {
+                    if (notification == EN_CHANGE) {
+                        // Ignore change notifications during programmatic text setting
+                        if (!window->setting_text_programmatically) {
                             bool was_modified = window->is_modified;
                             window->is_modified = true;
                             if (!was_modified) {
@@ -795,6 +780,32 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                             update_status_bar(window);
                             update_scrollbars(window);
                             ui_post_event(UI_EVENT_TEXT_CHANGED, window, NULL);
+                        }
+                    } else if (notification == EN_SELCHANGE) {
+                        update_status_bar(window);
+                    }
+                } else {
+                    handle_command(window, control_id);
+                }
+            }
+            return 0;
+        }        case WM_NOTIFY: {
+            if (window) {
+                NMHDR *nmhdr = (NMHDR *) lparam;
+                if (nmhdr->idFrom == ID_EDIT_CONTROL) {
+                    switch (nmhdr->code) {
+                        case EN_CHANGE: {
+                            // Ignore change notifications during programmatic text setting
+                            if (!window->setting_text_programmatically) {
+                                bool was_modified = window->is_modified;
+                                window->is_modified = true;
+                                if (!was_modified) {
+                                    update_title(window);
+                                }
+                                update_status_bar(window);
+                                update_scrollbars(window);
+                                ui_post_event(UI_EVENT_TEXT_CHANGED, window, NULL);
+                            }
                             break;
                         }
                         case EN_SELCHANGE: {
