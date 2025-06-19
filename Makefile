@@ -25,12 +25,12 @@ TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/thread_safe
 
 # Windows GUI specific
 WINDOWS_GUI_SOURCES = src/platform/ui_win32.c
-WINDOWS_GUI_LIBS = -mwindows -lcomctl32 -lcomdlg32 -lgdi32 -lkernel32 -lshell32 -luser32 -lshcore -luxtheme
+WINDOWS_GUI_LIBS = -mwindows -lcomctl32 -lcomdlg32 -lgdi32 -lkernel32 -lshell32 -luser32 -lshcore -luxtheme -lpsapi
 WINDOWS_GUI_TARGET = npad.exe
 
 # Windows Terminal specific
 WINDOWS_TERMINAL_SOURCES = src/platform/ui_win32_terminal.c
-WINDOWS_TERMINAL_LIBS = -lkernel32
+WINDOWS_TERMINAL_LIBS = -lkernel32 -lpsapi
 WINDOWS_TERMINAL_TARGET = npad-terminal.exe
 
 # macOS specific (future)
