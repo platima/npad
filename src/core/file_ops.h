@@ -20,6 +20,15 @@ bool file_read_binary(const char *filename, void **data, size_t *size);
 bool file_write_text(const char *filename, const char *content);
 bool file_write_binary(const char *filename, const void *data, size_t size);
 
+// Atomic file operations with rollback capability
+bool file_write_text_atomic(const char *filename, const char *content);
+bool file_write_binary_atomic(const char *filename, const void *data, size_t size);
+
+// Enhanced validation and checks
+bool file_check_disk_space(const char *path, size_t required_bytes);
+bool file_validate_permissions(const char *filename, bool for_writing);
+bool file_verify_integrity(const char *filename, const char *expected_content);
+
 // File utility functions
 bool file_exists(const char *filename);
 bool file_is_readable(const char *filename);
