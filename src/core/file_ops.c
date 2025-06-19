@@ -38,7 +38,6 @@ static void set_errno_error(const char *operation, const char *filename) {
              operation ? operation : "Unknown", filename ? filename : "Unknown", strerror(errno));
 }
 
-// FIXED: Enhanced path validation that allows legitimate file paths while preventing traversal
 static bool is_safe_path(const char *filename) {
     if (!filename || strlen(filename) == 0) {
         return false;
@@ -49,7 +48,6 @@ static bool is_safe_path(const char *filename) {
         return false; // Path too long
     }
 
-    // FIXED: Allow absolute paths but check for directory traversal patterns
     // Check for various path traversal patterns but allow legitimate paths
     const char *pos = filename;
     while ((pos = strstr(pos, "..")) != NULL) {
@@ -92,7 +90,6 @@ static bool is_safe_path(const char *filename) {
         }
     }
 
-    // FIXED: Allow legitimate file paths - the main concern is preventing "../" traversal
     // which we've already checked above. Other restrictions were too aggressive.
     return true;
 }

@@ -381,7 +381,6 @@ bool editor_find(const char *text, bool case_sensitive, bool whole_word) {
     return result;
 }
 
-// FIXED: Enhanced replace function with better bounds checking and overflow protection
 bool editor_replace(const char *find_text, const char *replace_text, bool case_sensitive,
                     bool whole_word, bool replace_all) {
     if (!find_text) {
