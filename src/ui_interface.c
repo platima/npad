@@ -32,6 +32,8 @@ extern void ui_platform_get_window_size(Window *window, int *width, int *height)
 extern void ui_platform_set_window_size(Window *window, int width, int height);
 extern void ui_platform_get_window_position(Window *window, int *x, int *y);
 extern void ui_platform_set_window_position(Window *window, int x, int y);
+extern void ui_platform_set_window_maximized(Window *window, bool maximized);
+extern bool ui_platform_is_window_maximized(Window *window);
 
 // Platform text functions
 extern void ui_platform_set_text(Window *window, const char *text);
@@ -59,12 +61,12 @@ extern char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams
 extern char *ui_platform_show_save_dialog(Window *parent, const FileDialogParams *params);
 extern bool ui_platform_show_message_box(Window *parent, const char *title, const char *message,
                                          bool is_question);
+extern SavePromptResult ui_platform_show_save_prompt(Window *parent, const char *filename);
 extern void ui_platform_show_about_dialog(Window *parent);
 
 // Platform find/replace functions
-extern Dialog *ui_platform_show_find_dialog(Window *parent);
-extern Dialog *ui_platform_show_replace_dialog(Window *parent);
-extern void ui_platform_close_dialog(Dialog *dialog);
+extern void ui_platform_show_find_dialog(Window *parent);
+extern void ui_platform_show_replace_dialog(Window *parent);
 
 // Platform theme functions
 extern void ui_platform_set_dark_mode(bool enabled);
@@ -76,6 +78,9 @@ extern bool ui_platform_is_text_modified(Window *window);
 extern void ui_platform_set_text_modified(Window *window, bool modified);
 extern int ui_platform_get_line_count(Window *window);
 extern void ui_platform_get_cursor_line_column(Window *window, int *line, int *column);
+extern void ui_platform_set_status_info(Window *window, const char *encoding_name,
+                                        const char *eol_name);
+extern void ui_platform_set_auto_save_timer(Window *window, int seconds);
 
 // Platform-specific helpers
 extern void *ui_platform_get_native_handle(Window *window);
@@ -132,6 +137,14 @@ void ui_get_window_position(Window *window, int *x, int *y) {
 
 void ui_set_window_position(Window *window, int x, int y) {
     ui_platform_set_window_position(window, x, y);
+}
+
+void ui_set_window_maximized(Window *window, bool maximized) {
+    ui_platform_set_window_maximized(window, maximized);
+}
+
+bool ui_is_window_maximized(Window *window) {
+    return ui_platform_is_window_maximized(window);
 }
 
 void ui_set_text(Window *window, const char *text) {
@@ -206,20 +219,20 @@ bool ui_show_message_box(Window *parent, const char *title, const char *message,
     return ui_platform_show_message_box(parent, title, message, is_question);
 }
 
+SavePromptResult ui_show_save_prompt(Window *parent, const char *filename) {
+    return ui_platform_show_save_prompt(parent, filename);
+}
+
 void ui_show_about_dialog(Window *parent) {
     ui_platform_show_about_dialog(parent);
 }
 
-Dialog *ui_show_find_dialog(Window *parent) {
-    return ui_platform_show_find_dialog(parent);
+void ui_show_find_dialog(Window *parent) {
+    ui_platform_show_find_dialog(parent);
 }
 
-Dialog *ui_show_replace_dialog(Window *parent) {
-    return ui_platform_show_replace_dialog(parent);
-}
-
-void ui_close_dialog(Dialog *dialog) {
-    ui_platform_close_dialog(dialog);
+void ui_show_replace_dialog(Window *parent) {
+    ui_platform_show_replace_dialog(parent);
 }
 
 void ui_set_event_handler(UIEventHandler handler) {
@@ -260,6 +273,14 @@ int ui_get_line_count(Window *window) {
 
 void ui_get_cursor_line_column(Window *window, int *line, int *column) {
     ui_platform_get_cursor_line_column(window, line, column);
+}
+
+void ui_set_status_info(Window *window, const char *encoding_name, const char *eol_name) {
+    ui_platform_set_status_info(window, encoding_name, eol_name);
+}
+
+void ui_set_auto_save_timer(Window *window, int seconds) {
+    ui_platform_set_auto_save_timer(window, seconds);
 }
 
 void *ui_get_native_handle(Window *window) {

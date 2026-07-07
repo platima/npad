@@ -9,18 +9,21 @@
 #ifndef MAIN_H
 #define MAIN_H
 
-#define STRINGIFY(x) #x
+// Two-level macro so the argument is expanded before stringification
+#define NPAD_STRINGIFY_HELPER(x) #x
+#define NPAD_STRINGIFY(x) NPAD_STRINGIFY_HELPER(x)
 
 #define NPAD_VERSION_MAJOR 0
-#define NPAD_VERSION_MINOR 1
-#define NPAD_VERSION_PATCH 8
+#define NPAD_VERSION_MINOR 2
+#define NPAD_VERSION_PATCH 0
 #define NPAD_VERSION_RELEASE "dev"
 
-// Version information
+// Version information (the Makefile may override with a git-derived string)
 #ifndef NPAD_VERSION
 #define NPAD_VERSION                                                                               \
-    STRINGIFY(NPAD_VERSION_MAJOR)                                                                  \
-    "." STRINGIFY(NPAD_VERSION_MINOR) "." STRINGIFY(NPAD_VERSION_PATCH) "-" NPAD_VERSION_RELEASE
+    NPAD_STRINGIFY(NPAD_VERSION_MAJOR)                                                             \
+    "." NPAD_STRINGIFY(NPAD_VERSION_MINOR) "." NPAD_STRINGIFY(                                     \
+        NPAD_VERSION_PATCH) "-" NPAD_VERSION_RELEASE
 #endif
 
 // Platform detection

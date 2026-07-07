@@ -55,3 +55,8 @@ npad-linux-*
 unpad*.exe
 src/platform/npad.res
 notes.txt
+
+# Test executables
+tests/test_file_ops
+tests/test_error
+tests/test_encoding

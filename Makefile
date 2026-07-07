@@ -15,6 +15,18 @@ ifdef CROSS_COMPILE
 CC = $(CROSS_COMPILE)gcc
 endif
 
+# Windows toolchain: cross-compile from Linux by default, or use the native
+# MinGW toolchain when building on Windows (MSYS2 / Git Bash)
+ifeq ($(OS),Windows_NT)
+MINGW_CC ?= gcc
+MINGW_WINDRES ?= windres
+MINGW_STRIP ?= strip
+else
+MINGW_CC ?= x86_64-w64-mingw32-gcc
+MINGW_WINDRES ?= x86_64-w64-mingw32-windres
+MINGW_STRIP ?= x86_64-w64-mingw32-strip
+endif
+
 # Source files
 CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/thread_safety.c src/core/error.c
 SHARED_SOURCES = src/ui_interface.c
@@ -25,12 +37,12 @@ TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/thread_safe
 
 # Windows GUI specific
 WINDOWS_GUI_SOURCES = src/platform/ui_win32.c
-WINDOWS_GUI_LIBS = -mwindows -lcomctl32 -lcomdlg32 -lgdi32 -lkernel32 -lshell32 -luser32 -lshcore -luxtheme -lpsapi
+WINDOWS_GUI_LIBS = -mwindows -lcomctl32 -lcomdlg32 -lgdi32 -lkernel32 -lshell32 -luser32 -lshcore
 WINDOWS_GUI_TARGET = npad.exe
 
 # Windows Terminal specific
 WINDOWS_TERMINAL_SOURCES = src/platform/ui_win32_terminal.c
-WINDOWS_TERMINAL_LIBS = -lkernel32 -lpsapi
+WINDOWS_TERMINAL_LIBS = -lkernel32
 WINDOWS_TERMINAL_TARGET = npad-terminal.exe
 
 # macOS specific (future)
@@ -74,10 +86,10 @@ CFLAGS += -Os -DNDEBUG
 LDFLAGS += -s
 endif
 
-# Default target - detect platform and build  
+# Default target - detect platform and build
 .DEFAULT_GOAL := detect-platform
 
-# Build all platforms that can be built on current system
+# Build every variant this system can build (Windows cross + Linux native)
 all: windows linux
 # Note: macOS builds require macOS host system with Xcode/clang
 
@@ -106,10 +118,10 @@ windows: windows-gui windows-terminal
 windows-gui: $(WINDOWS_GUI_TARGET)
 
 $(WINDOWS_GUI_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(WINDOWS_GUI_SOURCES) src/main.c src/platform/npad.rc
-	cd src/platform && x86_64-w64-mingw32-windres npad.rc -O coff -o npad.res
-	x86_64-w64-mingw32-gcc $(CFLAGS) -o $@ $(CORE_SOURCES) $(SHARED_SOURCES) $(WINDOWS_GUI_SOURCES) src/main.c src/platform/npad.res $(WINDOWS_GUI_LIBS) $(LDFLAGS)
+	cd src/platform && $(MINGW_WINDRES) npad.rc -O coff -o npad.res
+	$(MINGW_CC) $(CFLAGS) -o $@ $(CORE_SOURCES) $(SHARED_SOURCES) $(WINDOWS_GUI_SOURCES) src/main.c src/platform/npad.res $(WINDOWS_GUI_LIBS) $(LDFLAGS)
 ifndef DEBUG
-	x86_64-w64-mingw32-strip $@
+	$(MINGW_STRIP) $@
 endif
 	@echo "Windows GUI build complete: $(WINDOWS_GUI_TARGET)"
 
@@ -136,9 +148,9 @@ linux: linux-x11 linux-wayland linux-terminal
 windows-terminal: $(WINDOWS_TERMINAL_TARGET)
 
 $(WINDOWS_TERMINAL_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(WINDOWS_TERMINAL_SOURCES) src/main.c
-	x86_64-w64-mingw32-gcc $(CFLAGS) -o $@ $^ $(WINDOWS_TERMINAL_LIBS) $(LDFLAGS)
+	$(MINGW_CC) $(CFLAGS) -o $@ $^ $(WINDOWS_TERMINAL_LIBS) $(LDFLAGS)
 ifndef DEBUG
-	x86_64-w64-mingw32-strip $@
+	$(MINGW_STRIP) $@
 endif
 	@echo "Windows Terminal build complete: $(WINDOWS_TERMINAL_TARGET)"
 
@@ -152,7 +164,7 @@ $(LINUX_TERMINAL_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_TERMINAL_SOU
 terminal: windows-terminal linux-terminal
 
 # Development targets
-debug: 
+debug:
 	$(MAKE) DEBUG=1
 
 debug-linux:
@@ -186,6 +198,7 @@ lint:
 	cppcheck --enable=all --std=c99 --platform=win32A \
 		--suppress=missingIncludeSystem \
 		--suppress=unusedFunction \
+		--inline-suppr \
 		--error-exitcode=1 \
 		src/
 
@@ -198,7 +211,7 @@ format-check:
 	find src/ -name "*.c" -o -name "*.h" | xargs clang-format --dry-run --Werror
 
 # Testing targets
-test: test-file-ops test-error
+test: test-file-ops test-error test-encoding
 	@echo "All tests completed"
 
 test-file-ops: tests/test_file_ops
@@ -209,6 +222,10 @@ test-error: tests/test_error
 	@echo "Running error system tests..."
 	./tests/test_error
 
+test-encoding: tests/test_encoding
+	@echo "Running encoding tests..."
+	./tests/test_encoding
+
 tests/test_file_ops: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_file_ops.c
 	@mkdir -p tests
 	$(CC) $(CFLAGS) -o $@ $^ -lpthread
@@ -217,29 +234,37 @@ tests/test_error: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_erro
 	@mkdir -p tests
 	$(CC) $(CFLAGS) -o $@ $^ -lpthread
 
+tests/test_encoding: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_encoding.c
+	@mkdir -p tests
+	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+
 # Cleanup
 clean:
 	rm -f $(WINDOWS_GUI_TARGET) $(WINDOWS_TERMINAL_TARGET) $(MACOS_TARGET) $(LINUX_X11_TARGET) $(LINUX_WAYLAND_TARGET) $(LINUX_TERMINAL_TARGET)
 	rm -f npad-*.exe npad-*linux* npad-*win32*
-	rm -f *.o src/**/*.o src/platform/npad.res
-	rm -f tests/test_file_ops tests/test_error
+	find src tests -name '*.o' -delete 2>/dev/null || true
+	rm -f src/platform/npad.res
+	rm -f tests/test_file_ops tests/test_error tests/test_encoding
 
 # Installation
-install: detect-platform
+install:
 ifeq ($(OS),Windows_NT)
-	copy $(WINDOWS_TARGET) C:\Windows\System32\
+	@echo "On Windows, copy npad.exe to a directory on your PATH, for example:"
+	@echo "  mkdir %LOCALAPPDATA%\Programs\npad"
+	@echo "  copy npad.exe %LOCALAPPDATA%\Programs\npad\"
 else
 	install -D $(LINUX_X11_TARGET) $(DESTDIR)/usr/local/bin/npad-x11
-		install -D $(LINUX_WAYLAND_TARGET) $(DESTDIR)/usr/local/bin/npad-wayland
-		install -D $(LINUX_TERMINAL_TARGET) $(DESTDIR)/usr/local/bin/npad-terminal
-		ln -sf npad-x11 $(DESTDIR)/usr/local/bin/npad
+	install -D $(LINUX_WAYLAND_TARGET) $(DESTDIR)/usr/local/bin/npad-wayland
+	install -D $(LINUX_TERMINAL_TARGET) $(DESTDIR)/usr/local/bin/npad-terminal
+	ln -sf npad-x11 $(DESTDIR)/usr/local/bin/npad
 endif
 
 uninstall:
 ifeq ($(OS),Windows_NT)
-	del C:\Windows\System32\$(WINDOWS_TARGET) 2>nul || echo "File not found"
+	@echo "Remove the directory you copied npad.exe into, for example:"
+	@echo "  rmdir /s %LOCALAPPDATA%\Programs\npad"
 else
-	rm -f $(DESTDIR)/usr/local/bin/npad
+	rm -f $(DESTDIR)/usr/local/bin/npad $(DESTDIR)/usr/local/bin/npad-x11 $(DESTDIR)/usr/local/bin/npad-wayland $(DESTDIR)/usr/local/bin/npad-terminal
 endif
 
 # Help
@@ -247,7 +272,8 @@ help:
 	@echo "npad build system"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all              - Auto-detect platform and build"
+	@echo "  (default)        - Auto-detect platform and build"
+	@echo "  all              - Build Windows and Linux variants"
 	@echo "  windows          - Build all Windows variants (GUI + Terminal)"
 	@echo "  windows-gui      - Build Windows GUI version"
 	@echo "  windows-terminal - Build Windows Terminal version"
@@ -264,14 +290,16 @@ help:
 	@echo "  test             - Run all tests"
 	@echo "  test-file-ops    - Run file operations tests"
 	@echo "  test-error       - Run error system tests"
+	@echo "  test-encoding    - Run encoding/line-ending tests"
 	@echo "  clean            - Remove build artifacts"
-	@echo "  install          - Install to system"
-	@echo "  uninstall        - Remove from system"
+	@echo "  install          - Install to system (Linux)"
+	@echo "  uninstall        - Remove from system (Linux)"
 	@echo "  help             - Show this help"
 	@echo ""
 	@echo "Variables:"
 	@echo "  CC               - C compiler to use"
+	@echo "  MINGW_CC         - MinGW compiler for Windows builds"
 	@echo "  DEBUG=1          - Enable debug build"
 	@echo "  VERSION          - Version string (auto-detected from git)"
 
-.PHONY: all windows windows-gui windows-terminal linux linux-x11 linux-wayland linux-terminal terminal macos debug debug-windows debug-linux clean install uninstall lint format format-check test test-file-ops test-error help detect-platform
+.PHONY: all windows windows-gui windows-terminal linux linux-x11 linux-wayland linux-terminal terminal macos debug debug-windows debug-linux clean install uninstall lint format format-check test test-file-ops test-error test-encoding help detect-platform

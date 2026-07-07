@@ -15,7 +15,6 @@
 // Forward declarations for platform-specific types
 typedef struct Window Window;
 typedef struct Menu Menu;
-typedef struct Dialog Dialog;
 
 // Event types
 typedef enum {
@@ -34,7 +33,9 @@ typedef enum {
     UI_EVENT_EDIT_REPLACE,
     UI_EVENT_VIEW_TOGGLE_DARK_MODE,
     UI_EVENT_TEXT_CHANGED,
-    UI_EVENT_WINDOW_CLOSING
+    UI_EVENT_WINDOW_CLOSING,
+    UI_EVENT_AUTO_SAVE,   // Auto-save timer fired
+    UI_EVENT_FILE_DROPPED // File dragged onto the window; data = UTF-8 path
 } UIEventType;
 
 // Event structure
@@ -66,6 +67,13 @@ typedef struct {
     bool save_dialog;
 } FileDialogParams;
 
+// Result of the "save changes?" prompt (Notepad's three-way choice)
+typedef enum {
+    UI_SAVE_PROMPT_SAVE,    // Save the file, then continue
+    UI_SAVE_PROMPT_DISCARD, // Continue without saving
+    UI_SAVE_PROMPT_CANCEL   // Abort the operation
+} SavePromptResult;
+
 // Core UI functions
 bool ui_init(void);
 void ui_cleanup(void);
@@ -82,6 +90,8 @@ void ui_get_window_size(Window *window, int *width, int *height);
 void ui_set_window_size(Window *window, int width, int height);
 void ui_get_window_position(Window *window, int *x, int *y);
 void ui_set_window_position(Window *window, int x, int y);
+void ui_set_window_maximized(Window *window, bool maximized);
+bool ui_is_window_maximized(Window *window);
 
 // Text editing
 void ui_set_text(Window *window, const char *text);
@@ -108,12 +118,12 @@ bool ui_can_redo(Window *window);
 char *ui_show_open_dialog(Window *parent, const FileDialogParams *params);
 char *ui_show_save_dialog(Window *parent, const FileDialogParams *params);
 bool ui_show_message_box(Window *parent, const char *title, const char *message, bool is_question);
+SavePromptResult ui_show_save_prompt(Window *parent, const char *filename);
 void ui_show_about_dialog(Window *parent);
 
-// Find/Replace
-Dialog *ui_show_find_dialog(Window *parent);
-Dialog *ui_show_replace_dialog(Window *parent);
-void ui_close_dialog(Dialog *dialog);
+// Find/Replace (modeless dialogs owned and closed by the platform layer)
+void ui_show_find_dialog(Window *parent);
+void ui_show_replace_dialog(Window *parent);
 
 // Event handling
 void ui_set_event_handler(UIEventHandler handler);
@@ -129,6 +139,10 @@ bool ui_is_text_modified(Window *window);
 void ui_set_text_modified(Window *window, bool modified);
 int ui_get_line_count(Window *window);
 void ui_get_cursor_line_column(Window *window, int *line, int *column);
+void ui_set_status_info(Window *window, const char *encoding_name, const char *eol_name);
+
+// Auto-save timer (seconds; 0 disables). Fires UI_EVENT_AUTO_SAVE.
+void ui_set_auto_save_timer(Window *window, int seconds);
 
 // Platform-specific helpers (implemented per platform)
 void *ui_get_native_handle(Window *window);

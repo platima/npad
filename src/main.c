@@ -136,18 +136,21 @@ int main(int argc, char *argv[]) {
 
     // Load window state from settings
     int x, y, width, height;
-    bool maximized;
+    bool maximized = false;
     if (settings_load_window_state(&x, &y, &width, &height, &maximized)) {
         ui_set_window_position(main_window, x, y);
         ui_set_window_size(main_window, width, height);
     }
 
-    // Show the window
-    ui_show_window(main_window);
+    // Attach the window to the editor before it becomes visible so early
+    // UI events always see a valid main window
+    editor_set_main_window(main_window);
 
-    // Set the main window reference in editor
-    extern EditorState g_editor;
-    g_editor.main_window = main_window;
+    // Show the window, restoring maximized state if applicable
+    ui_show_window(main_window);
+    if (maximized) {
+        ui_set_window_maximized(main_window, true);
+    }
 
     // Open startup file if specified
     extern char *g_startup_file;
@@ -162,10 +165,10 @@ int main(int argc, char *argv[]) {
 
     DEBUG_PRINT("Message loop exited with code: %d", result);
 
-    // Save window state
+    // Save window state (restored geometry plus maximized flag)
     ui_get_window_position(main_window, &x, &y);
     ui_get_window_size(main_window, &width, &height);
-    settings_save_window_state(x, y, width, height, false); // TODO: detect maximized state
+    settings_save_window_state(x, y, width, height, ui_is_window_maximized(main_window));
 
     // Save settings
     settings_save();

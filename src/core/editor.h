@@ -10,26 +10,26 @@
 #define EDITOR_H
 
 #include "../ui_interface.h"
+#include "file_ops.h"
 #include <stdbool.h>
 
-// Editor state
+// Editor state. All editor functions run on the single UI thread; the
+// state is not shared across threads.
 typedef struct {
-    char *current_file;
+    char *current_file; // UTF-8 path, NULL for a new/untitled document
     bool is_modified;
     bool auto_save_enabled;
     int auto_save_interval; // seconds
+    TextFileInfo file_info; // Encoding and line endings of the current file
     Window *main_window;
-
-    // Memory management
-    size_t max_file_size;       // Maximum file size in bytes
-    size_t max_memory_usage;    // Maximum total memory usage in bytes
-    size_t current_text_size;   // Current text content size
-    bool memory_limit_warnings; // Show warnings when approaching limits
 } EditorState;
 
 // Core editor functions
 bool editor_init(void);
 void editor_cleanup(void);
+
+// Attach the main window (applies title, status bar info, auto-save timer)
+void editor_set_main_window(Window *window);
 
 // File operations
 bool editor_new_file(void);
@@ -46,11 +46,6 @@ void editor_select_all(void);
 void editor_undo(void);
 void editor_redo(void);
 
-// Search operations
-bool editor_find(const char *text, bool case_sensitive, bool whole_word);
-bool editor_replace(const char *find_text, const char *replace_text, bool case_sensitive,
-                    bool whole_word, bool replace_all);
-
 // State management
 bool editor_is_modified(void);
 void editor_set_modified(bool modified);
@@ -62,17 +57,6 @@ void editor_enable_auto_save(bool enabled);
 bool editor_is_auto_save_enabled(void);
 void editor_set_auto_save_interval(int seconds);
 int editor_get_auto_save_interval(void);
-
-// Memory management functions
-bool editor_check_memory_limits(size_t additional_bytes);
-bool editor_validate_file_size(const char *filename);
-size_t editor_get_current_memory_usage(void);
-size_t editor_get_text_length(void);
-bool editor_set_memory_limits(size_t max_file_size, size_t max_memory_usage);
-
-// Memory status and reporting
-void editor_show_memory_status(void);
-bool editor_is_approaching_memory_limit(void);
 
 // Event handling
 bool editor_handle_event(const UIEvent *event);

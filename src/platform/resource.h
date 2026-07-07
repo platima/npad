@@ -15,6 +15,7 @@
 // Dialog IDs
 #define IDD_FIND 200
 #define IDD_REPLACE 201
+#define IDD_GOTO 202
 
 // Control IDs for Find Dialog
 #define ID_FIND_TEXT 3001
@@ -31,6 +32,9 @@
 // Direction radio buttons
 #define IDC_RADIO_UP 3010
 #define IDC_RADIO_DOWN 3011
+
+// Go To Line dialog
+#define ID_GOTO_EDIT 3012
 
 // Static text controls
 #define IDC_STATIC -1

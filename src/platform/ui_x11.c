@@ -143,18 +143,12 @@ void ui_platform_show_about_dialog(Window *parent) {
     (void) parent;
 }
 
-Dialog *ui_platform_show_find_dialog(Window *parent) {
+void ui_platform_show_find_dialog(Window *parent) {
     (void) parent;
-    return NULL;
 }
-Dialog *ui_platform_show_replace_dialog(Window *parent) {
+void ui_platform_show_replace_dialog(Window *parent) {
     (void) parent;
-    return NULL;
 }
-void ui_platform_close_dialog(Dialog *dialog) {
-    (void) dialog;
-}
-
 void ui_platform_set_dark_mode(bool enabled) {
     (void) enabled;
 }
@@ -186,4 +180,31 @@ void ui_platform_get_cursor_line_column(Window *window, int *line, int *column) 
 void *ui_platform_get_native_handle(Window *window) {
     (void) window;
     return NULL;
+}
+
+SavePromptResult ui_platform_show_save_prompt(Window *parent, const char *filename) {
+    (void) parent;
+    (void) filename;
+    return UI_SAVE_PROMPT_DISCARD;
+}
+
+void ui_platform_set_status_info(Window *window, const char *encoding_name, const char *eol_name) {
+    (void) window;
+    (void) encoding_name;
+    (void) eol_name;
+}
+
+void ui_platform_set_auto_save_timer(Window *window, int seconds) {
+    (void) window;
+    (void) seconds;
+}
+
+void ui_platform_set_window_maximized(Window *window, bool maximized) {
+    (void) window;
+    (void) maximized;
+}
+
+bool ui_platform_is_window_maximized(Window *window) {
+    (void) window;
+    return false;
 }

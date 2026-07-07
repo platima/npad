@@ -2,6 +2,9 @@
  * npad - Editor Core Implementation
  * Core editor functionality and state management
  *
+ * All functions here run on the single UI thread (events are dispatched
+ * from the platform message loop), so editor state needs no locking.
+ *
  * Author: Platima
  * https://github.com/platima/npad
  */
@@ -10,220 +13,68 @@
 #include "error.h"
 #include "file_ops.h"
 #include "settings.h"
-#include "thread_safety.h"
-#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef _WIN32
-#define strnicmp _strnicmp
-#include <windows.h>
-#include <psapi.h>
-#else
-#include <strings.h>
-#include <sys/resource.h>
-#include <unistd.h>
-#define strnicmp strncasecmp
-#endif
-
-// Memory limit constants
-#define DEFAULT_MAX_FILE_SIZE (100 * 1024 * 1024) // 100MB
-#define DEFAULT_MAX_MEMORY (200 * 1024 * 1024)    // 200MB
-#define MEMORY_WARNING_THRESHOLD (0.8)            // Warn at 80% usage
-#define MEMORY_SAFETY_MARGIN (4 * 1024 * 1024)    // 4MB safety margin
+// Files larger than this (in MB, configurable via "large_file_warning_mb")
+// prompt for confirmation before opening. 0 disables the prompt.
+#define DEFAULT_LARGE_FILE_WARNING_MB 100
 
 // Global editor state
 EditorState g_editor = { 0 };
 char *g_startup_file = NULL;
 
-// Get current process memory usage
-static size_t get_process_memory_usage(void) {
-#ifdef _WIN32
-    PROCESS_MEMORY_COUNTERS pmc;
-    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
-        return pmc.WorkingSetSize;
+static char *duplicate_string(const char *str) {
+    if (!str)
+        return NULL;
+    char *copy = malloc(strlen(str) + 1);
+    if (copy) {
+        strcpy(copy, str);
     }
-    return 0;
-#else
-    struct rusage usage;
-    if (getrusage(RUSAGE_SELF, &usage) == 0) {
-        return usage.ru_maxrss * 1024; // Convert KB to bytes on Linux
-    }
-    return 0;
-#endif
+    return copy;
 }
 
-// Estimate memory usage for a text buffer
-static size_t estimate_text_memory_usage(size_t text_length) {
-    // Account for:
-    // - The text itself
-    // - UI control overhead (estimated 2x for rich text controls)
-    // - Undo/redo buffers (estimated 1x)
-    // - Internal string overhead (estimated 0.5x)
-    return text_length * 4;
+// Push the current file's encoding/line-ending info to the status bar
+static void editor_update_status_info(void) {
+    if (g_editor.main_window) {
+        ui_set_status_info(g_editor.main_window, file_encoding_name(g_editor.file_info.encoding),
+                           file_line_ending_name(g_editor.file_info.line_ending));
+    }
 }
 
-// Check if operation would exceed memory limits
-bool editor_check_memory_limits(size_t additional_bytes) {
-    npad_mutex_lock(&g_editor_mutex);
-
-    size_t current_process_memory = get_process_memory_usage();
-    size_t estimated_new_usage = current_process_memory + additional_bytes;
-
-    bool within_limits = (estimated_new_usage + MEMORY_SAFETY_MARGIN <= g_editor.max_memory_usage);
-
-    // Check for warning threshold
-    if (within_limits && g_editor.memory_limit_warnings) {
-        double usage_ratio = (double) estimated_new_usage / g_editor.max_memory_usage;
-        if (usage_ratio >= MEMORY_WARNING_THRESHOLD) {
-            npad_mutex_unlock(&g_editor_mutex);
-
-            char warning_msg[512];
-            snprintf(warning_msg, sizeof(warning_msg),
-                     "Memory usage is approaching limits:\n"
-                     "Current: %.1f MB / %.1f MB (%.1f%%)\n"
-                     "Continue with this operation?",
-                     estimated_new_usage / (1024.0 * 1024.0),
-                     g_editor.max_memory_usage / (1024.0 * 1024.0), usage_ratio * 100.0);
-
-            return ui_show_message_box(g_editor.main_window, "Memory Warning", warning_msg, true);
-        }
+// Apply the auto-save settings to the platform timer
+static void editor_apply_auto_save_timer(void) {
+    if (g_editor.main_window) {
+        ui_set_auto_save_timer(g_editor.main_window,
+                               g_editor.auto_save_enabled ? g_editor.auto_save_interval : 0);
     }
-
-    npad_mutex_unlock(&g_editor_mutex);
-    return within_limits;
-}
-
-// Validate file size before opening
-bool editor_validate_file_size(const char *filename) {
-    if (!filename) {
-        return false;
-    }
-
-    size_t file_size = file_get_size(filename);
-    if (file_size == 0) {
-        return true; // Empty file or size check failed, allow it
-    }
-
-    npad_mutex_lock(&g_editor_mutex);
-    bool size_ok = (file_size <= g_editor.max_file_size);
-    npad_mutex_unlock(&g_editor_mutex);
-
-    if (!size_ok) {
-        char error_msg[512];
-        snprintf(error_msg, sizeof(error_msg),
-                 "File is too large to open:\n"
-                 "File size: %.2f MB\n"
-                 "Maximum allowed: %.2f MB",
-                 file_size / (1024.0 * 1024.0), g_editor.max_file_size / (1024.0 * 1024.0));
-
-        ui_show_message_box(g_editor.main_window, "File Too Large", error_msg, false);
-        return false;
-    }
-
-    // Check if loading this file would exceed memory limits
-    size_t estimated_memory = estimate_text_memory_usage(file_size);
-    if (!editor_check_memory_limits(estimated_memory)) {
-        char error_msg[512];
-        snprintf(error_msg, sizeof(error_msg),
-                 "Loading this file would exceed memory limits:\n"
-                 "Estimated memory needed: %.2f MB\n"
-                 "Current memory usage: %.2f MB\n"
-                 "Maximum allowed: %.2f MB",
-                 estimated_memory / (1024.0 * 1024.0),
-                 get_process_memory_usage() / (1024.0 * 1024.0),
-                 g_editor.max_memory_usage / (1024.0 * 1024.0));
-
-        ui_show_message_box(g_editor.main_window, "Memory Limit Exceeded", error_msg, false);
-        return false;
-    }
-
-    return true;
-}
-
-// Get current memory usage
-size_t editor_get_current_memory_usage(void) {
-    return get_process_memory_usage();
-}
-
-// Get current text length
-size_t editor_get_text_length(void) {
-    if (!g_editor.main_window) {
-        return 0;
-    }
-
-    char *text = ui_get_text(g_editor.main_window);
-    if (!text) {
-        return 0;
-    }
-
-    size_t length = strlen(text);
-    free(text);
-    return length;
-}
-
-// Set memory limits
-bool editor_set_memory_limits(size_t max_file_size, size_t max_memory_usage) {
-    if (max_file_size == 0 || max_memory_usage == 0) {
-        return false;
-    }
-
-    npad_mutex_lock(&g_editor_mutex);
-    g_editor.max_file_size = max_file_size;
-    g_editor.max_memory_usage = max_memory_usage;
-    npad_mutex_unlock(&g_editor_mutex);
-
-    // Save to settings
-    settings_set_int("max_file_size_mb", (int) (max_file_size / (1024 * 1024)));
-    settings_set_int("max_memory_usage_mb", (int) (max_memory_usage / (1024 * 1024)));
-
-    return true;
 }
 
 bool editor_init(void) {
-    npad_mutex_lock(&g_editor_mutex);
     memset(&g_editor, 0, sizeof(EditorState));
 
-    // Load settings
-    g_editor.auto_save_enabled = settings_get_bool("auto_save_enabled", true); // Enabled by default
-    g_editor.auto_save_interval = settings_get_int("auto_save_interval", 300); // 5 minutes default
-
-    // Load memory limit settings
-    int max_file_size_mb =
-        settings_get_int("max_file_size_mb", DEFAULT_MAX_FILE_SIZE / (1024 * 1024));
-    int max_memory_mb = settings_get_int("max_memory_usage_mb", DEFAULT_MAX_MEMORY / (1024 * 1024));
-    g_editor.max_file_size = (size_t) max_file_size_mb * 1024 * 1024;
-    g_editor.max_memory_usage = (size_t) max_memory_mb * 1024 * 1024;
-    g_editor.memory_limit_warnings = settings_get_bool("memory_limit_warnings", true);
-    g_editor.current_text_size = 0;
-
-    // Validate memory limits
-    if (g_editor.max_file_size < 1024 * 1024) { // Minimum 1MB
-        g_editor.max_file_size = DEFAULT_MAX_FILE_SIZE;
-    }
-    if (g_editor.max_memory_usage < 10 * 1024 * 1024) { // Minimum 10MB
-        g_editor.max_memory_usage = DEFAULT_MAX_MEMORY;
+    g_editor.auto_save_enabled = settings_get_bool("auto_save_enabled", true);
+    g_editor.auto_save_interval = settings_get_int("auto_save_interval", 300);
+    if (g_editor.auto_save_interval < 10) {
+        g_editor.auto_save_interval = 10; // Sanity floor
     }
 
-    npad_mutex_unlock(&g_editor_mutex);
+    // New documents default to modern Notepad conventions
+    g_editor.file_info.encoding = NPAD_ENC_UTF8;
+    g_editor.file_info.line_ending = NPAD_EOL_CRLF;
 
-    // Set event handler
     ui_set_event_handler(editor_handle_event);
 
     return true;
 }
 
 void editor_cleanup(void) {
-    npad_mutex_lock(&g_editor_mutex);
-
     if (g_editor.current_file) {
         free(g_editor.current_file);
         g_editor.current_file = NULL;
     }
-
-    npad_mutex_unlock(&g_editor_mutex);
 
     if (g_startup_file) {
         free(g_startup_file);
@@ -231,31 +82,33 @@ void editor_cleanup(void) {
     }
 }
 
+void editor_set_main_window(Window *window) {
+    g_editor.main_window = window;
+    editor_update_title();
+    editor_update_status_info();
+    editor_apply_auto_save_timer();
+}
+
 bool editor_new_file(void) {
     // Check if current file needs saving
-    if (g_editor.is_modified && !editor_prompt_save_changes()) {
+    if (!editor_prompt_save_changes()) {
         return false; // User cancelled
     }
 
-    npad_mutex_lock(&g_editor_mutex);
-
-    // Clear the editor
     if (g_editor.main_window) {
         ui_clear_text(g_editor.main_window);
     }
 
-    // Reset state
     if (g_editor.current_file) {
         free(g_editor.current_file);
         g_editor.current_file = NULL;
     }
 
-    g_editor.is_modified = false;
-    g_editor.current_text_size = 0;
+    g_editor.file_info.encoding = NPAD_ENC_UTF8;
+    g_editor.file_info.line_ending = NPAD_EOL_CRLF;
 
-    npad_mutex_unlock(&g_editor_mutex);
-
-    editor_update_title();
+    editor_set_modified(false);
+    editor_update_status_info();
 
     return true;
 }
@@ -264,82 +117,67 @@ bool editor_open_file(const char *filename) {
     if (!filename)
         return false;
 
-    // Validate file size before opening
-    if (!editor_validate_file_size(filename)) {
-        return false;
-    }
-
     // Check if current file needs saving
-    if (g_editor.is_modified && !editor_prompt_save_changes()) {
+    if (!editor_prompt_save_changes()) {
         return false; // User cancelled
     }
 
-    // Load file content
-    char *content = file_read_text(filename);
+    // Warn before opening very large files
+    int warn_mb = settings_get_int("large_file_warning_mb", DEFAULT_LARGE_FILE_WARNING_MB);
+    if (warn_mb > 0) {
+        size_t size = file_get_size(filename);
+        if (size > (size_t) warn_mb * 1024 * 1024) {
+            char message[512];
+            snprintf(message, sizeof(message),
+                     "The file is %.1f MB and may take a while to open.\n"
+                     "Do you want to continue?",
+                     size / (1024.0 * 1024.0));
+            if (!ui_show_message_box(g_editor.main_window, "npad", message, true)) {
+                return false;
+            }
+        }
+    }
+
+    // Load file content, detecting encoding and line endings
+    TextFileInfo info;
+    char *content = file_read_text_ex(filename, &info);
     if (!content) {
         char error_msg[512];
-        snprintf(error_msg, sizeof(error_msg), "Could not open file: %s\nError: %s", filename,
+        snprintf(error_msg, sizeof(error_msg), "Could not open file: %.300s\n%.150s", filename,
                  file_get_last_error());
         ui_show_message_box(g_editor.main_window, "Error", error_msg, false);
         return false;
     }
 
-    // Final memory check with actual content size
-    size_t content_length = strlen(content);
-    size_t estimated_memory = estimate_text_memory_usage(content_length);
-
-    if (!editor_check_memory_limits(estimated_memory)) {
+    char *new_path = duplicate_string(filename);
+    if (!new_path) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, filename,
+                         "Failed to allocate memory for current file path");
         free(content);
-        char error_msg[512];
-        snprintf(error_msg, sizeof(error_msg),
-                 "Cannot load file: would exceed memory limits\n"
-                 "File size: %.2f MB\n"
-                 "Estimated memory usage: %.2f MB",
-                 content_length / (1024.0 * 1024.0), estimated_memory / (1024.0 * 1024.0));
-        ui_show_message_box(g_editor.main_window, "Memory Limit", error_msg, false);
         return false;
     }
 
-    npad_mutex_lock(&g_editor_mutex);
-
-    // Set content in editor
     if (g_editor.main_window) {
         ui_set_text(g_editor.main_window, content);
     }
-
-    // Update current text size
-    g_editor.current_text_size = content_length;
-
     free(content);
 
-    // Update state
     if (g_editor.current_file) {
         free(g_editor.current_file);
     }
+    g_editor.current_file = new_path;
+    g_editor.file_info = info;
 
-    g_editor.current_file = malloc(strlen(filename) + 1);
-    if (!g_editor.current_file) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, filename,
-                         "Failed to allocate memory for current file path");
-        npad_mutex_unlock(&g_editor_mutex);
-        return false;
-    }
-    strcpy(g_editor.current_file, filename);
-    g_editor.is_modified = false;
+    settings_add_recent_file(filename);
 
-    npad_mutex_unlock(&g_editor_mutex);
-
-    editor_update_title();
+    editor_set_modified(false);
+    editor_update_status_info();
 
     return true;
 }
 
 bool editor_save_file(void) {
-    npad_mutex_lock(&g_editor_mutex);
-
     if (!g_editor.current_file) {
-        npad_mutex_unlock(&g_editor_mutex);
-
         // No current file, prompt for save as
         FileDialogParams params = { .title = "Save As",
                                     .default_filename = "Untitled.txt",
@@ -356,49 +194,25 @@ bool editor_save_file(void) {
         return result;
     }
 
-    // Save to current file
-    if (!g_editor.main_window) {
-        npad_mutex_unlock(&g_editor_mutex);
+    if (!g_editor.main_window)
         return false;
-    }
-
-    npad_mutex_unlock(&g_editor_mutex);
 
     char *content = ui_get_text(g_editor.main_window);
     if (!content)
         return false;
 
-    npad_mutex_lock(&g_editor_mutex);
-    char *current_file_copy = NULL;
-    if (g_editor.current_file) {
-        current_file_copy = malloc(strlen(g_editor.current_file) + 1);
-        if (current_file_copy) {
-            strcpy(current_file_copy, g_editor.current_file);
-        }
-    }
-    npad_mutex_unlock(&g_editor_mutex);
-
-    if (!current_file_copy) {
-        free(content);
-        return false;
-    }
-
-    bool success = file_write_text(current_file_copy, content);
+    bool success = file_write_text_ex(g_editor.current_file, content, &g_editor.file_info);
     free(content);
 
     if (success) {
-        npad_mutex_lock(&g_editor_mutex);
-        g_editor.is_modified = false;
-        npad_mutex_unlock(&g_editor_mutex);
-        editor_update_title();
+        editor_set_modified(false);
     } else {
         char error_msg[512];
-        snprintf(error_msg, sizeof(error_msg), "Could not save file: %s\nError: %s",
-                 current_file_copy, file_get_last_error());
+        snprintf(error_msg, sizeof(error_msg), "Could not save file: %.300s\n%.150s",
+                 g_editor.current_file, file_get_last_error());
         ui_show_message_box(g_editor.main_window, "Error", error_msg, false);
     }
 
-    free(current_file_copy);
     return success;
 }
 
@@ -410,33 +224,28 @@ bool editor_save_file_as(const char *filename) {
     if (!content)
         return false;
 
-    bool success = file_write_text(filename, content);
+    bool success = file_write_text_ex(filename, content, &g_editor.file_info);
     free(content);
 
     if (success) {
-        npad_mutex_lock(&g_editor_mutex);
+        char *new_path = duplicate_string(filename);
+        if (!new_path) {
+            NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, filename,
+                             "Failed to allocate memory for new file path");
+            return false;
+        }
 
-        // Update current file
         if (g_editor.current_file) {
             free(g_editor.current_file);
         }
+        g_editor.current_file = new_path;
 
-        g_editor.current_file = malloc(strlen(filename) + 1);
-        if (!g_editor.current_file) {
-            NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, filename,
-                             "Failed to allocate memory for new file path");
-            npad_mutex_unlock(&g_editor_mutex);
-            return false;
-        }
-        strcpy(g_editor.current_file, filename);
-        g_editor.is_modified = false;
-
-        npad_mutex_unlock(&g_editor_mutex);
-
-        editor_update_title();
+        settings_add_recent_file(filename);
+        editor_set_modified(false);
+        editor_update_status_info();
     } else {
         char error_msg[512];
-        snprintf(error_msg, sizeof(error_msg), "Could not save file: %s\nError: %s", filename,
+        snprintf(error_msg, sizeof(error_msg), "Could not save file: %.300s\n%.150s", filename,
                  file_get_last_error());
         ui_show_message_box(g_editor.main_window, "Error", error_msg, false);
     }
@@ -445,11 +254,6 @@ bool editor_save_file_as(const char *filename) {
 }
 
 bool editor_close_file(void) {
-    // Check if current file needs saving
-    if (g_editor.is_modified && !editor_prompt_save_changes()) {
-        return false; // User cancelled
-    }
-
     return editor_new_file();
 }
 
@@ -466,64 +270,8 @@ void editor_copy(void) {
 }
 
 void editor_paste(void) {
-    if (!g_editor.main_window) {
-        return;
-    }
-
-    // Get current text length before paste
-    size_t current_length = editor_get_text_length();
-
-    // Proceed with paste operation
-    ui_paste(g_editor.main_window);
-
-    // Check new text length after paste
-    size_t new_length = editor_get_text_length();
-
-    // Validate the new size
-    npad_mutex_lock(&g_editor_mutex);
-    bool within_file_limit = (new_length <= g_editor.max_file_size);
-    g_editor.current_text_size = new_length;
-    npad_mutex_unlock(&g_editor_mutex);
-
-    if (!within_file_limit) {
-        // Undo the paste operation
-        ui_undo(g_editor.main_window);
-
-        char error_msg[512];
-        snprintf(error_msg, sizeof(error_msg),
-                 "Paste operation exceeded file size limit\n"
-                 "Operation has been undone.\n"
-                 "Current text: %.2f MB\n"
-                 "Maximum allowed: %.2f MB",
-                 new_length / (1024.0 * 1024.0), g_editor.max_file_size / (1024.0 * 1024.0));
-        ui_show_message_box(g_editor.main_window, "File Size Limit", error_msg, false);
-
-        // Update size after undo
-        npad_mutex_lock(&g_editor_mutex);
-        g_editor.current_text_size = current_length;
-        npad_mutex_unlock(&g_editor_mutex);
-        return;
-    }
-
-    // Check memory usage
-    size_t estimated_memory = estimate_text_memory_usage(new_length);
-    if (!editor_check_memory_limits(0)) { // Check current usage
-        // Undo the paste operation
-        ui_undo(g_editor.main_window);
-
-        char error_msg[512];
-        snprintf(error_msg, sizeof(error_msg),
-                 "Paste operation exceeded memory limits\n"
-                 "Operation has been undone.\n"
-                 "Text size: %.2f MB\n"
-                 "Estimated memory: %.2f MB",
-                 new_length / (1024.0 * 1024.0), estimated_memory / (1024.0 * 1024.0));
-        ui_show_message_box(g_editor.main_window, "Memory Limit", error_msg, false);
-
-        // Update size after undo
-        npad_mutex_lock(&g_editor_mutex);
-        g_editor.current_text_size = current_length;
-        npad_mutex_unlock(&g_editor_mutex);
+    if (g_editor.main_window) {
+        ui_paste(g_editor.main_window);
     }
 }
 
@@ -545,312 +293,12 @@ void editor_redo(void) {
     }
 }
 
-bool editor_find(const char *text, bool case_sensitive, bool whole_word) {
-    if (!text) {
-        NPAD_ERROR_INVALID_PARAM("text");
-        return false;
-    }
-
-    if (strlen(text) == 0) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, "find operation",
-                         "Empty search text provided");
-        return false;
-    }
-
-    if (!g_editor.main_window) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_EDITOR, 0, "find operation", "No main window available");
-        return false;
-    }
-
-    char *content = ui_get_text(g_editor.main_window);
-    if (!content) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_UI, 0, "find operation",
-                         "Failed to get text content from main window");
-        return false;
-    }
-
-    int cursor_pos = ui_get_cursor_position(g_editor.main_window);
-    size_t content_len = strlen(content);
-
-    // Bounds checking
-    if (cursor_pos < 0)
-        cursor_pos = 0;
-    if ((size_t) cursor_pos >= content_len) {
-        free(content);
-        return false;
-    }
-
-    char *search_start = content + cursor_pos;
-    char *found = NULL;
-
-    if (case_sensitive) {
-        if (whole_word) {
-            // Case-sensitive whole word search
-            char *pos = search_start;
-            size_t text_len = strlen(text);
-            while ((pos = strstr(pos, text)) != NULL) {
-                // Check if it's a whole word
-                bool is_start = (pos == content || !isalnum((unsigned char) *(pos - 1)));
-                bool is_end = !isalnum((unsigned char) *(pos + text_len));
-                if (is_start && is_end) {
-                    found = pos;
-                    break;
-                }
-                pos++;
-            }
-        } else {
-            // Case-sensitive search
-            found = strstr(search_start, text);
-        }
-    } else {
-        // Case-insensitive search - simplified implementation
-        size_t text_len = strlen(text);
-        char *pos = search_start;
-        char *content_end = content + content_len;
-
-        while (pos <= content_end - text_len) {
-            if (strnicmp(pos, text, text_len) == 0) {
-                if (!whole_word || ((pos == content || !isalnum((unsigned char) *(pos - 1))) &&
-                                    !isalnum((unsigned char) *(pos + text_len)))) {
-                    found = pos;
-                    break;
-                }
-            }
-            pos++;
-        }
-    }
-
-    bool result = false;
-    if (found) {
-        int found_pos = (int) (found - content);
-        ui_set_cursor_position(g_editor.main_window, found_pos);
-        // Select the found text
-        ui_set_cursor_position(g_editor.main_window, found_pos + (int) strlen(text));
-        result = true;
-    }
-
-    free(content);
-    return result;
-}
-
-bool editor_replace(const char *find_text, const char *replace_text, bool case_sensitive,
-                    bool whole_word, bool replace_all) {
-    if (!find_text) {
-        NPAD_ERROR_INVALID_PARAM("find_text");
-        return false;
-    }
-
-    if (!replace_text) {
-        NPAD_ERROR_INVALID_PARAM("replace_text");
-        return false;
-    }
-
-    if (strlen(find_text) == 0) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, "replace operation",
-                         "Empty find text provided");
-        return false;
-    }
-
-    if (!g_editor.main_window) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_EDITOR, 0, "replace operation", "No main window available");
-        return false;
-    }
-
-    char *content = ui_get_text(g_editor.main_window);
-    if (!content) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_UI, 0, "replace operation",
-                         "Failed to get text content from main window");
-        return false;
-    }
-
-    size_t content_len = strlen(content);
-    size_t find_len = strlen(find_text);
-    size_t replace_len = strlen(replace_text);
-
-    // Prevent potential integer overflow in size calculations
-    const size_t MAX_CONTENT_SIZE = 50 * 1024 * 1024; // 50MB limit
-    if (content_len > MAX_CONTENT_SIZE) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, "replace operation",
-                         "Content too large for replace operation");
-        free(content);
-        return false;
-    }
-
-    // Count replacements needed first
-    int replacement_count = 0;
-    char *pos = content;
-    char *content_end = content + content_len;
-
-    while (pos <= content_end - find_len) {
-        char *match = NULL;
-        if (case_sensitive) {
-            match = strstr(pos, find_text);
-            if (match && match < pos)
-                break; // Sanity check
-        } else {
-            // Case-insensitive search
-            for (char *p = pos; p <= content_end - find_len; p++) {
-                if (strnicmp(p, find_text, find_len) == 0) {
-                    if (!whole_word || ((p == content || !isalnum((unsigned char) *(p - 1))) &&
-                                        !isalnum((unsigned char) *(p + find_len)))) {
-                        match = p;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (match && match >= pos && match <= content_end - find_len) {
-            if (whole_word && case_sensitive) {
-                // Check word boundaries
-                bool is_start = (match == content || !isalnum((unsigned char) *(match - 1)));
-                bool is_end = !isalnum((unsigned char) *(match + find_len));
-                if (!is_start || !is_end) {
-                    pos = match + 1;
-                    continue;
-                }
-            }
-            replacement_count++;
-            pos = match + find_len;
-            if (!replace_all)
-                break;
-        } else {
-            break;
-        }
-
-        // Prevent infinite loops
-        if (replacement_count > 100000) {
-            NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, "replace operation",
-                             "Too many replacements requested (limit: 100000)");
-            free(content);
-            return false;
-        }
-    }
-
-    if (replacement_count == 0) {
-        free(content);
-        return false;
-    }
-
-    // Calculate new content size with overflow protection
-    size_t size_diff = 0;
-    if (replace_len >= find_len) {
-        size_diff = (replace_len - find_len) * replacement_count;
-        // Check for overflow
-        if (size_diff / replacement_count != (replace_len - find_len)) {
-            NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, "replace operation",
-                             "Replace operation would cause size overflow");
-            free(content);
-            return false;
-        }
-    } else {
-        size_diff = (find_len - replace_len) * replacement_count;
-    }
-
-    size_t new_size;
-    if (replace_len >= find_len) {
-        new_size = content_len + size_diff + 1;
-        if (new_size < content_len) { // Overflow check
-            NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, "replace operation",
-                             "Replace operation would cause size overflow");
-            free(content);
-            return false;
-        }
-    } else {
-        new_size = content_len - size_diff + 1;
-    }
-
-    if (new_size > MAX_CONTENT_SIZE) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, "replace operation",
-                         "Result would be too large");
-        free(content);
-        return false;
-    }
-
-    // Allocate new content buffer
-    char *new_content = malloc(new_size);
-    if (!new_content) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, "replace operation",
-                         "Failed to allocate memory for replacement content (size: %zu)", new_size);
-        free(content);
-        return false;
-    }
-
-    // Perform replacements
-    char *src = content;
-    char *dst = new_content;
-    int replacements_done = 0;
-
-    while (*src && (replace_all || replacements_done == 0)) {
-        char *match = NULL;
-        if (case_sensitive) {
-            match = strstr(src, find_text);
-        } else {
-            for (char *p = src; *p && p <= content_end - find_len; p++) {
-                if (strnicmp(p, find_text, find_len) == 0) {
-                    if (!whole_word || ((p == content || !isalnum((unsigned char) *(p - 1))) &&
-                                        !isalnum((unsigned char) *(p + find_len)))) {
-                        match = p;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (match && match >= src) {
-            if (whole_word && case_sensitive) {
-                bool is_start = (match == content || !isalnum((unsigned char) *(match - 1)));
-                bool is_end = !isalnum((unsigned char) *(match + find_len));
-                if (!is_start || !is_end) {
-                    *dst++ = *src++;
-                    continue;
-                }
-            }
-
-            // Copy text before match
-            while (src < match) {
-                *dst++ = *src++;
-            }
-
-            // Copy replacement text - we've pre-calculated buffer size so this should fit
-            strncpy(dst, replace_text, replace_len);
-            dst += replace_len;
-            src += find_len;
-            replacements_done++;
-        } else {
-            *dst++ = *src++;
-        }
-    }
-
-    // Copy remaining text
-    while (*src) {
-        *dst++ = *src++;
-    }
-    *dst = '\0';
-
-    // Update editor content
-    ui_set_text(g_editor.main_window, new_content);
-
-    npad_mutex_lock(&g_editor_mutex);
-    g_editor.is_modified = true;
-    npad_mutex_unlock(&g_editor_mutex);
-
-    editor_update_title();
-
-    free(content);
-    free(new_content);
-    return replacements_done > 0;
-}
-
 bool editor_is_modified(void) {
     return g_editor.is_modified;
 }
 
 void editor_set_modified(bool modified) {
-    npad_mutex_lock(&g_editor_mutex);
     g_editor.is_modified = modified;
-    npad_mutex_unlock(&g_editor_mutex);
-
     if (g_editor.main_window) {
         ui_set_text_modified(g_editor.main_window, modified);
     }
@@ -868,21 +316,18 @@ void editor_set_startup_file(const char *filename) {
     }
 
     if (filename) {
-        g_startup_file = malloc(strlen(filename) + 1);
+        g_startup_file = duplicate_string(filename);
         if (!g_startup_file) {
             NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, filename,
                              "Failed to allocate memory for startup file path");
-            return;
         }
-        strcpy(g_startup_file, filename);
     }
 }
 
 void editor_enable_auto_save(bool enabled) {
-    npad_mutex_lock(&g_editor_mutex);
     g_editor.auto_save_enabled = enabled;
-    npad_mutex_unlock(&g_editor_mutex);
     settings_set_bool("auto_save_enabled", enabled);
+    editor_apply_auto_save_timer();
 }
 
 bool editor_is_auto_save_enabled(void) {
@@ -890,10 +335,12 @@ bool editor_is_auto_save_enabled(void) {
 }
 
 void editor_set_auto_save_interval(int seconds) {
-    npad_mutex_lock(&g_editor_mutex);
+    if (seconds < 10) {
+        seconds = 10;
+    }
     g_editor.auto_save_interval = seconds;
-    npad_mutex_unlock(&g_editor_mutex);
     settings_set_int("auto_save_interval", seconds);
+    editor_apply_auto_save_timer();
 }
 
 int editor_get_auto_save_interval(void) {
@@ -906,7 +353,7 @@ bool editor_handle_event(const UIEvent *event) {
 
     switch (event->type) {
         case UI_EVENT_QUIT:
-            if (g_editor.is_modified && !editor_prompt_save_changes()) {
+            if (!editor_prompt_save_changes()) {
                 return false; // Cancel quit
             }
             ui_quit();
@@ -948,6 +395,19 @@ bool editor_handle_event(const UIEvent *event) {
             return true;
         }
 
+        case UI_EVENT_FILE_DROPPED:
+            if (event->data) {
+                editor_open_file((const char *) event->data);
+            }
+            return true;
+
+        case UI_EVENT_AUTO_SAVE:
+            // Silent auto-save: only for documents that already have a file
+            if (g_editor.auto_save_enabled && g_editor.is_modified && g_editor.current_file) {
+                editor_save_file();
+            }
+            return true;
+
         case UI_EVENT_EDIT_UNDO:
             editor_undo();
             return true;
@@ -973,23 +433,23 @@ bool editor_handle_event(const UIEvent *event) {
             return true;
 
         case UI_EVENT_EDIT_FIND:
-            // TODO: Show find dialog
+            ui_show_find_dialog(g_editor.main_window);
             return true;
 
         case UI_EVENT_EDIT_REPLACE:
-            // TODO: Show replace dialog
+            ui_show_replace_dialog(g_editor.main_window);
             return true;
 
         case UI_EVENT_VIEW_TOGGLE_DARK_MODE:
             ui_set_dark_mode(!ui_is_dark_mode());
+            settings_set_string("theme", ui_is_dark_mode() ? "dark" : "light");
             return true;
+
         case UI_EVENT_TEXT_CHANGED:
-            npad_mutex_lock(&g_editor_mutex);
-            g_editor.is_modified = true;
-            // Update current text size tracking
-            g_editor.current_text_size = editor_get_text_length();
-            npad_mutex_unlock(&g_editor_mutex);
-            editor_update_title();
+            if (!g_editor.is_modified) {
+                g_editor.is_modified = true;
+                editor_update_title();
+            }
             return true;
 
         case UI_EVENT_WINDOW_CLOSING:
@@ -1001,106 +461,47 @@ bool editor_handle_event(const UIEvent *event) {
     }
 }
 
+// Notepad's three-way prompt. Returns true when the pending operation may
+// proceed (saved or discarded), false when the user cancelled or the save
+// failed.
 bool editor_prompt_save_changes(void) {
     if (!g_editor.is_modified)
         return true;
 
-    npad_mutex_lock(&g_editor_mutex);
     const char *filename = g_editor.current_file ? g_editor.current_file : "Untitled";
-    char *filename_copy = malloc(strlen(filename) + 1);
-    if (filename_copy) {
-        strcpy(filename_copy, filename);
+
+    switch (ui_show_save_prompt(g_editor.main_window, filename)) {
+        case UI_SAVE_PROMPT_SAVE:
+            return editor_save_file();
+        case UI_SAVE_PROMPT_DISCARD:
+            return true;
+        case UI_SAVE_PROMPT_CANCEL:
+        default:
+            return false;
     }
-    npad_mutex_unlock(&g_editor_mutex);
-
-    if (!filename_copy) {
-        return true; // Fail gracefully
-    }
-
-    char message[512];
-    snprintf(message, sizeof(message), "Do you want to save changes to %.400s?", filename_copy);
-    free(filename_copy);
-
-    // This should return: true for Yes/No, false for Cancel
-    // For now, we'll use a simple message box
-    return ui_show_message_box(g_editor.main_window, "npad", message, true);
 }
 
 void editor_update_title(void) {
     if (!g_editor.main_window)
         return;
 
-    npad_mutex_lock(&g_editor_mutex);
-
     const char *filename = g_editor.current_file ? g_editor.current_file : "Untitled";
-    bool is_modified = g_editor.is_modified;
-
-    // Create copies to work with outside the mutex
-    char *filename_copy = malloc(strlen(filename) + 1);
-    if (!filename_copy) {
-        npad_mutex_unlock(&g_editor_mutex);
-        return;
-    }
-    strcpy(filename_copy, filename);
-
-    npad_mutex_unlock(&g_editor_mutex);
 
     // Extract just the filename from the full path
-    const char *display_name = filename_copy;
-    const char *last_slash = strrchr(filename_copy, '/');
-    const char *last_backslash = strrchr(filename_copy, '\\');
-
-    if (last_slash || last_backslash) {
-        const char *separator = (last_slash > last_backslash) ? last_slash : last_backslash;
+    const char *display_name = filename;
+    const char *last_slash = strrchr(filename, '/');
+    const char *last_backslash = strrchr(filename, '\\');
+    const char *separator = last_slash;
+    if (!separator || (last_backslash && last_backslash > separator)) {
+        separator = last_backslash;
+    }
+    if (separator) {
         display_name = separator + 1;
     }
 
     char title[512];
-    snprintf(title, sizeof(title), "%s%.400s - npad", is_modified ? "*" : "", display_name);
+    snprintf(title, sizeof(title), "%s%.400s - npad", g_editor.is_modified ? "*" : "",
+             display_name);
 
     ui_set_window_title(g_editor.main_window, title);
-    free(filename_copy);
-}
-
-// Show memory status information
-void editor_show_memory_status(void) {
-    size_t current_memory = get_process_memory_usage();
-    size_t current_text_size = editor_get_text_length();
-
-    npad_mutex_lock(&g_editor_mutex);
-    size_t max_memory = g_editor.max_memory_usage;
-    size_t max_file_size = g_editor.max_file_size;
-    npad_mutex_unlock(&g_editor_mutex);
-
-    double memory_usage_percent = (double) current_memory / max_memory * 100.0;
-    double file_size_percent = (double) current_text_size / max_file_size * 100.0;
-
-    char status_msg[1024];
-    snprintf(status_msg, sizeof(status_msg),
-             "Memory Usage Status:\n\n"
-             "Process Memory: %.2f MB / %.2f MB (%.1f%%)\n"
-             "Current Text: %.2f MB / %.2f MB (%.1f%%)\n\n"
-             "Limits:\n"
-             "- Maximum file size: %.2f MB\n"
-             "- Maximum memory usage: %.2f MB\n"
-             "- Memory warnings: %s",
-             current_memory / (1024.0 * 1024.0), max_memory / (1024.0 * 1024.0),
-             memory_usage_percent, current_text_size / (1024.0 * 1024.0),
-             max_file_size / (1024.0 * 1024.0), file_size_percent,
-             max_file_size / (1024.0 * 1024.0), max_memory / (1024.0 * 1024.0),
-             g_editor.memory_limit_warnings ? "Enabled" : "Disabled");
-
-    ui_show_message_box(g_editor.main_window, "Memory Status", status_msg, false);
-}
-
-// Check if approaching memory limits
-bool editor_is_approaching_memory_limit(void) {
-    size_t current_memory = get_process_memory_usage();
-
-    npad_mutex_lock(&g_editor_mutex);
-    size_t max_memory = g_editor.max_memory_usage;
-    npad_mutex_unlock(&g_editor_mutex);
-
-    double usage_ratio = (double) current_memory / max_memory;
-    return usage_ratio >= MEMORY_WARNING_THRESHOLD;
 }
