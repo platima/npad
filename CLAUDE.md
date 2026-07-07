@@ -9,9 +9,10 @@ npad is a lightweight, cross-platform text editor inspired by classic Windows No
 ## Build System
 
 **Primary build commands:**
-- `make` or `make all` - Auto-detect platform and build
-- `make windows` - Build for Windows x64 using MinGW
-- `make linux` - Build for Linux with X11
+- `make` - Auto-detect platform and build
+- `make all` - Build all Windows and Linux variants
+- `make windows` - Build for Windows x64 using MinGW (cross or native)
+- `make linux` - Build Linux variants (X11, Wayland, ncurses stubs)
 - `make debug` - Build with debug symbols enabled
 - `make clean` - Clean build artifacts
 
@@ -19,9 +20,10 @@ npad is a lightweight, cross-platform text editor inspired by classic Windows No
 - `make lint` - Run cppcheck static analysis (requires cppcheck)
 - `make format` - Auto-format code with clang-format
 - `make format-check` - Verify code formatting without changes
+- `make test` - Build and run the unit test suites (file ops, errors, encoding)
 
 **Cross-compilation:**
-The project is designed for cross-compilation from Linux to Windows using MinGW-w64. The setup script `./scripts/setup-runner.sh` installs necessary dependencies.
+The project is designed for cross-compilation from Linux to Windows using MinGW-w64 (`x86_64-w64-mingw32-gcc`). On Windows itself, a native MinGW toolchain (MSYS2 / Git Bash) is used automatically; override with `MINGW_CC`/`MINGW_WINDRES`/`MINGW_STRIP`. The setup script `./scripts/setup-runner.sh` installs necessary dependencies on Linux.
 
 ## Architecture
 
@@ -44,7 +46,13 @@ Platform Implementation (Win32/X11/Cocoa/ncurses)
 **State management:**
 - `EditorState` struct in `src/core/editor.h` maintains editor state
 - Settings stored as JSON in platform-appropriate locations
-- Window state persistence for position/size across sessions
+- Window state persistence for position/size/maximized across sessions
+- All editor logic runs on the single UI thread; editor state is not locked
+
+**Text handling conventions:**
+- Core code passes UTF-8 strings; the Win32 layer converts to UTF-16 at the API boundary (wide APIs throughout)
+- `file_read_text_ex`/`file_write_text_ex` detect and preserve each file's encoding (UTF-8/UTF-8 BOM/UTF-16 LE/BE/ANSI) and line endings (CRLF/LF/CR)
+- Editor saves are atomic (temp file + verify + rename); a failed save must never destroy the existing file
 
 ## Development Notes
 

@@ -5,6 +5,80 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-07
+
+Full review and repair release. A code audit found that several features
+described in earlier entries (Find/Replace, word wrap toggling, redo,
+modified-state tracking) did not actually work; this release rewrites the
+affected code and implements them for real. Entries for 0.1.5-0.1.8 below
+should be read with that in mind.
+
+### 🐛 Bug Fixes
+- **CRITICAL**: A failed save (e.g. disk full) deleted the file being saved
+  over. Saves are now atomic: write to a temp file, verify, then rename.
+- **CRITICAL**: The save-changes prompt was Yes/No and never saved -
+  answering "Yes" silently discarded changes. It is now the proper
+  Save / Don't Save / Cancel prompt and actually saves.
+- **CRITICAL**: After saving via the close prompt, the window could never be
+  closed (the modified flag was never cleared). Close via the X button and
+  File > Exit now share one code path.
+- **CRITICAL**: Enter and Tab did not insert characters (IsDialogMessage was
+  applied to the main window and the edit control lacked ES_WANTRETURN).
+- **CRITICAL**: Typing or pasting beyond 64KB was silently dropped
+  (EM_LIMITTEXT 0 sets a 64KB cap on rich edit controls); the limit is now
+  ~2GB via EM_EXLIMITTEXT.
+- Go To Line dialog buttons did nothing (broken hand-rolled modal loop);
+  it is now a real resource-based dialog, with Notepad's out-of-range message.
+- The window title showed "*Untitled" after any edit even with a file open.
+- Paths containing ".." (e.g. `npad ..\notes.txt`) were rejected.
+- Version string rendered as "NPAD_VERSION_MAJOR...." in builds where the
+  Makefile did not inject it (missing macro double-expansion).
+- Word wrap toggle changed style bits that rich edit ignores; it now uses
+  EM_SETTARGETDEVICE and actually wraps. Default is off (classic Notepad).
+- The application manifest (common controls v6, per-monitor DPI) was no
+  longer embedded; restored.
+- Window position is validated against connected monitors, and the
+  maximized state is saved and restored.
+- Double ReleaseDC in the font dialog.
+
+### ✨ Features
+- Full Unicode support: the Win32 layer uses wide APIs end to end, with
+  UTF-8 as the internal representation.
+- Encoding detection and preservation: UTF-8, UTF-8 BOM, UTF-16 LE/BE
+  (with or without BOM), and ANSI files round-trip unchanged.
+- Line ending detection and preservation (CRLF / LF / CR), shown truthfully
+  in the status bar (previously hardcoded to "Windows (CRLF)" and "UTF-8").
+- Working Find / Replace dialogs (the dialog resources existed but were
+  never wired up): direction, match case, whole word, F3 / Shift+F3.
+- Redo is reachable: Edit > Redo menu item and Ctrl+Y.
+- Drag-and-drop opens files (the WM_DROPFILES handler was missing).
+- Zoom: Ctrl+Plus / Ctrl+Minus / Ctrl+0, Ctrl+Scroll, View > Zoom menu,
+  real percentage in the status bar.
+- Auto-save: a real timer now exists (silent save for named documents,
+  default 5 minutes, configurable).
+- Dark mode: editor colors, title bar and status bar; follows the system
+  theme by default and can be toggled from the View menu.
+- Recent Files menu (the settings plumbing existed but was unused).
+- Menu items enable/disable correctly (Undo/Redo/Cut/Copy/Paste/Delete/Find).
+- Edit > Delete (Del) and Edit > Time/Date (F5), like Notepad.
+- Monospace default font (Consolas 11pt); font choice persists.
+
+### 🔧 Technical Improvements
+- Removed the memory-limit subsystem (working-set-based caps, paste-undo
+  enforcement, per-keystroke full-document copies). A single confirmation
+  prompt for very large files remains ("large_file_warning_mb" setting).
+- Editor no longer copies the entire document on every keystroke.
+- UTF-8 file paths work on Windows (_wfopen / MoveFileExW).
+- Makefile: native MinGW builds on Windows, fixed install/uninstall/clean.
+- CI now runs the unit test suite; new tests cover encoding and line-ending
+  detection/round-trips, atomic write behavior, and path validation.
+
+### ⚠️ Breaking Changes
+- The `max_file_size_mb` / `max_memory_usage_mb` / `memory_limit_warnings`
+  settings are gone; `large_file_warning_mb` (default 100) replaces them.
+- Word wrap now defaults to off, matching classic Notepad; the previous
+  state is persisted in the `word_wrap` setting.
+
 ## [0.1.8] - 2025-06-18
 
 ### 🐛 Bug Fixes

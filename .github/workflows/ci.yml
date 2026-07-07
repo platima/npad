@@ -148,7 +148,11 @@ jobs:
     needs: [build-windows, build-linux]
     steps:
     - uses: actions/checkout@v4
-    
+
+    - name: Run unit tests
+      run: |
+        make test
+
     - name: Download artifacts
       uses: actions/download-artifact@v4
       with:

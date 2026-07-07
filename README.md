@@ -35,28 +35,36 @@ npad aims to recreate the beloved simplicity of original Windows Notepad while a
 
 ## Features ✨
 
+Current features (Windows build):
+
 - **⚡ Lightning fast** - Native API implementation with minimal overhead
-- **🌍 Cross-platform** - Windows, macOS, Linux and CLI
 - **💨 Minimal resource usage** - Tiny memory footprint and fast startup
 - **🎯 Classic interface** - Familiar Notepad-style UI and behavior
-- **📦 Easy install** - Installable by portable exe, or exe installer, with MSI, winget, and others planned
-- **🚀 Easy launch** - Optionally 'notepad' in Windows
-- **👀 Familiar** - Default functionality matches notepad.exe almost 1:1, with the exception of dark/light mode
+- **🌍 Unicode throughout** - Detects and preserves UTF-8, UTF-8 BOM, UTF-16 LE/BE and ANSI encodings
+- **↩️ Line ending aware** - Detects and preserves Windows (CRLF), Unix (LF) and Mac (CR) line endings, shown in the status bar
 - **🔧 Quality-of-life enhancements:**
   - Optional auto-save (enabled by default, configurable)
-  - Optional tabbed interface (disabled by default, configurable)
-  - Resume session / crash protection (disabled by default, configurable)
   - Dark / light theme support (follows system theme by default, configurable)
-  - Improved upport for differing line terminators (Windows, Linux, macOS)
-  - JSON settings storage
-  - Open large files without hanging
-  - Easy monospace toggle
-  - Additional keyboard shortcuts (Word Wrap, Go-To Line, Monospace, etc)
-  - Line ending conversiosn
-  - Full undo / redo history
-  - Improved find and replace functionality
-  - Remembers window position and size
-  - Multi-language support
+  - Find / Replace with direction, match case and whole word (Ctrl+F / Ctrl+H, F3 / Shift+F3)
+  - Undo / Redo (Ctrl+Z / Ctrl+Y)
+  - Zoom (Ctrl+Plus / Ctrl+Minus / Ctrl+0, Ctrl+Scroll)
+  - Word wrap toggle (Alt+Z), Go To Line (Ctrl+G), Time/Date (F5)
+  - Monospace font by default (Consolas 11pt) with a persistent font chooser
+  - Recent files menu
+  - Drag-and-drop to open files
+  - Atomic saves - a failed save can never destroy the existing file
+  - JSON settings storage; remembers window position, size and maximized state
+  - Confirmation prompt before opening very large files
+
+Planned (see the [Roadmap](#roadmap)):
+
+- 🚧 macOS, Linux (X11/Wayland) and terminal builds
+- 🚧 Optional tabbed interface
+- 🚧 Session resume / crash protection
+- 🚧 Line ending conversion and save-dialog encoding picker
+- 🚧 Monospace toggle shortcut and status bar click actions
+- 🚧 Multi-language support
+- 🚧 Portable EXE, installer, MSI and winget distribution
 
 _**Note: Windows support will be first, for the obvious reasons, as compile-yourself, a portable EXE, or as an EXE installer. Other platforms and installers will come with time or contributions**_
 
@@ -126,17 +134,17 @@ Every sponsorship, no matter the size, is deeply appreciated and goes directly t
 
 Your support makes a real difference in keeping this project alive and thriving! ✨
 
-## Get 📥
+## Get npad 📥
 
 ### Pre-Built
 
-Download the portable EXE or installer from the [**Releases page**](https://github.com/platima/npad/releases).
+Download builds from the [**Releases page**](https://github.com/platima/npad/releases) when available.
 
-**Available options:**
+**Planned distribution options:**
 - 📦 **Portable EXE** - Just download and run, no installation required
 - 🛠️ **EXE Installer** - Traditional Windows installer with registry integration
-- 📋 **MSI Package** - Coming soon for enterprise deployment
-- 🎁 **Winget** - Coming soon for `winget install npad`
+- 📋 **MSI Package** - For enterprise deployment
+- 🎁 **Winget** - For `winget install npad`
 
 ### Compile Yourself
 
@@ -190,7 +198,7 @@ Download the portable EXE or installer from the [**Releases page**](https://gith
    make format         # Auto-format code
    ```
 
-## Use 🎯
+## Use npad 🎯
 
 ### Running from Windows Run dialog
 After installation, simply press `Win+R` and type `npad` to launch.
@@ -244,43 +252,44 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
 - [ ] **Initial Notepad features**
   - [x] Initial launchable Win32 application
   - [x] Core text editing functionality
-  - [ ] File operations (New, Open, Save, Save As)
-  - [ ] Initial menu items
-  - [ ] Initial status bar
-  - [ ] Zoom via Ctrl+/-, Ctrl Scroll
+  - [x] File operations (New, Open, Save, Save As)
+  - [x] Initial menu items
+  - [x] Initial status bar
+  - [x] Zoom via Ctrl+/-, Ctrl Scroll
   - [ ] RTL/LTR support
-  - [ ] High DPI support
+  - [x] High DPI support
   - [ ] Encoding options in Save Dialog
-  - [ ] Drag and drop to open
-  - [ ] Word wrap support (add Alt+Z shortcut)
-  - [ ] Font chooser
-  - [ ] Find/Replace dialog
+  - [x] Drag and drop to open
+  - [x] Word wrap support (add Alt+Z shortcut)
+  - [x] Font chooser
+  - [x] Find/Replace dialog
 - [ ] **Core Enhancements**
-  - [ ] Settings system with JSON storage
-  - [ ] Auto-save feature (enabled by default)
+  - [x] Settings system with JSON storage
+  - [x] Auto-save feature (enabled by default)
   - [ ] Session resume / crash protection (disabled by default)
-  - [ ] Dark/light theme support (follow system by default)
+  - [x] Dark/light theme support (follow system by default)
   - [ ] Unlimited Undo & Redo
   - [ ] Improvements to Find & Replace dialogs
     - [ ] Recent list (configurable)
     - [ ] Show match count
-    - [ ] 'Find Previous'
+    - [x] 'Find Previous'
     - [ ] Wrap-around indicator
-    - [ ] Correct \[tab\] order
+    - [x] Correct \[tab\] order
   - [ ] Monospace toggle
     - [ ] Menu / Keyboard shortcut (Ctrl+M)
     - [ ] Status bar click
   - [ ] Zoom improvements
-    - [ ] Menu / Keyboard shortcut (Ctrl+Z)
+    - [x] Menu / Keyboard shortcuts (Ctrl+Plus / Ctrl+Minus / Ctrl+0)
     - [ ] Status bar click
   - [ ] Go-To Line via
-    - [ ] Menu / Keyboard shortcut (Ctrl+G)
+    - [x] Menu / Keyboard shortcut (Ctrl+G)
     - [ ] Status bar click
   - [ ] Convert line endings between LF, CR LF, CR
+    - [x] Detect and preserve line endings (shown in status bar)
     - [ ] Menu / Keyboard shortcut (Ctrl+E)
     - [ ] Status bar click
   - [ ] Ctrl+Drop to insert instead of open
-  - [ ] 'Recent' menu (optional)
+  - [x] 'Recent' menu (optional)
 - [ ] **Advanced Features**
   - [ ] Tabbed interface (optional)
   - [ ] Multi-language support
