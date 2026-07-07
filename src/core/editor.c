@@ -52,6 +52,22 @@ static void editor_apply_auto_save_timer(void) {
     }
 }
 
+// Encoding/line endings for new documents, from user preferences
+static void load_default_file_info(TextFileInfo *info) {
+    int encoding = settings_get_int("default_encoding", (int) NPAD_ENC_UTF8);
+    int line_ending = settings_get_int("default_line_ending", (int) NPAD_EOL_CRLF);
+
+    if (encoding < 0 || encoding > (int) NPAD_ENC_ANSI) {
+        encoding = (int) NPAD_ENC_UTF8;
+    }
+    if (line_ending < 0 || line_ending > (int) NPAD_EOL_CR) {
+        line_ending = (int) NPAD_EOL_CRLF;
+    }
+
+    info->encoding = (TextEncoding) encoding;
+    info->line_ending = (LineEnding) line_ending;
+}
+
 bool editor_init(void) {
     memset(&g_editor, 0, sizeof(EditorState));
 
@@ -61,9 +77,7 @@ bool editor_init(void) {
         g_editor.auto_save_interval = 10; // Sanity floor
     }
 
-    // New documents default to modern Notepad conventions
-    g_editor.file_info.encoding = NPAD_ENC_UTF8;
-    g_editor.file_info.line_ending = NPAD_EOL_CRLF;
+    load_default_file_info(&g_editor.file_info);
 
     ui_set_event_handler(editor_handle_event);
 
@@ -104,8 +118,7 @@ bool editor_new_file(void) {
         g_editor.current_file = NULL;
     }
 
-    g_editor.file_info.encoding = NPAD_ENC_UTF8;
-    g_editor.file_info.line_ending = NPAD_EOL_CRLF;
+    load_default_file_info(&g_editor.file_info);
 
     editor_set_modified(false);
     editor_update_status_info();
@@ -182,13 +195,15 @@ bool editor_save_file(void) {
         FileDialogParams params = { .title = "Save As",
                                     .default_filename = "Untitled.txt",
                                     .filter = "Text Files (*.txt)|*.txt|All Files (*.*)|*.*",
-                                    .save_dialog = true };
+                                    .save_dialog = true,
+                                    .encoding = g_editor.file_info.encoding };
 
         char *filename = ui_show_save_dialog(g_editor.main_window, &params);
         if (!filename) {
             return false; // User cancelled
         }
 
+        g_editor.file_info.encoding = params.encoding; // From the dialog's picker
         bool result = editor_save_file_as(filename);
         free(filename);
         return result;
@@ -309,6 +324,30 @@ const char *editor_get_current_file(void) {
     return g_editor.current_file;
 }
 
+void editor_set_line_ending(LineEnding line_ending) {
+    if (g_editor.file_info.line_ending == line_ending)
+        return;
+    g_editor.file_info.line_ending = line_ending;
+    editor_set_modified(true);
+    editor_update_status_info();
+}
+
+LineEnding editor_get_line_ending(void) {
+    return g_editor.file_info.line_ending;
+}
+
+void editor_set_encoding(TextEncoding encoding) {
+    if (g_editor.file_info.encoding == encoding)
+        return;
+    g_editor.file_info.encoding = encoding;
+    editor_set_modified(true);
+    editor_update_status_info();
+}
+
+TextEncoding editor_get_encoding(void) {
+    return g_editor.file_info.encoding;
+}
+
 void editor_set_startup_file(const char *filename) {
     if (g_startup_file) {
         free(g_startup_file);
@@ -385,10 +424,12 @@ bool editor_handle_event(const UIEvent *event) {
             FileDialogParams params = { .title = "Save As",
                                         .default_filename = "Untitled.txt",
                                         .filter = "Text Files (*.txt)|*.txt|All Files (*.*)|*.*",
-                                        .save_dialog = true };
+                                        .save_dialog = true,
+                                        .encoding = g_editor.file_info.encoding };
 
             char *filename = ui_show_save_dialog(g_editor.main_window, &params);
             if (filename) {
+                g_editor.file_info.encoding = params.encoding; // From the dialog's picker
                 editor_save_file_as(filename);
                 free(filename);
             }

@@ -52,6 +52,12 @@ void editor_set_modified(bool modified);
 const char *editor_get_current_file(void);
 void editor_set_startup_file(const char *filename);
 
+// Document format (applied when the file is next saved; marks modified)
+void editor_set_line_ending(LineEnding line_ending);
+LineEnding editor_get_line_ending(void);
+void editor_set_encoding(TextEncoding encoding);
+TextEncoding editor_get_encoding(void);
+
 // Auto-save functionality
 void editor_enable_auto_save(bool enabled);
 bool editor_is_auto_save_enabled(void);

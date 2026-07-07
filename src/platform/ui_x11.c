@@ -126,7 +126,7 @@ char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *param
     (void) params;
     return NULL;
 }
-char *ui_platform_show_save_dialog(Window *parent, const FileDialogParams *params) {
+char *ui_platform_show_save_dialog(Window *parent, FileDialogParams *params) {
     (void) parent;
     (void) params;
     return NULL;

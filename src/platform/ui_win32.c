@@ -13,11 +13,13 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <commdlg.h>
+#include <prsht.h>
 #include <richedit.h>
 #include <shellapi.h>
 
 #include "../ui_interface.h"
 #include "../main.h"
+#include "../core/editor.h"
 #include "../core/error.h"
 #include "../core/settings.h"
 #include "resource.h"
@@ -51,6 +53,7 @@
 #define ID_FILE_SAVE_AS 2004
 #define ID_FILE_EXIT 2005
 #define ID_FILE_RECENT_CLEAR 2006
+#define ID_FILE_PREFERENCES 2007
 #define ID_FILE_RECENT_BASE 2010 // 2010..2019 reserved for recent files
 #define ID_EDIT_UNDO 2101
 #define ID_EDIT_REDO 2102
@@ -67,6 +70,12 @@
 #define ID_EDIT_TIME_DATE 2113
 #define ID_FORMAT_WORD_WRAP 2201
 #define ID_FORMAT_FONT 2202
+#define ID_FORMAT_MONOSPACE 2203
+#define ID_FORMAT_EOL_CRLF 2211 // 2211..2213, order matches the LineEnding enum
+#define ID_FORMAT_EOL_LF 2212
+#define ID_FORMAT_EOL_CR 2213
+#define ID_FORMAT_EOL_CYCLE 2214
+#define ID_ENCODING_BASE 2221 // 2221..2225, order matches the TextEncoding enum
 #define ID_VIEW_STATUS_BAR 2301
 #define ID_VIEW_DARK_MODE 2302
 #define ID_VIEW_ZOOM_IN 2303
@@ -102,12 +111,17 @@ static const wchar_t *g_richedit_class = MSFTEDIT_CLASS;
 // Modeless find/replace dialog (only one can be open at a time, like Notepad)
 static HWND g_find_dialog = NULL;
 
-// Last search parameters shared by Find, Replace and F3
+// Last search parameters shared by Find, Replace and F3 (persisted)
 static wchar_t g_search_text[256] = L"";
 static wchar_t g_replace_text[256] = L"";
 static bool g_match_case = false;
 static bool g_whole_word = false;
 static bool g_search_down = true;
+static bool g_wrap_around = true;
+
+// Last find/replace dialog position, remembered for the session
+static POINT g_find_dialog_pos;
+static bool g_find_dialog_pos_valid = false;
 
 // Optional per-monitor DPI function (Windows 10+)
 typedef UINT(WINAPI *GetDpiForWindowFunc)(HWND);
@@ -127,6 +141,11 @@ static void update_menu_states(Window *window);
 static void rebuild_recent_menu(Window *window);
 static void show_font_dialog(Window *window);
 static void show_goto_dialog(Window *window);
+static void show_preferences_dialog(Window *window);
+static void show_context_menu(Window *window, int x, int y);
+static void show_line_ending_popup(Window *window);
+static void show_encoding_popup(Window *window);
+static void set_status_bar_visible(Window *window, bool visible);
 static void set_zoom(Window *window, int percent);
 static int get_zoom(Window *window);
 static bool find_next(Window *window, bool down);
@@ -169,6 +188,64 @@ static UINT get_window_dpi(HWND hwnd) {
     UINT dpi = (UINT) GetDeviceCaps(hdc, LOGPIXELSX);
     ReleaseDC(NULL, hdc);
     return dpi;
+}
+
+// Whether apps should use dark mode according to the OS setting
+static bool read_system_dark_mode(void) {
+    bool dark = false;
+    HKEY hkey;
+    DWORD value = 1;
+    DWORD size = sizeof(value);
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                      L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", 0,
+                      KEY_READ, &hkey) == ERROR_SUCCESS) {
+        DWORD type = REG_DWORD;
+        if (RegQueryValueExW(hkey, L"AppsUseLightTheme", NULL, &type, (LPBYTE) &value, &size) ==
+                ERROR_SUCCESS &&
+            type == REG_DWORD && size == sizeof(DWORD)) {
+            dark = (value == 0);
+        }
+        RegCloseKey(hkey);
+    }
+    return dark;
+}
+
+// Resolve the "theme" setting (system/light/dark) to a dark-mode flag
+static bool resolve_theme_dark_mode(void) {
+    bool dark = false;
+    char *theme = settings_get_string("theme", "system");
+    if (theme && strcmp(theme, "dark") == 0) {
+        dark = true;
+    } else if (theme && strcmp(theme, "light") == 0) {
+        dark = false;
+    } else {
+        dark = read_system_dark_mode();
+    }
+    free(theme);
+    return dark;
+}
+
+// Subclass for the edit control: refresh the status bar after events that
+// EN_SELCHANGE does not reliably cover (native Ctrl+wheel zoom, caret
+// movement onto a new empty line, mouse-driven caret moves)
+static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam,
+                                           UINT_PTR id, DWORD_PTR ref) {
+    (void) ref;
+    LRESULT result = DefSubclassProc(hwnd, msg, wparam, lparam);
+
+    switch (msg) {
+        case WM_KEYUP:
+        case WM_LBUTTONUP:
+        case WM_MOUSEWHEEL:
+            if (g_main_window) {
+                update_status_bar(g_main_window);
+            }
+            break;
+        case WM_NCDESTROY:
+            RemoveWindowSubclass(hwnd, edit_subclass_proc, id);
+            break;
+    }
+    return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -217,28 +294,13 @@ bool ui_platform_init(void) {
     }
 
     // Theme: "system" (default) follows the OS setting; "light"/"dark" override
-    char *theme = settings_get_string("theme", "system");
-    if (theme && strcmp(theme, "dark") == 0) {
-        g_dark_mode = true;
-    } else if (theme && strcmp(theme, "light") == 0) {
-        g_dark_mode = false;
-    } else {
-        HKEY hkey;
-        DWORD value = 1;
-        DWORD size = sizeof(value);
-        if (RegOpenKeyExW(HKEY_CURRENT_USER,
-                          L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", 0,
-                          KEY_READ, &hkey) == ERROR_SUCCESS) {
-            DWORD type = REG_DWORD;
-            if (RegQueryValueExW(hkey, L"AppsUseLightTheme", NULL, &type, (LPBYTE) &value, &size) ==
-                    ERROR_SUCCESS &&
-                type == REG_DWORD && size == sizeof(DWORD)) {
-                g_dark_mode = (value == 0);
-            }
-            RegCloseKey(hkey);
-        }
-    }
-    free(theme);
+    g_dark_mode = resolve_theme_dark_mode();
+
+    // Restore persisted find/replace options
+    g_match_case = settings_get_bool("find_match_case", false);
+    g_whole_word = settings_get_bool("find_whole_word", false);
+    g_search_down = settings_get_bool("find_search_down", true);
+    g_wrap_around = settings_get_bool("find_wrap_around", true);
 
     return true;
 }
@@ -351,12 +413,14 @@ Window *ui_platform_create_main_window(void) {
         return NULL;
     }
 
-    // Plain text mode, effectively unlimited length, small margins
+    // Plain text mode, effectively unlimited length, deep undo, small margins
     SendMessageW(window->edit_hwnd, EM_SETTEXTMODE, TM_PLAINTEXT, 0);
     SendMessageW(window->edit_hwnd, EM_EXLIMITTEXT, 0, 0x7FFFFFFE);
+    SendMessageW(window->edit_hwnd, EM_SETUNDOLIMIT, 100000, 0);
     SendMessageW(window->edit_hwnd, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
                  MAKELPARAM(4, 4));
     SendMessageW(window->edit_hwnd, EM_SETEVENTMASK, 0, ENM_CHANGE | ENM_SELCHANGE);
+    SetWindowSubclass(window->edit_hwnd, edit_subclass_proc, 1, 0);
 
     apply_font(window);
     apply_word_wrap(window);
@@ -397,6 +461,9 @@ Window *ui_platform_create_main_window(void) {
                       { FCONTROL | FVIRTKEY, 'G', ID_EDIT_GOTO_LINE },
                       { FVIRTKEY, VK_F5, ID_EDIT_TIME_DATE },
                       { FALT | FVIRTKEY, 'Z', ID_FORMAT_WORD_WRAP },
+                      { FCONTROL | FVIRTKEY, 'M', ID_FORMAT_MONOSPACE },
+                      { FCONTROL | FVIRTKEY, 'E', ID_FORMAT_EOL_CYCLE },
+                      { FCONTROL | FVIRTKEY, VK_OEM_COMMA, ID_FILE_PREFERENCES },
                       { FCONTROL | FVIRTKEY, VK_OEM_PLUS, ID_VIEW_ZOOM_IN },
                       { FCONTROL | FVIRTKEY, VK_ADD, ID_VIEW_ZOOM_IN },
                       { FCONTROL | FVIRTKEY, VK_OEM_MINUS, ID_VIEW_ZOOM_OUT },
@@ -714,7 +781,47 @@ static wchar_t *build_filter(const char *filter) {
     return result;
 }
 
-static char *show_file_dialog(Window *parent, const FileDialogParams *params, bool save) {
+// Hook for the save dialog's child template: hosts the encoding picker.
+// The current encoding travels in via ofn->lCustData and the user's
+// selection travels back out the same way (set at CDN_FILEOK).
+static UINT_PTR CALLBACK save_dialog_hook(HWND dlg, UINT msg, WPARAM wparam, LPARAM lparam) {
+    (void) wparam;
+
+    switch (msg) {
+        case WM_INITDIALOG: {
+            OPENFILENAMEW *ofn = (OPENFILENAMEW *) lparam;
+            HWND combo = GetDlgItem(dlg, ID_SAVE_ENCODING_COMBO);
+            if (combo && ofn) {
+                for (int i = 0; i <= (int) NPAD_ENC_ANSI; i++) {
+                    wchar_t *name = utf8_to_wide(file_encoding_name((TextEncoding) i));
+                    if (name) {
+                        SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM) name);
+                        free(name);
+                    }
+                }
+                SendMessageW(combo, CB_SETCURSEL, (WPARAM) ofn->lCustData, 0);
+            }
+            return TRUE;
+        }
+
+        case WM_NOTIFY: {
+            OFNOTIFYW *notify = (OFNOTIFYW *) lparam;
+            if (notify && notify->hdr.code == CDN_FILEOK) {
+                HWND combo = GetDlgItem(dlg, ID_SAVE_ENCODING_COMBO);
+                if (combo && notify->lpOFN) {
+                    LRESULT sel = SendMessageW(combo, CB_GETCURSEL, 0, 0);
+                    if (sel >= 0 && sel <= (LRESULT) NPAD_ENC_ANSI) {
+                        notify->lpOFN->lCustData = (LPARAM) sel;
+                    }
+                }
+            }
+            break;
+        }
+    }
+    return 0;
+}
+
+static char *show_file_dialog(Window *parent, FileDialogParams *params, bool save) {
     OPENFILENAMEW ofn;
     wchar_t filename[MAX_PATH] = L"";
 
@@ -733,6 +840,7 @@ static char *show_file_dialog(Window *parent, const FileDialogParams *params, bo
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = parent ? parent->hwnd : NULL;
+    ofn.hInstance = g_hinstance;
     ofn.lpstrFile = filename;
     ofn.nMaxFile = MAX_PATH;
     ofn.lpstrFilter = filter;
@@ -740,12 +848,20 @@ static char *show_file_dialog(Window *parent, const FileDialogParams *params, bo
     ofn.lpstrTitle = title;
     ofn.lpstrDefExt = L"txt";
     if (save) {
-        ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER;
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER | OFN_ENABLEHOOK |
+                    OFN_ENABLETEMPLATE | OFN_ENABLESIZING;
+        ofn.lpfnHook = save_dialog_hook;
+        ofn.lpTemplateName = MAKEINTRESOURCEW(IDD_SAVE_ENCODING);
+        ofn.lCustData = params ? (LPARAM) params->encoding : (LPARAM) NPAD_ENC_UTF8;
     } else {
         ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY | OFN_EXPLORER;
     }
 
     BOOL ok = save ? GetSaveFileNameW(&ofn) : GetOpenFileNameW(&ofn);
+
+    if (ok && save && params) {
+        params->encoding = (TextEncoding) ofn.lCustData;
+    }
 
     free(filter);
     free(title);
@@ -754,10 +870,11 @@ static char *show_file_dialog(Window *parent, const FileDialogParams *params, bo
 }
 
 char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *params) {
-    return show_file_dialog(parent, params, false);
+    // The open dialog never writes back through params
+    return show_file_dialog(parent, (FileDialogParams *) params, false);
 }
 
-char *ui_platform_show_save_dialog(Window *parent, const FileDialogParams *params) {
+char *ui_platform_show_save_dialog(Window *parent, FileDialogParams *params) {
     return show_file_dialog(parent, params, true);
 }
 
@@ -828,25 +945,24 @@ void ui_platform_show_about_dialog(Window *parent) {
 // Find / Replace
 // ---------------------------------------------------------------------------
 
-// Search from the current selection in the given direction, select the
-// match, and report failure like Notepad.
-static bool find_next(Window *window, bool down) {
-    if (!window || !window->edit_hwnd || g_search_text[0] == L'\0')
-        return false;
+// Show a transient message in the leftmost status bar part
+static void set_status_message(Window *window, const char *message) {
+    if (!window || !window->status_hwnd)
+        return;
+    wchar_t *wide = utf8_to_wide(message ? message : "");
+    if (wide) {
+        SendMessageW(window->status_hwnd, SB_SETTEXTW, 0, (LPARAM) wide);
+        free(wide);
+    }
+}
 
-    CHARRANGE sel = { 0, 0 };
-    SendMessageW(window->edit_hwnd, EM_EXGETSEL, 0, (LPARAM) &sel);
-
+// Run one EM_FINDTEXTEXW pass over the given range
+static bool find_in_range(Window *window, LONG from, LONG to, bool down, CHARRANGE *found) {
     FINDTEXTEXW ft;
     memset(&ft, 0, sizeof(ft));
     ft.lpstrText = g_search_text;
-    if (down) {
-        ft.chrg.cpMin = sel.cpMax;
-        ft.chrg.cpMax = -1;
-    } else {
-        ft.chrg.cpMin = sel.cpMin;
-        ft.chrg.cpMax = 0;
-    }
+    ft.chrg.cpMin = from;
+    ft.chrg.cpMax = to;
 
     WPARAM flags = 0;
     if (down)
@@ -856,8 +972,43 @@ static bool find_next(Window *window, bool down) {
     if (g_whole_word)
         flags |= FR_WHOLEWORD;
 
-    LRESULT pos = SendMessageW(window->edit_hwnd, EM_FINDTEXTEXW, flags, (LPARAM) &ft);
-    if (pos == -1) {
+    if (SendMessageW(window->edit_hwnd, EM_FINDTEXTEXW, flags, (LPARAM) &ft) == -1)
+        return false;
+
+    *found = ft.chrgText;
+    return true;
+}
+
+// Search from the current selection in the given direction, wrapping around
+// if enabled, select the match, and report failure like Notepad.
+static bool find_next(Window *window, bool down) {
+    if (!window || !window->edit_hwnd || g_search_text[0] == L'\0')
+        return false;
+
+    CHARRANGE sel = { 0, 0 };
+    SendMessageW(window->edit_hwnd, EM_EXGETSEL, 0, (LPARAM) &sel);
+
+    CHARRANGE found;
+    bool hit;
+    bool wrapped = false;
+
+    if (down) {
+        hit = find_in_range(window, sel.cpMax, -1, true, &found);
+    } else {
+        hit = find_in_range(window, sel.cpMin, 0, false, &found);
+    }
+
+    if (!hit && g_wrap_around) {
+        LONG length = (LONG) SendMessageW(window->edit_hwnd, WM_GETTEXTLENGTH, 0, 0);
+        if (down) {
+            hit = find_in_range(window, 0, -1, true, &found);
+        } else {
+            hit = find_in_range(window, length, 0, false, &found);
+        }
+        wrapped = hit;
+    }
+
+    if (!hit) {
         char search_utf8[512] = "";
         char *converted = wide_to_utf8(g_search_text);
         if (converted) {
@@ -874,12 +1025,14 @@ static bool find_next(Window *window, bool down) {
         return false;
     }
 
-    SendMessageW(window->edit_hwnd, EM_EXSETSEL, 0, (LPARAM) &ft.chrgText);
+    SendMessageW(window->edit_hwnd, EM_EXSETSEL, 0, (LPARAM) &found);
     SendMessageW(window->edit_hwnd, EM_SCROLLCARET, 0, 0);
+    set_status_message(window, wrapped ? "Wrapped around" : "");
     return true;
 }
 
-// Read search parameters out of the find/replace dialog controls
+// Read search parameters out of the find/replace dialog controls and
+// persist them across sessions
 static void read_search_fields(HWND dialog, bool has_replace) {
     GetDlgItemTextW(dialog, ID_FIND_TEXT, g_search_text,
                     sizeof(g_search_text) / sizeof(g_search_text[0]));
@@ -889,7 +1042,15 @@ static void read_search_fields(HWND dialog, bool has_replace) {
     }
     g_match_case = IsDlgButtonChecked(dialog, ID_FIND_CASE) == BST_CHECKED;
     g_whole_word = IsDlgButtonChecked(dialog, ID_FIND_WHOLE_WORD) == BST_CHECKED;
-    g_search_down = IsDlgButtonChecked(dialog, IDC_RADIO_UP) != BST_CHECKED;
+    g_wrap_around = IsDlgButtonChecked(dialog, ID_FIND_WRAP) == BST_CHECKED;
+    if (GetDlgItem(dialog, IDC_RADIO_UP)) {
+        g_search_down = IsDlgButtonChecked(dialog, IDC_RADIO_UP) != BST_CHECKED;
+    }
+
+    settings_set_bool("find_match_case", g_match_case);
+    settings_set_bool("find_whole_word", g_whole_word);
+    settings_set_bool("find_wrap_around", g_wrap_around);
+    settings_set_bool("find_search_down", g_search_down);
 }
 
 // Is the current selection exactly the current search text?
@@ -977,8 +1138,28 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
             }
             CheckDlgButton(dialog, ID_FIND_CASE, g_match_case ? BST_CHECKED : BST_UNCHECKED);
             CheckDlgButton(dialog, ID_FIND_WHOLE_WORD, g_whole_word ? BST_CHECKED : BST_UNCHECKED);
-            CheckRadioButton(dialog, IDC_RADIO_UP, IDC_RADIO_DOWN,
-                             g_search_down ? IDC_RADIO_DOWN : IDC_RADIO_UP);
+            CheckDlgButton(dialog, ID_FIND_WRAP, g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
+            if (GetDlgItem(dialog, IDC_RADIO_UP)) {
+                CheckRadioButton(dialog, IDC_RADIO_UP, IDC_RADIO_DOWN,
+                                 g_search_down ? IDC_RADIO_DOWN : IDC_RADIO_UP);
+            }
+
+            // Position like notepad.exe: offset into the parent window,
+            // or wherever the user last moved it this session
+            Window *parent = (Window *) lparam;
+            if (g_find_dialog_pos_valid) {
+                SetWindowPos(dialog, NULL, g_find_dialog_pos.x, g_find_dialog_pos.y, 0, 0,
+                             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            } else if (parent && parent->hwnd) {
+                RECT parent_rect;
+                if (GetWindowRect(parent->hwnd, &parent_rect)) {
+                    int dpi = (int) get_window_dpi(parent->hwnd);
+                    SetWindowPos(dialog, NULL, parent_rect.left + MulDiv(84, dpi, 96),
+                                 parent_rect.top + MulDiv(185, dpi, 96), 0, 0,
+                                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                }
+            }
+
             SendDlgItemMessageW(dialog, ID_FIND_TEXT, EM_SETSEL, 0, -1);
             SetFocus(GetDlgItem(dialog, ID_FIND_TEXT));
             return FALSE; // Focus set manually
@@ -1015,11 +1196,18 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
             DestroyWindow(dialog);
             return TRUE;
 
-        case WM_DESTROY:
+        case WM_DESTROY: {
+            RECT rect;
+            if (GetWindowRect(dialog, &rect)) {
+                g_find_dialog_pos.x = rect.left;
+                g_find_dialog_pos.y = rect.top;
+                g_find_dialog_pos_valid = true;
+            }
             if (g_find_dialog == dialog) {
                 g_find_dialog = NULL;
             }
             return FALSE;
+        }
     }
     return FALSE;
 }
@@ -1166,8 +1354,19 @@ void ui_platform_get_cursor_line_column(Window *window, int *line, int *column) 
         return;
 
     int pos = ui_platform_get_cursor_position(window);
-    *line = (int) SendMessageW(window->edit_hwnd, EM_EXLINEFROMCHAR, 0, pos) + 1;
-    int line_start = (int) SendMessageW(window->edit_hwnd, EM_LINEINDEX, *line - 1, 0);
+    int line_index = (int) SendMessageW(window->edit_hwnd, EM_EXLINEFROMCHAR, 0, pos);
+
+    // RichEdit reports the previous line when the caret sits at the very
+    // end of the text right after a line break; if the next line starts at
+    // or before the caret, the caret is actually on that next line
+    LRESULT next_start =
+        SendMessageW(window->edit_hwnd, EM_LINEINDEX, (WPARAM) (line_index + 1), 0);
+    if (next_start != -1 && next_start <= pos) {
+        line_index++;
+    }
+
+    int line_start = (int) SendMessageW(window->edit_hwnd, EM_LINEINDEX, (WPARAM) line_index, 0);
+    *line = line_index + 1;
     *column = pos - line_start + 1;
 }
 
@@ -1272,11 +1471,18 @@ static void apply_word_wrap(Window *window) {
 
 // Apply the persisted font (default: Consolas 11pt, matching Notepad's
 // monospace look) to the whole document and as the insertion default.
+// When the monospace toggle (Ctrl+M) is on, Consolas overrides the
+// user-chosen face.
 static void apply_font(Window *window) {
     if (!window || !window->edit_hwnd)
         return;
 
-    char *face = settings_get_string("font_face", "Consolas");
+    char *face;
+    if (settings_get_bool("monospace_enabled", true)) {
+        face = settings_get_string("monospace_font", "Consolas");
+    } else {
+        face = settings_get_string("font_face", "Consolas");
+    }
     int size = settings_get_int("font_size", 11);
     int weight = settings_get_int("font_weight", FW_NORMAL);
     bool italic = settings_get_bool("font_italic", false);
@@ -1359,6 +1565,215 @@ static void show_font_dialog(Window *window) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Preferences (tabbed property sheet)
+// ---------------------------------------------------------------------------
+
+static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
+    switch (msg) {
+        case WM_INITDIALOG:
+            CheckDlgButton(page, ID_PREF_AUTOSAVE_ENABLED,
+                           editor_is_auto_save_enabled() ? BST_CHECKED : BST_UNCHECKED);
+            SetDlgItemInt(page, ID_PREF_AUTOSAVE_INTERVAL, (UINT) editor_get_auto_save_interval(),
+                          FALSE);
+            SetDlgItemInt(page, ID_PREF_LARGE_FILE_MB,
+                          (UINT) settings_get_int("large_file_warning_mb", 100), FALSE);
+            SetDlgItemInt(page, ID_PREF_RECENT_MAX, (UINT) settings_get_int("recent_files_max", 10),
+                          FALSE);
+            EnableWindow(GetDlgItem(page, ID_PREF_AUTOSAVE_INTERVAL),
+                         editor_is_auto_save_enabled());
+            return TRUE;
+
+        case WM_COMMAND:
+            if (LOWORD(wparam) == ID_PREF_AUTOSAVE_ENABLED) {
+                EnableWindow(GetDlgItem(page, ID_PREF_AUTOSAVE_INTERVAL),
+                             IsDlgButtonChecked(page, ID_PREF_AUTOSAVE_ENABLED) == BST_CHECKED);
+                return TRUE;
+            }
+            if (LOWORD(wparam) == ID_PREF_RECENT_CLEAR) {
+                settings_clear_recent_files();
+                if (g_main_window) {
+                    rebuild_recent_menu(g_main_window);
+                }
+                return TRUE;
+            }
+            break;
+
+        case WM_NOTIFY: {
+            NMHDR *nmhdr = (NMHDR *) lparam;
+            if (nmhdr->code == PSN_APPLY) {
+                BOOL ok = FALSE;
+
+                editor_enable_auto_save(IsDlgButtonChecked(page, ID_PREF_AUTOSAVE_ENABLED) ==
+                                        BST_CHECKED);
+
+                UINT interval = GetDlgItemInt(page, ID_PREF_AUTOSAVE_INTERVAL, &ok, FALSE);
+                if (ok && interval > 0) {
+                    editor_set_auto_save_interval((int) interval);
+                }
+
+                UINT large_mb = GetDlgItemInt(page, ID_PREF_LARGE_FILE_MB, &ok, FALSE);
+                if (ok) {
+                    settings_set_int("large_file_warning_mb", (int) large_mb);
+                }
+
+                UINT recent_max = GetDlgItemInt(page, ID_PREF_RECENT_MAX, &ok, FALSE);
+                if (ok) {
+                    if (recent_max > MAX_RECENT_MENU_FILES) {
+                        recent_max = MAX_RECENT_MENU_FILES;
+                    }
+                    settings_set_int("recent_files_max", (int) recent_max);
+                    if (g_main_window) {
+                        rebuild_recent_menu(g_main_window);
+                    }
+                }
+
+                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                return TRUE;
+            }
+            break;
+        }
+    }
+    return FALSE;
+}
+
+static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
+    switch (msg) {
+        case WM_INITDIALOG: {
+            char *theme = settings_get_string("theme", "system");
+            int radio = ID_PREF_THEME_SYSTEM;
+            if (theme && strcmp(theme, "light") == 0) {
+                radio = ID_PREF_THEME_LIGHT;
+            } else if (theme && strcmp(theme, "dark") == 0) {
+                radio = ID_PREF_THEME_DARK;
+            }
+            free(theme);
+            CheckRadioButton(page, ID_PREF_THEME_SYSTEM, ID_PREF_THEME_DARK, radio);
+
+            CheckDlgButton(page, ID_PREF_STATUSBAR,
+                           (g_main_window && g_main_window->status_bar_visible) ? BST_CHECKED
+                                                                                : BST_UNCHECKED);
+            return TRUE;
+        }
+
+        case WM_COMMAND:
+            if (LOWORD(wparam) == ID_PREF_FONT) {
+                show_font_dialog(g_main_window);
+                return TRUE;
+            }
+            break;
+
+        case WM_NOTIFY: {
+            NMHDR *nmhdr = (NMHDR *) lparam;
+            if (nmhdr->code == PSN_APPLY) {
+                const char *theme = "system";
+                if (IsDlgButtonChecked(page, ID_PREF_THEME_LIGHT) == BST_CHECKED) {
+                    theme = "light";
+                } else if (IsDlgButtonChecked(page, ID_PREF_THEME_DARK) == BST_CHECKED) {
+                    theme = "dark";
+                }
+                settings_set_string("theme", theme);
+                ui_platform_set_dark_mode(resolve_theme_dark_mode());
+
+                bool show_status = IsDlgButtonChecked(page, ID_PREF_STATUSBAR) == BST_CHECKED;
+                if (g_main_window && g_main_window->status_bar_visible != show_status) {
+                    set_status_bar_visible(g_main_window, show_status);
+                }
+
+                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                return TRUE;
+            }
+            break;
+        }
+    }
+    return FALSE;
+}
+
+static INT_PTR CALLBACK prefs_files_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
+    (void) wparam;
+    switch (msg) {
+        case WM_INITDIALOG: {
+            HWND enc_combo = GetDlgItem(page, ID_PREF_DEFAULT_ENCODING);
+            for (int i = 0; i <= (int) NPAD_ENC_ANSI; i++) {
+                wchar_t *name = utf8_to_wide(file_encoding_name((TextEncoding) i));
+                if (name) {
+                    SendMessageW(enc_combo, CB_ADDSTRING, 0, (LPARAM) name);
+                    free(name);
+                }
+            }
+            SendMessageW(enc_combo, CB_SETCURSEL, (WPARAM) settings_get_int("default_encoding", 0),
+                         0);
+
+            HWND eol_combo = GetDlgItem(page, ID_PREF_DEFAULT_EOL);
+            for (int i = 0; i <= (int) NPAD_EOL_CR; i++) {
+                wchar_t *name = utf8_to_wide(file_line_ending_name((LineEnding) i));
+                if (name) {
+                    SendMessageW(eol_combo, CB_ADDSTRING, 0, (LPARAM) name);
+                    free(name);
+                }
+            }
+            SendMessageW(eol_combo, CB_SETCURSEL,
+                         (WPARAM) settings_get_int("default_line_ending", 0), 0);
+            return TRUE;
+        }
+
+        case WM_NOTIFY: {
+            NMHDR *nmhdr = (NMHDR *) lparam;
+            if (nmhdr->code == PSN_APPLY) {
+                LRESULT enc =
+                    SendMessageW(GetDlgItem(page, ID_PREF_DEFAULT_ENCODING), CB_GETCURSEL, 0, 0);
+                if (enc >= 0) {
+                    settings_set_int("default_encoding", (int) enc);
+                }
+                LRESULT eol =
+                    SendMessageW(GetDlgItem(page, ID_PREF_DEFAULT_EOL), CB_GETCURSEL, 0, 0);
+                if (eol >= 0) {
+                    settings_set_int("default_line_ending", (int) eol);
+                }
+                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                return TRUE;
+            }
+            break;
+        }
+    }
+    return FALSE;
+}
+
+static void show_preferences_dialog(Window *window) {
+    if (!window)
+        return;
+
+    PROPSHEETPAGEW pages[3];
+    ZeroMemory(pages, sizeof(pages));
+
+    pages[0].dwSize = sizeof(PROPSHEETPAGEW);
+    pages[0].hInstance = g_hinstance;
+    pages[0].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_GENERAL);
+    pages[0].pfnDlgProc = prefs_general_proc;
+
+    pages[1].dwSize = sizeof(PROPSHEETPAGEW);
+    pages[1].hInstance = g_hinstance;
+    pages[1].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_APPEARANCE);
+    pages[1].pfnDlgProc = prefs_appearance_proc;
+
+    pages[2].dwSize = sizeof(PROPSHEETPAGEW);
+    pages[2].hInstance = g_hinstance;
+    pages[2].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_FILES);
+    pages[2].pfnDlgProc = prefs_files_proc;
+
+    PROPSHEETHEADERW psh;
+    ZeroMemory(&psh, sizeof(psh));
+    psh.dwSize = sizeof(PROPSHEETHEADERW);
+    psh.dwFlags = PSH_PROPSHEETPAGE | PSH_NOAPPLYNOW | PSH_NOCONTEXTHELP;
+    psh.hwndParent = window->hwnd;
+    psh.hInstance = g_hinstance;
+    psh.pszCaption = L"Preferences";
+    psh.nPages = 3;
+    psh.ppsp = pages;
+
+    PropertySheetW(&psh);
+}
+
 // Go To Line dialog (resource-based, truly modal)
 static INT_PTR CALLBACK goto_proc(HWND dialog, UINT msg, WPARAM wparam, LPARAM lparam) {
     (void) lparam;
@@ -1438,11 +1853,12 @@ static void create_menu(Window *window) {
     HMENU hrecent = CreatePopupMenu();
     HMENU hedit = CreatePopupMenu();
     HMENU hformat = CreatePopupMenu();
+    HMENU heol = CreatePopupMenu();
     HMENU hview = CreatePopupMenu();
     HMENU hzoom = CreatePopupMenu();
     HMENU hhelp = CreatePopupMenu();
 
-    if (!hmenu || !hfile || !hrecent || !hedit || !hformat || !hview || !hzoom || !hhelp) {
+    if (!hmenu || !hfile || !hrecent || !hedit || !hformat || !heol || !hview || !hzoom || !hhelp) {
         NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Menu creation",
                          "Failed to create menu components");
         return;
@@ -1456,6 +1872,8 @@ static void create_menu(Window *window) {
     AppendMenuW(hfile, MF_STRING, ID_FILE_SAVE_AS, L"Save &As...\tCtrl+Shift+S");
     AppendMenuW(hfile, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hfile, MF_STRING | MF_POPUP, (UINT_PTR) hrecent, L"&Recent Files");
+    AppendMenuW(hfile, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(hfile, MF_STRING, ID_FILE_PREFERENCES, L"&Preferences...\tCtrl+,");
     AppendMenuW(hfile, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hfile, MF_STRING, ID_FILE_EXIT, L"E&xit");
 
@@ -1479,6 +1897,13 @@ static void create_menu(Window *window) {
 
     // Format menu
     AppendMenuW(hformat, MF_STRING, ID_FORMAT_WORD_WRAP, L"&Word Wrap\tAlt+Z");
+    AppendMenuW(hformat, MF_STRING, ID_FORMAT_MONOSPACE, L"&Monospace\tCtrl+M");
+    AppendMenuW(hformat, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(heol, MF_STRING, ID_FORMAT_EOL_CRLF, L"&Windows (CRLF)");
+    AppendMenuW(heol, MF_STRING, ID_FORMAT_EOL_LF, L"&Unix (LF)");
+    AppendMenuW(heol, MF_STRING, ID_FORMAT_EOL_CR, L"&Mac (CR)");
+    AppendMenuW(hformat, MF_STRING | MF_POPUP, (UINT_PTR) heol, L"&Line Endings");
+    AppendMenuW(hformat, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hformat, MF_STRING, ID_FORMAT_FONT, L"&Font...");
 
     // View menu
@@ -1549,9 +1974,10 @@ static void rebuild_recent_menu(Window *window) {
     }
 }
 
-// Enable/disable menu items to match the current state, like Notepad
-static void update_menu_states(Window *window) {
-    if (!window || !window->hmenu || !window->edit_hwnd)
+// Enable/disable edit commands in the given menu to match the current
+// state, like Notepad. Shared by the menu bar and the context menu.
+static void apply_edit_command_states(Window *window, HMENU menu) {
+    if (!window || !menu || !window->edit_hwnd)
         return;
 
     bool has_selection = ui_platform_has_selection(window);
@@ -1562,18 +1988,128 @@ static void update_menu_states(Window *window) {
     UINT enabled = MF_BYCOMMAND | MF_ENABLED;
     UINT disabled = MF_BYCOMMAND | MF_GRAYED;
 
-    EnableMenuItem(window->hmenu, ID_EDIT_UNDO, ui_platform_can_undo(window) ? enabled : disabled);
-    EnableMenuItem(window->hmenu, ID_EDIT_REDO, ui_platform_can_redo(window) ? enabled : disabled);
-    EnableMenuItem(window->hmenu, ID_EDIT_CUT, has_selection ? enabled : disabled);
-    EnableMenuItem(window->hmenu, ID_EDIT_COPY, has_selection ? enabled : disabled);
-    EnableMenuItem(window->hmenu, ID_EDIT_DELETE, has_selection ? enabled : disabled);
-    EnableMenuItem(window->hmenu, ID_EDIT_PASTE, can_paste ? enabled : disabled);
-    EnableMenuItem(window->hmenu, ID_EDIT_FIND, has_text ? enabled : disabled);
-    EnableMenuItem(window->hmenu, ID_EDIT_FIND_NEXT,
+    EnableMenuItem(menu, ID_EDIT_UNDO, ui_platform_can_undo(window) ? enabled : disabled);
+    EnableMenuItem(menu, ID_EDIT_REDO, ui_platform_can_redo(window) ? enabled : disabled);
+    EnableMenuItem(menu, ID_EDIT_CUT, has_selection ? enabled : disabled);
+    EnableMenuItem(menu, ID_EDIT_COPY, has_selection ? enabled : disabled);
+    EnableMenuItem(menu, ID_EDIT_DELETE, has_selection ? enabled : disabled);
+    EnableMenuItem(menu, ID_EDIT_PASTE, can_paste ? enabled : disabled);
+    EnableMenuItem(menu, ID_EDIT_FIND, has_text ? enabled : disabled);
+    EnableMenuItem(menu, ID_EDIT_FIND_NEXT,
                    (has_text && g_search_text[0] != L'\0') ? enabled : disabled);
-    EnableMenuItem(window->hmenu, ID_EDIT_FIND_PREV,
+    EnableMenuItem(menu, ID_EDIT_FIND_PREV,
                    (has_text && g_search_text[0] != L'\0') ? enabled : disabled);
-    EnableMenuItem(window->hmenu, ID_EDIT_REPLACE, has_text ? enabled : disabled);
+    EnableMenuItem(menu, ID_EDIT_REPLACE, has_text ? enabled : disabled);
+}
+
+// Refresh enable states and checkmarks across the whole menu bar
+static void update_menu_states(Window *window) {
+    if (!window || !window->hmenu)
+        return;
+
+    apply_edit_command_states(window, window->hmenu);
+
+    CheckMenuItem(window->hmenu, ID_FORMAT_MONOSPACE,
+                  settings_get_bool("monospace_enabled", true) ? MF_CHECKED : MF_UNCHECKED);
+    CheckMenuRadioItem(window->hmenu, ID_FORMAT_EOL_CRLF, ID_FORMAT_EOL_CR,
+                       ID_FORMAT_EOL_CRLF + (UINT) editor_get_line_ending(), MF_BYCOMMAND);
+}
+
+// Right-click context menu for the edit control (Notepad-style)
+static void show_context_menu(Window *window, int x, int y) {
+    if (!window || !window->edit_hwnd)
+        return;
+
+    // Keyboard-invoked (Shift+F10): position at the caret
+    if (x == -1 && y == -1) {
+        CHARRANGE sel = { 0, 0 };
+        SendMessageW(window->edit_hwnd, EM_EXGETSEL, 0, (LPARAM) &sel);
+        POINTL pt = { 0, 0 };
+        SendMessageW(window->edit_hwnd, EM_POSFROMCHAR, (WPARAM) &pt, sel.cpMin);
+        POINT screen = { pt.x, pt.y };
+        ClientToScreen(window->edit_hwnd, &screen);
+        x = screen.x;
+        y = screen.y;
+    }
+
+    HMENU menu = CreatePopupMenu();
+    if (!menu)
+        return;
+
+    AppendMenuW(menu, MF_STRING, ID_EDIT_UNDO, L"&Undo");
+    AppendMenuW(menu, MF_STRING, ID_EDIT_REDO, L"&Redo");
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(menu, MF_STRING, ID_EDIT_CUT, L"Cu&t");
+    AppendMenuW(menu, MF_STRING, ID_EDIT_COPY, L"&Copy");
+    AppendMenuW(menu, MF_STRING, ID_EDIT_PASTE, L"&Paste");
+    AppendMenuW(menu, MF_STRING, ID_EDIT_DELETE, L"&Delete");
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(menu, MF_STRING, ID_EDIT_SELECT_ALL, L"Select &All");
+
+    apply_edit_command_states(window, menu);
+
+    TrackPopupMenu(menu, TPM_RIGHTBUTTON, x, y, 0, window->hwnd, NULL);
+    DestroyMenu(menu);
+}
+
+// Popup for the status bar's line-ending part (also mirrors Format > Line Endings)
+static void show_line_ending_popup(Window *window) {
+    if (!window)
+        return;
+
+    HMENU menu = CreatePopupMenu();
+    if (!menu)
+        return;
+
+    AppendMenuW(menu, MF_STRING, ID_FORMAT_EOL_CRLF, L"&Windows (CRLF)");
+    AppendMenuW(menu, MF_STRING, ID_FORMAT_EOL_LF, L"&Unix (LF)");
+    AppendMenuW(menu, MF_STRING, ID_FORMAT_EOL_CR, L"&Mac (CR)");
+    CheckMenuRadioItem(menu, ID_FORMAT_EOL_CRLF, ID_FORMAT_EOL_CR,
+                       ID_FORMAT_EOL_CRLF + (UINT) editor_get_line_ending(), MF_BYCOMMAND);
+
+    POINT pt;
+    GetCursorPos(&pt);
+    TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, window->hwnd, NULL);
+    DestroyMenu(menu);
+}
+
+// Popup for the status bar's encoding part
+static void show_encoding_popup(Window *window) {
+    if (!window)
+        return;
+
+    HMENU menu = CreatePopupMenu();
+    if (!menu)
+        return;
+
+    for (int i = 0; i <= (int) NPAD_ENC_ANSI; i++) {
+        wchar_t *name = utf8_to_wide(file_encoding_name((TextEncoding) i));
+        if (name) {
+            AppendMenuW(menu, MF_STRING, ID_ENCODING_BASE + (UINT) i, name);
+            free(name);
+        }
+    }
+    CheckMenuRadioItem(menu, ID_ENCODING_BASE, ID_ENCODING_BASE + (UINT) NPAD_ENC_ANSI,
+                       ID_ENCODING_BASE + (UINT) editor_get_encoding(), MF_BYCOMMAND);
+
+    POINT pt;
+    GetCursorPos(&pt);
+    TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, window->hwnd, NULL);
+    DestroyMenu(menu);
+}
+
+// Toggle status bar visibility (shared by the View menu and Preferences)
+static void set_status_bar_visible(Window *window, bool visible) {
+    if (!window)
+        return;
+
+    window->status_bar_visible = visible;
+    settings_set_bool("status_bar_visible", visible);
+    ShowWindow(window->status_hwnd, visible ? SW_SHOW : SW_HIDE);
+    resize_controls(window);
+    if (window->hmenu) {
+        CheckMenuItem(window->hmenu, ID_VIEW_STATUS_BAR, visible ? MF_CHECKED : MF_UNCHECKED);
+    }
 }
 
 static void handle_command(Window *window, WORD command) {
@@ -1588,6 +2124,12 @@ static void handle_command(Window *window, WORD command) {
         if (files) {
             settings_free_recent_files(files, count);
         }
+        return;
+    }
+
+    // Encoding entries from the status bar popup
+    if (command >= ID_ENCODING_BASE && command <= ID_ENCODING_BASE + (WORD) NPAD_ENC_ANSI) {
+        editor_set_encoding((TextEncoding) (command - ID_ENCODING_BASE));
         return;
     }
 
@@ -1607,6 +2149,9 @@ static void handle_command(Window *window, WORD command) {
         case ID_FILE_RECENT_CLEAR:
             settings_clear_recent_files();
             rebuild_recent_menu(window);
+            break;
+        case ID_FILE_PREFERENCES:
+            show_preferences_dialog(window);
             break;
         case ID_FILE_EXIT:
             ui_post_event(UI_EVENT_QUIT, window, NULL);
@@ -1663,6 +2208,19 @@ static void handle_command(Window *window, WORD command) {
             settings_set_bool("word_wrap", window->word_wrap_enabled);
             apply_word_wrap(window);
             break;
+        case ID_FORMAT_MONOSPACE:
+            settings_set_bool("monospace_enabled", !settings_get_bool("monospace_enabled", true));
+            apply_font(window);
+            update_menu_states(window);
+            break;
+        case ID_FORMAT_EOL_CRLF:
+        case ID_FORMAT_EOL_LF:
+        case ID_FORMAT_EOL_CR:
+            editor_set_line_ending((LineEnding) (command - ID_FORMAT_EOL_CRLF));
+            break;
+        case ID_FORMAT_EOL_CYCLE:
+            editor_set_line_ending((LineEnding) ((editor_get_line_ending() + 1) % 3));
+            break;
         case ID_FORMAT_FONT:
             show_font_dialog(window);
             break;
@@ -1676,14 +2234,7 @@ static void handle_command(Window *window, WORD command) {
             set_zoom(window, 100);
             break;
         case ID_VIEW_STATUS_BAR:
-            window->status_bar_visible = !window->status_bar_visible;
-            settings_set_bool("status_bar_visible", window->status_bar_visible);
-            ShowWindow(window->status_hwnd, window->status_bar_visible ? SW_SHOW : SW_HIDE);
-            resize_controls(window);
-            if (window->hmenu) {
-                CheckMenuItem(window->hmenu, ID_VIEW_STATUS_BAR,
-                              window->status_bar_visible ? MF_CHECKED : MF_UNCHECKED);
-            }
+            set_status_bar_visible(window, !window->status_bar_visible);
             break;
         case ID_VIEW_DARK_MODE:
             ui_post_event(UI_EVENT_VIEW_TOGGLE_DARK_MODE, window, NULL);
@@ -1811,7 +2362,34 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                 NMHDR *nmhdr = (NMHDR *) lparam;
                 if (nmhdr->idFrom == ID_EDIT_CONTROL && nmhdr->code == EN_SELCHANGE) {
                     update_status_bar(window);
+                } else if (nmhdr->hwndFrom == window->status_hwnd && nmhdr->code == NM_CLICK) {
+                    // Status bar part clicks: Ln/Col -> Go To, zoom -> reset,
+                    // line ending / encoding -> pickers
+                    NMMOUSE *mouse = (NMMOUSE *) lparam;
+                    switch ((int) mouse->dwItemSpec) {
+                        case 1:
+                            show_goto_dialog(window);
+                            break;
+                        case 2:
+                            set_zoom(window, 100);
+                            break;
+                        case 3:
+                            show_line_ending_popup(window);
+                            break;
+                        case 4:
+                            show_encoding_popup(window);
+                            break;
+                    }
                 }
+            }
+            break;
+        }
+
+        case WM_CONTEXTMENU: {
+            if (window && (HWND) wparam == window->edit_hwnd) {
+                show_context_menu(window, (int) (short) LOWORD(lparam),
+                                  (int) (short) HIWORD(lparam));
+                return 0;
             }
             break;
         }
@@ -1822,7 +2400,21 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
             if (window && DragQueryFileW(drop, 0, path, MAX_PATH) > 0) {
                 char *utf8 = wide_to_utf8(path);
                 if (utf8) {
-                    ui_post_event(UI_EVENT_FILE_DROPPED, window, utf8);
+                    if (GetKeyState(VK_CONTROL) & 0x8000) {
+                        // Ctrl+Drop inserts the file contents at the caret
+                        TextFileInfo info;
+                        char *content = file_read_text_ex(utf8, &info);
+                        if (content) {
+                            wchar_t *wide = utf8_to_wide(content);
+                            if (wide) {
+                                SendMessageW(window->edit_hwnd, EM_REPLACESEL, TRUE, (LPARAM) wide);
+                                free(wide);
+                            }
+                            free(content);
+                        }
+                    } else {
+                        ui_post_event(UI_EVENT_FILE_DROPPED, window, utf8);
+                    }
                     free(utf8);
                 }
             }

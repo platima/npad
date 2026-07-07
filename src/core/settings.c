@@ -327,9 +327,23 @@ bool settings_load_window_state(int *x, int *y, int *width, int *height, bool *m
     return true;
 }
 
+// User-configurable cap on the recent files list (0 disables it)
+static int recent_files_limit(void) {
+    int max = settings_get_int("recent_files_max", MAX_RECENT_FILES);
+    if (max < 0)
+        max = 0;
+    if (max > MAX_RECENT_FILES)
+        max = MAX_RECENT_FILES;
+    return max;
+}
+
 bool settings_add_recent_file(const char *filepath) {
     if (!filepath)
         return false;
+
+    int limit = recent_files_limit();
+    if (limit == 0)
+        return true; // Recent files disabled
 
     // Get current recent files
     int count;
@@ -367,7 +381,7 @@ bool settings_add_recent_file(const char *filepath) {
     new_count++;
 
     // Add existing files (except the one we're moving to top)
-    for (int i = 0; i < count && new_count < MAX_RECENT_FILES; i++) {
+    for (int i = 0; i < count && new_count < limit; i++) {
         if (i != existing_index && recent_files && recent_files[i]) {
             new_list[new_count] = malloc(strlen(recent_files[i]) + 1);
             if (!new_list[new_count]) {
@@ -420,12 +434,13 @@ char **settings_get_recent_files(int *count) {
     }
     *count = 0;
 
+    int limit = recent_files_limit();
     for (int i = 0; i < MAX_RECENT_FILES; i++) {
         char key[32];
         snprintf(key, sizeof(key), "recent_file_%d", i);
 
         char *filepath = settings_get_string(key, NULL);
-        if (filepath && file_exists(filepath)) {
+        if (filepath && *count < limit && file_exists(filepath)) {
             files[*count] = filepath;
             (*count)++;
         } else if (filepath) {

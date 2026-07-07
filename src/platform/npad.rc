@@ -45,42 +45,42 @@ END
 // Application Icon
 IDI_NPAD ICON "npad.ico"
 
-// Find Dialog
-IDD_FIND DIALOGEX 0, 0, 250, 120
+// Find Dialog (compact layout matching classic notepad.exe:
+// checkboxes bottom-left, Direction group to their right, buttons top-right)
+IDD_FIND DIALOGEX 0, 0, 262, 78
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Find"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
-    LTEXT           "Find &what:", IDC_STATIC, 9, 15, 48, 8
-    EDITTEXT        ID_FIND_TEXT, 65, 12, 120, 14, ES_AUTOHSCROLL
-    DEFPUSHBUTTON   "&Find Next", ID_FIND_NEXT, 195, 12, 50, 14
-    PUSHBUTTON      "Cancel", ID_FIND_CANCEL, 195, 30, 50, 14
-    CONTROL         "&Match case", ID_FIND_CASE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 9, 42, 64, 10
-    CONTROL         "Match &whole word only", ID_FIND_WHOLE_WORD, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 9, 56, 132, 10
-    GROUPBOX        "Direction", IDC_STATIC, 9, 75, 75, 35
-    CONTROL         "&Up", IDC_RADIO_UP, "Button", BS_AUTORADIOBUTTON | WS_GROUP, 15, 87, 25, 10
-    CONTROL         "&Down", IDC_RADIO_DOWN, "Button", BS_AUTORADIOBUTTON, 50, 87, 30, 10
+    LTEXT           "Fi&nd what:", IDC_STATIC, 7, 9, 40, 8
+    EDITTEXT        ID_FIND_TEXT, 48, 7, 150, 14, ES_AUTOHSCROLL
+    DEFPUSHBUTTON   "&Find Next", ID_FIND_NEXT, 205, 7, 50, 14
+    PUSHBUTTON      "Cancel", ID_FIND_CANCEL, 205, 24, 50, 14
+    CONTROL         "Match &case", ID_FIND_CASE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 32, 92, 10
+    CONTROL         "Match &whole word only", ID_FIND_WHOLE_WORD, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 45, 92, 10
+    CONTROL         "Wrap ar&ound", ID_FIND_WRAP, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 58, 92, 10
+    GROUPBOX        "Direction", IDC_STATIC, 108, 30, 90, 38
+    CONTROL         "&Up", IDC_RADIO_UP, "Button", BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 116, 45, 28, 10
+    CONTROL         "&Down", IDC_RADIO_DOWN, "Button", BS_AUTORADIOBUTTON, 152, 45, 36, 10
 END
 
-// Replace Dialog  
-IDD_REPLACE DIALOGEX 0, 0, 270, 140
+// Replace Dialog (no Direction group, like classic notepad.exe)
+IDD_REPLACE DIALOGEX 0, 0, 262, 90
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Replace"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
-    LTEXT           "Find &what:", IDC_STATIC, 9, 15, 48, 8
-    EDITTEXT        ID_FIND_TEXT, 65, 12, 120, 14, ES_AUTOHSCROLL
-    LTEXT           "Re&place with:", IDC_STATIC, 9, 35, 48, 8
-    EDITTEXT        ID_REPLACE_WITH, 65, 32, 120, 14, ES_AUTOHSCROLL
-    DEFPUSHBUTTON   "&Find Next", ID_FIND_NEXT, 195, 12, 70, 14
-    PUSHBUTTON      "&Replace", ID_REPLACE_NEXT, 195, 30, 70, 14
-    PUSHBUTTON      "Replace &All", ID_REPLACE_ALL, 195, 48, 70, 14
-    PUSHBUTTON      "Cancel", ID_FIND_CANCEL, 195, 66, 70, 14
-    CONTROL         "&Match case", ID_FIND_CASE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 9, 62, 64, 10
-    CONTROL         "Match &whole word only", ID_FIND_WHOLE_WORD, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 9, 76, 132, 10
-    GROUPBOX        "Direction", IDC_STATIC, 9, 95, 75, 35
-    CONTROL         "&Up", IDC_RADIO_UP, "Button", BS_AUTORADIOBUTTON | WS_GROUP, 15, 107, 25, 10
-    CONTROL         "&Down", IDC_RADIO_DOWN, "Button", BS_AUTORADIOBUTTON, 50, 107, 30, 10
+    LTEXT           "Fi&nd what:", IDC_STATIC, 7, 9, 40, 8
+    EDITTEXT        ID_FIND_TEXT, 52, 7, 146, 14, ES_AUTOHSCROLL
+    LTEXT           "Re&place with:", IDC_STATIC, 7, 27, 45, 8
+    EDITTEXT        ID_REPLACE_WITH, 52, 25, 146, 14, ES_AUTOHSCROLL
+    DEFPUSHBUTTON   "&Find Next", ID_FIND_NEXT, 205, 7, 50, 14
+    PUSHBUTTON      "&Replace", ID_REPLACE_NEXT, 205, 24, 50, 14
+    PUSHBUTTON      "Replace &All", ID_REPLACE_ALL, 205, 41, 50, 14
+    PUSHBUTTON      "Cancel", ID_FIND_CANCEL, 205, 58, 50, 14
+    CONTROL         "Match &case", ID_FIND_CASE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 45, 92, 10
+    CONTROL         "Match &whole word only", ID_FIND_WHOLE_WORD, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 58, 92, 10
+    CONTROL         "Wrap ar&ound", ID_FIND_WRAP, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 71, 92, 10
 END
 // Go To Line Dialog
 IDD_GOTO DIALOGEX 0, 0, 180, 62
@@ -92,4 +92,55 @@ BEGIN
     EDITTEXT        ID_GOTO_EDIT, 9, 21, 162, 14, ES_AUTOHSCROLL | ES_NUMBER
     DEFPUSHBUTTON   "&Go To", IDOK, 66, 42, 50, 14
     PUSHBUTTON      "Cancel", IDCANCEL, 121, 42, 50, 14
+END
+
+// Preferences: General page
+IDD_PREFS_GENERAL DIALOGEX 0, 0, 220, 150
+STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+CAPTION "General"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    CONTROL         "Enable &auto-save", ID_PREF_AUTOSAVE_ENABLED, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 10, 12, 110, 10
+    LTEXT           "Auto-save &interval (seconds):", IDC_STATIC, 22, 30, 100, 8
+    EDITTEXT        ID_PREF_AUTOSAVE_INTERVAL, 130, 28, 44, 13, ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "&Large file warning threshold (MB):", IDC_STATIC, 10, 54, 116, 8
+    EDITTEXT        ID_PREF_LARGE_FILE_MB, 130, 52, 44, 13, ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "Ma&x recent files (0-10):", IDC_STATIC, 10, 76, 116, 8
+    EDITTEXT        ID_PREF_RECENT_MAX, 130, 74, 44, 13, ES_AUTOHSCROLL | ES_NUMBER
+    PUSHBUTTON      "&Clear Recent Files Now", ID_PREF_RECENT_CLEAR, 10, 96, 100, 14
+END
+
+// Preferences: Appearance page
+IDD_PREFS_APPEARANCE DIALOGEX 0, 0, 220, 150
+STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+CAPTION "Appearance"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    GROUPBOX        "Theme", IDC_STATIC, 10, 8, 130, 64
+    CONTROL         "Follow &system", ID_PREF_THEME_SYSTEM, "Button", BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 20, 22, 100, 10
+    CONTROL         "&Light", ID_PREF_THEME_LIGHT, "Button", BS_AUTORADIOBUTTON, 20, 36, 100, 10
+    CONTROL         "&Dark", ID_PREF_THEME_DARK, "Button", BS_AUTORADIOBUTTON, 20, 50, 100, 10
+    CONTROL         "Show s&tatus bar", ID_PREF_STATUSBAR, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 10, 82, 110, 10
+    PUSHBUTTON      "&Font...", ID_PREF_FONT, 10, 100, 60, 14
+END
+
+// Preferences: Files page
+IDD_PREFS_FILES DIALOGEX 0, 0, 220, 150
+STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+CAPTION "Files"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "Default &encoding for new files:", IDC_STATIC, 10, 14, 106, 8
+    COMBOBOX        ID_PREF_DEFAULT_ENCODING, 120, 12, 90, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Default &line endings for new files:", IDC_STATIC, 10, 38, 106, 8
+    COMBOBOX        ID_PREF_DEFAULT_EOL, 120, 36, 90, 60, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+END
+
+// Save dialog child template hosting the encoding picker
+IDD_SAVE_ENCODING DIALOGEX 0, 0, 220, 26
+STYLE DS_SETFONT | DS_3DLOOK | DS_CONTROL | WS_CHILD | WS_CLIPSIBLINGS
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "&Encoding:", IDC_STATIC, 7, 8, 36, 8
+    COMBOBOX        ID_SAVE_ENCODING_COMBO, 46, 6, 110, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
 END

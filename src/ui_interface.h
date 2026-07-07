@@ -9,6 +9,7 @@
 #ifndef UI_INTERFACE_H
 #define UI_INTERFACE_H
 
+#include "core/file_ops.h" // TextEncoding / LineEnding
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -59,12 +60,14 @@ typedef struct {
     bool dark_mode;
 } WindowParams;
 
-// File dialog parameters
+// File dialog parameters. For save dialogs, `encoding` carries the current
+// encoding in and the user's choice from the dialog's encoding picker out.
 typedef struct {
     const char *title;
     const char *default_filename;
     const char *filter;
     bool save_dialog;
+    TextEncoding encoding;
 } FileDialogParams;
 
 // Result of the "save changes?" prompt (Notepad's three-way choice)
@@ -116,7 +119,7 @@ bool ui_can_redo(Window *window);
 
 // Dialogs
 char *ui_show_open_dialog(Window *parent, const FileDialogParams *params);
-char *ui_show_save_dialog(Window *parent, const FileDialogParams *params);
+char *ui_show_save_dialog(Window *parent, FileDialogParams *params);
 bool ui_show_message_box(Window *parent, const char *title, const char *message, bool is_question);
 SavePromptResult ui_show_save_prompt(Window *parent, const char *filename);
 void ui_show_about_dialog(Window *parent);

@@ -62,6 +62,28 @@ should be read with that in mind.
 - Menu items enable/disable correctly (Undo/Redo/Cut/Copy/Paste/Delete/Find).
 - Edit > Delete (Del) and Edit > Time/Date (F5), like Notepad.
 - Monospace default font (Consolas 11pt); font choice persists.
+- Right-click context menu in the editor (Undo/Redo/Cut/Copy/Paste/Delete/
+  Select All), with state-aware enabling.
+- Find/Replace: "Wrap around" option (with a "Wrapped around" status
+  indicator), compact classic-Notepad layout with the Direction group
+  beside the checkboxes, dialogs open offset into the window like
+  notepad.exe and remember their position; find options persist.
+- Tabbed Preferences dialog (File > Preferences..., Ctrl+,): auto-save,
+  large-file threshold, recent-files size and clearing; theme and status
+  bar; default encoding and line endings for new files.
+- Line ending conversion: Format > Line Endings, Ctrl+E cycles, applied on
+  save; also available by clicking the status bar's line-ending part.
+- Encoding picker in the Save dialog; encoding also changeable from the
+  status bar's encoding part.
+- Status bar click actions: Ln/Col opens Go To, zoom resets to 100%.
+- Monospace toggle (Format > Monospace, Ctrl+M) between Consolas and the
+  chosen font.
+- Ctrl+Drop inserts the dropped file's contents at the caret instead of
+  opening it.
+- Undo depth raised from RichEdit's default 100 actions to 100,000.
+- Status bar refreshes immediately after Ctrl+Scroll zoom and when the
+  caret moves onto a new empty line (fixed RichEdit end-of-text line
+  reporting plus stale-refresh events).
 
 ### 🔧 Technical Improvements
 - Removed the memory-limit subsystem (working-set-based caps, paste-undo

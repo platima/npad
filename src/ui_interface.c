@@ -58,7 +58,7 @@ extern bool ui_platform_can_redo(Window *window);
 
 // Platform dialog functions
 extern char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *params);
-extern char *ui_platform_show_save_dialog(Window *parent, const FileDialogParams *params);
+extern char *ui_platform_show_save_dialog(Window *parent, FileDialogParams *params);
 extern bool ui_platform_show_message_box(Window *parent, const char *title, const char *message,
                                          bool is_question);
 extern SavePromptResult ui_platform_show_save_prompt(Window *parent, const char *filename);
@@ -211,7 +211,7 @@ char *ui_show_open_dialog(Window *parent, const FileDialogParams *params) {
     return ui_platform_show_open_dialog(parent, params);
 }
 
-char *ui_show_save_dialog(Window *parent, const FileDialogParams *params) {
+char *ui_show_save_dialog(Window *parent, FileDialogParams *params) {
     return ui_platform_show_save_dialog(parent, params);
 }
 

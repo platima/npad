@@ -43,15 +43,20 @@ Current features (Windows build):
 - **🌍 Unicode throughout** - Detects and preserves UTF-8, UTF-8 BOM, UTF-16 LE/BE and ANSI encodings
 - **↩️ Line ending aware** - Detects and preserves Windows (CRLF), Unix (LF) and Mac (CR) line endings, shown in the status bar
 - **🔧 Quality-of-life enhancements:**
+  - Tabbed Preferences dialog (Ctrl+,) for auto-save, theme, fonts, defaults and more
   - Optional auto-save (enabled by default, configurable)
   - Dark / light theme support (follows system theme by default, configurable)
-  - Find / Replace with direction, match case and whole word (Ctrl+F / Ctrl+H, F3 / Shift+F3)
-  - Undo / Redo (Ctrl+Z / Ctrl+Y)
+  - Find / Replace with direction, match case, whole word and wrap-around (Ctrl+F / Ctrl+H, F3 / Shift+F3)
+  - Undo / Redo (Ctrl+Z / Ctrl+Y) with a deep undo history
   - Zoom (Ctrl+Plus / Ctrl+Minus / Ctrl+0, Ctrl+Scroll)
   - Word wrap toggle (Alt+Z), Go To Line (Ctrl+G), Time/Date (F5)
-  - Monospace font by default (Consolas 11pt) with a persistent font chooser
-  - Recent files menu
-  - Drag-and-drop to open files
+  - Line ending conversion (Format menu, Ctrl+E to cycle, or click the status bar)
+  - Encoding picker in the Save dialog (or click the status bar)
+  - Right-click context menu (Undo/Redo/Cut/Copy/Paste/Delete/Select All)
+  - Status bar click actions: Ln/Col opens Go To, zoom resets, line ending and encoding open pickers
+  - Monospace font by default (Consolas 11pt), monospace toggle (Ctrl+M), persistent font chooser
+  - Recent files menu (size configurable)
+  - Drag-and-drop to open files; Ctrl+Drop inserts the file at the caret
   - Atomic saves - a failed save can never destroy the existing file
   - JSON settings storage; remembers window position, size and maximized state
   - Confirmation prompt before opening very large files
@@ -61,8 +66,6 @@ Planned (see the [Roadmap](#roadmap)):
 - 🚧 macOS, Linux (X11/Wayland) and terminal builds
 - 🚧 Optional tabbed interface
 - 🚧 Session resume / crash protection
-- 🚧 Line ending conversion and save-dialog encoding picker
-- 🚧 Monospace toggle shortcut and status bar click actions
 - 🚧 Multi-language support
 - 🚧 Portable EXE, installer, MSI and winget distribution
 
@@ -258,7 +261,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] Zoom via Ctrl+/-, Ctrl Scroll
   - [ ] RTL/LTR support
   - [x] High DPI support
-  - [ ] Encoding options in Save Dialog
+  - [x] Encoding options in Save Dialog
   - [x] Drag and drop to open
   - [x] Word wrap support (add Alt+Z shortcut)
   - [x] Font chooser
@@ -268,33 +271,33 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] Auto-save feature (enabled by default)
   - [ ] Session resume / crash protection (disabled by default)
   - [x] Dark/light theme support (follow system by default)
-  - [ ] Unlimited Undo & Redo
+  - [x] Deep Undo & Redo history (100,000 actions)
   - [ ] Improvements to Find & Replace dialogs
     - [ ] Recent list (configurable)
     - [ ] Show match count
     - [x] 'Find Previous'
-    - [ ] Wrap-around indicator
+    - [x] Wrap-around option and indicator
     - [x] Correct \[tab\] order
   - [ ] Monospace toggle
-    - [ ] Menu / Keyboard shortcut (Ctrl+M)
+    - [x] Menu / Keyboard shortcut (Ctrl+M)
     - [ ] Status bar click
-  - [ ] Zoom improvements
+  - [x] Zoom improvements
     - [x] Menu / Keyboard shortcuts (Ctrl+Plus / Ctrl+Minus / Ctrl+0)
-    - [ ] Status bar click
-  - [ ] Go-To Line via
+    - [x] Status bar click (resets to 100%)
+  - [x] Go-To Line via
     - [x] Menu / Keyboard shortcut (Ctrl+G)
-    - [ ] Status bar click
-  - [ ] Convert line endings between LF, CR LF, CR
+    - [x] Status bar click
+  - [x] Convert line endings between LF, CR LF, CR
     - [x] Detect and preserve line endings (shown in status bar)
-    - [ ] Menu / Keyboard shortcut (Ctrl+E)
-    - [ ] Status bar click
-  - [ ] Ctrl+Drop to insert instead of open
+    - [x] Menu / Keyboard shortcut (Ctrl+E)
+    - [x] Status bar click
+  - [x] Ctrl+Drop to insert instead of open
   - [x] 'Recent' menu (optional)
 - [ ] **Advanced Features**
   - [ ] Tabbed interface (optional)
   - [ ] Multi-language support
-  - [ ] Settings window
-  - [ ] Full undo/redo history
+  - [x] Settings window (tabbed Preferences dialog, Ctrl+,)
+  - [x] Full undo/redo history
   - [ ] Custom keyboard shortcuts
   - [ ] Solarized color schemes
 - [ ] **Distribution & Installation**
