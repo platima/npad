@@ -41,8 +41,9 @@
 // Window class name
 #define NPAD_WINDOW_CLASS L"NpadMainWindow"
 
-// Auto-save timer
+// Timers
 #define NPAD_AUTO_SAVE_TIMER_ID 1
+#define NPAD_SESSION_TIMER_ID 2
 
 // Control IDs
 #define ID_EDIT_CONTROL 1001
@@ -210,19 +211,52 @@ static bool read_system_dark_mode(void) {
     return dark;
 }
 
-// Resolve the "theme" setting (system/light/dark) to a dark-mode flag
-static bool resolve_theme_dark_mode(void) {
+// Resolve the "theme" setting to editor colors and whether the scheme is
+// dark (used for the title-bar decision). Schemes: system, light, dark,
+// solarized-light, solarized-dark.
+static bool theme_colors(COLORREF *bg, COLORREF *fg) {
     bool dark = false;
+    COLORREF back = GetSysColor(COLOR_WINDOW);
+    COLORREF text = GetSysColor(COLOR_WINDOWTEXT);
+
     char *theme = settings_get_string("theme", "system");
-    if (theme && strcmp(theme, "dark") == 0) {
+    const char *t = theme ? theme : "system";
+
+    if (strcmp(t, "dark") == 0) {
         dark = true;
-    } else if (theme && strcmp(theme, "light") == 0) {
+        back = RGB(30, 30, 30);
+        text = RGB(220, 220, 220);
+    } else if (strcmp(t, "light") == 0) {
         dark = false;
-    } else {
+        back = RGB(255, 255, 255);
+        text = RGB(0, 0, 0);
+    } else if (strcmp(t, "solarized-light") == 0) {
+        dark = false;
+        back = RGB(0xFD, 0xF6, 0xE3); // base3
+        text = RGB(0x65, 0x7B, 0x83); // base00
+    } else if (strcmp(t, "solarized-dark") == 0) {
+        dark = true;
+        back = RGB(0x00, 0x2B, 0x36); // base03
+        text = RGB(0x83, 0x94, 0x96); // base0
+    } else {                          // "system"
         dark = read_system_dark_mode();
+        if (dark) {
+            back = RGB(30, 30, 30);
+            text = RGB(220, 220, 220);
+        }
     }
     free(theme);
+
+    if (bg)
+        *bg = back;
+    if (fg)
+        *fg = text;
     return dark;
+}
+
+// Resolve the "theme" setting to a dark-mode flag (title bar decision)
+static bool resolve_theme_dark_mode(void) {
+    return theme_colors(NULL, NULL);
 }
 
 // Subclass for the edit control: refresh the status bar after events that
@@ -956,6 +990,39 @@ static void set_status_message(Window *window, const char *message) {
     }
 }
 
+// Count total matches of the current search term (capped) and the 1-based
+// ordinal of the match at `current`. Match count uses the current
+// case/whole-word options.
+static void count_matches(Window *window, const CHARRANGE *current, int *total, int *ordinal) {
+    const int CAP = 10000;
+    *total = 0;
+    *ordinal = 0;
+
+    FINDTEXTEXW ft;
+    LONG from = 0;
+    WPARAM flags = FR_DOWN;
+    if (g_match_case)
+        flags |= FR_MATCHCASE;
+    if (g_whole_word)
+        flags |= FR_WHOLEWORD;
+
+    while (*total < CAP) {
+        memset(&ft, 0, sizeof(ft));
+        ft.lpstrText = g_search_text;
+        ft.chrg.cpMin = from;
+        ft.chrg.cpMax = -1;
+        if (SendMessageW(window->edit_hwnd, EM_FINDTEXTEXW, flags, (LPARAM) &ft) == -1)
+            break;
+        (*total)++;
+        if (ft.chrgText.cpMin == current->cpMin) {
+            *ordinal = *total;
+        }
+        from = ft.chrgText.cpMax;
+        if (from <= ft.chrgText.cpMin)
+            from = ft.chrgText.cpMin + 1; // Guard against zero-width matches
+    }
+}
+
 // Run one EM_FINDTEXTEXW pass over the given range
 static bool find_in_range(Window *window, LONG from, LONG to, bool down, CHARRANGE *found) {
     FINDTEXTEXW ft;
@@ -1027,8 +1094,77 @@ static bool find_next(Window *window, bool down) {
 
     SendMessageW(window->edit_hwnd, EM_EXSETSEL, 0, (LPARAM) &found);
     SendMessageW(window->edit_hwnd, EM_SCROLLCARET, 0, 0);
-    set_status_message(window, wrapped ? "Wrapped around" : "");
+
+    int total = 0, ordinal = 0;
+    count_matches(window, &found, &total, &ordinal);
+    char message[128];
+    if (wrapped) {
+        snprintf(message, sizeof(message), "Wrapped around - Match %d of %d", ordinal, total);
+    } else {
+        snprintf(message, sizeof(message), "Match %d of %d", ordinal, total);
+    }
+    set_status_message(window, message);
     return true;
+}
+
+// Find/Replace term history: most-recent-first, de-duplicated, capped
+#define FIND_HISTORY_MAX 10
+
+static void history_load(HWND combo, const char *prefix) {
+    for (int i = 0; i < FIND_HISTORY_MAX; i++) {
+        char key[48];
+        snprintf(key, sizeof(key), "%s_%d", prefix, i);
+        char *value = settings_get_string(key, NULL);
+        if (!value)
+            break;
+        if (value[0]) {
+            wchar_t *wide = utf8_to_wide(value);
+            if (wide) {
+                SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM) wide);
+                free(wide);
+            }
+        }
+        free(value);
+    }
+}
+
+static void history_push(const char *prefix, const wchar_t *value) {
+    if (!value || value[0] == L'\0')
+        return;
+    char *utf8 = wide_to_utf8(value);
+    if (!utf8)
+        return;
+
+    // Read existing entries, dropping any duplicate of the new value
+    char *entries[FIND_HISTORY_MAX];
+    int count = 0;
+    entries[count++] = utf8;
+    for (int i = 0; i < FIND_HISTORY_MAX && count < FIND_HISTORY_MAX; i++) {
+        char key[48];
+        snprintf(key, sizeof(key), "%s_%d", prefix, i);
+        char *existing = settings_get_string(key, NULL);
+        if (!existing)
+            break;
+        if (existing[0] && strcmp(existing, utf8) != 0) {
+            entries[count++] = existing;
+        } else {
+            free(existing);
+        }
+    }
+
+    for (int i = 0; i < FIND_HISTORY_MAX; i++) {
+        char key[48];
+        snprintf(key, sizeof(key), "%s_%d", prefix, i);
+        if (i < count) {
+            settings_set_string(key, entries[i]);
+        } else {
+            settings_remove_key(key);
+        }
+    }
+
+    for (int i = 0; i < count; i++) {
+        free(entries[i]);
+    }
 }
 
 // Read search parameters out of the find/replace dialog controls and
@@ -1051,6 +1187,11 @@ static void read_search_fields(HWND dialog, bool has_replace) {
     settings_set_bool("find_whole_word", g_whole_word);
     settings_set_bool("find_wrap_around", g_wrap_around);
     settings_set_bool("find_search_down", g_search_down);
+
+    history_push("find_hist", g_search_text);
+    if (has_replace) {
+        history_push("replace_hist", g_replace_text);
+    }
 }
 
 // Is the current selection exactly the current search text?
@@ -1132,8 +1273,10 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
     switch (msg) {
         case WM_INITDIALOG: {
             SetWindowLongPtrW(dialog, GWLP_USERDATA, lparam);
+            history_load(GetDlgItem(dialog, ID_FIND_TEXT), "find_hist");
             SetDlgItemTextW(dialog, ID_FIND_TEXT, g_search_text);
             if (GetDlgItem(dialog, ID_REPLACE_WITH)) {
+                history_load(GetDlgItem(dialog, ID_REPLACE_WITH), "replace_hist");
                 SetDlgItemTextW(dialog, ID_REPLACE_WITH, g_replace_text);
             }
             CheckDlgButton(dialog, ID_FIND_CASE, g_match_case ? BST_CHECKED : BST_UNCHECKED);
@@ -1160,7 +1303,7 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
                 }
             }
 
-            SendDlgItemMessageW(dialog, ID_FIND_TEXT, EM_SETSEL, 0, -1);
+            SendDlgItemMessageW(dialog, ID_FIND_TEXT, CB_SETEDITSEL, 0, MAKELPARAM(0, -1));
             SetFocus(GetDlgItem(dialog, ID_FIND_TEXT));
             return FALSE; // Focus set manually
         }
@@ -1272,8 +1415,9 @@ static void apply_theme(Window *window) {
     if (!window || !window->edit_hwnd)
         return;
 
-    COLORREF back = g_dark_mode ? RGB(30, 30, 30) : GetSysColor(COLOR_WINDOW);
-    COLORREF text = g_dark_mode ? RGB(220, 220, 220) : GetSysColor(COLOR_WINDOWTEXT);
+    // Colors and the dark flag come from the resolved color scheme
+    COLORREF back, text;
+    g_dark_mode = theme_colors(&back, &text);
 
     // Preserve document state while re-styling
     LRESULT was_modified = SendMessageW(window->edit_hwnd, EM_GETMODIFY, 0, 0);
@@ -1307,8 +1451,11 @@ static void apply_theme(Window *window) {
 }
 
 void ui_platform_set_dark_mode(bool enabled) {
+    // The quick View > Dark Mode toggle maps onto the light/dark schemes
+    settings_set_string("theme", enabled ? "dark" : "light");
     g_dark_mode = enabled;
     if (g_main_window) {
+        apply_font(g_main_window);
         apply_theme(g_main_window);
     }
 }
@@ -1389,6 +1536,16 @@ void ui_platform_set_auto_save_timer(Window *window, int seconds) {
     KillTimer(window->hwnd, NPAD_AUTO_SAVE_TIMER_ID);
     if (seconds > 0) {
         SetTimer(window->hwnd, NPAD_AUTO_SAVE_TIMER_ID, (UINT) seconds * 1000, NULL);
+    }
+}
+
+void ui_platform_set_session_timer(Window *window, int seconds) {
+    if (!window || !window->hwnd)
+        return;
+
+    KillTimer(window->hwnd, NPAD_SESSION_TIMER_ID);
+    if (seconds > 0) {
+        SetTimer(window->hwnd, NPAD_SESSION_TIMER_ID, (UINT) seconds * 1000, NULL);
     }
 }
 
@@ -1499,7 +1656,7 @@ static void apply_font(Window *window) {
     cf.yHeight = size * 20; // Twips
     cf.wWeight = (WORD) weight;
     cf.dwEffects = italic ? CFE_ITALIC : 0;
-    cf.crTextColor = g_dark_mode ? RGB(220, 220, 220) : GetSysColor(COLOR_WINDOWTEXT);
+    theme_colors(NULL, &cf.crTextColor); // Match the current scheme's text color
 
     wchar_t *wide_face = utf8_to_wide(face ? face : "Consolas");
     if (wide_face) {
@@ -1580,14 +1737,25 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                           (UINT) settings_get_int("large_file_warning_mb", 100), FALSE);
             SetDlgItemInt(page, ID_PREF_RECENT_MAX, (UINT) settings_get_int("recent_files_max", 10),
                           FALSE);
+            CheckDlgButton(page, ID_PREF_SESSION_ENABLED,
+                           editor_is_session_resume_enabled() ? BST_CHECKED : BST_UNCHECKED);
+            SetDlgItemInt(page, ID_PREF_SESSION_INTERVAL,
+                          (UINT) settings_get_int("session_interval", 30), FALSE);
             EnableWindow(GetDlgItem(page, ID_PREF_AUTOSAVE_INTERVAL),
                          editor_is_auto_save_enabled());
+            EnableWindow(GetDlgItem(page, ID_PREF_SESSION_INTERVAL),
+                         editor_is_session_resume_enabled());
             return TRUE;
 
         case WM_COMMAND:
             if (LOWORD(wparam) == ID_PREF_AUTOSAVE_ENABLED) {
                 EnableWindow(GetDlgItem(page, ID_PREF_AUTOSAVE_INTERVAL),
                              IsDlgButtonChecked(page, ID_PREF_AUTOSAVE_ENABLED) == BST_CHECKED);
+                return TRUE;
+            }
+            if (LOWORD(wparam) == ID_PREF_SESSION_ENABLED) {
+                EnableWindow(GetDlgItem(page, ID_PREF_SESSION_INTERVAL),
+                             IsDlgButtonChecked(page, ID_PREF_SESSION_ENABLED) == BST_CHECKED);
                 return TRUE;
             }
             if (LOWORD(wparam) == ID_PREF_RECENT_CLEAR) {
@@ -1628,6 +1796,14 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                     }
                 }
 
+                UINT session_interval = GetDlgItemInt(page, ID_PREF_SESSION_INTERVAL, &ok, FALSE);
+                if (ok && session_interval > 0) {
+                    settings_set_int("session_interval", (int) session_interval);
+                }
+                // Enable/disable last so the interval it reads is current
+                editor_enable_session_resume(IsDlgButtonChecked(page, ID_PREF_SESSION_ENABLED) ==
+                                             BST_CHECKED);
+
                 SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
                 return TRUE;
             }
@@ -1637,18 +1813,31 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
     return FALSE;
 }
 
+// Color scheme setting values, indexed by the Appearance combo selection
+static const char *const SCHEME_KEYS[] = { "system", "light", "dark", "solarized-light",
+                                           "solarized-dark" };
+static const wchar_t *const SCHEME_LABELS[] = { L"Follow system", L"Light", L"Dark",
+                                                L"Solarized Light", L"Solarized Dark" };
+#define SCHEME_COUNT ((int) (sizeof(SCHEME_KEYS) / sizeof(SCHEME_KEYS[0])))
+
 static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
         case WM_INITDIALOG: {
+            HWND combo = GetDlgItem(page, ID_PREF_SCHEME);
+            for (int i = 0; i < SCHEME_COUNT; i++) {
+                SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM) SCHEME_LABELS[i]);
+            }
+
             char *theme = settings_get_string("theme", "system");
-            int radio = ID_PREF_THEME_SYSTEM;
-            if (theme && strcmp(theme, "light") == 0) {
-                radio = ID_PREF_THEME_LIGHT;
-            } else if (theme && strcmp(theme, "dark") == 0) {
-                radio = ID_PREF_THEME_DARK;
+            int sel = 0;
+            for (int i = 0; i < SCHEME_COUNT; i++) {
+                if (theme && strcmp(theme, SCHEME_KEYS[i]) == 0) {
+                    sel = i;
+                    break;
+                }
             }
             free(theme);
-            CheckRadioButton(page, ID_PREF_THEME_SYSTEM, ID_PREF_THEME_DARK, radio);
+            SendMessageW(combo, CB_SETCURSEL, (WPARAM) sel, 0);
 
             CheckDlgButton(page, ID_PREF_STATUSBAR,
                            (g_main_window && g_main_window->status_bar_visible) ? BST_CHECKED
@@ -1666,14 +1855,16 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
         case WM_NOTIFY: {
             NMHDR *nmhdr = (NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
-                const char *theme = "system";
-                if (IsDlgButtonChecked(page, ID_PREF_THEME_LIGHT) == BST_CHECKED) {
-                    theme = "light";
-                } else if (IsDlgButtonChecked(page, ID_PREF_THEME_DARK) == BST_CHECKED) {
-                    theme = "dark";
+                int sel = (int) SendDlgItemMessageW(page, ID_PREF_SCHEME, CB_GETCURSEL, 0, 0);
+                if (sel < 0 || sel >= SCHEME_COUNT) {
+                    sel = 0;
                 }
-                settings_set_string("theme", theme);
-                ui_platform_set_dark_mode(resolve_theme_dark_mode());
+                settings_set_string("theme", SCHEME_KEYS[sel]);
+                // Re-apply colors for the chosen scheme (also syncs g_dark_mode)
+                if (g_main_window) {
+                    apply_font(g_main_window);
+                    apply_theme(g_main_window);
+                }
 
                 bool show_status = IsDlgButtonChecked(page, ID_PREF_STATUSBAR) == BST_CHECKED;
                 if (g_main_window && g_main_window->status_bar_visible != show_status) {
@@ -1873,8 +2064,6 @@ static void create_menu(Window *window) {
     AppendMenuW(hfile, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hfile, MF_STRING | MF_POPUP, (UINT_PTR) hrecent, L"&Recent Files");
     AppendMenuW(hfile, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(hfile, MF_STRING, ID_FILE_PREFERENCES, L"&Preferences...\tCtrl+,");
-    AppendMenuW(hfile, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hfile, MF_STRING, ID_FILE_EXIT, L"E&xit");
 
     // Edit menu
@@ -1894,6 +2083,8 @@ static void create_menu(Window *window) {
     AppendMenuW(hedit, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hedit, MF_STRING, ID_EDIT_SELECT_ALL, L"Select &All\tCtrl+A");
     AppendMenuW(hedit, MF_STRING, ID_EDIT_TIME_DATE, L"Time/&Date\tF5");
+    AppendMenuW(hedit, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(hedit, MF_STRING, ID_FILE_PREFERENCES, L"&Preferences...\tCtrl+,");
 
     // Format menu
     AppendMenuW(hformat, MF_STRING, ID_FORMAT_WORD_WRAP, L"&Word Wrap\tAlt+Z");
@@ -2262,15 +2453,18 @@ static void update_status_bar(Window *window) {
     text[127] = L'\0';
     SendMessageW(window->status_hwnd, SB_SETTEXTW, 2, (LPARAM) text);
 
+    SendMessageW(window->status_hwnd, SB_SETTEXTW, 3,
+                 (LPARAM) (settings_get_bool("monospace_enabled", true) ? L"Mono" : L"Prop"));
+
     wchar_t *eol = utf8_to_wide(window->status_line_ending);
     if (eol) {
-        SendMessageW(window->status_hwnd, SB_SETTEXTW, 3, (LPARAM) eol);
+        SendMessageW(window->status_hwnd, SB_SETTEXTW, 4, (LPARAM) eol);
         free(eol);
     }
 
     wchar_t *encoding = utf8_to_wide(window->status_encoding);
     if (encoding) {
-        SendMessageW(window->status_hwnd, SB_SETTEXTW, 4, (LPARAM) encoding);
+        SendMessageW(window->status_hwnd, SB_SETTEXTW, 5, (LPARAM) encoding);
         free(encoding);
     }
 }
@@ -2291,16 +2485,18 @@ static void resize_controls(Window *window) {
         GetWindowRect(window->status_hwnd, &status_rect);
         status_height = status_rect.bottom - status_rect.top;
 
-        // Status bar parts, scaled for DPI: [message][Ln,Col][zoom][EOL][encoding]
+        // Status bar parts, scaled for DPI:
+        // [message][Ln,Col][zoom][Mono/Prop][EOL][encoding]
         int dpi = (int) get_window_dpi(window->hwnd);
         int width = rect.right;
-        int parts[5];
-        parts[4] = width;
-        parts[3] = width - MulDiv(110, dpi, 96);
+        int parts[6];
+        parts[5] = width;
+        parts[4] = width - MulDiv(110, dpi, 96);
+        parts[3] = width - MulDiv(170, dpi, 96);
         parts[2] = width - MulDiv(230, dpi, 96);
         parts[1] = width - MulDiv(290, dpi, 96);
         parts[0] = width - MulDiv(410, dpi, 96);
-        SendMessageW(window->status_hwnd, SB_SETPARTS, 5, (LPARAM) parts);
+        SendMessageW(window->status_hwnd, SB_SETPARTS, 6, (LPARAM) parts);
         update_status_bar(window);
     }
 
@@ -2364,7 +2560,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                     update_status_bar(window);
                 } else if (nmhdr->hwndFrom == window->status_hwnd && nmhdr->code == NM_CLICK) {
                     // Status bar part clicks: Ln/Col -> Go To, zoom -> reset,
-                    // line ending / encoding -> pickers
+                    // font mode -> toggle monospace, line ending / encoding -> pickers
                     NMMOUSE *mouse = (NMMOUSE *) lparam;
                     switch ((int) mouse->dwItemSpec) {
                         case 1:
@@ -2374,9 +2570,13 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                             set_zoom(window, 100);
                             break;
                         case 3:
-                            show_line_ending_popup(window);
+                            handle_command(window, ID_FORMAT_MONOSPACE);
+                            update_status_bar(window);
                             break;
                         case 4:
+                            show_line_ending_popup(window);
+                            break;
+                        case 5:
                             show_encoding_popup(window);
                             break;
                     }
@@ -2425,6 +2625,8 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         case WM_TIMER: {
             if (window && wparam == NPAD_AUTO_SAVE_TIMER_ID) {
                 ui_post_event(UI_EVENT_AUTO_SAVE, window, NULL);
+            } else if (window && wparam == NPAD_SESSION_TIMER_ID) {
+                ui_post_event(UI_EVENT_SESSION_SNAPSHOT, window, NULL);
             }
             return 0;
         }

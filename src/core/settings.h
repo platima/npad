@@ -38,6 +38,9 @@ bool settings_save(void);
 bool settings_load(void);
 const char *settings_get_file_path(void);
 
+// The directory settings are stored in (malloc'd; caller frees). NULL on error.
+char *settings_get_config_dir(void);
+
 // Window state helpers
 bool settings_save_window_state(int x, int y, int width, int height, bool maximized);
 bool settings_load_window_state(int *x, int *y, int *width, int *height, bool *maximized);

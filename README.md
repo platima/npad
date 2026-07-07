@@ -43,17 +43,19 @@ Current features (Windows build):
 - **🌍 Unicode throughout** - Detects and preserves UTF-8, UTF-8 BOM, UTF-16 LE/BE and ANSI encodings
 - **↩️ Line ending aware** - Detects and preserves Windows (CRLF), Unix (LF) and Mac (CR) line endings, shown in the status bar
 - **🔧 Quality-of-life enhancements:**
-  - Tabbed Preferences dialog (Ctrl+,) for auto-save, theme, fonts, defaults and more
+  - Tabbed Preferences dialog (Edit menu, Ctrl+,) for auto-save, session resume, theme, fonts, defaults and more
   - Optional auto-save (enabled by default, configurable)
-  - Dark / light theme support (follows system theme by default, configurable)
+  - Optional session resume / crash recovery (disabled by default, configurable)
+  - Theme support: follow system, light, dark, and Solarized Light / Dark colour schemes
   - Find / Replace with direction, match case, whole word and wrap-around (Ctrl+F / Ctrl+H, F3 / Shift+F3)
+  - Find remembers recent search / replace terms, and shows a live match count
   - Undo / Redo (Ctrl+Z / Ctrl+Y) with a deep undo history
   - Zoom (Ctrl+Plus / Ctrl+Minus / Ctrl+0, Ctrl+Scroll)
   - Word wrap toggle (Alt+Z), Go To Line (Ctrl+G), Time/Date (F5)
   - Line ending conversion (Format menu, Ctrl+E to cycle, or click the status bar)
   - Encoding picker in the Save dialog (or click the status bar)
   - Right-click context menu (Undo/Redo/Cut/Copy/Paste/Delete/Select All)
-  - Status bar click actions: Ln/Col opens Go To, zoom resets, line ending and encoding open pickers
+  - Status bar click actions: Ln/Col opens Go To, zoom resets, font mode toggles monospace, line ending and encoding open pickers
   - Monospace font by default (Consolas 11pt), monospace toggle (Ctrl+M), persistent font chooser
   - Recent files menu (size configurable)
   - Drag-and-drop to open files; Ctrl+Drop inserts the file at the caret
@@ -65,8 +67,8 @@ Planned (see the [Roadmap](#roadmap)):
 
 - 🚧 macOS, Linux (X11/Wayland) and terminal builds
 - 🚧 Optional tabbed interface
-- 🚧 Session resume / crash protection
 - 🚧 Multi-language support
+- 🚧 Custom keyboard shortcuts
 - 🚧 Portable EXE, installer, MSI and winget distribution
 
 _**Note: Windows support will be first, for the obvious reasons, as compile-yourself, a portable EXE, or as an EXE installer. Other platforms and installers will come with time or contributions**_
@@ -269,18 +271,18 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
 - [ ] **Core Enhancements**
   - [x] Settings system with JSON storage
   - [x] Auto-save feature (enabled by default)
-  - [ ] Session resume / crash protection (disabled by default)
+  - [x] Session resume / crash protection (disabled by default)
   - [x] Dark/light theme support (follow system by default)
   - [x] Deep Undo & Redo history (100,000 actions)
-  - [ ] Improvements to Find & Replace dialogs
-    - [ ] Recent list (configurable)
-    - [ ] Show match count
+  - [x] Improvements to Find & Replace dialogs
+    - [x] Recent list (configurable)
+    - [x] Show match count
     - [x] 'Find Previous'
     - [x] Wrap-around option and indicator
     - [x] Correct \[tab\] order
-  - [ ] Monospace toggle
+  - [x] Monospace toggle
     - [x] Menu / Keyboard shortcut (Ctrl+M)
-    - [ ] Status bar click
+    - [x] Status bar click
   - [x] Zoom improvements
     - [x] Menu / Keyboard shortcuts (Ctrl+Plus / Ctrl+Minus / Ctrl+0)
     - [x] Status bar click (resets to 100%)
@@ -296,10 +298,10 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
 - [ ] **Advanced Features**
   - [ ] Tabbed interface (optional)
   - [ ] Multi-language support
-  - [x] Settings window (tabbed Preferences dialog, Ctrl+,)
+  - [x] Settings window (tabbed Preferences dialog, Edit menu, Ctrl+,)
   - [x] Full undo/redo history
   - [ ] Custom keyboard shortcuts
-  - [ ] Solarized color schemes
+  - [x] Solarized color schemes
 - [ ] **Distribution & Installation**
   - [ ] Portable EXE build
   - [ ] Windows installer (EXE)

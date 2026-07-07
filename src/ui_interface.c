@@ -81,6 +81,7 @@ extern void ui_platform_get_cursor_line_column(Window *window, int *line, int *c
 extern void ui_platform_set_status_info(Window *window, const char *encoding_name,
                                         const char *eol_name);
 extern void ui_platform_set_auto_save_timer(Window *window, int seconds);
+extern void ui_platform_set_session_timer(Window *window, int seconds);
 
 // Platform-specific helpers
 extern void *ui_platform_get_native_handle(Window *window);
@@ -281,6 +282,10 @@ void ui_set_status_info(Window *window, const char *encoding_name, const char *e
 
 void ui_set_auto_save_timer(Window *window, int seconds) {
     ui_platform_set_auto_save_timer(window, seconds);
+}
+
+void ui_set_session_timer(Window *window, int seconds) {
+    ui_platform_set_session_timer(window, seconds);
 }
 
 void *ui_get_native_handle(Window *window) {

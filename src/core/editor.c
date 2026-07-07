@@ -12,6 +12,7 @@
 #include "editor.h"
 #include "error.h"
 #include "file_ops.h"
+#include "session.h"
 #include "settings.h"
 #include <errno.h>
 #include <stdio.h>
@@ -21,6 +22,9 @@
 // Files larger than this (in MB, configurable via "large_file_warning_mb")
 // prompt for confirmation before opening. 0 disables the prompt.
 #define DEFAULT_LARGE_FILE_WARNING_MB 100
+
+// How often to snapshot unsaved work when session recovery is enabled
+#define DEFAULT_SESSION_INTERVAL_SEC 30
 
 // Global editor state
 EditorState g_editor = { 0 };
@@ -52,6 +56,90 @@ static void editor_apply_auto_save_timer(void) {
     }
 }
 
+// Apply the session-recovery settings to the platform timer
+static void editor_apply_session_timer(void) {
+    if (g_editor.main_window) {
+        ui_set_session_timer(g_editor.main_window,
+                             g_editor.session_resume_enabled ? g_editor.session_interval : 0);
+    }
+}
+
+// The directory recovery snapshots live in (a subdirectory of the config
+// dir so they sit apart from settings.json). Caller frees; NULL on error.
+static char *editor_session_dir(void) {
+    char *config = settings_get_config_dir();
+    if (!config)
+        return NULL;
+    char *dir = file_join_paths(config, "recovery");
+    free(config);
+    return dir;
+}
+
+// Write a crash-recovery snapshot of the current unsaved document
+static void editor_snapshot_session(void) {
+    if (!g_editor.session_resume_enabled || !g_editor.is_modified || !g_editor.main_window)
+        return;
+
+    char *dir = editor_session_dir();
+    if (!dir)
+        return;
+
+    char *content = ui_get_text(g_editor.main_window);
+    if (content) {
+        session_write(dir, content, g_editor.current_file, g_editor.file_info.encoding,
+                      g_editor.file_info.line_ending);
+        free(content);
+    }
+    free(dir);
+}
+
+// Remove any recovery snapshot (after a clean save or clean exit)
+static void editor_clear_session(void) {
+    char *dir = editor_session_dir();
+    if (dir) {
+        session_clear(dir);
+        free(dir);
+    }
+}
+
+// On startup, offer to restore work left behind by an unclean exit
+static void editor_check_session_recovery(void) {
+    if (!g_editor.session_resume_enabled || !g_editor.main_window)
+        return;
+
+    char *dir = editor_session_dir();
+    if (!dir)
+        return;
+
+    if (session_exists(dir)) {
+        if (ui_show_message_box(g_editor.main_window, "npad",
+                                "npad may have closed unexpectedly.\n"
+                                "Restore your unsaved work?",
+                                true)) {
+            char *path = NULL;
+            TextFileInfo info = g_editor.file_info;
+            char *content = session_read(dir, &path, &info.encoding, &info.line_ending);
+            if (content) {
+                ui_set_text(g_editor.main_window, content);
+                free(content);
+
+                if (g_editor.current_file) {
+                    free(g_editor.current_file);
+                }
+                g_editor.current_file = path; // Ownership transferred (may be NULL)
+                g_editor.file_info = info;
+                editor_set_modified(true);
+                editor_update_status_info();
+            } else {
+                free(path);
+            }
+        }
+        session_clear(dir);
+    }
+
+    free(dir);
+}
+
 // Encoding/line endings for new documents, from user preferences
 static void load_default_file_info(TextFileInfo *info) {
     int encoding = settings_get_int("default_encoding", (int) NPAD_ENC_UTF8);
@@ -75,6 +163,12 @@ bool editor_init(void) {
     g_editor.auto_save_interval = settings_get_int("auto_save_interval", 300);
     if (g_editor.auto_save_interval < 10) {
         g_editor.auto_save_interval = 10; // Sanity floor
+    }
+
+    g_editor.session_resume_enabled = settings_get_bool("session_resume_enabled", false);
+    g_editor.session_interval = settings_get_int("session_interval", DEFAULT_SESSION_INTERVAL_SEC);
+    if (g_editor.session_interval < 5) {
+        g_editor.session_interval = 5;
     }
 
     load_default_file_info(&g_editor.file_info);
@@ -101,6 +195,13 @@ void editor_set_main_window(Window *window) {
     editor_update_title();
     editor_update_status_info();
     editor_apply_auto_save_timer();
+    editor_apply_session_timer();
+
+    // Offer to restore anything a previous crash left behind (only when no
+    // startup file was requested, so we do not clobber an explicit open)
+    if (!g_startup_file) {
+        editor_check_session_recovery();
+    }
 }
 
 bool editor_new_file(void) {
@@ -221,6 +322,7 @@ bool editor_save_file(void) {
 
     if (success) {
         editor_set_modified(false);
+        editor_clear_session(); // Saved work no longer needs recovery
     } else {
         char error_msg[512];
         snprintf(error_msg, sizeof(error_msg), "Could not save file: %.300s\n%.150s",
@@ -257,6 +359,7 @@ bool editor_save_file_as(const char *filename) {
 
         settings_add_recent_file(filename);
         editor_set_modified(false);
+        editor_clear_session(); // Saved work no longer needs recovery
         editor_update_status_info();
     } else {
         char error_msg[512];
@@ -386,6 +489,26 @@ int editor_get_auto_save_interval(void) {
     return g_editor.auto_save_interval;
 }
 
+void editor_enable_session_resume(bool enabled) {
+    g_editor.session_resume_enabled = enabled;
+    settings_set_bool("session_resume_enabled", enabled);
+
+    // Pick up any interval change saved alongside this toggle
+    g_editor.session_interval = settings_get_int("session_interval", DEFAULT_SESSION_INTERVAL_SEC);
+    if (g_editor.session_interval < 5) {
+        g_editor.session_interval = 5;
+    }
+
+    editor_apply_session_timer();
+    if (!enabled) {
+        editor_clear_session(); // Drop any snapshot when the feature is turned off
+    }
+}
+
+bool editor_is_session_resume_enabled(void) {
+    return g_editor.session_resume_enabled;
+}
+
 bool editor_handle_event(const UIEvent *event) {
     if (!event)
         return false;
@@ -395,6 +518,7 @@ bool editor_handle_event(const UIEvent *event) {
             if (!editor_prompt_save_changes()) {
                 return false; // Cancel quit
             }
+            editor_clear_session(); // Clean exit: nothing to recover
             ui_quit();
             return true;
 
@@ -447,6 +571,10 @@ bool editor_handle_event(const UIEvent *event) {
             if (g_editor.auto_save_enabled && g_editor.is_modified && g_editor.current_file) {
                 editor_save_file();
             }
+            return true;
+
+        case UI_EVENT_SESSION_SNAPSHOT:
+            editor_snapshot_session();
             return true;
 
         case UI_EVENT_EDIT_UNDO:

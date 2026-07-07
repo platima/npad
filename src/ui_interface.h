@@ -35,8 +35,9 @@ typedef enum {
     UI_EVENT_VIEW_TOGGLE_DARK_MODE,
     UI_EVENT_TEXT_CHANGED,
     UI_EVENT_WINDOW_CLOSING,
-    UI_EVENT_AUTO_SAVE,   // Auto-save timer fired
-    UI_EVENT_FILE_DROPPED // File dragged onto the window; data = UTF-8 path
+    UI_EVENT_AUTO_SAVE,       // Auto-save timer fired
+    UI_EVENT_FILE_DROPPED,    // File dragged onto the window; data = UTF-8 path
+    UI_EVENT_SESSION_SNAPSHOT // Session-recovery timer fired
 } UIEventType;
 
 // Event structure
@@ -146,6 +147,10 @@ void ui_set_status_info(Window *window, const char *encoding_name, const char *e
 
 // Auto-save timer (seconds; 0 disables). Fires UI_EVENT_AUTO_SAVE.
 void ui_set_auto_save_timer(Window *window, int seconds);
+
+// Session-recovery snapshot timer (seconds; 0 disables). Fires
+// UI_EVENT_SESSION_SNAPSHOT.
+void ui_set_session_timer(Window *window, int seconds);
 
 // Platform-specific helpers (implemented per platform)
 void *ui_get_native_handle(Window *window);

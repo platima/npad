@@ -60,3 +60,4 @@ notes.txt
 tests/test_file_ops
 tests/test_error
 tests/test_encoding
+tests/test_session

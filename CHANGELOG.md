@@ -13,6 +13,20 @@ modified-state tracking) did not actually work; this release rewrites the
 affected code and implements them for real. Entries for 0.1.5-0.1.8 below
 should be read with that in mind.
 
+### ✨ Session recovery & Find/theme polish (2026-07-08)
+- Session resume / crash protection (disabled by default, configurable):
+  unsaved work is snapshotted to a recovery folder on a timer, and offered
+  for restoration on the next launch after an unclean exit. Snapshots are
+  cleared on a clean save or exit.
+- Find / Replace now remembers recent search and replace terms in dropdowns
+  and shows a live "Match X of Y" count in the status bar.
+- Solarized Light and Solarized Dark colour schemes, selectable from a new
+  Appearance colour-scheme picker (alongside System / Light / Dark).
+- The status bar's font-mode segment toggles monospace when clicked.
+- Preferences moved from the File menu to the Edit menu (Ctrl+, unchanged),
+  with a new General-page session-resume option.
+- New pure `session` core module with unit tests for the recovery format.
+
 ### 🐛 Bug Fixes
 - **CRITICAL**: A failed save (e.g. disk full) deleted the file being saved
   over. Saves are now atomic: write to a temp file, verify, then rename.

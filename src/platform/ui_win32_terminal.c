@@ -238,6 +238,11 @@ void ui_platform_set_auto_save_timer(Window *window, int seconds) {
     (void) seconds;
 }
 
+void ui_platform_set_session_timer(Window *window, int seconds) {
+    (void) window;
+    (void) seconds;
+}
+
 void ui_platform_set_window_maximized(Window *window, bool maximized) {
     (void) window;
     (void) maximized;

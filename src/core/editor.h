@@ -19,8 +19,10 @@ typedef struct {
     char *current_file; // UTF-8 path, NULL for a new/untitled document
     bool is_modified;
     bool auto_save_enabled;
-    int auto_save_interval; // seconds
-    TextFileInfo file_info; // Encoding and line endings of the current file
+    int auto_save_interval;      // seconds
+    bool session_resume_enabled; // Crash-recovery snapshots
+    int session_interval;        // seconds
+    TextFileInfo file_info;      // Encoding and line endings of the current file
     Window *main_window;
 } EditorState;
 
@@ -63,6 +65,10 @@ void editor_enable_auto_save(bool enabled);
 bool editor_is_auto_save_enabled(void);
 void editor_set_auto_save_interval(int seconds);
 int editor_get_auto_save_interval(void);
+
+// Session recovery (crash protection)
+void editor_enable_session_resume(bool enabled);
+bool editor_is_session_resume_enabled(void);
 
 // Event handling
 bool editor_handle_event(const UIEvent *event);

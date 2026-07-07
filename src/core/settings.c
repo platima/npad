@@ -308,6 +308,12 @@ const char *settings_get_file_path(void) {
     return g_settings_file_path;
 }
 
+char *settings_get_config_dir(void) {
+    if (!g_settings_file_path)
+        return NULL;
+    return file_get_directory(g_settings_file_path);
+}
+
 bool settings_save_window_state(int x, int y, int width, int height, bool maximized) {
     return settings_set_int("window_x", x) && settings_set_int("window_y", y) &&
            settings_set_int("window_width", width) && settings_set_int("window_height", height) &&
