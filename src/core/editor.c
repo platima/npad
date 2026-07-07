@@ -102,9 +102,13 @@ static void editor_clear_session(void) {
     }
 }
 
-// On startup, offer to restore work left behind by an unclean exit
+// On startup, offer to restore work left behind by an unclean exit.
+// The check is unconditional on the current enabled state: a snapshot only
+// exists on disk if session resume was enabled when it was last written
+// (disabling clears it), and the enabled flag may not have been persisted
+// if the previous run was killed before a clean exit.
 static void editor_check_session_recovery(void) {
-    if (!g_editor.session_resume_enabled || !g_editor.main_window)
+    if (!g_editor.main_window)
         return;
 
     char *dir = editor_session_dir();
@@ -498,6 +502,10 @@ void editor_enable_session_resume(bool enabled) {
     if (g_editor.session_interval < 5) {
         g_editor.session_interval = 5;
     }
+
+    // Persist immediately so the flag survives even if this run is later
+    // killed without a clean exit
+    settings_save();
 
     editor_apply_session_timer();
     if (!enabled) {

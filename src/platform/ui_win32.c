@@ -45,6 +45,13 @@
 #define NPAD_AUTO_SAVE_TIMER_ID 1
 #define NPAD_SESSION_TIMER_ID 2
 
+// Default font faces for Windows. The monospace and proportional defaults
+// differ so the Monospace toggle produces a visible change out of the box.
+#define DEFAULT_MONO_FONT "Consolas"
+#define DEFAULT_PROP_FONT "Segoe UI"
+#define OPENDYSLEXIC_FONT "OpenDyslexic"
+#define OPENDYSLEXIC_FONT_W L"OpenDyslexic"
+
 // Control IDs
 #define ID_EDIT_CONTROL 1001
 #define ID_STATUS_BAR 1002
@@ -55,6 +62,7 @@
 #define ID_FILE_EXIT 2005
 #define ID_FILE_RECENT_CLEAR 2006
 #define ID_FILE_PREFERENCES 2007
+#define ID_FILE_NEW_WINDOW 2008
 #define ID_FILE_RECENT_BASE 2010 // 2010..2019 reserved for recent files
 #define ID_EDIT_UNDO 2101
 #define ID_EDIT_REDO 2102
@@ -131,6 +139,9 @@ static GetDpiForWindowFunc g_GetDpiForWindow = NULL;
 // Forward declarations
 static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
 static void create_menu(Window *window);
+static void build_accelerators(Window *window);
+static void apply_new_window_pref(Window *window);
+static void launch_new_window(void);
 static void handle_command(Window *window, WORD command);
 static void update_status_bar(Window *window);
 static void resize_controls(Window *window);
@@ -140,7 +151,7 @@ static void apply_font(Window *window);
 static void apply_word_wrap(Window *window);
 static void update_menu_states(Window *window);
 static void rebuild_recent_menu(Window *window);
-static void show_font_dialog(Window *window);
+static void show_font_dialog(Window *window, const char *font_key, const char *default_face);
 static void show_goto_dialog(Window *window);
 static void show_preferences_dialog(Window *window);
 static void show_context_menu(Window *window, int x, int y);
@@ -477,40 +488,7 @@ Window *ui_platform_create_main_window(void) {
     }
 
     create_menu(window);
-
-    ACCEL accel[] = { { FCONTROL | FVIRTKEY, 'N', ID_FILE_NEW },
-                      { FCONTROL | FVIRTKEY, 'O', ID_FILE_OPEN },
-                      { FCONTROL | FVIRTKEY, 'S', ID_FILE_SAVE },
-                      { FCONTROL | FSHIFT | FVIRTKEY, 'S', ID_FILE_SAVE_AS },
-                      { FCONTROL | FVIRTKEY, 'Z', ID_EDIT_UNDO },
-                      { FCONTROL | FVIRTKEY, 'Y', ID_EDIT_REDO },
-                      { FCONTROL | FVIRTKEY, 'X', ID_EDIT_CUT },
-                      { FCONTROL | FVIRTKEY, 'C', ID_EDIT_COPY },
-                      { FCONTROL | FVIRTKEY, 'V', ID_EDIT_PASTE },
-                      { FCONTROL | FVIRTKEY, 'A', ID_EDIT_SELECT_ALL },
-                      { FCONTROL | FVIRTKEY, 'F', ID_EDIT_FIND },
-                      { FVIRTKEY, VK_F3, ID_EDIT_FIND_NEXT },
-                      { FSHIFT | FVIRTKEY, VK_F3, ID_EDIT_FIND_PREV },
-                      { FCONTROL | FVIRTKEY, 'H', ID_EDIT_REPLACE },
-                      { FCONTROL | FVIRTKEY, 'G', ID_EDIT_GOTO_LINE },
-                      { FVIRTKEY, VK_F5, ID_EDIT_TIME_DATE },
-                      { FALT | FVIRTKEY, 'Z', ID_FORMAT_WORD_WRAP },
-                      { FCONTROL | FVIRTKEY, 'M', ID_FORMAT_MONOSPACE },
-                      { FCONTROL | FVIRTKEY, 'E', ID_FORMAT_EOL_CYCLE },
-                      { FCONTROL | FVIRTKEY, VK_OEM_COMMA, ID_FILE_PREFERENCES },
-                      { FCONTROL | FVIRTKEY, VK_OEM_PLUS, ID_VIEW_ZOOM_IN },
-                      { FCONTROL | FVIRTKEY, VK_ADD, ID_VIEW_ZOOM_IN },
-                      { FCONTROL | FVIRTKEY, VK_OEM_MINUS, ID_VIEW_ZOOM_OUT },
-                      { FCONTROL | FVIRTKEY, VK_SUBTRACT, ID_VIEW_ZOOM_OUT },
-                      { FCONTROL | FVIRTKEY, '0', ID_VIEW_ZOOM_RESET },
-                      { FCONTROL | FVIRTKEY, VK_NUMPAD0, ID_VIEW_ZOOM_RESET } };
-    window->haccel = CreateAcceleratorTableW(accel, sizeof(accel) / sizeof(accel[0]));
-
-    if (!window->haccel) {
-        NPAD_ERROR_WARNING(NPAD_ERROR_SYSTEM, GetLastError(), "Accelerator table creation",
-                           "Failed to create accelerator table - keyboard shortcuts will not work");
-    }
-
+    build_accelerators(window);
     apply_theme(window);
 
     g_main_window = window;
@@ -1444,10 +1422,6 @@ static void apply_theme(Window *window) {
     if (window->hwnd) {
         set_title_bar_dark(window->hwnd, g_dark_mode);
     }
-
-    if (window->hmenu) {
-        CheckMenuItem(window->hmenu, ID_VIEW_DARK_MODE, g_dark_mode ? MF_CHECKED : MF_UNCHECKED);
-    }
 }
 
 void ui_platform_set_dark_mode(bool enabled) {
@@ -1630,16 +1604,55 @@ static void apply_word_wrap(Window *window) {
 // monospace look) to the whole document and as the insertion default.
 // When the monospace toggle (Ctrl+M) is on, Consolas overrides the
 // user-chosen face.
+// The settings key (and default) for the font face the editor is currently
+// showing. OpenDyslexic overrides both; otherwise the Monospace toggle
+// selects between the monospace and proportional faces.
+static const char *active_font_key(const char **default_face) {
+    if (settings_get_bool("opendyslexic_enabled", false)) {
+        if (default_face)
+            *default_face = OPENDYSLEXIC_FONT;
+        return "opendyslexic_font";
+    }
+    if (settings_get_bool("monospace_enabled", true)) {
+        if (default_face)
+            *default_face = DEFAULT_MONO_FONT;
+        return "monospace_font";
+    }
+    if (default_face)
+        *default_face = DEFAULT_PROP_FONT;
+    return "proportional_font";
+}
+
+static int CALLBACK font_enum_proc(const LOGFONTW *lf, const TEXTMETRICW *tm, DWORD type,
+                                   LPARAM param) {
+    (void) lf;
+    (void) tm;
+    (void) type;
+    *(bool *) param = true;
+    return 0; // Stop after the first match
+}
+
+// Whether a font family is installed on the system
+static bool font_is_installed(const wchar_t *face) {
+    LOGFONTW lf;
+    ZeroMemory(&lf, sizeof(lf));
+    wcsncpy(lf.lfFaceName, face, LF_FACESIZE - 1);
+    lf.lfCharSet = DEFAULT_CHARSET;
+
+    bool found = false;
+    HDC hdc = GetDC(NULL);
+    EnumFontFamiliesExW(hdc, &lf, font_enum_proc, (LPARAM) &found, 0);
+    ReleaseDC(NULL, hdc);
+    return found;
+}
+
 static void apply_font(Window *window) {
     if (!window || !window->edit_hwnd)
         return;
 
-    char *face;
-    if (settings_get_bool("monospace_enabled", true)) {
-        face = settings_get_string("monospace_font", "Consolas");
-    } else {
-        face = settings_get_string("font_face", "Consolas");
-    }
+    const char *default_face = DEFAULT_MONO_FONT;
+    const char *key = active_font_key(&default_face);
+    char *face = settings_get_string(key, default_face);
     int size = settings_get_int("font_size", 11);
     int weight = settings_get_int("font_weight", FW_NORMAL);
     bool italic = settings_get_bool("font_italic", false);
@@ -1674,11 +1687,13 @@ static void apply_font(Window *window) {
     SendMessageW(window->edit_hwnd, EM_SETMODIFY, (WPARAM) was_modified, 0);
 }
 
-static void show_font_dialog(Window *window) {
+// Show the font chooser and save the selection to font_key (face) plus the
+// shared size/weight/italic settings.
+static void show_font_dialog(Window *window, const char *font_key, const char *default_face) {
     if (!window || !window->edit_hwnd)
         return;
 
-    char *face = settings_get_string("font_face", "Consolas");
+    char *face = settings_get_string(font_key, default_face);
     int size = settings_get_int("font_size", 11);
     int weight = settings_get_int("font_weight", FW_NORMAL);
     bool italic = settings_get_bool("font_italic", false);
@@ -1692,7 +1707,7 @@ static void show_font_dialog(Window *window) {
     lf.lfHeight = -MulDiv(size, log_pixels_y, 72);
     lf.lfWeight = weight;
     lf.lfItalic = italic ? TRUE : FALSE;
-    wchar_t *wide_face = utf8_to_wide(face ? face : "Consolas");
+    wchar_t *wide_face = utf8_to_wide(face ? face : default_face);
     if (wide_face) {
         wcsncpy(lf.lfFaceName, wide_face, LF_FACESIZE - 1);
         lf.lfFaceName[LF_FACESIZE - 1] = L'\0';
@@ -1711,7 +1726,7 @@ static void show_font_dialog(Window *window) {
     if (ChooseFontW(&cf)) {
         char *new_face = wide_to_utf8(lf.lfFaceName);
         if (new_face) {
-            settings_set_string("font_face", new_face);
+            settings_set_string(font_key, new_face);
             free(new_face);
         }
         settings_set_int("font_size", cf.iPointSize / 10); // iPointSize is tenths of a point
@@ -1741,6 +1756,9 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                            editor_is_session_resume_enabled() ? BST_CHECKED : BST_UNCHECKED);
             SetDlgItemInt(page, ID_PREF_SESSION_INTERVAL,
                           (UINT) settings_get_int("session_interval", 30), FALSE);
+            CheckDlgButton(page, ID_PREF_CTRL_N_WINDOW,
+                           settings_get_bool("ctrl_n_new_window", false) ? BST_CHECKED
+                                                                         : BST_UNCHECKED);
             EnableWindow(GetDlgItem(page, ID_PREF_AUTOSAVE_INTERVAL),
                          editor_is_auto_save_enabled());
             EnableWindow(GetDlgItem(page, ID_PREF_SESSION_INTERVAL),
@@ -1804,6 +1822,12 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                 editor_enable_session_resume(IsDlgButtonChecked(page, ID_PREF_SESSION_ENABLED) ==
                                              BST_CHECKED);
 
+                settings_set_bool("ctrl_n_new_window",
+                                  IsDlgButtonChecked(page, ID_PREF_CTRL_N_WINDOW) == BST_CHECKED);
+                if (g_main_window) {
+                    apply_new_window_pref(g_main_window);
+                }
+
                 SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
                 return TRUE;
             }
@@ -1839,6 +1863,9 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
             free(theme);
             SendMessageW(combo, CB_SETCURSEL, (WPARAM) sel, 0);
 
+            CheckDlgButton(page, ID_PREF_OPENDYSLEXIC,
+                           settings_get_bool("opendyslexic_enabled", false) ? BST_CHECKED
+                                                                            : BST_UNCHECKED);
             CheckDlgButton(page, ID_PREF_STATUSBAR,
                            (g_main_window && g_main_window->status_bar_visible) ? BST_CHECKED
                                                                                 : BST_UNCHECKED);
@@ -1846,8 +1873,12 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
         }
 
         case WM_COMMAND:
-            if (LOWORD(wparam) == ID_PREF_FONT) {
-                show_font_dialog(g_main_window);
+            if (LOWORD(wparam) == ID_PREF_FONT_MONO) {
+                show_font_dialog(g_main_window, "monospace_font", DEFAULT_MONO_FONT);
+                return TRUE;
+            }
+            if (LOWORD(wparam) == ID_PREF_FONT_PROP) {
+                show_font_dialog(g_main_window, "proportional_font", DEFAULT_PROP_FONT);
                 return TRUE;
             }
             break;
@@ -1860,10 +1891,23 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
                     sel = 0;
                 }
                 settings_set_string("theme", SCHEME_KEYS[sel]);
-                // Re-apply colors for the chosen scheme (also syncs g_dark_mode)
+
+                bool dyslexic = IsDlgButtonChecked(page, ID_PREF_OPENDYSLEXIC) == BST_CHECKED;
+                bool was_dyslexic = settings_get_bool("opendyslexic_enabled", false);
+                settings_set_bool("opendyslexic_enabled", dyslexic);
+                if (dyslexic && !was_dyslexic && !font_is_installed(OPENDYSLEXIC_FONT_W)) {
+                    MessageBoxW(page,
+                                L"The OpenDyslexic font is not installed.\n"
+                                L"Download it from https://opendyslexic.org and install it, "
+                                L"then this option will take effect.",
+                                L"npad", MB_OK | MB_ICONINFORMATION);
+                }
+
+                // Re-apply colors and font for the chosen scheme (also syncs g_dark_mode)
                 if (g_main_window) {
                     apply_font(g_main_window);
                     apply_theme(g_main_window);
+                    update_status_bar(g_main_window);
                 }
 
                 bool show_status = IsDlgButtonChecked(page, ID_PREF_STATUSBAR) == BST_CHECKED;
@@ -1880,8 +1924,78 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
     return FALSE;
 }
 
+// Copy the current settings.json to a user-chosen file
+static void export_settings(HWND owner) {
+    settings_save(); // Flush current in-memory settings to disk first
+    const char *src = settings_get_file_path();
+    if (!src)
+        return;
+
+    wchar_t filename[MAX_PATH] = L"npad-settings.json";
+    OPENFILENAMEW ofn;
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFile = filename;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrFilter = L"JSON Files (*.json)\0*.json\0All Files (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.lpstrDefExt = L"json";
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER;
+
+    if (GetSaveFileNameW(&ofn)) {
+        char *dest = wide_to_utf8(filename);
+        bool ok = dest && file_copy(src, dest);
+        free(dest);
+        MessageBoxW(owner, ok ? L"Settings exported." : L"Failed to export settings.", L"npad",
+                    ok ? (MB_OK | MB_ICONINFORMATION) : (MB_OK | MB_ICONWARNING));
+    }
+}
+
+// Replace the current settings with a user-chosen file and reload them
+static void import_settings(HWND owner) {
+    const char *dest = settings_get_file_path();
+    if (!dest)
+        return;
+
+    wchar_t filename[MAX_PATH] = L"";
+    OPENFILENAMEW ofn;
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFile = filename;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrFilter = L"JSON Files (*.json)\0*.json\0All Files (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY | OFN_EXPLORER;
+
+    if (!GetOpenFileNameW(&ofn)) {
+        return;
+    }
+
+    char *src = wide_to_utf8(filename);
+    bool ok = src && file_copy(src, dest);
+    free(src);
+    if (!ok) {
+        MessageBoxW(owner, L"Failed to import settings.", L"npad", MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    // Reload settings and re-apply what can change live
+    settings_clear_all();
+    settings_load();
+    if (g_main_window) {
+        apply_font(g_main_window);
+        apply_theme(g_main_window);
+        apply_new_window_pref(g_main_window);
+        rebuild_recent_menu(g_main_window);
+        update_status_bar(g_main_window);
+    }
+    MessageBoxW(owner, L"Settings imported. Restart npad for all changes to take effect.", L"npad",
+                MB_OK | MB_ICONINFORMATION);
+}
+
 static INT_PTR CALLBACK prefs_files_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
-    (void) wparam;
     switch (msg) {
         case WM_INITDIALOG: {
             HWND enc_combo = GetDlgItem(page, ID_PREF_DEFAULT_ENCODING);
@@ -1907,6 +2021,17 @@ static INT_PTR CALLBACK prefs_files_proc(HWND page, UINT msg, WPARAM wparam, LPA
                          (WPARAM) settings_get_int("default_line_ending", 0), 0);
             return TRUE;
         }
+
+        case WM_COMMAND:
+            if (LOWORD(wparam) == ID_PREF_EXPORT) {
+                export_settings(page);
+                return TRUE;
+            }
+            if (LOWORD(wparam) == ID_PREF_IMPORT) {
+                import_settings(page);
+                return TRUE;
+            }
+            break;
 
         case WM_NOTIFY: {
             NMHDR *nmhdr = (NMHDR *) lparam;
@@ -1955,7 +2080,8 @@ static void show_preferences_dialog(Window *window) {
     PROPSHEETHEADERW psh;
     ZeroMemory(&psh, sizeof(psh));
     psh.dwSize = sizeof(PROPSHEETHEADERW);
-    psh.dwFlags = PSH_PROPSHEETPAGE | PSH_NOAPPLYNOW | PSH_NOCONTEXTHELP;
+    // Include the Apply button so changes can be previewed without closing
+    psh.dwFlags = PSH_PROPSHEETPAGE | PSH_NOCONTEXTHELP;
     psh.hwndParent = window->hwnd;
     psh.hInstance = g_hinstance;
     psh.pszCaption = L"Preferences";
@@ -1963,6 +2089,10 @@ static void show_preferences_dialog(Window *window) {
     psh.ppsp = pages;
 
     PropertySheetW(&psh);
+
+    // Persist all applied preference changes to disk immediately, so they
+    // survive even if this run is later killed without a clean exit
+    settings_save();
 }
 
 // Go To Line dialog (resource-based, truly modal)
@@ -2038,6 +2168,89 @@ static void insert_time_date(Window *window) {
     SendMessageW(window->edit_hwnd, EM_REPLACESEL, TRUE, (LPARAM) combined);
 }
 
+// (Re)build the accelerator table. The Ctrl+N / Ctrl+Shift+N pair maps to
+// "New" vs "New Window" according to the ctrl_n_new_window preference.
+static void build_accelerators(Window *window) {
+    bool cn_window = settings_get_bool("ctrl_n_new_window", false);
+    WORD new_cmd = cn_window ? ID_FILE_NEW_WINDOW : ID_FILE_NEW;
+    WORD new_window_cmd = cn_window ? ID_FILE_NEW : ID_FILE_NEW_WINDOW;
+
+    ACCEL accel[] = { { FCONTROL | FVIRTKEY, 'N', new_cmd },
+                      { FCONTROL | FSHIFT | FVIRTKEY, 'N', new_window_cmd },
+                      { FCONTROL | FVIRTKEY, 'O', ID_FILE_OPEN },
+                      { FCONTROL | FVIRTKEY, 'S', ID_FILE_SAVE },
+                      { FCONTROL | FSHIFT | FVIRTKEY, 'S', ID_FILE_SAVE_AS },
+                      { FCONTROL | FVIRTKEY, 'Z', ID_EDIT_UNDO },
+                      { FCONTROL | FVIRTKEY, 'Y', ID_EDIT_REDO },
+                      { FCONTROL | FVIRTKEY, 'X', ID_EDIT_CUT },
+                      { FCONTROL | FVIRTKEY, 'C', ID_EDIT_COPY },
+                      { FCONTROL | FVIRTKEY, 'V', ID_EDIT_PASTE },
+                      { FCONTROL | FVIRTKEY, 'A', ID_EDIT_SELECT_ALL },
+                      { FCONTROL | FVIRTKEY, 'F', ID_EDIT_FIND },
+                      { FVIRTKEY, VK_F3, ID_EDIT_FIND_NEXT },
+                      { FSHIFT | FVIRTKEY, VK_F3, ID_EDIT_FIND_PREV },
+                      { FCONTROL | FVIRTKEY, 'H', ID_EDIT_REPLACE },
+                      { FCONTROL | FVIRTKEY, 'G', ID_EDIT_GOTO_LINE },
+                      { FVIRTKEY, VK_F5, ID_EDIT_TIME_DATE },
+                      { FALT | FVIRTKEY, 'Z', ID_FORMAT_WORD_WRAP },
+                      { FCONTROL | FVIRTKEY, 'M', ID_FORMAT_MONOSPACE },
+                      { FCONTROL | FVIRTKEY, 'E', ID_FORMAT_EOL_CYCLE },
+                      { FCONTROL | FVIRTKEY, VK_OEM_COMMA, ID_FILE_PREFERENCES },
+                      { FCONTROL | FVIRTKEY, VK_OEM_PLUS, ID_VIEW_ZOOM_IN },
+                      { FCONTROL | FVIRTKEY, VK_ADD, ID_VIEW_ZOOM_IN },
+                      { FCONTROL | FVIRTKEY, VK_OEM_MINUS, ID_VIEW_ZOOM_OUT },
+                      { FCONTROL | FVIRTKEY, VK_SUBTRACT, ID_VIEW_ZOOM_OUT },
+                      { FCONTROL | FVIRTKEY, '0', ID_VIEW_ZOOM_RESET },
+                      { FCONTROL | FVIRTKEY, VK_NUMPAD0, ID_VIEW_ZOOM_RESET } };
+
+    HACCEL new_table = CreateAcceleratorTableW(accel, sizeof(accel) / sizeof(accel[0]));
+    if (!new_table) {
+        NPAD_ERROR_WARNING(NPAD_ERROR_SYSTEM, GetLastError(), "Accelerator table creation",
+                           "Failed to create accelerator table - keyboard shortcuts will not work");
+        return;
+    }
+    if (window->haccel) {
+        DestroyAcceleratorTable(window->haccel);
+    }
+    window->haccel = new_table;
+}
+
+// Re-apply the ctrl_n_new_window preference to the menu labels and accelerators
+static void apply_new_window_pref(Window *window) {
+    if (!window || !window->hmenu)
+        return;
+    bool cn_window = settings_get_bool("ctrl_n_new_window", false);
+    ModifyMenuW(window->hmenu, ID_FILE_NEW, MF_BYCOMMAND | MF_STRING, ID_FILE_NEW,
+                cn_window ? L"&New\tCtrl+Shift+N" : L"&New\tCtrl+N");
+    ModifyMenuW(window->hmenu, ID_FILE_NEW_WINDOW, MF_BYCOMMAND | MF_STRING, ID_FILE_NEW_WINDOW,
+                cn_window ? L"New &Window\tCtrl+N" : L"New &Window\tCtrl+Shift+N");
+    build_accelerators(window);
+}
+
+// Launch a second npad instance (a fresh, independent window)
+static void launch_new_window(void) {
+    wchar_t path[MAX_PATH];
+    if (GetModuleFileNameW(NULL, path, MAX_PATH) == 0) {
+        return;
+    }
+
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    ZeroMemory(&pi, sizeof(pi));
+
+    // CreateProcess may modify the command line buffer, so pass a copy
+    wchar_t cmdline[MAX_PATH + 2];
+    _snwprintf(cmdline, MAX_PATH + 1, L"\"%s\"", path);
+    cmdline[MAX_PATH + 1] = L'\0';
+
+    if (CreateProcessW(path, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+}
+
 static void create_menu(Window *window) {
     HMENU hmenu = CreateMenu();
     HMENU hfile = CreatePopupMenu();
@@ -2056,7 +2269,10 @@ static void create_menu(Window *window) {
     }
 
     // File menu
-    AppendMenuW(hfile, MF_STRING, ID_FILE_NEW, L"&New\tCtrl+N");
+    bool cn_window = settings_get_bool("ctrl_n_new_window", false);
+    AppendMenuW(hfile, MF_STRING, ID_FILE_NEW, cn_window ? L"&New\tCtrl+Shift+N" : L"&New\tCtrl+N");
+    AppendMenuW(hfile, MF_STRING, ID_FILE_NEW_WINDOW,
+                cn_window ? L"New &Window\tCtrl+N" : L"New &Window\tCtrl+Shift+N");
     AppendMenuW(hfile, MF_STRING, ID_FILE_OPEN, L"&Open...\tCtrl+O");
     AppendMenuW(hfile, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hfile, MF_STRING, ID_FILE_SAVE, L"&Save\tCtrl+S");
@@ -2103,8 +2319,8 @@ static void create_menu(Window *window) {
     AppendMenuW(hzoom, MF_STRING, ID_VIEW_ZOOM_RESET, L"&Restore Default Zoom\tCtrl+0");
     AppendMenuW(hview, MF_STRING | MF_POPUP, (UINT_PTR) hzoom, L"&Zoom");
     AppendMenuW(hview, MF_STRING, ID_VIEW_STATUS_BAR, L"&Status Bar");
-    AppendMenuW(hview, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(hview, MF_STRING, ID_VIEW_DARK_MODE, L"&Dark Mode");
+    // Theme (incl. Solarized) is chosen in Preferences > Appearance; a plain
+    // View > Dark Mode toggle would clobber a selected Solarized scheme.
 
     // Help menu
     AppendMenuW(hhelp, MF_STRING, ID_HELP_ABOUT, L"&About npad");
@@ -2328,6 +2544,9 @@ static void handle_command(Window *window, WORD command) {
         case ID_FILE_NEW:
             ui_post_event(UI_EVENT_FILE_NEW, window, NULL);
             break;
+        case ID_FILE_NEW_WINDOW:
+            launch_new_window();
+            break;
         case ID_FILE_OPEN:
             ui_post_event(UI_EVENT_FILE_OPEN, window, NULL);
             break;
@@ -2412,9 +2631,12 @@ static void handle_command(Window *window, WORD command) {
         case ID_FORMAT_EOL_CYCLE:
             editor_set_line_ending((LineEnding) ((editor_get_line_ending() + 1) % 3));
             break;
-        case ID_FORMAT_FONT:
-            show_font_dialog(window);
+        case ID_FORMAT_FONT: {
+            const char *def = DEFAULT_MONO_FONT;
+            const char *key = active_font_key(&def);
+            show_font_dialog(window, key, def);
             break;
+        }
         case ID_VIEW_ZOOM_IN:
             set_zoom(window, get_zoom(window) + 10);
             break;
@@ -2426,9 +2648,6 @@ static void handle_command(Window *window, WORD command) {
             break;
         case ID_VIEW_STATUS_BAR:
             set_status_bar_visible(window, !window->status_bar_visible);
-            break;
-        case ID_VIEW_DARK_MODE:
-            ui_post_event(UI_EVENT_VIEW_TOGGLE_DARK_MODE, window, NULL);
             break;
         case ID_HELP_ABOUT:
             ui_platform_show_about_dialog(window);
@@ -2485,17 +2704,19 @@ static void resize_controls(Window *window) {
         GetWindowRect(window->status_hwnd, &status_rect);
         status_height = status_rect.bottom - status_rect.top;
 
-        // Status bar parts, scaled for DPI:
+        // Status bar parts, scaled for DPI. Right-anchored widths:
+        // encoding 90, EOL 120 (fits "Windows (CRLF)"), font 55, zoom 55,
+        // Ln/Col 120; the message part takes the remaining space.
         // [message][Ln,Col][zoom][Mono/Prop][EOL][encoding]
         int dpi = (int) get_window_dpi(window->hwnd);
         int width = rect.right;
         int parts[6];
         parts[5] = width;
-        parts[4] = width - MulDiv(110, dpi, 96);
-        parts[3] = width - MulDiv(170, dpi, 96);
-        parts[2] = width - MulDiv(230, dpi, 96);
-        parts[1] = width - MulDiv(290, dpi, 96);
-        parts[0] = width - MulDiv(410, dpi, 96);
+        parts[4] = width - MulDiv(90, dpi, 96);
+        parts[3] = width - MulDiv(210, dpi, 96);
+        parts[2] = width - MulDiv(265, dpi, 96);
+        parts[1] = width - MulDiv(320, dpi, 96);
+        parts[0] = width - MulDiv(440, dpi, 96);
         SendMessageW(window->status_hwnd, SB_SETPARTS, 6, (LPARAM) parts);
         update_status_bar(window);
     }

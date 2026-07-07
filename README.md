@@ -26,6 +26,7 @@ A lightweight, cross-platform text editor inspired by the simplicity and speed o
 - [Architecture](#architecture)
 - [Contributing](#contributing)
 - [Roadmap](#roadmap)
+- [Acknowledgements](#acknowledgements)
 - [License](#license)
 - [Author](#author)
 
@@ -43,10 +44,10 @@ Current features (Windows build):
 - **🌍 Unicode throughout** - Detects and preserves UTF-8, UTF-8 BOM, UTF-16 LE/BE and ANSI encodings
 - **↩️ Line ending aware** - Detects and preserves Windows (CRLF), Unix (LF) and Mac (CR) line endings, shown in the status bar
 - **🔧 Quality-of-life enhancements:**
-  - Tabbed Preferences dialog (Edit menu, Ctrl+,) for auto-save, session resume, theme, fonts, defaults and more
+  - Tabbed Preferences dialog (Edit menu, Ctrl+,) with an Apply button, for auto-save, session resume, theme, fonts, defaults and more
   - Optional auto-save (enabled by default, configurable)
   - Optional session resume / crash recovery (disabled by default, configurable)
-  - Theme support: follow system, light, dark, and Solarized Light / Dark colour schemes
+  - Theme support: follow system, light, dark, and Solarized Light / Dark colour schemes (chosen in Preferences)
   - Find / Replace with direction, match case, whole word and wrap-around (Ctrl+F / Ctrl+H, F3 / Shift+F3)
   - Find remembers recent search / replace terms, and shows a live match count
   - Undo / Redo (Ctrl+Z / Ctrl+Y) with a deep undo history
@@ -56,9 +57,12 @@ Current features (Windows build):
   - Encoding picker in the Save dialog (or click the status bar)
   - Right-click context menu (Undo/Redo/Cut/Copy/Paste/Delete/Select All)
   - Status bar click actions: Ln/Col opens Go To, zoom resets, font mode toggles monospace, line ending and encoding open pickers
-  - Monospace font by default (Consolas 11pt), monospace toggle (Ctrl+M), persistent font chooser
+  - New Window (Ctrl+Shift+N) opens a second independent instance; a Preferences option can make Ctrl+N do this instead
+  - Separate monospace and proportional fonts, each with its own picker; monospace by default (Ctrl+M or status-bar click to toggle)
+  - OpenDyslexic font option for reading assistance (Preferences > Appearance)
   - Recent files menu (size configurable)
   - Drag-and-drop to open files; Ctrl+Drop inserts the file at the caret
+  - Export / Import settings (Preferences > Files) for backup or moving between machines
   - Atomic saves - a failed save can never destroy the existing file
   - JSON settings storage; remembers window position, size and maximized state
   - Confirmation prompt before opening very large files
@@ -295,6 +299,10 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
     - [x] Status bar click
   - [x] Ctrl+Drop to insert instead of open
   - [x] 'Recent' menu (optional)
+  - [x] New Window (Ctrl+Shift+N; configurable Ctrl+N behaviour)
+  - [x] Separate monospace / proportional fonts
+  - [x] OpenDyslexic font option (reading assistance)
+  - [x] Config backup / export & import
 - [ ] **Advanced Features**
   - [ ] Tabbed interface (optional)
   - [ ] Multi-language support
@@ -305,6 +313,9 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
 - [ ] **Distribution & Installation**
   - [ ] Portable EXE build
   - [ ] Windows installer (EXE)
+    - [ ] Bundle & offer open-source fonts (Intel One Mono, Roboto, OpenDyslexic), pre-setting them in the config
+    - [ ] Default to associating the `notepad` app execution alias on Windows 11
+    - [ ] On install, offer to open Settings to remove any existing `notepad` app execution alias (if it cannot be done programmatically)
   - [ ] MSI package
   - [ ] Winget integration
   - [ ] Optional 'notepad' command replacement
@@ -321,6 +332,14 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
 ## Changelog 🛠
 
 See [CHANGELOG.md](CHANGELOG.md) file for details.
+
+## Acknowledgements 🙏
+
+- **Solarized** colour schemes by [Ethan Schoonover](https://ethanschoonover.com/solarized/).
+- Fonts planned for bundling with the installer, under open licences:
+  - [Intel One Mono](https://github.com/intel/intel-one-mono) (SIL Open Font License)
+  - [Roboto](https://github.com/googlefonts/roboto-3-classic) (Apache License 2.0)
+  - [OpenDyslexic](https://opendyslexic.org) (SIL Open Font License) - reading assistance
 
 ## License 📄
 

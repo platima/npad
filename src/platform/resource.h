@@ -49,15 +49,21 @@
 #define ID_PREF_RECENT_CLEAR 3104
 #define ID_PREF_SESSION_ENABLED 3105
 #define ID_PREF_SESSION_INTERVAL 3106
+#define ID_PREF_CTRL_N_WINDOW 3107
 
 // Preferences: Appearance page
 #define ID_PREF_STATUSBAR 3113
 #define ID_PREF_FONT 3114
 #define ID_PREF_SCHEME 3115
+#define ID_PREF_FONT_MONO 3116
+#define ID_PREF_FONT_PROP 3117
+#define ID_PREF_OPENDYSLEXIC 3118
 
 // Preferences: Files page
 #define ID_PREF_DEFAULT_ENCODING 3120
 #define ID_PREF_DEFAULT_EOL 3121
+#define ID_PREF_EXPORT 3122
+#define ID_PREF_IMPORT 3123
 
 // Save dialog encoding picker
 #define ID_SAVE_ENCODING_COMBO 3130

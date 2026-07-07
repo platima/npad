@@ -13,6 +13,28 @@ modified-state tracking) did not actually work; this release rewrites the
 affected code and implements them for real. Entries for 0.1.5-0.1.8 below
 should be read with that in mind.
 
+### ✨ Fonts, New Window, backup & fixes (2026-07-08)
+- **Fixed** session recovery not being offered after a crash: the startup
+  check now looks for a leftover snapshot unconditionally (the enabled flag
+  was not persisted when a run was killed before a clean exit), and the flag
+  is now saved to disk the moment it is toggled.
+- **Fixed** the Monospace toggle appearing to do nothing: the monospace and
+  proportional fonts now have distinct defaults (Consolas vs Segoe UI) and
+  each has its own picker in Preferences > Appearance.
+- **Fixed** the status bar clipping the line-ending text ("Windows (CRLF)").
+- New Window (Ctrl+Shift+N) opens a second independent instance. A
+  Preferences option swaps Ctrl+N / Ctrl+Shift+N between "New" and
+  "New Window".
+- OpenDyslexic font option for reading assistance (Preferences > Appearance),
+  with an install hint when the font is missing.
+- Export / Import settings buttons (Preferences > Files) for backup or moving
+  configuration between machines.
+- Preferences now has an Apply button, so changes can be previewed without
+  closing the dialog, and are persisted to disk immediately.
+- Removed View > Dark Mode (it clobbered a selected Solarized scheme); the
+  theme is chosen in Preferences > Appearance. Solarized is credited to
+  Ethan Schoonover in the README.
+
 ### ✨ Session recovery & Find/theme polish (2026-07-08)
 - Session resume / crash protection (disabled by default, configurable):
   unsaved work is snapshotted to a recovery folder on a timer, and offered
