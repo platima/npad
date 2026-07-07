@@ -236,20 +236,50 @@ bool settings_clear_all(void) {
     return true;
 }
 
+// Create a directory and any missing parent directories
+static void create_directory_recursive(const char *path) {
+    if (!path || !path[0])
+        return;
+
+    char *copy = malloc(strlen(path) + 1);
+    if (!copy)
+        return;
+    strcpy(copy, path);
+
+    // Create each intermediate component (skip drive/root prefixes)
+    for (char *p = copy + 1; *p; p++) {
+        if ((*p == '/' || *p == '\\') && *(p - 1) != ':') {
+            char saved = *p;
+            *p = '\0';
+#ifdef _WIN32
+            CreateDirectory(copy, NULL);
+#else
+            mkdir(copy, 0755);
+#endif
+            *p = saved;
+        }
+    }
+
+#ifdef _WIN32
+    CreateDirectory(copy, NULL);
+#else
+    mkdir(copy, 0755);
+#endif
+    free(copy);
+}
+
 bool settings_save(void) {
     if (!g_settings_file_path)
         return false;
 
     char *content = serialize_settings();
     if (!content)
-        return false; // Ensure directory exists
+        return false;
+
+    // Ensure the settings directory (and its parents) exist
     char *dir = file_get_directory(g_settings_file_path);
     if (dir) {
-#ifdef _WIN32
-        CreateDirectory(dir, NULL);
-#else
-        mkdir(dir, 0755);
-#endif
+        create_directory_recursive(dir);
         free(dir);
     }
 
