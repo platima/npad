@@ -194,6 +194,11 @@ static void parse_command_line(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-v") == 0) {
             show_version();
             exit(0);
+        } else if (strcmp(argv[i], "--recover") == 0) {
+            // Internal: reopen a specific crash-recovery slot in this instance
+            if (i + 1 < argc) {
+                editor_set_recover_slot(argv[++i]);
+            }
         } else if (argv[i][0] != '-') {
             // Assume it's a filename to open
             editor_set_startup_file(argv[i]);

@@ -82,6 +82,7 @@ extern void ui_platform_set_status_info(Window *window, const char *encoding_nam
                                         const char *eol_name);
 extern void ui_platform_set_auto_save_timer(Window *window, int seconds);
 extern void ui_platform_set_session_timer(Window *window, int seconds);
+extern void ui_platform_launch_recovery_instance(const char *slot_id);
 
 // Platform-specific helpers
 extern void *ui_platform_get_native_handle(Window *window);
@@ -286,6 +287,10 @@ void ui_set_auto_save_timer(Window *window, int seconds) {
 
 void ui_set_session_timer(Window *window, int seconds) {
     ui_platform_set_session_timer(window, seconds);
+}
+
+void ui_launch_recovery_instance(const char *slot_id) {
+    ui_platform_launch_recovery_instance(slot_id);
 }
 
 void *ui_get_native_handle(Window *window) {

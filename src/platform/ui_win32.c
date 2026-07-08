@@ -161,6 +161,7 @@ static void set_status_bar_visible(Window *window, bool visible);
 static void set_zoom(Window *window, int percent);
 static int get_zoom(Window *window);
 static bool find_next(Window *window, bool down);
+static bool font_is_installed(const wchar_t *face);
 
 // ---------------------------------------------------------------------------
 // UTF-8 <-> UTF-16 helpers
@@ -1608,7 +1609,12 @@ static void apply_word_wrap(Window *window) {
 // showing. OpenDyslexic overrides both; otherwise the Monospace toggle
 // selects between the monospace and proportional faces.
 static const char *active_font_key(const char **default_face) {
-    if (settings_get_bool("opendyslexic_enabled", false)) {
+    // Only honour OpenDyslexic when the font is actually installed, so a
+    // stale/imported setting cannot leave the editor stuck on a substituted
+    // fallback face (which would also make the mono/proportional toggle
+    // appear to do nothing).
+    if (settings_get_bool("opendyslexic_enabled", false) &&
+        font_is_installed(OPENDYSLEXIC_FONT_W)) {
         if (default_face)
             *default_face = OPENDYSLEXIC_FONT;
         return "opendyslexic_font";
@@ -1741,6 +1747,11 @@ static void show_font_dialog(Window *window, const char *font_key, const char *d
 // Preferences (tabbed property sheet)
 // ---------------------------------------------------------------------------
 
+// Mark a property-sheet page dirty so the Apply button becomes enabled
+static void mark_prefs_dirty(HWND page) {
+    PropSheet_Changed(GetParent(page), page);
+}
+
 static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
         case WM_INITDIALOG:
@@ -1765,18 +1776,30 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                          editor_is_session_resume_enabled());
             return TRUE;
 
-        case WM_COMMAND:
-            if (LOWORD(wparam) == ID_PREF_AUTOSAVE_ENABLED) {
+        case WM_COMMAND: {
+            WORD code = HIWORD(wparam);
+            WORD id = LOWORD(wparam);
+            // Enable Apply when a value control changes (not the action buttons)
+            if ((code == BN_CLICKED &&
+                 (id == ID_PREF_AUTOSAVE_ENABLED || id == ID_PREF_SESSION_ENABLED ||
+                  id == ID_PREF_CTRL_N_WINDOW)) ||
+                (code == EN_CHANGE &&
+                 (id == ID_PREF_AUTOSAVE_INTERVAL || id == ID_PREF_LARGE_FILE_MB ||
+                  id == ID_PREF_RECENT_MAX || id == ID_PREF_SESSION_INTERVAL))) {
+                mark_prefs_dirty(page);
+            }
+
+            if (id == ID_PREF_AUTOSAVE_ENABLED) {
                 EnableWindow(GetDlgItem(page, ID_PREF_AUTOSAVE_INTERVAL),
                              IsDlgButtonChecked(page, ID_PREF_AUTOSAVE_ENABLED) == BST_CHECKED);
                 return TRUE;
             }
-            if (LOWORD(wparam) == ID_PREF_SESSION_ENABLED) {
+            if (id == ID_PREF_SESSION_ENABLED) {
                 EnableWindow(GetDlgItem(page, ID_PREF_SESSION_INTERVAL),
                              IsDlgButtonChecked(page, ID_PREF_SESSION_ENABLED) == BST_CHECKED);
                 return TRUE;
             }
-            if (LOWORD(wparam) == ID_PREF_RECENT_CLEAR) {
+            if (id == ID_PREF_RECENT_CLEAR) {
                 settings_clear_recent_files();
                 if (g_main_window) {
                     rebuild_recent_menu(g_main_window);
@@ -1784,6 +1807,7 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                 return TRUE;
             }
             break;
+        }
 
         case WM_NOTIFY: {
             NMHDR *nmhdr = (NMHDR *) lparam;
@@ -1872,16 +1896,23 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
             return TRUE;
         }
 
-        case WM_COMMAND:
-            if (LOWORD(wparam) == ID_PREF_FONT_MONO) {
+        case WM_COMMAND: {
+            WORD code = HIWORD(wparam);
+            WORD id = LOWORD(wparam);
+            if ((code == BN_CLICKED && (id == ID_PREF_OPENDYSLEXIC || id == ID_PREF_STATUSBAR)) ||
+                (code == CBN_SELCHANGE && id == ID_PREF_SCHEME)) {
+                mark_prefs_dirty(page);
+            }
+            if (id == ID_PREF_FONT_MONO) {
                 show_font_dialog(g_main_window, "monospace_font", DEFAULT_MONO_FONT);
                 return TRUE;
             }
-            if (LOWORD(wparam) == ID_PREF_FONT_PROP) {
+            if (id == ID_PREF_FONT_PROP) {
                 show_font_dialog(g_main_window, "proportional_font", DEFAULT_PROP_FONT);
                 return TRUE;
             }
             break;
+        }
 
         case WM_NOTIFY: {
             NMHDR *nmhdr = (NMHDR *) lparam;
@@ -1893,15 +1924,18 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
                 settings_set_string("theme", SCHEME_KEYS[sel]);
 
                 bool dyslexic = IsDlgButtonChecked(page, ID_PREF_OPENDYSLEXIC) == BST_CHECKED;
-                bool was_dyslexic = settings_get_bool("opendyslexic_enabled", false);
-                settings_set_bool("opendyslexic_enabled", dyslexic);
-                if (dyslexic && !was_dyslexic && !font_is_installed(OPENDYSLEXIC_FONT_W)) {
+                if (dyslexic && !font_is_installed(OPENDYSLEXIC_FONT_W)) {
+                    // Cannot enable a font that is not installed: inform the
+                    // user and revert both the setting and the checkbox.
                     MessageBoxW(page,
                                 L"The OpenDyslexic font is not installed.\n"
                                 L"Download it from https://opendyslexic.org and install it, "
-                                L"then this option will take effect.",
+                                L"then enable this option.",
                                 L"npad", MB_OK | MB_ICONINFORMATION);
+                    dyslexic = false;
+                    CheckDlgButton(page, ID_PREF_OPENDYSLEXIC, BST_UNCHECKED);
                 }
+                settings_set_bool("opendyslexic_enabled", dyslexic);
 
                 // Re-apply colors and font for the chosen scheme (also syncs g_dark_mode)
                 if (g_main_window) {
@@ -2022,16 +2056,23 @@ static INT_PTR CALLBACK prefs_files_proc(HWND page, UINT msg, WPARAM wparam, LPA
             return TRUE;
         }
 
-        case WM_COMMAND:
-            if (LOWORD(wparam) == ID_PREF_EXPORT) {
+        case WM_COMMAND: {
+            WORD code = HIWORD(wparam);
+            WORD id = LOWORD(wparam);
+            if (code == CBN_SELCHANGE &&
+                (id == ID_PREF_DEFAULT_ENCODING || id == ID_PREF_DEFAULT_EOL)) {
+                mark_prefs_dirty(page);
+            }
+            if (id == ID_PREF_EXPORT) {
                 export_settings(page);
                 return TRUE;
             }
-            if (LOWORD(wparam) == ID_PREF_IMPORT) {
+            if (id == ID_PREF_IMPORT) {
                 import_settings(page);
                 return TRUE;
             }
             break;
+        }
 
         case WM_NOTIFY: {
             NMHDR *nmhdr = (NMHDR *) lparam;
@@ -2228,7 +2269,9 @@ static void apply_new_window_pref(Window *window) {
 }
 
 // Launch a second npad instance (a fresh, independent window)
-static void launch_new_window(void) {
+// Launch another npad instance, optionally with extra command-line
+// arguments (already-quoted where needed). extra may be NULL.
+static void spawn_self(const wchar_t *extra) {
     wchar_t path[MAX_PATH];
     if (GetModuleFileNameW(NULL, path, MAX_PATH) == 0) {
         return;
@@ -2241,14 +2284,35 @@ static void launch_new_window(void) {
     ZeroMemory(&pi, sizeof(pi));
 
     // CreateProcess may modify the command line buffer, so pass a copy
-    wchar_t cmdline[MAX_PATH + 2];
-    _snwprintf(cmdline, MAX_PATH + 1, L"\"%s\"", path);
-    cmdline[MAX_PATH + 1] = L'\0';
+    wchar_t cmdline[1024];
+    if (extra && extra[0]) {
+        _snwprintf(cmdline, 1023, L"\"%s\" %s", path, extra);
+    } else {
+        _snwprintf(cmdline, 1023, L"\"%s\"", path);
+    }
+    cmdline[1023] = L'\0';
 
     if (CreateProcessW(path, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
     }
+}
+
+static void launch_new_window(void) {
+    spawn_self(NULL);
+}
+
+void ui_platform_launch_recovery_instance(const char *slot_id) {
+    if (!slot_id)
+        return;
+    wchar_t *wslot = utf8_to_wide(slot_id);
+    if (!wslot)
+        return;
+    wchar_t extra[128];
+    _snwprintf(extra, 127, L"--recover %s", wslot);
+    extra[127] = L'\0';
+    free(wslot);
+    spawn_self(extra);
 }
 
 static void create_menu(Window *window) {

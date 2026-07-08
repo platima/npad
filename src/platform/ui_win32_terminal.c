@@ -243,6 +243,10 @@ void ui_platform_set_session_timer(Window *window, int seconds) {
     (void) seconds;
 }
 
+void ui_platform_launch_recovery_instance(const char *slot_id) {
+    (void) slot_id;
+}
+
 void ui_platform_set_window_maximized(Window *window, bool maximized) {
     (void) window;
     (void) maximized;

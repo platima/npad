@@ -46,7 +46,7 @@ Current features (Windows build):
 - **🔧 Quality-of-life enhancements:**
   - Tabbed Preferences dialog (Edit menu, Ctrl+,) with an Apply button, for auto-save, session resume, theme, fonts, defaults and more
   - Optional auto-save (enabled by default, configurable)
-  - Optional session resume / crash recovery (disabled by default, configurable)
+  - Optional session resume / crash recovery (disabled by default, configurable); restores every window that was open, each in its own instance
   - Theme support: follow system, light, dark, and Solarized Light / Dark colour schemes (chosen in Preferences)
   - Find / Replace with direction, match case, whole word and wrap-around (Ctrl+F / Ctrl+H, F3 / Shift+F3)
   - Find remembers recent search / replace terms, and shows a live match count
@@ -59,7 +59,7 @@ Current features (Windows build):
   - Status bar click actions: Ln/Col opens Go To, zoom resets, font mode toggles monospace, line ending and encoding open pickers
   - New Window (Ctrl+Shift+N) opens a second independent instance; a Preferences option can make Ctrl+N do this instead
   - Separate monospace and proportional fonts, each with its own picker; monospace by default (Ctrl+M or status-bar click to toggle)
-  - OpenDyslexic font option for reading assistance (Preferences > Appearance)
+  - OpenDyslexic font option for reading assistance (Preferences > Appearance; requires the font to be installed)
   - Recent files menu (size configurable)
   - Drag-and-drop to open files; Ctrl+Drop inserts the file at the caret
   - Export / Import settings (Preferences > Files) for backup or moving between machines

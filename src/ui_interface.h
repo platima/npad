@@ -152,6 +152,10 @@ void ui_set_auto_save_timer(Window *window, int seconds);
 // UI_EVENT_SESSION_SNAPSHOT.
 void ui_set_session_timer(Window *window, int seconds);
 
+// Launch a new npad instance to restore a specific recovery slot
+// (used when several crashed sessions must each reopen in their own window)
+void ui_launch_recovery_instance(const char *slot_id);
+
 // Platform-specific helpers (implemented per platform)
 void *ui_get_native_handle(Window *window);
 

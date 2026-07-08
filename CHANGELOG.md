@@ -13,6 +13,22 @@ modified-state tracking) did not actually work; this release rewrites the
 affected code and implements them for real. Entries for 0.1.5-0.1.8 below
 should be read with that in mind.
 
+### 🐛 Preferences & recovery fixes (2026-07-09)
+- **Fixed** crash recovery restoring only one document when several windows
+  were open. Each instance now writes its own recovery slot, and on the next
+  launch npad restores one in the current window and reopens the rest in new
+  windows.
+- **Fixed** the Monospace toggle being stuck on the proportional font after a
+  restart: `OpenDyslexic` was overriding the monospace/proportional choice
+  even when the font was not installed (RichEdit then substituted a fallback
+  face). OpenDyslexic is now only used when actually installed.
+- **Fixed** OpenDyslexic staying enabled after saving even when the font is
+  absent; it now reverts (and the checkbox unchecks) with an install hint.
+- **Fixed** the Preferences window clipping long text; the pages are wider.
+- **Fixed** the Preferences Apply button never enabling; pages now mark
+  themselves changed so Apply activates on any edit and previews without
+  closing the dialog.
+
 ### ✨ Fonts, New Window, backup & fixes (2026-07-08)
 - **Fixed** session recovery not being offered after a crash: the startup
   check now looks for a leftover snapshot unconditionally (the enabled flag

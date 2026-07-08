@@ -54,6 +54,10 @@ void editor_set_modified(bool modified);
 const char *editor_get_current_file(void);
 void editor_set_startup_file(const char *filename);
 
+// Restore a specific recovery slot at startup (set from the --recover option
+// on windows spawned to reopen extra crashed sessions)
+void editor_set_recover_slot(const char *slot);
+
 // Document format (applied when the file is next saved; marks modified)
 void editor_set_line_ending(LineEnding line_ending);
 LineEnding editor_get_line_ending(void);

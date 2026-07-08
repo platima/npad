@@ -18,6 +18,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+#ifdef _WIN32
+#include <process.h>
+#define npad_getpid _getpid
+#else
+#include <unistd.h>
+#define npad_getpid getpid
+#endif
 
 // Files larger than this (in MB, configurable via "large_file_warning_mb")
 // prompt for confirmation before opening. 0 disables the prompt.
@@ -29,6 +38,11 @@
 // Global editor state
 EditorState g_editor = { 0 };
 char *g_startup_file = NULL;
+
+// This instance's recovery slot id (unique per process), and the specific
+// slot to restore when launched with --recover (NULL for a normal launch).
+static char g_session_slot[64] = { 0 };
+static char *g_recover_slot = NULL;
 
 static char *duplicate_string(const char *str) {
     if (!str)
@@ -86,27 +100,51 @@ static void editor_snapshot_session(void) {
 
     char *content = ui_get_text(g_editor.main_window);
     if (content) {
-        session_write(dir, content, g_editor.current_file, g_editor.file_info.encoding,
-                      g_editor.file_info.line_ending);
+        session_write(dir, g_session_slot, content, g_editor.current_file,
+                      g_editor.file_info.encoding, g_editor.file_info.line_ending);
         free(content);
     }
     free(dir);
 }
 
-// Remove any recovery snapshot (after a clean save or clean exit)
+// Remove this instance's recovery snapshot (after a clean save or clean exit)
 static void editor_clear_session(void) {
     char *dir = editor_session_dir();
     if (dir) {
-        session_clear(dir);
+        session_clear_slot(dir, g_session_slot);
         free(dir);
     }
+}
+
+// Restore one slot's content into this window. Returns true if restored.
+static bool editor_restore_slot(const char *dir, const char *slot_id) {
+    char *path = NULL;
+    TextFileInfo info = g_editor.file_info;
+    char *content = session_take(dir, slot_id, &path, &info.encoding, &info.line_ending);
+    if (!content) {
+        free(path);
+        return false;
+    }
+
+    ui_set_text(g_editor.main_window, content);
+    free(content);
+
+    if (g_editor.current_file) {
+        free(g_editor.current_file);
+    }
+    g_editor.current_file = path; // Ownership transferred (may be NULL)
+    g_editor.file_info = info;
+    editor_set_modified(true);
+    editor_update_status_info();
+    return true;
 }
 
 // On startup, offer to restore work left behind by an unclean exit.
 // The check is unconditional on the current enabled state: a snapshot only
 // exists on disk if session resume was enabled when it was last written
 // (disabling clears it), and the enabled flag may not have been persisted
-// if the previous run was killed before a clean exit.
+// if the previous run was killed before a clean exit. When several sessions
+// were open, each left its own slot; the extras reopen in new windows.
 static void editor_check_session_recovery(void) {
     if (!g_editor.main_window)
         return;
@@ -115,31 +153,45 @@ static void editor_check_session_recovery(void) {
     if (!dir)
         return;
 
-    if (session_exists(dir)) {
-        if (ui_show_message_box(g_editor.main_window, "npad",
-                                "npad may have closed unexpectedly.\n"
-                                "Restore your unsaved work?",
-                                true)) {
-            char *path = NULL;
-            TextFileInfo info = g_editor.file_info;
-            char *content = session_read(dir, &path, &info.encoding, &info.line_ending);
-            if (content) {
-                ui_set_text(g_editor.main_window, content);
-                free(content);
+    // Launched to recover one specific slot (a window spawned for an extra
+    // leftover session): restore it silently, no prompt.
+    if (g_recover_slot) {
+        editor_restore_slot(dir, g_recover_slot);
+        free(dir);
+        return;
+    }
 
-                if (g_editor.current_file) {
-                    free(g_editor.current_file);
+    int count = 0;
+    char **slots = session_list_slots(dir, &count);
+    if (count > 0) {
+        char message[256];
+        if (count == 1) {
+            snprintf(message, sizeof(message),
+                     "npad may have closed unexpectedly.\nRestore your unsaved work?");
+        } else {
+            snprintf(message, sizeof(message),
+                     "npad may have closed unexpectedly.\n"
+                     "Restore your %d unsaved documents?",
+                     count);
+        }
+
+        if (ui_show_message_box(g_editor.main_window, "npad", message, true)) {
+            // Restore the first slot here; reopen the rest in new windows
+            bool restored_here = false;
+            for (int i = 0; i < count; i++) {
+                if (!restored_here) {
+                    restored_here = editor_restore_slot(dir, slots[i]);
+                } else {
+                    ui_launch_recovery_instance(slots[i]);
                 }
-                g_editor.current_file = path; // Ownership transferred (may be NULL)
-                g_editor.file_info = info;
-                editor_set_modified(true);
-                editor_update_status_info();
-            } else {
-                free(path);
+            }
+        } else {
+            for (int i = 0; i < count; i++) {
+                session_clear_slot(dir, slots[i]);
             }
         }
-        session_clear(dir);
     }
+    session_free_slots(slots, count);
 
     free(dir);
 }
@@ -175,6 +227,11 @@ bool editor_init(void) {
         g_editor.session_interval = 5;
     }
 
+    // Unique recovery slot id for this instance (time + pid). Distinct across
+    // concurrently running instances so their snapshots never collide.
+    snprintf(g_session_slot, sizeof(g_session_slot), "%lx-%x", (unsigned long) time(NULL),
+             (unsigned) npad_getpid());
+
     load_default_file_info(&g_editor.file_info);
 
     ui_set_event_handler(editor_handle_event);
@@ -191,6 +248,21 @@ void editor_cleanup(void) {
     if (g_startup_file) {
         free(g_startup_file);
         g_startup_file = NULL;
+    }
+
+    if (g_recover_slot) {
+        free(g_recover_slot);
+        g_recover_slot = NULL;
+    }
+}
+
+void editor_set_recover_slot(const char *slot) {
+    if (g_recover_slot) {
+        free(g_recover_slot);
+        g_recover_slot = NULL;
+    }
+    if (slot) {
+        g_recover_slot = duplicate_string(slot);
     }
 }
 
