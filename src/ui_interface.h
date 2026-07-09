@@ -97,6 +97,10 @@ void ui_set_window_position(Window *window, int x, int y);
 void ui_set_window_maximized(Window *window, bool maximized);
 bool ui_is_window_maximized(Window *window);
 
+// Sensible first-run window geometry: a DPI-correct fraction of the primary
+// monitor work area, centred.
+void ui_get_default_window_rect(int *x, int *y, int *width, int *height);
+
 // Text editing
 void ui_set_text(Window *window, const char *text);
 char *ui_get_text(Window *window);
@@ -153,8 +157,14 @@ void ui_set_auto_save_timer(Window *window, int seconds);
 void ui_set_session_timer(Window *window, int seconds);
 
 // Launch a new npad instance to restore a specific recovery slot
-// (used when several crashed sessions must each reopen in their own window)
-void ui_launch_recovery_instance(const char *slot_id);
+// (used when several crashed sessions must each reopen in their own window).
+// cascade_index staggers the new window's position so restored windows do
+// not overlap.
+void ui_launch_recovery_instance(const char *slot_id, int cascade_index);
+
+// Notify other running npad instances that settings on disk changed, so
+// they reload and re-apply them live.
+void ui_notify_settings_changed(void);
 
 // Platform-specific helpers (implemented per platform)
 void *ui_get_native_handle(Window *window);

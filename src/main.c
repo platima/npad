@@ -42,6 +42,10 @@ static void parse_command_line(int argc, char *argv[]);
 static void show_help(void);
 static void show_version(void);
 
+// Cascade offset for a window spawned to reopen an extra crashed session
+// (0 for a normally launched window). Set from --cascade.
+int g_cascade_index = 0;
+
 int main(int argc, char *argv[]) {
     DEBUG_PRINT("npad starting...");
 
@@ -134,13 +138,24 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Load window state from settings
+    // Window geometry: use the saved state if present, otherwise a large
+    // DPI-correct default centred on the work area (first run).
     int x, y, width, height;
     bool maximized = false;
-    if (settings_load_window_state(&x, &y, &width, &height, &maximized)) {
-        ui_set_window_position(main_window, x, y);
-        ui_set_window_size(main_window, width, height);
+    if (settings_has_key("window_width")) {
+        settings_load_window_state(&x, &y, &width, &height, &maximized);
+    } else {
+        ui_get_default_window_rect(&x, &y, &width, &height);
     }
+
+    // Cascade recovery windows so restored sessions do not stack exactly
+    if (g_cascade_index > 0) {
+        x += g_cascade_index * 40;
+        y += g_cascade_index * 40;
+    }
+
+    ui_set_window_size(main_window, width, height);
+    ui_set_window_position(main_window, x, y);
 
     // Attach the window to the editor before it becomes visible so early
     // UI events always see a valid main window
@@ -198,6 +213,11 @@ static void parse_command_line(int argc, char *argv[]) {
             // Internal: reopen a specific crash-recovery slot in this instance
             if (i + 1 < argc) {
                 editor_set_recover_slot(argv[++i]);
+            }
+        } else if (strcmp(argv[i], "--cascade") == 0) {
+            // Internal: stagger this recovery window's position
+            if (i + 1 < argc) {
+                g_cascade_index = atoi(argv[++i]);
             }
         } else if (argv[i][0] != '-') {
             // Assume it's a filename to open

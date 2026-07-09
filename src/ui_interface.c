@@ -34,6 +34,7 @@ extern void ui_platform_get_window_position(Window *window, int *x, int *y);
 extern void ui_platform_set_window_position(Window *window, int x, int y);
 extern void ui_platform_set_window_maximized(Window *window, bool maximized);
 extern bool ui_platform_is_window_maximized(Window *window);
+extern void ui_platform_get_default_window_rect(int *x, int *y, int *width, int *height);
 
 // Platform text functions
 extern void ui_platform_set_text(Window *window, const char *text);
@@ -82,7 +83,8 @@ extern void ui_platform_set_status_info(Window *window, const char *encoding_nam
                                         const char *eol_name);
 extern void ui_platform_set_auto_save_timer(Window *window, int seconds);
 extern void ui_platform_set_session_timer(Window *window, int seconds);
-extern void ui_platform_launch_recovery_instance(const char *slot_id);
+extern void ui_platform_launch_recovery_instance(const char *slot_id, int cascade_index);
+extern void ui_platform_notify_settings_changed(void);
 
 // Platform-specific helpers
 extern void *ui_platform_get_native_handle(Window *window);
@@ -147,6 +149,10 @@ void ui_set_window_maximized(Window *window, bool maximized) {
 
 bool ui_is_window_maximized(Window *window) {
     return ui_platform_is_window_maximized(window);
+}
+
+void ui_get_default_window_rect(int *x, int *y, int *width, int *height) {
+    ui_platform_get_default_window_rect(x, y, width, height);
 }
 
 void ui_set_text(Window *window, const char *text) {
@@ -289,8 +295,12 @@ void ui_set_session_timer(Window *window, int seconds) {
     ui_platform_set_session_timer(window, seconds);
 }
 
-void ui_launch_recovery_instance(const char *slot_id) {
-    ui_platform_launch_recovery_instance(slot_id);
+void ui_launch_recovery_instance(const char *slot_id, int cascade_index) {
+    ui_platform_launch_recovery_instance(slot_id, cascade_index);
+}
+
+void ui_notify_settings_changed(void) {
+    ui_platform_notify_settings_changed();
 }
 
 void *ui_get_native_handle(Window *window) {

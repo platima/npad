@@ -117,6 +117,10 @@ static Window *g_main_window = NULL;
 static HMODULE g_richedit_lib = NULL;
 static const wchar_t *g_richedit_class = MSFTEDIT_CLASS;
 
+// Registered broadcast message telling other instances that settings on disk
+// changed (wParam carries the sender's pid so it can ignore its own message)
+static UINT g_settings_changed_msg = 0;
+
 // Modeless find/replace dialog (only one can be open at a time, like Notepad)
 static HWND g_find_dialog = NULL;
 
@@ -162,6 +166,7 @@ static void set_zoom(Window *window, int percent);
 static int get_zoom(Window *window);
 static bool find_next(Window *window, bool down);
 static bool font_is_installed(const wchar_t *face);
+void ui_platform_notify_settings_changed(void);
 
 // ---------------------------------------------------------------------------
 // UTF-8 <-> UTF-16 helpers
@@ -231,8 +236,10 @@ static bool theme_colors(COLORREF *bg, COLORREF *fg) {
     COLORREF back = GetSysColor(COLOR_WINDOW);
     COLORREF text = GetSysColor(COLOR_WINDOWTEXT);
 
-    char *theme = settings_get_string("theme", "system");
-    const char *t = theme ? theme : "system";
+    // Default to Light: classic Notepad has no colour schemes, so a fresh
+    // install is plain Light rather than following the OS dark mode.
+    char *theme = settings_get_string("theme", "light");
+    const char *t = theme ? theme : "light";
 
     if (strcmp(t, "dark") == 0) {
         dark = true;
@@ -339,7 +346,11 @@ bool ui_platform_init(void) {
         return false;
     }
 
-    // Theme: "system" (default) follows the OS setting; "light"/"dark" override
+    // Cross-instance settings-change broadcast (all instances register the
+    // same name, so the message id matches across processes)
+    g_settings_changed_msg = RegisterWindowMessageW(L"npadSettingsChanged");
+
+    // Theme default is Light; "system" follows the OS, "dark"/solarized override
     g_dark_mode = resolve_theme_dark_mode();
 
     // Restore persisted find/replace options
@@ -492,6 +503,11 @@ Window *ui_platform_create_main_window(void) {
     build_accelerators(window);
     apply_theme(window);
 
+    // Always show menu access-key underlines (and focus rectangles), rather
+    // than only while Alt is held, matching classic Notepad.
+    SendMessageW(window->hwnd, WM_CHANGEUISTATE,
+                 MAKEWPARAM(UIS_CLEAR, UISF_HIDEACCEL | UISF_HIDEFOCUS), 0);
+
     g_main_window = window;
     return window;
 }
@@ -598,6 +614,34 @@ bool ui_platform_is_window_maximized(Window *window) {
     if (!window || !window->hwnd)
         return false;
     return IsZoomed(window->hwnd) != 0;
+}
+
+void ui_platform_get_default_window_rect(int *x, int *y, int *width, int *height) {
+    RECT work;
+    if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0)) {
+        // Fallback to the full primary screen if the work area is unavailable
+        work.left = 0;
+        work.top = 0;
+        work.right = GetSystemMetrics(SM_CXSCREEN);
+        work.bottom = GetSystemMetrics(SM_CYSCREEN);
+    }
+
+    int work_w = work.right - work.left;
+    int work_h = work.bottom - work.top;
+
+    // A generous, Notepad-like default: ~72% of the work area, centred.
+    // Working in physical pixels makes this inherently DPI-correct.
+    int w = MulDiv(work_w, 72, 100);
+    int h = MulDiv(work_h, 72, 100);
+
+    if (width)
+        *width = w;
+    if (height)
+        *height = h;
+    if (x)
+        *x = work.left + (work_w - w) / 2;
+    if (y)
+        *y = work.top + (work_h - h) / 2;
 }
 
 // ---------------------------------------------------------------------------
@@ -1876,8 +1920,8 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
                 SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM) SCHEME_LABELS[i]);
             }
 
-            char *theme = settings_get_string("theme", "system");
-            int sel = 0;
+            char *theme = settings_get_string("theme", "light");
+            int sel = 1; // Light (index of "light" in SCHEME_KEYS)
             for (int i = 0; i < SCHEME_COUNT; i++) {
                 if (theme && strcmp(theme, SCHEME_KEYS[i]) == 0) {
                     sel = i;
@@ -2018,6 +2062,7 @@ static void import_settings(HWND owner) {
     // Reload settings and re-apply what can change live
     settings_clear_all();
     settings_load();
+    editor_reload_prefs();
     if (g_main_window) {
         apply_font(g_main_window);
         apply_theme(g_main_window);
@@ -2025,8 +2070,13 @@ static void import_settings(HWND owner) {
         rebuild_recent_menu(g_main_window);
         update_status_bar(g_main_window);
     }
-    MessageBoxW(owner, L"Settings imported. Restart npad for all changes to take effect.", L"npad",
-                MB_OK | MB_ICONINFORMATION);
+    // Propagate to other running instances too
+    ui_platform_notify_settings_changed();
+
+    MessageBoxW(owner,
+                L"Settings imported. A few options (window size, default encoding) "
+                L"take effect on restart.",
+                L"npad", MB_OK | MB_ICONINFORMATION);
 }
 
 static INT_PTR CALLBACK prefs_files_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -2134,6 +2184,9 @@ static void show_preferences_dialog(Window *window) {
     // Persist all applied preference changes to disk immediately, so they
     // survive even if this run is later killed without a clean exit
     settings_save();
+
+    // Let other running instances pick up the change live
+    ui_platform_notify_settings_changed();
 }
 
 // Go To Line dialog (resource-based, truly modal)
@@ -2302,17 +2355,33 @@ static void launch_new_window(void) {
     spawn_self(NULL);
 }
 
-void ui_platform_launch_recovery_instance(const char *slot_id) {
+void ui_platform_launch_recovery_instance(const char *slot_id, int cascade_index) {
     if (!slot_id)
         return;
     wchar_t *wslot = utf8_to_wide(slot_id);
     if (!wslot)
         return;
-    wchar_t extra[128];
-    _snwprintf(extra, 127, L"--recover %s", wslot);
-    extra[127] = L'\0';
+    wchar_t extra[160];
+    _snwprintf(extra, 159, L"--recover %s --cascade %d", wslot, cascade_index);
+    extra[159] = L'\0';
     free(wslot);
     spawn_self(extra);
+}
+
+static BOOL CALLBACK notify_enum_proc(HWND hwnd, LPARAM lparam) {
+    wchar_t cls[64];
+    if (GetClassNameW(hwnd, cls, 64) && wcscmp(cls, NPAD_WINDOW_CLASS) == 0) {
+        PostMessageW(hwnd, (UINT) lparam, (WPARAM) GetCurrentProcessId(), 0);
+    }
+    return TRUE;
+}
+
+void ui_platform_notify_settings_changed(void) {
+    // Post directly to every npad main window (this instance's is ignored via
+    // the pid check in the handler). More reliable than HWND_BROADCAST.
+    if (g_settings_changed_msg) {
+        EnumWindows(notify_enum_proc, (LPARAM) g_settings_changed_msg);
+    }
 }
 
 static void create_menu(Window *window) {
@@ -2789,8 +2858,32 @@ static void resize_controls(Window *window) {
                  SWP_NOZORDER);
 }
 
+// Reload settings from disk and re-apply everything that can change live.
+// Used when another instance saved preferences.
+static void reload_and_apply_settings(Window *window) {
+    if (!window)
+        return;
+    settings_clear_all();
+    settings_load();
+    editor_reload_prefs(); // Re-read auto-save / session settings and timers
+    apply_font(window);
+    apply_theme(window);
+    apply_new_window_pref(window);
+    rebuild_recent_menu(window);
+    update_status_bar(window);
+}
+
 static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     Window *window = (Window *) GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+
+    // Another instance changed settings on disk: reload and re-apply them.
+    // Ignore our own broadcast (wParam carries the sender's pid).
+    if (msg == g_settings_changed_msg && g_settings_changed_msg != 0) {
+        if (window && wparam != (WPARAM) GetCurrentProcessId()) {
+            reload_and_apply_settings(window);
+        }
+        return 0;
+    }
 
     switch (msg) {
         case WM_CREATE: {

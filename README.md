@@ -47,7 +47,8 @@ Current features (Windows build):
   - Tabbed Preferences dialog (Edit menu, Ctrl+,) with an Apply button, for auto-save, session resume, theme, fonts, defaults and more
   - Optional auto-save (enabled by default, configurable)
   - Optional session resume / crash recovery (disabled by default, configurable); restores every window that was open, each in its own instance
-  - Theme support: follow system, light, dark, and Solarized Light / Dark colour schemes (chosen in Preferences)
+  - Theme support: light (default), dark, follow-system, and Solarized Light / Dark colour schemes (chosen in Preferences); changes apply to all open windows live
+  - Opens at a large default sized to your display (remembered once you resize)
   - Find / Replace with direction, match case, whole word and wrap-around (Ctrl+F / Ctrl+H, F3 / Shift+F3)
   - Find remembers recent search / replace terms, and shows a live match count
   - Undo / Redo (Ctrl+Z / Ctrl+Y) with a deep undo history

@@ -13,6 +13,19 @@ modified-state tracking) did not actually work; this release rewrites the
 affected code and implements them for real. Entries for 0.1.5-0.1.8 below
 should be read with that in mind.
 
+### 🐛 Defaults, sync & window sizing (2026-07-09)
+- Default colour scheme is now **Light** (classic Notepad has no schemes);
+  "Follow system" is still selectable.
+- **Preference changes now propagate to other open npad windows** live
+  (each instance reloads settings and re-applies theme/font/etc.).
+- The **default window size** is now a DPI-correct fraction (~72%) of the
+  monitor work area, centred, instead of a fixed 800x600 - much better on
+  large / high-DPI displays. The size is still remembered once you resize.
+- Menu **access-key underlines are always shown** (not only while Alt is
+  held), matching classic Notepad.
+- **Crash-restored extra windows now cascade** instead of stacking exactly.
+- Narrowed the Preferences pages (round 5 overshot); long options wrap.
+
 ### 🐛 Preferences & recovery fixes (2026-07-09)
 - **Fixed** crash recovery restoring only one document when several windows
   were open. Each instance now writes its own recovery slot, and on the next

@@ -74,6 +74,10 @@ int editor_get_auto_save_interval(void);
 void editor_enable_session_resume(bool enabled);
 bool editor_is_session_resume_enabled(void);
 
+// Re-read preferences from settings and re-apply timers (used after another
+// instance changes settings, or after an import)
+void editor_reload_prefs(void);
+
 // Event handling
 bool editor_handle_event(const UIEvent *event);
 

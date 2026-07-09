@@ -176,13 +176,15 @@ static void editor_check_session_recovery(void) {
         }
 
         if (ui_show_message_box(g_editor.main_window, "npad", message, true)) {
-            // Restore the first slot here; reopen the rest in new windows
+            // Restore the first slot here; reopen the rest in new windows,
+            // cascaded so they do not stack on top of each other
             bool restored_here = false;
+            int cascade = 1;
             for (int i = 0; i < count; i++) {
                 if (!restored_here) {
                     restored_here = editor_restore_slot(dir, slots[i]);
                 } else {
-                    ui_launch_recovery_instance(slots[i]);
+                    ui_launch_recovery_instance(slots[i], cascade++);
                 }
             }
         } else {
@@ -587,6 +589,23 @@ void editor_enable_session_resume(bool enabled) {
 
 bool editor_is_session_resume_enabled(void) {
     return g_editor.session_resume_enabled;
+}
+
+void editor_reload_prefs(void) {
+    g_editor.auto_save_enabled = settings_get_bool("auto_save_enabled", true);
+    g_editor.auto_save_interval = settings_get_int("auto_save_interval", 300);
+    if (g_editor.auto_save_interval < 10) {
+        g_editor.auto_save_interval = 10;
+    }
+
+    g_editor.session_resume_enabled = settings_get_bool("session_resume_enabled", false);
+    g_editor.session_interval = settings_get_int("session_interval", DEFAULT_SESSION_INTERVAL_SEC);
+    if (g_editor.session_interval < 5) {
+        g_editor.session_interval = 5;
+    }
+
+    editor_apply_auto_save_timer();
+    editor_apply_session_timer();
 }
 
 bool editor_handle_event(const UIEvent *event) {

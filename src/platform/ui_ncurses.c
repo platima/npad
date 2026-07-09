@@ -296,8 +296,23 @@ void ui_platform_set_session_timer(Window *window, int seconds) {
     (void) seconds;
 }
 
-void ui_platform_launch_recovery_instance(const char *slot_id) {
+void ui_platform_launch_recovery_instance(const char *slot_id, int cascade_index) {
     (void) slot_id;
+    (void) cascade_index;
+}
+
+void ui_platform_notify_settings_changed(void) {
+}
+
+void ui_platform_get_default_window_rect(int *x, int *y, int *width, int *height) {
+    if (x)
+        *x = 100;
+    if (y)
+        *y = 100;
+    if (width)
+        *width = 800;
+    if (height)
+        *height = 600;
 }
 
 void ui_platform_set_window_maximized(Window *window, bool maximized) {
