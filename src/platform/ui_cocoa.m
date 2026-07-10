@@ -302,6 +302,11 @@ void ui_platform_launch_recovery_instance(const char *slot_id, int cascade_index
 void ui_platform_notify_settings_changed(void) {
 }
 
+bool ui_platform_pid_is_running(long pid) {
+    (void) pid;
+    return false;
+}
+
 void ui_platform_get_default_window_rect(int *x, int *y, int *width, int *height) {
     if (x) *x = 100;
     if (y) *y = 100;

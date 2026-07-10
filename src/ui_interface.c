@@ -85,6 +85,7 @@ extern void ui_platform_set_auto_save_timer(Window *window, int seconds);
 extern void ui_platform_set_session_timer(Window *window, int seconds);
 extern void ui_platform_launch_recovery_instance(const char *slot_id, int cascade_index);
 extern void ui_platform_notify_settings_changed(void);
+extern bool ui_platform_pid_is_running(long pid);
 
 // Platform-specific helpers
 extern void *ui_platform_get_native_handle(Window *window);
@@ -301,6 +302,10 @@ void ui_launch_recovery_instance(const char *slot_id, int cascade_index) {
 
 void ui_notify_settings_changed(void) {
     ui_platform_notify_settings_changed();
+}
+
+bool ui_pid_is_running(long pid) {
+    return ui_platform_pid_is_running(pid);
 }
 
 void *ui_get_native_handle(Window *window) {

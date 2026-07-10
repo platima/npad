@@ -148,10 +148,12 @@ int main(int argc, char *argv[]) {
         ui_get_default_window_rect(&x, &y, &width, &height);
     }
 
-    // Cascade recovery windows so restored sessions do not stack exactly
+    // Cascade new/restored windows so they do not stack exactly; wrap after
+    // a few steps so a long cascade does not march off-screen
     if (g_cascade_index > 0) {
-        x += g_cascade_index * 80;
-        y += g_cascade_index * 80;
+        int step = (g_cascade_index % 8) * 80;
+        x += step;
+        y += step;
     }
 
     ui_set_window_size(main_window, width, height);

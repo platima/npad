@@ -139,12 +139,24 @@ static bool editor_restore_slot(const char *dir, const char *slot_id) {
     return true;
 }
 
+// A slot id is "<time>-<pid>" in hex; a slot whose owning pid is still a
+// running npad process is a live session, not a crash to recover.
+static bool slot_owner_is_running(const char *slot_id) {
+    const char *dash = strrchr(slot_id, '-');
+    if (!dash)
+        return false;
+    long pid = strtol(dash + 1, NULL, 16);
+    return ui_pid_is_running(pid);
+}
+
 // On startup, offer to restore work left behind by an unclean exit.
 // The check is unconditional on the current enabled state: a snapshot only
 // exists on disk if session resume was enabled when it was last written
 // (disabling clears it), and the enabled flag may not have been persisted
 // if the previous run was killed before a clean exit. When several sessions
 // were open, each left its own slot; the extras reopen in new windows.
+// Slots owned by still-running npad instances are skipped (they are live
+// snapshots, not crashed sessions).
 static void editor_check_session_recovery(void) {
     if (!g_editor.main_window)
         return;
@@ -161,8 +173,20 @@ static void editor_check_session_recovery(void) {
         return;
     }
 
+    int listed = 0;
+    char **slots = session_list_slots(dir, &listed);
+
+    // Drop slots belonging to still-running instances (compacting the array)
     int count = 0;
-    char **slots = session_list_slots(dir, &count);
+    for (int i = 0; i < listed; i++) {
+        if (slot_owner_is_running(slots[i])) {
+            free(slots[i]);
+            slots[i] = NULL;
+        } else {
+            slots[count++] = slots[i];
+        }
+    }
+
     if (count > 0) {
         char message[256];
         if (count == 1) {

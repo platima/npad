@@ -283,7 +283,9 @@ bool settings_save(void) {
         free(dir);
     }
 
-    bool result = file_write_text(g_settings_file_path, content);
+    // Atomic write (temp file + verify + rename) so an interrupted save can
+    // never truncate or corrupt the existing settings file
+    bool result = file_write_text_atomic(g_settings_file_path, content);
     free(content);
 
     return result;

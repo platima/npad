@@ -135,7 +135,9 @@ position). Not intended for direct use.
 - **Crash recovery**: with session resume enabled, each window snapshots
   unsaved work to its own recovery slot. After an unclean exit, npad offers
   to restore; the first document opens in the current window and the rest in
-  new, cascaded windows. Slots are cleared on clean save/exit.
+  new, cascaded windows. Slots are cleared on clean save/exit. Snapshots
+  belonging to a still-running npad instance are ignored, so opening a new
+  window while others are open never offers to "restore" their live work.
 - **Drag & drop**: drop a file to open it; hold Ctrl to insert its contents
   at the caret instead.
 - **Large files**: opening a file over the configured threshold asks for

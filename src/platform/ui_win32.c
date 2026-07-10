@@ -563,13 +563,6 @@ void ui_platform_show_window(Window *window) {
     if (window && window->hwnd) {
         ShowWindow(window->hwnd, SW_SHOW);
         UpdateWindow(window->hwnd);
-
-        // Always show menu access-key underlines, like classic Notepad.
-        // This must run after the window is shown/activated - activation
-        // re-applies the "hidden until Alt" state, which is why sending it
-        // at creation time had no effect. (Also re-sent on WM_ACTIVATE.)
-        SendMessageW(window->hwnd, WM_CHANGEUISTATE,
-                     MAKEWPARAM(UIS_CLEAR, UISF_HIDEACCEL | UISF_HIDEFOCUS), 0);
     }
 }
 
@@ -662,11 +655,11 @@ void ui_platform_get_default_window_rect(int *x, int *y, int *width, int *height
     int work_w = work.right - work.left;
     int work_h = work.bottom - work.top;
 
-    // A generous, Notepad-like default: ~48% of the work-area width and
-    // ~72% of its height, centred. Working in physical pixels makes this
+    // Match classic Notepad's default: ~56% of the work-area width and
+    // ~60% of its height, centred. Working in physical pixels makes this
     // inherently DPI-correct.
-    int w = MulDiv(work_w, 48, 100);
-    int h = MulDiv(work_h, 72, 100);
+    int w = MulDiv(work_w, 56, 100);
+    int h = MulDiv(work_h, 60, 100);
 
     if (width)
         *width = w;
@@ -694,6 +687,11 @@ void ui_platform_set_text(Window *window, const char *text) {
     SetWindowTextW(window->edit_hwnd, wide);
     window->setting_text_programmatically = false;
     free(wide);
+
+    // SetWindowTextW drops the RichEdit character formatting, so re-apply the
+    // configured font/colour - otherwise opened or restored content would
+    // render in the control's default face rather than the user's font/theme.
+    apply_font(window);
 
     // Loading new content resets modification state, undo history and caret
     SendMessageW(window->edit_hwnd, EM_EMPTYUNDOBUFFER, 0, 0);
@@ -2059,11 +2057,19 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
                     set_status_bar_visible(g_main_window, show_status);
                 }
 
-                settings_set_bool("sync_view_state",
-                                  IsDlgButtonChecked(page, ID_PREF_SYNC_VIEW) == BST_CHECKED);
+                bool sync_view = IsDlgButtonChecked(page, ID_PREF_SYNC_VIEW) == BST_CHECKED;
+                settings_set_bool("sync_view_state", sync_view);
 
                 settings_save(); // Apply button: persist + propagate immediately
                 ui_platform_notify_settings_changed();
+
+                // Enabling sync should bring the other windows into line with
+                // this (active) window's view state right away, not only on the
+                // next change. Other windows enable sync via the settings-changed
+                // reload above, then adopt the view state posted here.
+                if (sync_view && g_main_window) {
+                    on_view_state_changed(g_main_window);
+                }
 
                 SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
                 return TRUE;
@@ -2497,8 +2503,28 @@ static void spawn_self(const wchar_t *extra) {
     }
 }
 
+static BOOL CALLBACK count_enum_proc(HWND hwnd, LPARAM lparam) {
+    wchar_t cls[64];
+    if (GetClassNameW(hwnd, cls, 64) && wcscmp(cls, NPAD_WINDOW_CLASS) == 0) {
+        (*(int *) lparam)++;
+    }
+    return TRUE;
+}
+
+// Number of npad main windows currently open (across all instances)
+static int count_npad_windows(void) {
+    int count = 0;
+    EnumWindows(count_enum_proc, (LPARAM) &count);
+    return count;
+}
+
 static void launch_new_window(void) {
-    spawn_self(NULL);
+    // Cascade the new window relative to the windows already open so it does
+    // not land exactly on top of them
+    wchar_t extra[64];
+    _snwprintf(extra, 63, L"--cascade %d", count_npad_windows());
+    extra[63] = L'\0';
+    spawn_self(extra);
 }
 
 void ui_platform_launch_recovery_instance(const char *slot_id, int cascade_index) {
@@ -2539,6 +2565,31 @@ void ui_platform_notify_settings_changed(void) {
     if (g_settings_changed_msg) {
         broadcast_to_npad_windows(g_settings_changed_msg, 0);
     }
+}
+
+bool ui_platform_pid_is_running(long pid) {
+    if (pid <= 0)
+        return false;
+
+    HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD) pid);
+    if (!proc) {
+        return false; // No such process (or gone) - treat as not running
+    }
+
+    bool running = false;
+    DWORD exit_code = 0;
+    if (GetExitCodeProcess(proc, &exit_code) && exit_code == STILL_ACTIVE) {
+        // Confirm it is actually npad.exe, guarding against pid reuse
+        wchar_t image[MAX_PATH];
+        DWORD size = MAX_PATH;
+        if (QueryFullProcessImageNameW(proc, 0, image, &size)) {
+            const wchar_t *base = wcsrchr(image, L'\\');
+            base = base ? base + 1 : image;
+            running = (_wcsicmp(base, L"npad.exe") == 0);
+        }
+    }
+    CloseHandle(proc);
+    return running;
 }
 
 static void create_menu(Window *window) {
@@ -3103,16 +3154,6 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                 SetFocus(window->edit_hwnd);
             }
             return 0;
-        }
-
-        case WM_ACTIVATE: {
-            // Re-assert always-visible access-key underlines: activation
-            // resets the UI state to "hidden until Alt" by default
-            if (LOWORD(wparam) != WA_INACTIVE) {
-                SendMessageW(hwnd, WM_CHANGEUISTATE,
-                             MAKEWPARAM(UIS_CLEAR, UISF_HIDEACCEL | UISF_HIDEFOCUS), 0);
-            }
-            break; // Let DefWindowProc handle the rest of activation
         }
 
         case WM_INITMENUPOPUP: {

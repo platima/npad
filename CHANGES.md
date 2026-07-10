@@ -10,6 +10,9 @@ Version numbers follow semver (0.x: minor = feature rounds / breaking
 changes, patch = fix-only rounds). Mapping of pre-0.2.0 commits to versions
 is a best-effort reconstruction from the changelog and commit subjects.
 
+## v0.7.1 (2026-07-10)
+- 2026-07-10 Round 8: skip live sessions in recovery, restore font/theme on load, window sizing, New Window cascade, sync-on-enable, atomic settings save
+
 ## v0.7.0 (2026-07-10)
 - 2026-07-10 Round 7: view-state model, Defaults/Backup prefs, docs and versioning overhaul
 

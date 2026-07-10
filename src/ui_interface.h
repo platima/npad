@@ -166,6 +166,10 @@ void ui_launch_recovery_instance(const char *slot_id, int cascade_index);
 // they reload and re-apply them live.
 void ui_notify_settings_changed(void);
 
+// Whether the given pid is a still-running npad process. Used to skip the
+// live recovery snapshots of other running instances at startup.
+bool ui_pid_is_running(long pid);
+
 // Platform-specific helpers (implemented per platform)
 void *ui_get_native_handle(Window *window);
 

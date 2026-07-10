@@ -5,6 +5,29 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-07-10
+
+### 🐛 Bug Fixes
+- Crash recovery no longer re-offers sessions that are **still running**: a
+  newly launched instance skips recovery slots whose owning process is a
+  live npad.exe, so it stops prompting to "restore" work that isn't lost
+  (and stops re-prompting right after you just restored).
+- **Restored/opened documents now use the configured font and theme.**
+  `SetWindowTextW` was dropping the RichEdit character formatting, so
+  restored text showed in the control's default face; the font/colour is
+  now re-applied after loading text.
+- Default window size adjusted to ~56% x ~60% of the work area to match
+  Notepad.
+- Manually opened New Windows (Ctrl+Shift+N) now cascade like restored
+  ones, instead of stacking on top of each other.
+- Enabling "Sync view across all instances" now brings the other windows
+  into line with the active window's font type and zoom immediately, not
+  only on the next change.
+- Dropped the non-working attempt to always show menu access-key underlines;
+  npad now follows standard Windows behaviour (underlines on Alt).
+- `settings.json` is now written atomically (temp file + rename), so an
+  interrupted save cannot truncate it.
+
 ## [0.7.0] - 2026-07-10
 
 ### ✨ Features
