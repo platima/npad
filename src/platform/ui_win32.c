@@ -106,6 +106,7 @@ typedef struct Window {
     bool setting_text_programmatically; // Suppress EN_CHANGE during programmatic changes
     bool word_wrap_enabled;
     bool status_bar_visible;
+    bool monospace_current;      // Per-window view state (starts from default_font_mono)
     char status_encoding[32];    // e.g. "UTF-8" (set by the editor core)
     char status_line_ending[32]; // e.g. "Windows (CRLF)"
 } Window;
@@ -120,6 +121,11 @@ static const wchar_t *g_richedit_class = MSFTEDIT_CLASS;
 // Registered broadcast message telling other instances that settings on disk
 // changed (wParam carries the sender's pid so it can ignore its own message)
 static UINT g_settings_changed_msg = 0;
+
+// Registered message carrying live view state (font type + zoom) between
+// instances when "Sync view across all instances" is enabled.
+// wParam = sender pid; lParam = MAKELPARAM(zoom_percent, monospace ? 1 : 0)
+static UINT g_view_sync_msg = 0;
 
 // Modeless find/replace dialog (only one can be open at a time, like Notepad)
 static HWND g_find_dialog = NULL;
@@ -166,6 +172,8 @@ static void set_zoom(Window *window, int percent);
 static int get_zoom(Window *window);
 static bool find_next(Window *window, bool down);
 static bool font_is_installed(const wchar_t *face);
+static void on_view_state_changed(Window *window);
+static void broadcast_to_npad_windows(UINT msg, LPARAM lparam);
 void ui_platform_notify_settings_changed(void);
 
 // ---------------------------------------------------------------------------
@@ -287,9 +295,18 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, L
     LRESULT result = DefSubclassProc(hwnd, msg, wparam, lparam);
 
     switch (msg) {
+        case WM_MOUSEWHEEL:
+            if (g_main_window) {
+                update_status_bar(g_main_window);
+                // Ctrl+wheel is RichEdit's native zoom: treat it as a
+                // user-initiated view-state change (sync / auto-defaults)
+                if (GET_KEYSTATE_WPARAM(wparam) & MK_CONTROL) {
+                    on_view_state_changed(g_main_window);
+                }
+            }
+            break;
         case WM_KEYUP:
         case WM_LBUTTONUP:
-        case WM_MOUSEWHEEL:
             if (g_main_window) {
                 update_status_bar(g_main_window);
             }
@@ -346,9 +363,10 @@ bool ui_platform_init(void) {
         return false;
     }
 
-    // Cross-instance settings-change broadcast (all instances register the
-    // same name, so the message id matches across processes)
+    // Cross-instance messages (all instances register the same names, so
+    // the message ids match across processes)
     g_settings_changed_msg = RegisterWindowMessageW(L"npadSettingsChanged");
+    g_view_sync_msg = RegisterWindowMessageW(L"npadViewStateChanged");
 
     // Theme default is Light; "system" follows the OS, "dark"/solarized override
     g_dark_mode = resolve_theme_dark_mode();
@@ -435,6 +453,11 @@ Window *ui_platform_create_main_window(void) {
     window->word_wrap_enabled = settings_get_bool("word_wrap", false);
     window->status_bar_visible = settings_get_bool("status_bar_visible", true);
 
+    // Font type is per-window view state, seeded from the Defaults setting
+    // (falling back to the pre-0.7 "monospace_enabled" key for migration)
+    window->monospace_current =
+        settings_get_bool("default_font_mono", settings_get_bool("monospace_enabled", true));
+
     window->hwnd = CreateWindowExW(WS_EX_ACCEPTFILES, NPAD_WINDOW_CLASS, L"npad",
                                    WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT,
                                    CW_USEDEFAULT, 800, 600, NULL, NULL, g_hinstance, window);
@@ -479,6 +502,14 @@ Window *ui_platform_create_main_window(void) {
     SendMessageW(window->edit_hwnd, EM_SETEVENTMASK, 0, ENM_CHANGE | ENM_SELCHANGE);
     SetWindowSubclass(window->edit_hwnd, edit_subclass_proc, 1, 0);
 
+    // Zoom is per-window view state, seeded from the Defaults setting
+    int default_zoom = settings_get_int("default_zoom", 100);
+    if (default_zoom < 10)
+        default_zoom = 10;
+    if (default_zoom > 500)
+        default_zoom = 500;
+    SendMessageW(window->edit_hwnd, EM_SETZOOM, (WPARAM) default_zoom, 100);
+
     apply_font(window);
     apply_word_wrap(window);
 
@@ -502,11 +533,6 @@ Window *ui_platform_create_main_window(void) {
     create_menu(window);
     build_accelerators(window);
     apply_theme(window);
-
-    // Always show menu access-key underlines (and focus rectangles), rather
-    // than only while Alt is held, matching classic Notepad.
-    SendMessageW(window->hwnd, WM_CHANGEUISTATE,
-                 MAKEWPARAM(UIS_CLEAR, UISF_HIDEACCEL | UISF_HIDEFOCUS), 0);
 
     g_main_window = window;
     return window;
@@ -537,6 +563,13 @@ void ui_platform_show_window(Window *window) {
     if (window && window->hwnd) {
         ShowWindow(window->hwnd, SW_SHOW);
         UpdateWindow(window->hwnd);
+
+        // Always show menu access-key underlines, like classic Notepad.
+        // This must run after the window is shown/activated - activation
+        // re-applies the "hidden until Alt" state, which is why sending it
+        // at creation time had no effect. (Also re-sent on WM_ACTIVATE.)
+        SendMessageW(window->hwnd, WM_CHANGEUISTATE,
+                     MAKEWPARAM(UIS_CLEAR, UISF_HIDEACCEL | UISF_HIDEFOCUS), 0);
     }
 }
 
@@ -629,9 +662,10 @@ void ui_platform_get_default_window_rect(int *x, int *y, int *width, int *height
     int work_w = work.right - work.left;
     int work_h = work.bottom - work.top;
 
-    // A generous, Notepad-like default: ~72% of the work area, centred.
-    // Working in physical pixels makes this inherently DPI-correct.
-    int w = MulDiv(work_w, 72, 100);
+    // A generous, Notepad-like default: ~48% of the work-area width and
+    // ~72% of its height, centred. Working in physical pixels makes this
+    // inherently DPI-correct.
+    int w = MulDiv(work_w, 48, 100);
     int h = MulDiv(work_h, 72, 100);
 
     if (width)
@@ -1619,6 +1653,28 @@ static void set_zoom(Window *window, int percent) {
         percent = 500;
     SendMessageW(window->edit_hwnd, EM_SETZOOM, (WPARAM) percent, 100);
     update_status_bar(window);
+    on_view_state_changed(window); // User-initiated zoom change
+}
+
+// Called after a user-initiated view-state change (font type or zoom) in
+// this window. Honors the two opt-in preferences:
+//  - auto-update defaults: the new state becomes the default for new windows
+//  - sync view: the new state is pushed live to all other npad windows
+static void on_view_state_changed(Window *window) {
+    if (!window)
+        return;
+
+    if (settings_get_bool("auto_update_defaults", false)) {
+        settings_set_bool("default_font_mono", window->monospace_current);
+        settings_set_int("default_zoom", get_zoom(window));
+        settings_save();
+        ui_platform_notify_settings_changed();
+    }
+
+    if (settings_get_bool("sync_view_state", false) && g_view_sync_msg) {
+        LPARAM state = MAKELPARAM(get_zoom(window), window->monospace_current ? 1 : 0);
+        broadcast_to_npad_windows(g_view_sync_msg, state);
+    }
 }
 
 static void apply_word_wrap(Window *window) {
@@ -1652,7 +1708,7 @@ static void apply_word_wrap(Window *window) {
 // The settings key (and default) for the font face the editor is currently
 // showing. OpenDyslexic overrides both; otherwise the Monospace toggle
 // selects between the monospace and proportional faces.
-static const char *active_font_key(const char **default_face) {
+static const char *active_font_key(const Window *window, const char **default_face) {
     // Only honour OpenDyslexic when the font is actually installed, so a
     // stale/imported setting cannot leave the editor stuck on a substituted
     // fallback face (which would also make the mono/proportional toggle
@@ -1663,7 +1719,8 @@ static const char *active_font_key(const char **default_face) {
             *default_face = OPENDYSLEXIC_FONT;
         return "opendyslexic_font";
     }
-    if (settings_get_bool("monospace_enabled", true)) {
+    // Font type is per-window view state (see monospace_current)
+    if (!window || window->monospace_current) {
         if (default_face)
             *default_face = DEFAULT_MONO_FONT;
         return "monospace_font";
@@ -1701,7 +1758,7 @@ static void apply_font(Window *window) {
         return;
 
     const char *default_face = DEFAULT_MONO_FONT;
-    const char *key = active_font_key(&default_face);
+    const char *key = active_font_key(window, &default_face);
     char *face = settings_get_string(key, default_face);
     int size = settings_get_int("font_size", 11);
     int weight = settings_get_int("font_weight", FW_NORMAL);
@@ -1784,6 +1841,8 @@ static void show_font_dialog(Window *window, const char *font_key, const char *d
         settings_set_bool("font_italic", lf.lfItalic != 0);
 
         apply_font(window);
+        settings_save(); // Persist and propagate to other windows
+        ui_platform_notify_settings_changed();
     }
 }
 
@@ -1896,6 +1955,9 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                     apply_new_window_pref(g_main_window);
                 }
 
+                settings_save(); // Apply button: persist + propagate immediately
+                ui_platform_notify_settings_changed();
+
                 SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
                 return TRUE;
             }
@@ -1937,13 +1999,17 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
             CheckDlgButton(page, ID_PREF_STATUSBAR,
                            (g_main_window && g_main_window->status_bar_visible) ? BST_CHECKED
                                                                                 : BST_UNCHECKED);
+            CheckDlgButton(page, ID_PREF_SYNC_VIEW,
+                           settings_get_bool("sync_view_state", false) ? BST_CHECKED
+                                                                       : BST_UNCHECKED);
             return TRUE;
         }
 
         case WM_COMMAND: {
             WORD code = HIWORD(wparam);
             WORD id = LOWORD(wparam);
-            if ((code == BN_CLICKED && (id == ID_PREF_OPENDYSLEXIC || id == ID_PREF_STATUSBAR)) ||
+            if ((code == BN_CLICKED && (id == ID_PREF_OPENDYSLEXIC || id == ID_PREF_STATUSBAR ||
+                                        id == ID_PREF_SYNC_VIEW)) ||
                 (code == CBN_SELCHANGE && id == ID_PREF_SCHEME)) {
                 mark_prefs_dirty(page);
             }
@@ -1992,6 +2058,12 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
                 if (g_main_window && g_main_window->status_bar_visible != show_status) {
                     set_status_bar_visible(g_main_window, show_status);
                 }
+
+                settings_set_bool("sync_view_state",
+                                  IsDlgButtonChecked(page, ID_PREF_SYNC_VIEW) == BST_CHECKED);
+
+                settings_save(); // Apply button: persist + propagate immediately
+                ui_platform_notify_settings_changed();
 
                 SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
                 return TRUE;
@@ -2079,7 +2151,8 @@ static void import_settings(HWND owner) {
                 L"npad", MB_OK | MB_ICONINFORMATION);
 }
 
-static INT_PTR CALLBACK prefs_files_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
+// Preferences: Defaults page - the initial state for new windows/files
+static INT_PTR CALLBACK prefs_defaults_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
         case WM_INITDIALOG: {
             HWND enc_combo = GetDlgItem(page, ID_PREF_DEFAULT_ENCODING);
@@ -2103,22 +2176,41 @@ static INT_PTR CALLBACK prefs_files_proc(HWND page, UINT msg, WPARAM wparam, LPA
             }
             SendMessageW(eol_combo, CB_SETCURSEL,
                          (WPARAM) settings_get_int("default_line_ending", 0), 0);
+
+            HWND font_combo = GetDlgItem(page, ID_PREF_DEFAULT_FONT_TYPE);
+            SendMessageW(font_combo, CB_ADDSTRING, 0, (LPARAM) L"Monospace");
+            SendMessageW(font_combo, CB_ADDSTRING, 0, (LPARAM) L"Proportional");
+            SendMessageW(font_combo, CB_SETCURSEL,
+                         settings_get_bool("default_font_mono", true) ? 0 : 1, 0);
+
+            SetDlgItemInt(page, ID_PREF_DEFAULT_ZOOM, (UINT) settings_get_int("default_zoom", 100),
+                          FALSE);
+
+            CheckDlgButton(page, ID_PREF_AUTO_DEFAULTS,
+                           settings_get_bool("auto_update_defaults", false) ? BST_CHECKED
+                                                                            : BST_UNCHECKED);
             return TRUE;
         }
 
         case WM_COMMAND: {
             WORD code = HIWORD(wparam);
             WORD id = LOWORD(wparam);
-            if (code == CBN_SELCHANGE &&
-                (id == ID_PREF_DEFAULT_ENCODING || id == ID_PREF_DEFAULT_EOL)) {
+            if ((code == CBN_SELCHANGE &&
+                 (id == ID_PREF_DEFAULT_ENCODING || id == ID_PREF_DEFAULT_EOL ||
+                  id == ID_PREF_DEFAULT_FONT_TYPE)) ||
+                (code == EN_CHANGE && id == ID_PREF_DEFAULT_ZOOM) ||
+                (code == BN_CLICKED && id == ID_PREF_AUTO_DEFAULTS)) {
                 mark_prefs_dirty(page);
             }
-            if (id == ID_PREF_EXPORT) {
-                export_settings(page);
-                return TRUE;
-            }
-            if (id == ID_PREF_IMPORT) {
-                import_settings(page);
+            if (id == ID_PREF_USE_CURRENT) {
+                // Copy the active window's view state into the fields
+                if (g_main_window) {
+                    SendDlgItemMessageW(page, ID_PREF_DEFAULT_FONT_TYPE, CB_SETCURSEL,
+                                        g_main_window->monospace_current ? 0 : 1, 0);
+                    SetDlgItemInt(page, ID_PREF_DEFAULT_ZOOM, (UINT) get_zoom(g_main_window),
+                                  FALSE);
+                    mark_prefs_dirty(page);
+                }
                 return TRUE;
             }
             break;
@@ -2137,6 +2229,55 @@ static INT_PTR CALLBACK prefs_files_proc(HWND page, UINT msg, WPARAM wparam, LPA
                 if (eol >= 0) {
                     settings_set_int("default_line_ending", (int) eol);
                 }
+                LRESULT font_type =
+                    SendMessageW(GetDlgItem(page, ID_PREF_DEFAULT_FONT_TYPE), CB_GETCURSEL, 0, 0);
+                if (font_type >= 0) {
+                    settings_set_bool("default_font_mono", font_type == 0);
+                }
+
+                BOOL ok = FALSE;
+                UINT zoom = GetDlgItemInt(page, ID_PREF_DEFAULT_ZOOM, &ok, FALSE);
+                if (ok) {
+                    if (zoom < 10)
+                        zoom = 10;
+                    if (zoom > 500)
+                        zoom = 500;
+                    settings_set_int("default_zoom", (int) zoom);
+                }
+
+                settings_set_bool("auto_update_defaults",
+                                  IsDlgButtonChecked(page, ID_PREF_AUTO_DEFAULTS) == BST_CHECKED);
+
+                settings_save(); // Apply button: persist + propagate immediately
+                ui_platform_notify_settings_changed();
+
+                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                return TRUE;
+            }
+            break;
+        }
+    }
+    return FALSE;
+}
+
+// Preferences: Backup page - settings export/import
+static INT_PTR CALLBACK prefs_backup_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
+    switch (msg) {
+        case WM_COMMAND:
+            if (LOWORD(wparam) == ID_PREF_EXPORT) {
+                export_settings(page);
+                return TRUE;
+            }
+            if (LOWORD(wparam) == ID_PREF_IMPORT) {
+                import_settings(page);
+                return TRUE;
+            }
+            break;
+
+        case WM_NOTIFY: {
+            NMHDR *nmhdr = (NMHDR *) lparam;
+            if (nmhdr->code == PSN_APPLY) {
+                // Nothing page-local to apply; export/import act immediately
                 SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
                 return TRUE;
             }
@@ -2150,7 +2291,7 @@ static void show_preferences_dialog(Window *window) {
     if (!window)
         return;
 
-    PROPSHEETPAGEW pages[3];
+    PROPSHEETPAGEW pages[4];
     ZeroMemory(pages, sizeof(pages));
 
     pages[0].dwSize = sizeof(PROPSHEETPAGEW);
@@ -2165,8 +2306,13 @@ static void show_preferences_dialog(Window *window) {
 
     pages[2].dwSize = sizeof(PROPSHEETPAGEW);
     pages[2].hInstance = g_hinstance;
-    pages[2].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_FILES);
-    pages[2].pfnDlgProc = prefs_files_proc;
+    pages[2].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_DEFAULTS);
+    pages[2].pfnDlgProc = prefs_defaults_proc;
+
+    pages[3].dwSize = sizeof(PROPSHEETPAGEW);
+    pages[3].hInstance = g_hinstance;
+    pages[3].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_BACKUP);
+    pages[3].pfnDlgProc = prefs_backup_proc;
 
     PROPSHEETHEADERW psh;
     ZeroMemory(&psh, sizeof(psh));
@@ -2176,7 +2322,7 @@ static void show_preferences_dialog(Window *window) {
     psh.hwndParent = window->hwnd;
     psh.hInstance = g_hinstance;
     psh.pszCaption = L"Preferences";
-    psh.nPages = 3;
+    psh.nPages = 4;
     psh.ppsp = pages;
 
     PropertySheetW(&psh);
@@ -2368,19 +2514,30 @@ void ui_platform_launch_recovery_instance(const char *slot_id, int cascade_index
     spawn_self(extra);
 }
 
-static BOOL CALLBACK notify_enum_proc(HWND hwnd, LPARAM lparam) {
+// Post a message to every npad main window (receivers ignore our own pid,
+// carried in wParam). More reliable than HWND_BROADCAST.
+typedef struct {
+    UINT msg;
+    LPARAM lparam;
+} NpadBroadcast;
+
+static BOOL CALLBACK broadcast_enum_proc(HWND hwnd, LPARAM lparam) {
+    const NpadBroadcast *bc = (const NpadBroadcast *) lparam;
     wchar_t cls[64];
     if (GetClassNameW(hwnd, cls, 64) && wcscmp(cls, NPAD_WINDOW_CLASS) == 0) {
-        PostMessageW(hwnd, (UINT) lparam, (WPARAM) GetCurrentProcessId(), 0);
+        PostMessageW(hwnd, bc->msg, (WPARAM) GetCurrentProcessId(), bc->lparam);
     }
     return TRUE;
 }
 
+static void broadcast_to_npad_windows(UINT msg, LPARAM lparam) {
+    NpadBroadcast bc = { msg, lparam };
+    EnumWindows(broadcast_enum_proc, (LPARAM) &bc);
+}
+
 void ui_platform_notify_settings_changed(void) {
-    // Post directly to every npad main window (this instance's is ignored via
-    // the pid check in the handler). More reliable than HWND_BROADCAST.
     if (g_settings_changed_msg) {
-        EnumWindows(notify_enum_proc, (LPARAM) g_settings_changed_msg);
+        broadcast_to_npad_windows(g_settings_changed_msg, 0);
     }
 }
 
@@ -2550,7 +2707,7 @@ static void update_menu_states(Window *window) {
     apply_edit_command_states(window, window->hmenu);
 
     CheckMenuItem(window->hmenu, ID_FORMAT_MONOSPACE,
-                  settings_get_bool("monospace_enabled", true) ? MF_CHECKED : MF_UNCHECKED);
+                  window->monospace_current ? MF_CHECKED : MF_UNCHECKED);
     CheckMenuRadioItem(window->hmenu, ID_FORMAT_EOL_CRLF, ID_FORMAT_EOL_CR,
                        ID_FORMAT_EOL_CRLF + (UINT) editor_get_line_ending(), MF_BYCOMMAND);
 }
@@ -2750,11 +2907,17 @@ static void handle_command(Window *window, WORD command) {
             window->word_wrap_enabled = !window->word_wrap_enabled;
             settings_set_bool("word_wrap", window->word_wrap_enabled);
             apply_word_wrap(window);
+            settings_save(); // Persist and propagate to other windows
+            ui_platform_notify_settings_changed();
             break;
         case ID_FORMAT_MONOSPACE:
-            settings_set_bool("monospace_enabled", !settings_get_bool("monospace_enabled", true));
+            // Per-window view state: affects only this window unless the
+            // sync/auto-default preferences say otherwise
+            window->monospace_current = !window->monospace_current;
             apply_font(window);
             update_menu_states(window);
+            update_status_bar(window);
+            on_view_state_changed(window);
             break;
         case ID_FORMAT_EOL_CRLF:
         case ID_FORMAT_EOL_LF:
@@ -2766,7 +2929,7 @@ static void handle_command(Window *window, WORD command) {
             break;
         case ID_FORMAT_FONT: {
             const char *def = DEFAULT_MONO_FONT;
-            const char *key = active_font_key(&def);
+            const char *key = active_font_key(window, &def);
             show_font_dialog(window, key, def);
             break;
         }
@@ -2781,6 +2944,8 @@ static void handle_command(Window *window, WORD command) {
             break;
         case ID_VIEW_STATUS_BAR:
             set_status_bar_visible(window, !window->status_bar_visible);
+            settings_save(); // Persist and propagate to other windows
+            ui_platform_notify_settings_changed();
             break;
         case ID_HELP_ABOUT:
             ui_platform_show_about_dialog(window);
@@ -2806,7 +2971,7 @@ static void update_status_bar(Window *window) {
     SendMessageW(window->status_hwnd, SB_SETTEXTW, 2, (LPARAM) text);
 
     SendMessageW(window->status_hwnd, SB_SETTEXTW, 3,
-                 (LPARAM) (settings_get_bool("monospace_enabled", true) ? L"Mono" : L"Prop"));
+                 (LPARAM) (window->monospace_current ? L"Mono" : L"Prop"));
 
     wchar_t *eol = utf8_to_wide(window->status_line_ending);
     if (eol) {
@@ -2870,6 +3035,20 @@ static void reload_and_apply_settings(Window *window) {
     apply_theme(window);
     apply_new_window_pref(window);
     rebuild_recent_menu(window);
+
+    // Sync shared window options; per-window view state (font type, zoom)
+    // is deliberately left alone
+    bool wrap = settings_get_bool("word_wrap", false);
+    if (wrap != window->word_wrap_enabled) {
+        window->word_wrap_enabled = wrap;
+        apply_word_wrap(window);
+    }
+    bool status = settings_get_bool("status_bar_visible", true);
+    if (status != window->status_bar_visible) {
+        set_status_bar_visible(window, status);
+    }
+
+    update_menu_states(window);
     update_status_bar(window);
 }
 
@@ -2881,6 +3060,26 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
     if (msg == g_settings_changed_msg && g_settings_changed_msg != 0) {
         if (window && wparam != (WPARAM) GetCurrentProcessId()) {
             reload_and_apply_settings(window);
+        }
+        return 0;
+    }
+
+    // Another instance changed its view state (font type / zoom) and view
+    // sync is enabled: mirror it here without re-broadcasting.
+    if (msg == g_view_sync_msg && g_view_sync_msg != 0) {
+        if (window && wparam != (WPARAM) GetCurrentProcessId() &&
+            settings_get_bool("sync_view_state", false)) {
+            int zoom = LOWORD(lparam);
+            bool mono = HIWORD(lparam) != 0;
+            if (zoom >= 10 && zoom <= 500) {
+                SendMessageW(window->edit_hwnd, EM_SETZOOM, (WPARAM) zoom, 100);
+            }
+            if (window->monospace_current != mono) {
+                window->monospace_current = mono;
+                apply_font(window);
+            }
+            update_menu_states(window);
+            update_status_bar(window);
         }
         return 0;
     }
@@ -2904,6 +3103,16 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                 SetFocus(window->edit_hwnd);
             }
             return 0;
+        }
+
+        case WM_ACTIVATE: {
+            // Re-assert always-visible access-key underlines: activation
+            // resets the UI state to "hidden until Alt" by default
+            if (LOWORD(wparam) != WA_INACTIVE) {
+                SendMessageW(hwnd, WM_CHANGEUISTATE,
+                             MAKEWPARAM(UIS_CLEAR, UISF_HIDEACCEL | UISF_HIDEFOCUS), 0);
+            }
+            break; // Let DefWindowProc handle the rest of activation
         }
 
         case WM_INITMENUPOPUP: {

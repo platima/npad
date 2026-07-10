@@ -5,28 +5,62 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0] - 2026-07-07
+## [0.7.0] - 2026-07-10
 
-Full review and repair release. A code audit found that several features
-described in earlier entries (Find/Replace, word wrap toggling, redo,
-modified-state tracking) did not actually work; this release rewrites the
-affected code and implements them for real. Entries for 0.1.5-0.1.8 below
-should be read with that in mind.
+### ✨ Features
+- **Defaults** Preferences tab: default encoding, line endings, font type
+  (monospace/proportional) and zoom for new windows, with a **Use Current**
+  button that captures the active window's state.
+- **Backup** Preferences tab (was "Files"): settings export/import.
+- Font type and zoom are now **per-window view state**, like classic
+  Notepad: toggling Monospace or zooming affects only that window and new
+  windows start from the Defaults-tab values. Two opt-in preferences extend
+  this: **"Sync view across all instances"** (Appearance) mirrors view
+  changes live to every open window, and **"Auto-update defaults in real
+  time"** (Defaults) makes view changes become the new defaults.
+- Menu-driven settings (word wrap, status bar, fonts) now save immediately
+  and propagate live to other open windows, like the Preferences dialog.
+- New `DOCUMENTATION.md` describing every setting, shortcut, status-bar
+  action and behaviour; new `CHANGES.md` commit-level history.
 
-### 🐛 Defaults, sync & window sizing (2026-07-09)
+### 🐛 Bug Fixes
+- The status bar's font-type segment could show the opposite mode and did
+  not refresh when toggling via the menu; it now always shows the window's
+  current state and updates immediately.
+- Menu access-key underlines are now genuinely always visible: the fix is
+  applied after the window is shown and re-applied on every activation
+  (the previous attempt ran before activation and was reset).
+- Preferences pages sized to 240 DLU (fixing round 6's over-correction).
+- Default window width reduced to ~48% of the work area (height ~72%);
+  the previous 72% width was too wide.
+- Crash-restored windows cascade 80px apart (was 40px, too subtle).
+- The Apply button now persists and propagates changes immediately, not
+  only when the dialog closes.
+
+### ⚠️ Versioning note
+Versions 0.2.0-0.6.0 below were previously accumulated under a single
+"0.2.0-dev" entry; they have been renumbered per semver (minor for feature
+rounds, patch for fix-only rounds). `CHANGES.md` maps every commit to these
+versions.
+
+## [0.6.0] - 2026-07-09
+
+### ✨ Features & Fixes
 - Default colour scheme is now **Light** (classic Notepad has no schemes);
   "Follow system" is still selectable.
 - **Preference changes now propagate to other open npad windows** live
   (each instance reloads settings and re-applies theme/font/etc.).
-- The **default window size** is now a DPI-correct fraction (~72%) of the
+- The **default window size** is now a DPI-correct fraction of the
   monitor work area, centred, instead of a fixed 800x600 - much better on
   large / high-DPI displays. The size is still remembered once you resize.
 - Menu **access-key underlines are always shown** (not only while Alt is
-  held), matching classic Notepad.
+  held), matching classic Notepad. (Completed in 0.7.0.)
 - **Crash-restored extra windows now cascade** instead of stacking exactly.
-- Narrowed the Preferences pages (round 5 overshot); long options wrap.
+- Narrowed the Preferences pages (0.5.1 overshot); long options wrap.
 
-### 🐛 Preferences & recovery fixes (2026-07-09)
+## [0.5.1] - 2026-07-09
+
+### 🐛 Bug Fixes
 - **Fixed** crash recovery restoring only one document when several windows
   were open. Each instance now writes its own recovery slot, and on the next
   launch npad restores one in the current window and reopens the rest in new
@@ -42,7 +76,9 @@ should be read with that in mind.
   themselves changed so Apply activates on any edit and previews without
   closing the dialog.
 
-### ✨ Fonts, New Window, backup & fixes (2026-07-08)
+## [0.5.0] - 2026-07-08
+
+### ✨ Fonts, New Window & settings backup
 - **Fixed** session recovery not being offered after a crash: the startup
   check now looks for a leftover snapshot unconditionally (the enabled flag
   was not persisted when a run was killed before a clean exit), and the flag
@@ -64,7 +100,9 @@ should be read with that in mind.
   theme is chosen in Preferences > Appearance. Solarized is credited to
   Ethan Schoonover in the README.
 
-### ✨ Session recovery & Find/theme polish (2026-07-08)
+## [0.4.0] - 2026-07-08
+
+### ✨ Session recovery & Find/theme polish
 - Session resume / crash protection (disabled by default, configurable):
   unsaved work is snapshotted to a recovery folder on a timer, and offered
   for restoration on the next launch after an unclean exit. Snapshots are
@@ -77,6 +115,40 @@ should be read with that in mind.
 - Preferences moved from the File menu to the Edit menu (Ctrl+, unchanged),
   with a new General-page session-resume option.
 - New pure `session` core module with unit tests for the recovery format.
+
+## [0.3.0] - 2026-07-07
+
+### ✨ Notepad parity & quality-of-life round
+- Right-click context menu in the editor (Undo/Redo/Cut/Copy/Paste/Delete/
+  Select All), with state-aware enabling.
+- Find/Replace: "Wrap around" option (with a "Wrapped around" status
+  indicator), compact classic-Notepad layout with the Direction group
+  beside the checkboxes, dialogs open offset into the window like
+  notepad.exe and remember their position; find options persist.
+- Tabbed Preferences dialog (Ctrl+,): auto-save, large-file threshold,
+  recent-files size and clearing; theme and status bar; default encoding
+  and line endings for new files.
+- Line ending conversion: Format > Line Endings, Ctrl+E cycles, applied on
+  save; also available by clicking the status bar's line-ending part.
+- Encoding picker in the Save dialog; encoding also changeable from the
+  status bar's encoding part.
+- Status bar click actions: Ln/Col opens Go To, zoom resets to 100%.
+- Monospace toggle (Format > Monospace, Ctrl+M) between Consolas and the
+  chosen font.
+- Ctrl+Drop inserts the dropped file's contents at the caret instead of
+  opening it.
+- Undo depth raised from RichEdit's default 100 actions to 100,000.
+- Status bar refreshes immediately after Ctrl+Scroll zoom and when the
+  caret moves onto a new empty line (fixed RichEdit end-of-text line
+  reporting plus stale-refresh events).
+
+## [0.2.0] - 2026-07-07
+
+Full review and repair release. A code audit found that several features
+described in earlier entries (Find/Replace, word wrap toggling, redo,
+modified-state tracking) did not actually work; this release rewrites the
+affected code and implements them for real. Entries for 0.1.5-0.1.8 below
+should be read with that in mind.
 
 ### 🐛 Bug Fixes
 - **CRITICAL**: A failed save (e.g. disk full) deleted the file being saved
@@ -127,28 +199,6 @@ should be read with that in mind.
 - Menu items enable/disable correctly (Undo/Redo/Cut/Copy/Paste/Delete/Find).
 - Edit > Delete (Del) and Edit > Time/Date (F5), like Notepad.
 - Monospace default font (Consolas 11pt); font choice persists.
-- Right-click context menu in the editor (Undo/Redo/Cut/Copy/Paste/Delete/
-  Select All), with state-aware enabling.
-- Find/Replace: "Wrap around" option (with a "Wrapped around" status
-  indicator), compact classic-Notepad layout with the Direction group
-  beside the checkboxes, dialogs open offset into the window like
-  notepad.exe and remember their position; find options persist.
-- Tabbed Preferences dialog (File > Preferences..., Ctrl+,): auto-save,
-  large-file threshold, recent-files size and clearing; theme and status
-  bar; default encoding and line endings for new files.
-- Line ending conversion: Format > Line Endings, Ctrl+E cycles, applied on
-  save; also available by clicking the status bar's line-ending part.
-- Encoding picker in the Save dialog; encoding also changeable from the
-  status bar's encoding part.
-- Status bar click actions: Ln/Col opens Go To, zoom resets to 100%.
-- Monospace toggle (Format > Monospace, Ctrl+M) between Consolas and the
-  chosen font.
-- Ctrl+Drop inserts the dropped file's contents at the caret instead of
-  opening it.
-- Undo depth raised from RichEdit's default 100 actions to 100,000.
-- Status bar refreshes immediately after Ctrl+Scroll zoom and when the
-  caret moves onto a new empty line (fixed RichEdit end-of-text line
-  reporting plus stale-refresh events).
 
 ### 🔧 Technical Improvements
 - Removed the memory-limit subsystem (working-set-based caps, paste-undo

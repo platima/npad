@@ -18,8 +18,9 @@
 #define IDD_GOTO 202
 #define IDD_PREFS_GENERAL 210
 #define IDD_PREFS_APPEARANCE 211
-#define IDD_PREFS_FILES 212
+#define IDD_PREFS_BACKUP 212
 #define IDD_SAVE_ENCODING 213
+#define IDD_PREFS_DEFAULTS 214
 
 // Control IDs for Find Dialog
 #define ID_FIND_TEXT 3001
@@ -58,10 +59,17 @@
 #define ID_PREF_FONT_MONO 3116
 #define ID_PREF_FONT_PROP 3117
 #define ID_PREF_OPENDYSLEXIC 3118
+#define ID_PREF_SYNC_VIEW 3119
 
-// Preferences: Files page
+// Preferences: Defaults page
 #define ID_PREF_DEFAULT_ENCODING 3120
 #define ID_PREF_DEFAULT_EOL 3121
+#define ID_PREF_DEFAULT_FONT_TYPE 3124
+#define ID_PREF_DEFAULT_ZOOM 3125
+#define ID_PREF_USE_CURRENT 3126
+#define ID_PREF_AUTO_DEFAULTS 3127
+
+// Preferences: Backup page
 #define ID_PREF_EXPORT 3122
 #define ID_PREF_IMPORT 3123
 

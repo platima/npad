@@ -150,8 +150,8 @@ int main(int argc, char *argv[]) {
 
     // Cascade recovery windows so restored sessions do not stack exactly
     if (g_cascade_index > 0) {
-        x += g_cascade_index * 40;
-        y += g_cascade_index * 40;
+        x += g_cascade_index * 80;
+        y += g_cascade_index * 80;
     }
 
     ui_set_window_size(main_window, width, height);

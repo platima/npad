@@ -72,5 +72,22 @@ Platform Implementation (Win32/X11/Cocoa/ncurses)
 - Zero external dependencies
 - Performance and minimal resource usage
 - Classic Notepad simplicity with quality-of-life improvements
+- Give the user maximum control over functionality, but default to behavior
+  extremely similar to Win10 notepad.exe (e.g. per-window view state is the
+  default; live sync and auto-updating defaults are opt-in preferences)
+
+**Settings & propagation model:**
+- Shared settings save to settings.json immediately when changed (menus or
+  Preferences) and propagate live to all open instances via a registered
+  window message; font type and zoom are per-window view state seeded from
+  the Defaults preferences (see DOCUMENTATION.md for the full model)
+
+**Versioning & changelog conventions (every change):**
+- Bump the version per semver in `src/main.h` AND `src/platform/npad.rc`
+  (0.x: minor = feature rounds / breaking changes, patch = fix-only rounds)
+- Add curated notes to `CHANGELOG.md` under the version heading
+- Append one entry per commit to `CHANGES.md` (newest first in its version
+  section)
+- Document any new setting/shortcut/behavior in `DOCUMENTATION.md`
 
 The codebase is currently in early development with Windows Win32 implementation being the primary focus.

@@ -44,7 +44,7 @@ Current features (Windows build):
 - **🌍 Unicode throughout** - Detects and preserves UTF-8, UTF-8 BOM, UTF-16 LE/BE and ANSI encodings
 - **↩️ Line ending aware** - Detects and preserves Windows (CRLF), Unix (LF) and Mac (CR) line endings, shown in the status bar
 - **🔧 Quality-of-life enhancements:**
-  - Tabbed Preferences dialog (Edit menu, Ctrl+,) with an Apply button, for auto-save, session resume, theme, fonts, defaults and more
+  - Tabbed Preferences dialog (Edit menu, Ctrl+,) with an Apply button: General, Appearance, Defaults and Backup pages (see [DOCUMENTATION.md](DOCUMENTATION.md) for every setting)
   - Optional auto-save (enabled by default, configurable)
   - Optional session resume / crash recovery (disabled by default, configurable); restores every window that was open, each in its own instance
   - Theme support: light (default), dark, follow-system, and Solarized Light / Dark colour schemes (chosen in Preferences); changes apply to all open windows live
@@ -59,7 +59,7 @@ Current features (Windows build):
   - Right-click context menu (Undo/Redo/Cut/Copy/Paste/Delete/Select All)
   - Status bar click actions: Ln/Col opens Go To, zoom resets, font mode toggles monospace, line ending and encoding open pickers
   - New Window (Ctrl+Shift+N) opens a second independent instance; a Preferences option can make Ctrl+N do this instead
-  - Separate monospace and proportional fonts, each with its own picker; monospace by default (Ctrl+M or status-bar click to toggle)
+  - Separate monospace and proportional fonts, each with its own picker; font type and zoom are per-window (Ctrl+M / Ctrl+Scroll), with configurable defaults, a 'Use Current' capture, and optional live sync across windows or auto-updating defaults
   - OpenDyslexic font option for reading assistance (Preferences > Appearance; requires the font to be installed)
   - Recent files menu (size configurable)
   - Drag-and-drop to open files; Ctrl+Drop inserts the file at the caret
@@ -330,9 +330,15 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [ ] RegEx find/replace option
 
   
+## Documentation 📖
+
+See [DOCUMENTATION.md](DOCUMENTATION.md) for every setting, keyboard
+shortcut, status-bar action and behaviour.
+
 ## Changelog 🛠
 
-See [CHANGELOG.md](CHANGELOG.md) file for details.
+See [CHANGELOG.md](CHANGELOG.md) for curated release notes and
+[CHANGES.md](CHANGES.md) for the commit-level history.
 
 ## Acknowledgements 🙏
 

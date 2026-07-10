@@ -14,8 +14,8 @@
 
 // Version Information (keep in sync with src/main.h)
 1 VERSIONINFO
-FILEVERSION 0,2,0,0
-PRODUCTVERSION 0,2,0,0
+FILEVERSION 0,7,0,0
+PRODUCTVERSION 0,7,0,0
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0x0L
 FILEOS VOS__WINDOWS32
@@ -28,12 +28,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Platima"
             VALUE "FileDescription", "npad - Lightweight Text Editor"
-            VALUE "FileVersion", "0.2.0.0"
+            VALUE "FileVersion", "0.7.0.0"
             VALUE "InternalName", "npad"
             VALUE "LegalCopyright", "Copyright © 2025 Platima"
             VALUE "OriginalFilename", "npad.exe"
             VALUE "ProductName", "npad"
-            VALUE "ProductVersion", "0.2.0.0"
+            VALUE "ProductVersion", "0.7.0.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -95,7 +95,7 @@ BEGIN
 END
 
 // Preferences: General page
-IDD_PREFS_GENERAL DIALOGEX 0, 0, 230, 196
+IDD_PREFS_GENERAL DIALOGEX 0, 0, 240, 196
 STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "General"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
@@ -108,41 +108,58 @@ BEGIN
     LTEXT           "Ma&x recent files (0-10):", IDC_STATIC, 10, 74, 130, 8
     EDITTEXT        ID_PREF_RECENT_MAX, 150, 72, 44, 13, ES_AUTOHSCROLL | ES_NUMBER
     PUSHBUTTON      "&Clear Recent Files Now", ID_PREF_RECENT_CLEAR, 10, 90, 110, 14
-    CONTROL         "Enable &session resume / crash recovery", ID_PREF_SESSION_ENABLED, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 114, 210, 18
+    CONTROL         "Enable &session resume / crash recovery", ID_PREF_SESSION_ENABLED, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 114, 220, 18
     LTEXT           "Snapshot i&nterval (seconds):", IDC_STATIC, 22, 138, 120, 8
     EDITTEXT        ID_PREF_SESSION_INTERVAL, 150, 136, 44, 13, ES_AUTOHSCROLL | ES_NUMBER
-    CONTROL         "Ctrl+N opens a new win&dow (Ctrl+Shift+N clears the current one)", ID_PREF_CTRL_N_WINDOW, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 160, 210, 20
+    CONTROL         "Ctrl+N opens a new win&dow (Ctrl+Shift+N clears the current one)", ID_PREF_CTRL_N_WINDOW, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 160, 220, 20
 END
 
 // Preferences: Appearance page
-IDD_PREFS_APPEARANCE DIALOGEX 0, 0, 230, 196
+IDD_PREFS_APPEARANCE DIALOGEX 0, 0, 240, 196
 STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "Appearance"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
     LTEXT           "Color &scheme:", IDC_STATIC, 10, 14, 60, 8
     COMBOBOX        ID_PREF_SCHEME, 74, 12, 140, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    GROUPBOX        "Fonts", IDC_STATIC, 10, 32, 210, 62
-    PUSHBUTTON      "&Monospace Font...", ID_PREF_FONT_MONO, 18, 46, 95, 14
-    PUSHBUTTON      "&Proportional Font...", ID_PREF_FONT_PROP, 118, 46, 95, 14
-    CONTROL         "Enable Open&Dyslexic font (reading assistance)", ID_PREF_OPENDYSLEXIC, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 18, 66, 196, 10
-    LTEXT           "Toggle monospace with Ctrl+M or the status bar.", IDC_STATIC, 18, 80, 196, 8
+    GROUPBOX        "Fonts", IDC_STATIC, 10, 32, 220, 62
+    PUSHBUTTON      "&Monospace Font...", ID_PREF_FONT_MONO, 18, 46, 100, 14
+    PUSHBUTTON      "&Proportional Font...", ID_PREF_FONT_PROP, 124, 46, 100, 14
+    CONTROL         "Enable Open&Dyslexic font (reading assistance)", ID_PREF_OPENDYSLEXIC, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 18, 66, 206, 10
+    LTEXT           "Toggle monospace with Ctrl+M or the status bar.", IDC_STATIC, 18, 80, 206, 8
     CONTROL         "Show s&tatus bar", ID_PREF_STATUSBAR, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 10, 102, 150, 10
+    CONTROL         "S&ync view (font type and zoom) across all instances", ID_PREF_SYNC_VIEW, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 120, 220, 18
 END
 
-// Preferences: Files page
-IDD_PREFS_FILES DIALOGEX 0, 0, 230, 196
+// Preferences: Defaults page (initial state for new windows)
+IDD_PREFS_DEFAULTS DIALOGEX 0, 0, 240, 196
 STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
-CAPTION "Files"
+CAPTION "Defaults"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
     LTEXT           "Default &encoding for new files:", IDC_STATIC, 10, 14, 116, 8
-    COMBOBOX        ID_PREF_DEFAULT_ENCODING, 128, 12, 92, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    COMBOBOX        ID_PREF_DEFAULT_ENCODING, 132, 12, 96, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
     LTEXT           "Default &line endings for new files:", IDC_STATIC, 10, 38, 116, 8
-    COMBOBOX        ID_PREF_DEFAULT_EOL, 128, 36, 92, 60, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    GROUPBOX        "Settings backup", IDC_STATIC, 10, 62, 210, 40
-    PUSHBUTTON      "E&xport Settings...", ID_PREF_EXPORT, 18, 78, 95, 14
-    PUSHBUTTON      "&Import Settings...", ID_PREF_IMPORT, 118, 78, 95, 14
+    COMBOBOX        ID_PREF_DEFAULT_EOL, 132, 36, 96, 60, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Default &font type:", IDC_STATIC, 10, 62, 116, 8
+    COMBOBOX        ID_PREF_DEFAULT_FONT_TYPE, 132, 60, 96, 60, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Default &zoom (10-500%):", IDC_STATIC, 10, 86, 116, 8
+    EDITTEXT        ID_PREF_DEFAULT_ZOOM, 132, 84, 44, 13, ES_AUTOHSCROLL | ES_NUMBER
+    PUSHBUTTON      "&Use Current", ID_PREF_USE_CURRENT, 10, 108, 80, 14
+    LTEXT           "Copies this window's font type and zoom into the fields above.", IDC_STATIC, 96, 111, 134, 16
+    CONTROL         "&Auto-update defaults in real time (view changes become the new defaults)", ID_PREF_AUTO_DEFAULTS, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 134, 220, 18
+END
+
+// Preferences: Backup page
+IDD_PREFS_BACKUP DIALOGEX 0, 0, 240, 196
+STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+CAPTION "Backup"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    GROUPBOX        "Settings backup", IDC_STATIC, 10, 12, 220, 40
+    PUSHBUTTON      "E&xport Settings...", ID_PREF_EXPORT, 18, 28, 100, 14
+    PUSHBUTTON      "&Import Settings...", ID_PREF_IMPORT, 124, 28, 100, 14
+    LTEXT           "Exports or replaces the settings.json file. Import applies immediately to all open windows.", IDC_STATIC, 10, 60, 220, 16
 END
 
 // Save dialog child template hosting the encoding picker
