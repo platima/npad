@@ -14,8 +14,8 @@
 
 // Version Information (keep in sync with src/main.h)
 1 VERSIONINFO
-FILEVERSION 0,7,1,0
-PRODUCTVERSION 0,7,1,0
+FILEVERSION 0,8,0,0
+PRODUCTVERSION 0,8,0,0
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0x0L
 FILEOS VOS__WINDOWS32
@@ -28,12 +28,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Platima"
             VALUE "FileDescription", "npad - Lightweight Text Editor"
-            VALUE "FileVersion", "0.7.1.0"
+            VALUE "FileVersion", "0.8.0.0"
             VALUE "InternalName", "npad"
             VALUE "LegalCopyright", "Copyright © 2025 Platima"
             VALUE "OriginalFilename", "npad.exe"
             VALUE "ProductName", "npad"
-            VALUE "ProductVersion", "0.7.1.0"
+            VALUE "ProductVersion", "0.8.0.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -160,13 +160,4 @@ BEGIN
     PUSHBUTTON      "E&xport Settings...", ID_PREF_EXPORT, 18, 28, 100, 14
     PUSHBUTTON      "&Import Settings...", ID_PREF_IMPORT, 124, 28, 100, 14
     LTEXT           "Exports or replaces the settings.json file. Import applies immediately to all open windows.", IDC_STATIC, 10, 60, 220, 16
-END
-
-// Save dialog child template hosting the encoding picker
-IDD_SAVE_ENCODING DIALOGEX 0, 0, 220, 26
-STYLE DS_SETFONT | DS_3DLOOK | DS_CONTROL | WS_CHILD | WS_CLIPSIBLINGS
-FONT 8, "MS Shell Dlg", 400, 0, 0x1
-BEGIN
-    LTEXT           "&Encoding:", IDC_STATIC, 7, 8, 36, 8
-    COMBOBOX        ID_SAVE_ENCODING_COMBO, 46, 6, 110, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
 END

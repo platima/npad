@@ -37,7 +37,7 @@ TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/session.c s
 
 # Windows GUI specific
 WINDOWS_GUI_SOURCES = src/platform/ui_win32.c
-WINDOWS_GUI_LIBS = -mwindows -lcomctl32 -lcomdlg32 -lgdi32 -lkernel32 -lshell32 -luser32 -lshcore
+WINDOWS_GUI_LIBS = -mwindows -lcomctl32 -lcomdlg32 -lgdi32 -lkernel32 -lshell32 -luser32 -lshcore -lole32 -luuid
 WINDOWS_GUI_TARGET = npad.exe
 
 # Windows Terminal specific

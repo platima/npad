@@ -668,8 +668,12 @@ bool editor_handle_event(const UIEvent *event) {
             return true;
 
         case UI_EVENT_FILE_SAVE_AS: {
+            // Pre-fill with the current file (full path so the dialog can open
+            // its folder and reuse its name) rather than always "Untitled.txt"
             FileDialogParams params = { .title = "Save As",
-                                        .default_filename = "Untitled.txt",
+                                        .default_filename = g_editor.current_file
+                                                                ? g_editor.current_file
+                                                                : "Untitled.txt",
                                         .filter = "Text Files (*.txt)|*.txt|All Files (*.*)|*.*",
                                         .save_dialog = true,
                                         .encoding = g_editor.file_info.encoding };

@@ -85,9 +85,8 @@ Platform Implementation (Win32/X11/Cocoa/ncurses)
 **Versioning & changelog conventions (every change):**
 - Bump the version per semver in `src/main.h` AND `src/platform/npad.rc`
   (0.x: minor = feature rounds / breaking changes, patch = fix-only rounds)
-- Add curated notes to `CHANGELOG.md` under the version heading
-- Append one entry per commit to `CHANGES.md` (newest first in its version
-  section)
+- Add curated notes to `CHANGELOG.md` under the version heading (the
+  commit-level history lives in `git log`, so there is no separate changes file)
 - Document any new setting/shortcut/behavior in `DOCUMENTATION.md`
 
 The codebase is currently in early development with Windows Win32 implementation being the primary focus.

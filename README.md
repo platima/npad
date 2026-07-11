@@ -59,11 +59,12 @@ Current features (Windows build):
   - Right-click context menu (Undo/Redo/Cut/Copy/Paste/Delete/Select All)
   - Status bar click actions: Ln/Col opens Go To, zoom resets, font mode toggles monospace, line ending and encoding open pickers
   - New Window (Ctrl+Shift+N) opens a second independent instance; a Preferences option can make Ctrl+N do this instead
+  - Close (Ctrl+W) closes the current window, Close All Windows (Ctrl+Shift+W) closes them all - each save-checked
   - Separate monospace and proportional fonts, each with its own picker; font type and zoom are per-window (Ctrl+M / Ctrl+Scroll), with configurable defaults, a 'Use Current' capture, and optional live sync across windows or auto-updating defaults
   - OpenDyslexic font option for reading assistance (Preferences > Appearance; requires the font to be installed)
   - Recent files menu (size configurable)
   - Drag-and-drop to open files; Ctrl+Drop inserts the file at the caret
-  - Export / Import settings (Preferences > Files) for backup or moving between machines
+  - Export / Import settings (Preferences > Backup) for backup or moving between machines
   - Atomic saves - a failed save can never destroy the existing file
   - JSON settings storage; remembers window position, size and maximized state
   - Confirmation prompt before opening very large files
@@ -337,8 +338,8 @@ shortcut, status-bar action and behaviour.
 
 ## Changelog 🛠
 
-See [CHANGELOG.md](CHANGELOG.md) for curated release notes and
-[CHANGES.md](CHANGES.md) for the commit-level history.
+See [CHANGELOG.md](CHANGELOG.md) for curated release notes; the commit-level
+history lives in `git log`.
 
 ## Acknowledgements 🙏
 

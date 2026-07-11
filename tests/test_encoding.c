@@ -185,6 +185,34 @@ TEST_CASE(roundtrip_utf16_le) {
     test_cleanup_temp_file(TEST_FILE);
 }
 
+TEST_CASE(detect_and_roundtrip_ansi_high_byte) {
+    // A byte outside ASCII that is not valid UTF-8 marks the file as ANSI
+    // (Windows code page; Latin-1 on other platforms). Saving it back as ANSI
+    // must reproduce the original byte, so a "save as ANSI" / reopen keeps ANSI
+    // rather than reverting to UTF-8. (Pure-ASCII files stay UTF-8 by design,
+    // since ANSI and UTF-8 are byte-identical for ASCII.)
+    const unsigned char data[] = { 'c', 'a', 'f', 0xE9 };
+    write_bytes(TEST_FILE, data, sizeof(data));
+
+    TextFileInfo info;
+    char *content = file_read_text_ex(TEST_FILE, &info);
+    TEST_ASSERT_NOT_NULL(content, "Read should succeed");
+    TEST_ASSERT_EQ(NPAD_ENC_ANSI, info.encoding, "High-byte non-UTF-8 text should detect as ANSI");
+
+    bool written = file_write_text_ex(TEST_FILE, content, &info);
+    TEST_ASSERT(written, "Write should succeed");
+    free(content);
+
+    size_t size = 0;
+    unsigned char *raw = read_bytes(TEST_FILE, &size);
+    TEST_ASSERT_NOT_NULL(raw, "Raw read should succeed");
+    TEST_ASSERT_EQ(sizeof(data), size, "Round-tripped ANSI file should have identical size");
+    TEST_ASSERT_EQ(0, memcmp(raw, data, sizeof(data)), "Round-tripped ANSI bytes should match");
+
+    free(raw);
+    test_cleanup_temp_file(TEST_FILE);
+}
+
 TEST_CASE(roundtrip_lf_preserved) {
     // An LF file saved with CRLF content from the editor keeps LF on disk
     write_bytes(TEST_FILE, "one\ntwo\n", 8);
@@ -265,6 +293,7 @@ int main(void) {
     RUN_TEST(read_utf16_be_bom);
     RUN_TEST(read_utf8_multibyte);
     RUN_TEST(roundtrip_utf16_le);
+    RUN_TEST(detect_and_roundtrip_ansi_high_byte);
     RUN_TEST(roundtrip_lf_preserved);
     RUN_TEST(write_failure_preserves_original);
     RUN_TEST(encoding_names);

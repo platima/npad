@@ -19,7 +19,6 @@
 #define IDD_PREFS_GENERAL 210
 #define IDD_PREFS_APPEARANCE 211
 #define IDD_PREFS_BACKUP 212
-#define IDD_SAVE_ENCODING 213
 #define IDD_PREFS_DEFAULTS 214
 
 // Control IDs for Find Dialog
@@ -72,9 +71,6 @@
 // Preferences: Backup page
 #define ID_PREF_EXPORT 3122
 #define ID_PREF_IMPORT 3123
-
-// Save dialog encoding picker
-#define ID_SAVE_ENCODING_COMBO 3130
 
 // Static text controls
 #define IDC_STATIC -1

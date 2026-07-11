@@ -1,8 +1,8 @@
 # npad Documentation
 
 Reference for npad's settings, keyboard shortcuts, status bar, command line
-and behaviour. For per-release notes see [CHANGELOG.md](CHANGELOG.md); for the
-raw commit history see [CHANGES.md](CHANGES.md).
+and behaviour. For per-release notes see [CHANGELOG.md](CHANGELOG.md); the raw
+commit history lives in `git log`.
 
 ## File locations
 
@@ -88,6 +88,7 @@ propagates live to all open npad windows.
 | Ctrl+N | New (or New Window, per preference) |
 | Ctrl+Shift+N | New Window (or New, per preference) |
 | Ctrl+O / Ctrl+S / Ctrl+Shift+S | Open / Save / Save As |
+| Ctrl+W / Ctrl+Shift+W | Close this window / Close all windows (each save-checked) |
 | Ctrl+Z / Ctrl+Y | Undo / Redo (100,000-step history) |
 | Ctrl+X / Ctrl+C / Ctrl+V / Del | Cut / Copy / Paste / Delete |
 | Ctrl+A | Select All |
@@ -113,6 +114,12 @@ Segments left to right; several are clickable:
 | Line ending | Windows (CRLF) / Unix (LF) / Mac (CR) | Line-ending picker (converts on save) |
 | Encoding | UTF-8 / UTF-8 BOM / UTF-16 LE / UTF-16 BE / ANSI | Encoding picker (applies on save) |
 
+Encoding can be set two ways: this status-bar picker, or the Encoding dropdown
+inside the Save As dialog. A pure-ASCII file always
+reports **UTF-8** on open, because ASCII bytes are identical whether the file
+was written as UTF-8 or ANSI; the encoding only diverges once the text contains
+non-ASCII characters.
+
 ## Command line
 
 ```
@@ -130,8 +137,10 @@ position). Not intended for direct use.
 - **Atomic saves**: files are written to a temp file, verified, then renamed
   over the original. A failed save never destroys the existing file.
 - **Encodings & line endings**: detected on open (BOM + heuristics) and
-  preserved on save; both changeable per-document via the status bar or
-  Format menu.
+  preserved on save. Line endings are changeable via the status bar or
+  Format > Line Endings; encoding via the status bar or the Save As dialog's
+  Encoding dropdown. Pure-ASCII files always report UTF-8 (ASCII bytes are
+  identical across UTF-8 and ANSI).
 - **Crash recovery**: with session resume enabled, each window snapshots
   unsaved work to its own recovery slot. After an unclean exit, npad offers
   to restore; the first document opens in the current window and the rest in
@@ -150,5 +159,5 @@ feature rounds or breaking changes, **patch** bumps for fix-only rounds.
 Every change updates:
 
 1. `src/main.h` + `src/platform/npad.rc` - the version numbers
-2. `CHANGELOG.md` - curated per-version notes
-3. `CHANGES.md` - one entry per commit
+2. `CHANGELOG.md` - curated per-version notes (the commit-level history is
+   `git log`, so there is no separate changes file)

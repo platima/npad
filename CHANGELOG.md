@@ -5,6 +5,29 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-07-11
+
+### ✨ Features
+- **Modern Save As dialog.** Save As now uses the shell's `IFileSaveDialog`,
+  so it looks native and matches the Open dialog instead of the old
+  pre-Vista styling. Its **Encoding** dropdown reliably applies the chosen
+  encoding, and it pre-fills the current file's name and folder (Save As of
+  an open document no longer defaults to "Untitled.txt").
+- **Close** (Ctrl+W) closes the current window after the usual save check;
+  **Close All Windows** (Ctrl+Shift+W) closes every open npad window, each
+  prompting to save its own document (Cancel keeps that window open). Both
+  are on the File menu.
+
+### 🐛 Bug Fixes
+- Choosing an encoding when saving now actually writes the file in that
+  encoding. The previous Save dialog's encoding picker did not propagate its
+  selection, so files were saved as UTF-8 regardless. (Pure-ASCII text still
+  reports UTF-8, since ASCII and ANSI bytes are identical.)
+
+### 🧹 Housekeeping
+- Consolidated changelogs: removed `CHANGES.md`; `CHANGELOG.md` is the single
+  curated record and `git log` is the commit-level history.
+
 ## [0.7.1] - 2026-07-10
 
 ### 🐛 Bug Fixes
@@ -44,7 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Menu-driven settings (word wrap, status bar, fonts) now save immediately
   and propagate live to other open windows, like the Preferences dialog.
 - New `DOCUMENTATION.md` describing every setting, shortcut, status-bar
-  action and behaviour; new `CHANGES.md` commit-level history.
+  action and behaviour.
 
 ### 🐛 Bug Fixes
 - The status bar's font-type segment could show the opposite mode and did
@@ -63,7 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### ⚠️ Versioning note
 Versions 0.2.0-0.6.0 below were previously accumulated under a single
 "0.2.0-dev" entry; they have been renumbered per semver (minor for feature
-rounds, patch for fix-only rounds). `CHANGES.md` maps every commit to these
+rounds, patch for fix-only rounds). `git log` maps every commit to these
 versions.
 
 ## [0.6.0] - 2026-07-09

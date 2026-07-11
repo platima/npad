@@ -16,6 +16,8 @@
 #include <prsht.h>
 #include <richedit.h>
 #include <shellapi.h>
+#include <objbase.h>
+#include <shlobj.h>
 
 #include "../ui_interface.h"
 #include "../main.h"
@@ -63,7 +65,13 @@
 #define ID_FILE_RECENT_CLEAR 2006
 #define ID_FILE_PREFERENCES 2007
 #define ID_FILE_NEW_WINDOW 2008
+#define ID_FILE_CLOSE 2009
 #define ID_FILE_RECENT_BASE 2010 // 2010..2019 reserved for recent files
+#define ID_FILE_CLOSE_ALL 2020
+
+// Control ids for the modern Save dialog's custom encoding dropdown
+#define SAVE_ENC_GROUP_ID 1200
+#define SAVE_ENC_COMBO_ID 1201
 #define ID_EDIT_UNDO 2101
 #define ID_EDIT_REDO 2102
 #define ID_EDIT_CUT 2103
@@ -121,6 +129,10 @@ static const wchar_t *g_richedit_class = MSFTEDIT_CLASS;
 // Registered broadcast message telling other instances that settings on disk
 // changed (wParam carries the sender's pid so it can ignore its own message)
 static UINT g_settings_changed_msg = 0;
+
+// Registered broadcast message telling every npad window to close itself
+// (each runs its own save-prompt; a Cancel keeps that window open)
+static UINT g_close_all_msg = 0;
 
 // Registered message carrying live view state (font type + zoom) between
 // instances when "Sync view across all instances" is enabled.
@@ -367,6 +379,11 @@ bool ui_platform_init(void) {
     // the message ids match across processes)
     g_settings_changed_msg = RegisterWindowMessageW(L"npadSettingsChanged");
     g_view_sync_msg = RegisterWindowMessageW(L"npadViewStateChanged");
+    g_close_all_msg = RegisterWindowMessageW(L"npadCloseAll");
+
+    // COM apartment for the shell Save dialog (IFileSaveDialog). Tolerate an
+    // already-initialised apartment (RPC_E_CHANGED_MODE / S_FALSE).
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 
     // Theme default is Light; "system" follows the OS, "dark"/solarized override
     g_dark_mode = resolve_theme_dark_mode();
@@ -401,6 +418,8 @@ void ui_platform_cleanup(void) {
         FreeLibrary(g_richedit_lib);
         g_richedit_lib = NULL;
     }
+
+    CoUninitialize();
 }
 
 int ui_platform_message_loop(void) {
@@ -870,46 +889,6 @@ static wchar_t *build_filter(const char *filter) {
     return result;
 }
 
-// Hook for the save dialog's child template: hosts the encoding picker.
-// The current encoding travels in via ofn->lCustData and the user's
-// selection travels back out the same way (set at CDN_FILEOK).
-static UINT_PTR CALLBACK save_dialog_hook(HWND dlg, UINT msg, WPARAM wparam, LPARAM lparam) {
-    (void) wparam;
-
-    switch (msg) {
-        case WM_INITDIALOG: {
-            OPENFILENAMEW *ofn = (OPENFILENAMEW *) lparam;
-            HWND combo = GetDlgItem(dlg, ID_SAVE_ENCODING_COMBO);
-            if (combo && ofn) {
-                for (int i = 0; i <= (int) NPAD_ENC_ANSI; i++) {
-                    wchar_t *name = utf8_to_wide(file_encoding_name((TextEncoding) i));
-                    if (name) {
-                        SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM) name);
-                        free(name);
-                    }
-                }
-                SendMessageW(combo, CB_SETCURSEL, (WPARAM) ofn->lCustData, 0);
-            }
-            return TRUE;
-        }
-
-        case WM_NOTIFY: {
-            OFNOTIFYW *notify = (OFNOTIFYW *) lparam;
-            if (notify && notify->hdr.code == CDN_FILEOK) {
-                HWND combo = GetDlgItem(dlg, ID_SAVE_ENCODING_COMBO);
-                if (combo && notify->lpOFN) {
-                    LRESULT sel = SendMessageW(combo, CB_GETCURSEL, 0, 0);
-                    if (sel >= 0 && sel <= (LRESULT) NPAD_ENC_ANSI) {
-                        notify->lpOFN->lCustData = (LPARAM) sel;
-                    }
-                }
-            }
-            break;
-        }
-    }
-    return 0;
-}
-
 static char *show_file_dialog(Window *parent, FileDialogParams *params, bool save) {
     OPENFILENAMEW ofn;
     wchar_t filename[MAX_PATH] = L"";
@@ -937,25 +916,119 @@ static char *show_file_dialog(Window *parent, FileDialogParams *params, bool sav
     ofn.lpstrTitle = title;
     ofn.lpstrDefExt = L"txt";
     if (save) {
-        ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER | OFN_ENABLEHOOK |
-                    OFN_ENABLETEMPLATE | OFN_ENABLESIZING;
-        ofn.lpfnHook = save_dialog_hook;
-        ofn.lpTemplateName = MAKEINTRESOURCEW(IDD_SAVE_ENCODING);
-        ofn.lCustData = params ? (LPARAM) params->encoding : (LPARAM) NPAD_ENC_UTF8;
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER | OFN_ENABLESIZING;
     } else {
         ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY | OFN_EXPLORER;
     }
 
     BOOL ok = save ? GetSaveFileNameW(&ofn) : GetOpenFileNameW(&ofn);
 
-    if (ok && save && params) {
-        params->encoding = (TextEncoding) ofn.lCustData;
-    }
-
     free(filter);
     free(title);
 
     return ok ? wide_to_utf8(filename) : NULL;
+}
+
+// Modern Save As using the shell's IFileSaveDialog. Unlike the legacy
+// GetSaveFileNameW hook it looks native (matching the Open dialog) and its
+// custom encoding dropdown reliably round-trips the chosen encoding back
+// through params->encoding. Falls back to the classic dialog if COM fails.
+static char *show_save_dialog_com(Window *parent, FileDialogParams *params) {
+    IFileSaveDialog *dialog = NULL;
+    HRESULT hr = CoCreateInstance(&CLSID_FileSaveDialog, NULL, CLSCTX_INPROC_SERVER,
+                                  &IID_IFileSaveDialog, (void **) &dialog);
+    if (FAILED(hr) || !dialog) {
+        return show_file_dialog(parent, params, true);
+    }
+
+    wchar_t *wtitle = (params && params->title) ? utf8_to_wide(params->title) : NULL;
+    if (wtitle) {
+        dialog->lpVtbl->SetTitle(dialog, wtitle);
+    }
+
+    COMDLG_FILTERSPEC types[] = {
+        { L"Text Files (*.txt)", L"*.txt" },
+        { L"All Files (*.*)", L"*.*" },
+    };
+    dialog->lpVtbl->SetFileTypes(dialog, 2, types);
+    dialog->lpVtbl->SetFileTypeIndex(dialog, 1);
+    dialog->lpVtbl->SetDefaultExtension(dialog, L"txt");
+
+    // Pre-fill name (and folder, when the current file has a path) so a Save As
+    // of an open document defaults to that file rather than "Untitled.txt".
+    if (params && params->default_filename && params->default_filename[0]) {
+        wchar_t *wpath = utf8_to_wide(params->default_filename);
+        if (wpath) {
+            wchar_t *base = wpath;
+            wchar_t *sep = wcsrchr(wpath, L'\\');
+            wchar_t *fsep = wcsrchr(wpath, L'/');
+            if (fsep && (!sep || fsep > sep)) {
+                sep = fsep;
+            }
+            if (sep) {
+                *sep = L'\0';
+                base = sep + 1;
+                IShellItem *folder = NULL;
+                if (SUCCEEDED(SHCreateItemFromParsingName(wpath, NULL, &IID_IShellItem,
+                                                          (void **) &folder)) &&
+                    folder) {
+                    dialog->lpVtbl->SetFolder(dialog, folder);
+                    folder->lpVtbl->Release(folder);
+                }
+            }
+            dialog->lpVtbl->SetFileName(dialog, base);
+            free(wpath);
+        }
+    }
+
+    // Custom encoding dropdown
+    IFileDialogCustomize *custom = NULL;
+    if (SUCCEEDED(
+            dialog->lpVtbl->QueryInterface(dialog, &IID_IFileDialogCustomize, (void **) &custom)) &&
+        custom) {
+        custom->lpVtbl->StartVisualGroup(custom, SAVE_ENC_GROUP_ID, L"Encoding");
+        custom->lpVtbl->AddComboBox(custom, SAVE_ENC_COMBO_ID);
+        for (int i = 0; i <= (int) NPAD_ENC_ANSI; i++) {
+            wchar_t *name = utf8_to_wide(file_encoding_name((TextEncoding) i));
+            if (name) {
+                custom->lpVtbl->AddControlItem(custom, SAVE_ENC_COMBO_ID, (DWORD) i, name);
+                free(name);
+            }
+        }
+        custom->lpVtbl->EndVisualGroup(custom);
+        DWORD initial = params ? (DWORD) params->encoding : (DWORD) NPAD_ENC_UTF8;
+        custom->lpVtbl->SetSelectedControlItem(custom, SAVE_ENC_COMBO_ID, initial);
+    }
+
+    char *result = NULL;
+    hr = dialog->lpVtbl->Show(dialog, parent ? parent->hwnd : NULL);
+    if (SUCCEEDED(hr)) {
+        if (custom && params) {
+            DWORD sel = 0;
+            if (SUCCEEDED(
+                    custom->lpVtbl->GetSelectedControlItem(custom, SAVE_ENC_COMBO_ID, &sel)) &&
+                sel <= (DWORD) NPAD_ENC_ANSI) {
+                params->encoding = (TextEncoding) sel;
+            }
+        }
+        IShellItem *item = NULL;
+        if (SUCCEEDED(dialog->lpVtbl->GetResult(dialog, &item)) && item) {
+            wchar_t *wresult = NULL;
+            if (SUCCEEDED(item->lpVtbl->GetDisplayName(item, SIGDN_FILESYSPATH, &wresult)) &&
+                wresult) {
+                result = wide_to_utf8(wresult);
+                CoTaskMemFree(wresult);
+            }
+            item->lpVtbl->Release(item);
+        }
+    }
+
+    if (custom) {
+        custom->lpVtbl->Release(custom);
+    }
+    dialog->lpVtbl->Release(dialog);
+    free(wtitle);
+    return result;
 }
 
 char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *params) {
@@ -964,7 +1037,7 @@ char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *param
 }
 
 char *ui_platform_show_save_dialog(Window *parent, FileDialogParams *params) {
-    return show_file_dialog(parent, params, true);
+    return show_save_dialog_com(parent, params);
 }
 
 bool ui_platform_show_message_box(Window *parent, const char *title, const char *message,
@@ -2426,6 +2499,8 @@ static void build_accelerators(Window *window) {
                       { FCONTROL | FVIRTKEY, 'O', ID_FILE_OPEN },
                       { FCONTROL | FVIRTKEY, 'S', ID_FILE_SAVE },
                       { FCONTROL | FSHIFT | FVIRTKEY, 'S', ID_FILE_SAVE_AS },
+                      { FCONTROL | FVIRTKEY, 'W', ID_FILE_CLOSE },
+                      { FCONTROL | FSHIFT | FVIRTKEY, 'W', ID_FILE_CLOSE_ALL },
                       { FCONTROL | FVIRTKEY, 'Z', ID_EDIT_UNDO },
                       { FCONTROL | FVIRTKEY, 'Y', ID_EDIT_REDO },
                       { FCONTROL | FVIRTKEY, 'X', ID_EDIT_CUT },
@@ -2620,6 +2695,9 @@ static void create_menu(Window *window) {
     AppendMenuW(hfile, MF_STRING, ID_FILE_SAVE_AS, L"Save &As...\tCtrl+Shift+S");
     AppendMenuW(hfile, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hfile, MF_STRING | MF_POPUP, (UINT_PTR) hrecent, L"&Recent Files");
+    AppendMenuW(hfile, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(hfile, MF_STRING, ID_FILE_CLOSE, L"&Close\tCtrl+W");
+    AppendMenuW(hfile, MF_STRING, ID_FILE_CLOSE_ALL, L"Close A&ll Windows\tCtrl+Shift+W");
     AppendMenuW(hfile, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hfile, MF_STRING, ID_FILE_EXIT, L"E&xit");
 
@@ -2904,6 +2982,20 @@ static void handle_command(Window *window, WORD command) {
         case ID_FILE_PREFERENCES:
             show_preferences_dialog(window);
             break;
+        case ID_FILE_CLOSE:
+            // One document per window, so "close" is the window's save-checked
+            // close path (same as Exit for this instance)
+            PostMessageW(window->hwnd, WM_CLOSE, 0, 0);
+            break;
+        case ID_FILE_CLOSE_ALL:
+            // Every npad window (this one included) gets a close request and
+            // runs its own save prompt; a Cancel leaves that window open
+            if (g_close_all_msg) {
+                broadcast_to_npad_windows(g_close_all_msg, 0);
+            } else {
+                PostMessageW(window->hwnd, WM_CLOSE, 0, 0);
+            }
+            break;
         case ID_FILE_EXIT:
             ui_post_event(UI_EVENT_QUIT, window, NULL);
             break;
@@ -3112,6 +3204,13 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         if (window && wparam != (WPARAM) GetCurrentProcessId()) {
             reload_and_apply_settings(window);
         }
+        return 0;
+    }
+
+    // Close All Windows: every npad window (including the sender) closes via
+    // its own save-checked WM_CLOSE path, so a Cancel keeps that window open.
+    if (msg == g_close_all_msg && g_close_all_msg != 0) {
+        PostMessageW(hwnd, WM_CLOSE, 0, 0);
         return 0;
     }
 
