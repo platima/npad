@@ -730,6 +730,8 @@ void ui_platform_set_text(Window *window, const char *text) {
     window->setting_text_programmatically = false;
     free(wide);
 
+    // EM_GETZOOM wrote through the pointers; 0/0 means default (100%)
+    // cppcheck-suppress knownConditionTrueFalse
     if (zoom_num && zoom_den) {
         SendMessageW(window->edit_hwnd, EM_SETZOOM, zoom_num, zoom_den);
     }
@@ -1954,7 +1956,9 @@ static void refresh_font_binding(Window *window) {
     st.codepage = 1200;
     SendMessageW(window->edit_hwnd, EM_SETTEXTEX, (WPARAM) &st, (LPARAM) buf);
 
-    if (zoom_num && zoom_den) { // EM_SETTEXTEX resets the zoom ratio
+    // EM_GETZOOM wrote through the pointers; EM_SETTEXTEX resets the ratio
+    // cppcheck-suppress knownConditionTrueFalse
+    if (zoom_num && zoom_den) {
         SendMessageW(window->edit_hwnd, EM_SETZOOM, zoom_num, zoom_den);
     }
     SendMessageW(window->edit_hwnd, EM_EXSETSEL, 0, (LPARAM) &saved_sel);
