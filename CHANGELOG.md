@@ -5,6 +5,35 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-07-13
+
+### ✨ Features
+- **Warn before lossy ANSI saves** (classic-Notepad parity): manually saving
+  a document as ANSI when it contains characters the system code page cannot
+  represent (emoji, most non-Latin scripts) now asks before replacing them
+  with `?`; declining cancels the save. Auto-save silently skips such
+  documents instead of prompting from a timer (crash-recovery snapshots
+  still protect the content).
+
+### 🐛 Bug Fixes
+- **Emoji and other non-Latin characters render correctly after opening a
+  file.** Loaded text was stamped with the configured font over the whole
+  document, which replaced the fallback fonts RichEdit assigns to characters
+  the configured font lacks - so emoji that displayed fine while typing came
+  back as placeholder boxes after save/reopen (the bytes on disk were always
+  correct). Text is now loaded via `EM_SETTEXTEX` with the default format
+  set first, keeping font fallback intact; font and theme changes re-trigger
+  fallback for such characters, and the window's zoom no longer resets when
+  a file is loaded into it.
+
+### 🔍 Verified
+- Encoding round-trip proven byte-exact on the Windows build for all five
+  encodings (UTF-8 `63 61 66 C3 A9`, UTF-8 BOM `EF BB BF ...`, UTF-16 LE
+  `FF FE 63 00 ...`, UTF-16 BE `FE FF 00 63 ...`, ANSI `63 61 66 E9` for
+  "café"). Note: a file containing only ASCII characters is byte-identical
+  in UTF-8 and ANSI, so tools like `file` report `us-ascii` - that is
+  correct UTF-8 output, not a missing encoding.
+
 ## [0.8.0] - 2026-07-11
 
 ### ✨ Features

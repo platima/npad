@@ -170,6 +170,8 @@ static void resize_controls(Window *window);
 static bool register_window_class(void);
 static void apply_theme(Window *window);
 static void apply_font(Window *window);
+static void apply_font_default(Window *window);
+static void refresh_font_binding(Window *window);
 static void apply_word_wrap(Window *window);
 static void update_menu_states(Window *window);
 static void rebuild_recent_menu(Window *window);
@@ -521,6 +523,11 @@ Window *ui_platform_create_main_window(void) {
     SendMessageW(window->edit_hwnd, EM_SETEVENTMASK, 0, ENM_CHANGE | ENM_SELCHANGE);
     SetWindowSubclass(window->edit_hwnd, edit_subclass_proc, 1, 0);
 
+    // Font binding: let RichEdit pick fallback faces for characters the
+    // configured font lacks (emoji, CJK), for typed and loaded text alike
+    LRESULT lang = SendMessageW(window->edit_hwnd, EM_GETLANGOPTIONS, 0, 0);
+    SendMessageW(window->edit_hwnd, EM_SETLANGOPTIONS, 0, lang | IMF_AUTOFONT);
+
     // Zoom is per-window view state, seeded from the Defaults setting
     int default_zoom = settings_get_int("default_zoom", 100);
     if (default_zoom < 10)
@@ -702,15 +709,30 @@ void ui_platform_set_text(Window *window, const char *text) {
     if (!wide)
         return;
 
+    // Refresh the default character format first so the incoming text adopts
+    // the configured font/colour, then insert via EM_SETTEXTEX: unlike a
+    // SetWindowTextW + SCF_ALL restamp, this leaves RichEdit's font binding
+    // free to give emoji/CJK characters a fallback face with real glyphs.
+    apply_font_default(window);
+
+    SETTEXTEX st;
+    st.flags = ST_DEFAULT;
+    st.codepage = 1200; // UTF-16
+
+    // EM_SETTEXTEX resets the zoom ratio; this window's zoom is view state
+    // that must survive loading a file
+    WPARAM zoom_num = 0;
+    LPARAM zoom_den = 0;
+    SendMessageW(window->edit_hwnd, EM_GETZOOM, (WPARAM) &zoom_num, (LPARAM) &zoom_den);
+
     window->setting_text_programmatically = true;
-    SetWindowTextW(window->edit_hwnd, wide);
+    SendMessageW(window->edit_hwnd, EM_SETTEXTEX, (WPARAM) &st, (LPARAM) wide);
     window->setting_text_programmatically = false;
     free(wide);
 
-    // SetWindowTextW drops the RichEdit character formatting, so re-apply the
-    // configured font/colour - otherwise opened or restored content would
-    // render in the control's default face rather than the user's font/theme.
-    apply_font(window);
+    if (zoom_num && zoom_den) {
+        SendMessageW(window->edit_hwnd, EM_SETZOOM, zoom_num, zoom_den);
+    }
 
     // Loading new content resets modification state, undo history and caret
     SendMessageW(window->edit_hwnd, EM_EMPTYUNDOBUFFER, 0, 0);
@@ -1560,6 +1582,7 @@ static void apply_theme(Window *window) {
     cf.crTextColor = text;
     SendMessageW(window->edit_hwnd, EM_SETCHARFORMAT, SCF_ALL, (LPARAM) &cf);
     SendMessageW(window->edit_hwnd, EM_SETCHARFORMAT, SCF_DEFAULT, (LPARAM) &cf);
+    refresh_font_binding(window); // Restamping can drop emoji fallback faces
 
     window->setting_text_programmatically = false;
     SendMessageW(window->edit_hwnd, EM_SETMODIFY, (WPARAM) was_modified, 0);
@@ -1579,7 +1602,9 @@ void ui_platform_set_dark_mode(bool enabled) {
     settings_set_string("theme", enabled ? "dark" : "light");
     g_dark_mode = enabled;
     if (g_main_window) {
-        apply_font(g_main_window);
+        // Colors only: apply_theme restamps CFM_COLOR; a full font stamp
+        // would wipe the fallback faces bound to emoji/CJK runs
+        apply_font_default(g_main_window);
         apply_theme(g_main_window);
     }
 }
@@ -1824,10 +1849,9 @@ static bool font_is_installed(const wchar_t *face) {
     return found;
 }
 
-static void apply_font(Window *window) {
-    if (!window || !window->edit_hwnd)
-        return;
-
+// Fill cf with the window's configured font (face, size, weight, italic)
+// and the current scheme's text color
+static void build_char_format(Window *window, CHARFORMAT2W *cf) {
     const char *default_face = DEFAULT_MONO_FONT;
     const char *key = active_font_key(window, &default_face);
     char *face = settings_get_string(key, default_face);
@@ -1840,27 +1864,121 @@ static void apply_font(Window *window) {
     if (size > 72)
         size = 72;
 
-    CHARFORMAT2W cf;
-    ZeroMemory(&cf, sizeof(cf));
-    cf.cbSize = sizeof(cf);
-    cf.dwMask = CFM_FACE | CFM_SIZE | CFM_WEIGHT | CFM_ITALIC | CFM_COLOR;
-    cf.yHeight = size * 20; // Twips
-    cf.wWeight = (WORD) weight;
-    cf.dwEffects = italic ? CFE_ITALIC : 0;
-    theme_colors(NULL, &cf.crTextColor); // Match the current scheme's text color
+    ZeroMemory(cf, sizeof(*cf));
+    cf->cbSize = sizeof(*cf);
+    cf->dwMask = CFM_FACE | CFM_SIZE | CFM_WEIGHT | CFM_ITALIC | CFM_COLOR;
+    cf->yHeight = size * 20; // Twips
+    cf->wWeight = (WORD) weight;
+    cf->dwEffects = italic ? CFE_ITALIC : 0;
+    theme_colors(NULL, &cf->crTextColor); // Match the current scheme's text color
 
     wchar_t *wide_face = utf8_to_wide(face ? face : "Consolas");
     if (wide_face) {
-        wcsncpy(cf.szFaceName, wide_face, LF_FACESIZE - 1);
-        cf.szFaceName[LF_FACESIZE - 1] = L'\0';
+        wcsncpy(cf->szFaceName, wide_face, LF_FACESIZE - 1);
+        cf->szFaceName[LF_FACESIZE - 1] = L'\0';
         free(wide_face);
     }
     free(face);
+}
+
+// Refresh only the control's default character format. Existing runs keep
+// their formatting - in particular the fallback faces RichEdit's font
+// binding gave emoji/CJK runs, which a blanket SCF_ALL face stamp would
+// replace with a face that has no glyphs for them (showing boxes).
+static void apply_font_default(Window *window) {
+    if (!window || !window->edit_hwnd)
+        return;
+
+    CHARFORMAT2W cf;
+    build_char_format(window, &cf);
+    SendMessageW(window->edit_hwnd, EM_SETCHARFORMAT, SCF_DEFAULT, (LPARAM) &cf);
+}
+
+// The control runs in plain-text mode, where the whole document shares one
+// character format: a document-wide format change (font or theme) discards
+// the fallback faces RichEdit's font binding gave emoji and other non-BMP
+// characters, leaving placeholder boxes. Binding only re-runs when text is
+// inserted, so when the document contains astral characters, re-set the
+// identical text through EM_SETTEXTEX to re-trigger it. Caret, scroll and
+// modified state are preserved; the undo stack is kept via ST_KEEPUNDO.
+// Callers hold setting_text_programmatically while this runs.
+static void refresh_font_binding(Window *window) {
+    if (!window || !window->edit_hwnd)
+        return;
+
+    GETTEXTLENGTHEX gtl;
+    gtl.flags = GTL_NUMCHARS | GTL_PRECISE;
+    gtl.codepage = 1200;
+    LRESULT len = SendMessageW(window->edit_hwnd, EM_GETTEXTLENGTHEX, (WPARAM) &gtl, 0);
+    if (len <= 0)
+        return;
+
+    wchar_t *buf = malloc(((size_t) len + 1) * sizeof(wchar_t));
+    if (!buf)
+        return;
+
+    GETTEXTEX gt;
+    ZeroMemory(&gt, sizeof(gt));
+    gt.cb = (DWORD) (((size_t) len + 1) * sizeof(wchar_t));
+    gt.flags = GT_DEFAULT;
+    gt.codepage = 1200;
+    LRESULT got = SendMessageW(window->edit_hwnd, EM_GETTEXTEX, (WPARAM) &gt, (LPARAM) buf);
+    if (got <= 0) {
+        free(buf);
+        return;
+    }
+
+    bool has_astral = false;
+    for (LRESULT i = 0; i + 1 < got; i++) {
+        if (IS_HIGH_SURROGATE(buf[i]) && IS_LOW_SURROGATE(buf[i + 1])) {
+            has_astral = true;
+            break;
+        }
+    }
+    if (!has_astral) {
+        free(buf); // Nothing the configured font could not render itself
+        return;
+    }
+
+    CHARRANGE saved_sel = { 0, 0 };
+    SendMessageW(window->edit_hwnd, EM_EXGETSEL, 0, (LPARAM) &saved_sel);
+    POINT scroll_pos = { 0, 0 };
+    SendMessageW(window->edit_hwnd, EM_GETSCROLLPOS, 0, (LPARAM) &scroll_pos);
+    WPARAM zoom_num = 0;
+    LPARAM zoom_den = 0;
+    SendMessageW(window->edit_hwnd, EM_GETZOOM, (WPARAM) &zoom_num, (LPARAM) &zoom_den);
+    SendMessageW(window->edit_hwnd, WM_SETREDRAW, FALSE, 0);
+
+    SETTEXTEX st;
+    st.flags = ST_KEEPUNDO;
+    st.codepage = 1200;
+    SendMessageW(window->edit_hwnd, EM_SETTEXTEX, (WPARAM) &st, (LPARAM) buf);
+
+    if (zoom_num && zoom_den) { // EM_SETTEXTEX resets the zoom ratio
+        SendMessageW(window->edit_hwnd, EM_SETZOOM, zoom_num, zoom_den);
+    }
+    SendMessageW(window->edit_hwnd, EM_EXSETSEL, 0, (LPARAM) &saved_sel);
+    SendMessageW(window->edit_hwnd, EM_SETSCROLLPOS, 0, (LPARAM) &scroll_pos);
+    SendMessageW(window->edit_hwnd, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(window->edit_hwnd, NULL, TRUE);
+    free(buf);
+}
+
+// Apply the configured font to the document. In plain-text mode setting the
+// default format restyles all text; refresh_font_binding then restores
+// emoji fallback faces. Text loading itself uses apply_font_default +
+// EM_SETTEXTEX, which binds as it inserts.
+static void apply_font(Window *window) {
+    if (!window || !window->edit_hwnd)
+        return;
+
+    CHARFORMAT2W cf;
+    build_char_format(window, &cf);
 
     LRESULT was_modified = SendMessageW(window->edit_hwnd, EM_GETMODIFY, 0, 0);
     window->setting_text_programmatically = true;
-    SendMessageW(window->edit_hwnd, EM_SETCHARFORMAT, SCF_ALL, (LPARAM) &cf);
     SendMessageW(window->edit_hwnd, EM_SETCHARFORMAT, SCF_DEFAULT, (LPARAM) &cf);
+    refresh_font_binding(window);
     window->setting_text_programmatically = false;
     SendMessageW(window->edit_hwnd, EM_SETMODIFY, (WPARAM) was_modified, 0);
 }
@@ -3367,7 +3485,10 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                                  suggested_rect->bottom - suggested_rect->top,
                                  SWP_NOZORDER | SWP_NOACTIVATE);
                 }
-                apply_font(window);
+                // Char formats are in twips (DPI-independent), so existing
+                // runs - including font-bound emoji - keep their formatting;
+                // only the default needs a refresh
+                apply_font_default(window);
                 resize_controls(window);
             }
             return 0;

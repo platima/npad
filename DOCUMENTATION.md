@@ -141,6 +141,14 @@ position). Not intended for direct use.
   Format > Line Endings; encoding via the status bar or the Save As dialog's
   Encoding dropdown. Pure-ASCII files always report UTF-8 (ASCII bytes are
   identical across UTF-8 and ANSI).
+- **Lossy ANSI saves warn first**: manually saving as ANSI when the document
+  contains characters the system code page cannot represent (emoji, most
+  non-Latin scripts) asks before replacing them with `?`; declining cancels
+  the save. Auto-save skips such documents silently rather than prompting
+  from a timer (session snapshots still protect the content).
+- **Emoji & mixed scripts**: characters the configured font lacks (emoji,
+  CJK, etc.) render via Windows font fallback - when typed, when a file is
+  opened, and across font or theme changes.
 - **Crash recovery**: with session resume enabled, each window snapshots
   unsaved work to its own recovery slot. After an unclean exit, npad offers
   to restore; the first document opens in the current window and the rest in

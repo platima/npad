@@ -392,6 +392,19 @@ bool editor_open_file(const char *filename) {
     return true;
 }
 
+// Warn before a user-initiated save that would replace characters the ANSI
+// code page cannot represent with '?'. Returns false if the user cancels.
+// Classic Notepad behaviour; auto-save never prompts (it skips instead).
+static bool editor_confirm_lossy_ansi(const char *content) {
+    if (g_editor.file_info.encoding != NPAD_ENC_ANSI || !content || !file_ansi_is_lossy(content)) {
+        return true;
+    }
+    return ui_show_message_box(g_editor.main_window, "npad",
+                               "This document contains characters that cannot be saved in "
+                               "ANSI encoding.\nThey will be replaced with '?'. Save anyway?",
+                               true);
+}
+
 bool editor_save_file(void) {
     if (!g_editor.current_file) {
         // No current file, prompt for save as
@@ -419,6 +432,11 @@ bool editor_save_file(void) {
     if (!content)
         return false;
 
+    if (!editor_confirm_lossy_ansi(content)) {
+        free(content);
+        return false; // User declined the lossy ANSI save
+    }
+
     bool success = file_write_text_ex(g_editor.current_file, content, &g_editor.file_info);
     free(content);
 
@@ -442,6 +460,11 @@ bool editor_save_file_as(const char *filename) {
     char *content = ui_get_text(g_editor.main_window);
     if (!content)
         return false;
+
+    if (!editor_confirm_lossy_ansi(content)) {
+        free(content);
+        return false; // User declined the lossy ANSI save
+    }
 
     bool success = file_write_text_ex(filename, content, &g_editor.file_info);
     free(content);
@@ -694,9 +717,22 @@ bool editor_handle_event(const UIEvent *event) {
             return true;
 
         case UI_EVENT_AUTO_SAVE:
-            // Silent auto-save: only for documents that already have a file
+            // Silent auto-save: only for documents that already have a file.
+            // A lossy ANSI save is skipped rather than prompting from a timer
+            // (the user gets the prompt on their next manual save; session
+            // snapshots still protect the unsaved content meanwhile).
             if (g_editor.auto_save_enabled && g_editor.is_modified && g_editor.current_file) {
-                editor_save_file();
+                bool skip = false;
+                if (g_editor.file_info.encoding == NPAD_ENC_ANSI && g_editor.main_window) {
+                    char *content = ui_get_text(g_editor.main_window);
+                    if (content) {
+                        skip = file_ansi_is_lossy(content);
+                        free(content);
+                    }
+                }
+                if (!skip) {
+                    editor_save_file();
+                }
             }
             return true;
 

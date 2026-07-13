@@ -55,7 +55,7 @@ Current features (Windows build):
   - Zoom (Ctrl+Plus / Ctrl+Minus / Ctrl+0, Ctrl+Scroll)
   - Word wrap toggle (Alt+Z), Go To Line (Ctrl+G), Time/Date (F5)
   - Line ending conversion (Format menu, Ctrl+E to cycle, or click the status bar)
-  - Encoding picker in the Save dialog (or click the status bar)
+  - Encoding picker in the Save dialog (or click the status bar); warns before an ANSI save would lose characters
   - Right-click context menu (Undo/Redo/Cut/Copy/Paste/Delete/Select All)
   - Status bar click actions: Ln/Col opens Go To, zoom resets, font mode toggles monospace, line ending and encoding open pickers
   - New Window (Ctrl+Shift+N) opens a second independent instance; a Preferences option can make Ctrl+N do this instead

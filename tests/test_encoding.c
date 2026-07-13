@@ -213,6 +213,16 @@ TEST_CASE(detect_and_roundtrip_ansi_high_byte) {
     test_cleanup_temp_file(TEST_FILE);
 }
 
+TEST_CASE(ansi_lossy_detection) {
+    // ASCII and Latin-1-representable text survives an ANSI save unchanged;
+    // anything beyond (emoji, CJK) degrades to '?' and must be flagged so
+    // the editor can warn before a lossy save
+    TEST_ASSERT(!file_ansi_is_lossy("plain ascii text"), "ASCII should not be lossy in ANSI");
+    TEST_ASSERT(!file_ansi_is_lossy("caf\xC3\xA9"), "Latin-1 text (e-acute) should not be lossy");
+    TEST_ASSERT(file_ansi_is_lossy("hi \xF0\x9F\x98\x91"), "Emoji should be lossy in ANSI");
+    TEST_ASSERT(!file_ansi_is_lossy(NULL), "NULL content should not be flagged");
+}
+
 TEST_CASE(roundtrip_lf_preserved) {
     // An LF file saved with CRLF content from the editor keeps LF on disk
     write_bytes(TEST_FILE, "one\ntwo\n", 8);
@@ -294,6 +304,7 @@ int main(void) {
     RUN_TEST(read_utf8_multibyte);
     RUN_TEST(roundtrip_utf16_le);
     RUN_TEST(detect_and_roundtrip_ansi_high_byte);
+    RUN_TEST(ansi_lossy_detection);
     RUN_TEST(roundtrip_lf_preserved);
     RUN_TEST(write_failure_preserves_original);
     RUN_TEST(encoding_names);

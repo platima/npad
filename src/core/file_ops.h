@@ -52,6 +52,10 @@ bool file_write_binary(const char *filename, const void *data, size_t size);
 // write it atomically (temp file + rename). info == NULL writes UTF-8/CRLF.
 bool file_write_text_ex(const char *filename, const char *utf8_content, const TextFileInfo *info);
 
+// Whether saving this UTF-8 content as ANSI would lose characters
+// (replaced with '?'). Used to warn the user before a lossy save.
+bool file_ansi_is_lossy(const char *utf8_content);
+
 // Atomic file operations with rollback capability
 bool file_write_text_atomic(const char *filename, const char *content);
 bool file_write_binary_atomic(const char *filename, const void *data, size_t size);

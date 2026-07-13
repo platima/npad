@@ -354,6 +354,37 @@ static uint8_t *utf8_to_ansi(const char *utf8, size_t *out_len) {
 #endif
 }
 
+bool file_ansi_is_lossy(const char *utf8) {
+    if (!utf8)
+        return false;
+#ifdef _WIN32
+    // Round-trip through the system code page and see whether any character
+    // had to fall back to the default character
+    int wide_len = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+    if (wide_len <= 0)
+        return false;
+    wchar_t *wide = malloc((size_t) wide_len * sizeof(wchar_t));
+    if (!wide)
+        return false;
+    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wide, wide_len);
+
+    BOOL used_default = FALSE;
+    WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, wide, -1, NULL, 0, NULL, &used_default);
+    free(wide);
+    return used_default != FALSE;
+#else
+    // Latin-1 model (matches utf8_to_ansi): anything above U+00FF is lost
+    size_t len = strlen(utf8);
+    size_t i = 0;
+    while (i < len) {
+        if (utf8_decode((const uint8_t *) utf8, len, &i) > 0xFF) {
+            return true;
+        }
+    }
+    return false;
+#endif
+}
+
 // Heuristic for UTF-16 files without a BOM: mostly-ASCII text has NUL
 // bytes in every other position
 static bool looks_like_utf16(const uint8_t *data, size_t len, bool *big_endian) {
