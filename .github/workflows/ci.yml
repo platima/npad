@@ -5,6 +5,8 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  # Required so release.yml can run this workflow as its validation gate
+  workflow_call:
 
 env:
   BUILD_TYPE: Release

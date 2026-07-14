@@ -7,6 +7,7 @@ name: Installers
 on:
   workflow_dispatch:
   push:
+    branches: ["**"]   # branches only: tag pushes build via release.yml instead
     paths:
       - "installer/**"
       - ".github/workflows/installers.yml"
