@@ -217,9 +217,10 @@ jobs:
         cd validation
         
         # Download Linux X11 build for testing
+        # endswith so the .sha256 companion file is not also matched
         linux_x11_url=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
           "https://api.github.com/repos/${{ github.repository }}/releases/$release_id/assets" \
-          | jq -r '.[] | select(.name | contains("linux-x11") and (endswith(".exe") == false)) | .browser_download_url')
+          | jq -r '.[] | select(.name | endswith("-linux-x11")) | .browser_download_url')
         
         if [ -n "$linux_x11_url" ]; then
           echo "Downloading Linux X11 build for validation..."
