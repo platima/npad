@@ -5,6 +5,18 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.3] - 2026-07-14
+
+### ✨ Features
+- **Installer**: new "Set the bundled fonts as npad's default editor
+  fonts" task (checked by default, shown when the fonts are being
+  installed or already present). Selecting it sets `monospace_font` /
+  `proportional_font` in settings.json - updating an existing file in
+  place while preserving every other setting - instead of the previous
+  behaviour of only pre-setting fonts when no settings.json existed.
+  Deselect the task (or `/MERGETASKS="!fontdefaults"` silently) to leave
+  the configuration untouched.
+
 ## [0.10.2] - 2026-07-14
 
 ### 🐛 Bug Fixes

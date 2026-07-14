@@ -24,11 +24,14 @@ chosen: the setup EXE asks (or accepts `/ALLUSERS`); the MSI takes
 **Setup EXE options** (interactive or `/VERYSILENT /SUPPRESSMSGBOXES`):
 - *Components*: bundled fonts - Intel One Mono (monospace), Roboto
   (proportional), OpenDyslexic (reading assistance); all SIL OFL licensed,
-  installed on by default. If npad has no settings.json yet, installed fonts
-  are pre-set as the default faces. Per-user installs use the Windows 10
-  1809+ per-user font store.
+  installed on by default. Per-user installs use the Windows 10 1809+
+  per-user font store.
 - *Tasks*: file associations (.txt on by default; .log/.ini/.cfg/.conf
-  opt-in), 'notepad' alias (on by default - see below), desktop icon (off).
+  opt-in), 'notepad' alias (on by default - see below), "set the bundled
+  fonts as npad's default editor fonts" (on by default, offered when the
+  fonts are being installed or already present; updates settings.json in
+  place, preserving all other settings - deselect or use
+  `/MERGETASKS="!fontdefaults"` to skip), desktop icon (off).
 
 **MSI features** (silent-deployment oriented, no UI - use `/qn` or `/qb`):
 `Main`, `AssocTxt`, `NotepadAlias`, `Fonts` install by default;

@@ -60,6 +60,7 @@ Name: "assoc\ini"; Description: "INI configuration files (.ini)"; Flags: uncheck
 Name: "assoc\cfg"; Description: "Config files (.cfg)"; Flags: unchecked
 Name: "assoc\conf"; Description: "Config files (.conf)"; Flags: unchecked
 Name: "notepadalias"; Description: "Open 'notepad' with npad (Win+R and app launches; see docs for the Windows 11 Store alias)"
+Name: "fontdefaults"; Description: "Set the bundled fonts as npad's default editor fonts (updates settings.json)"; Check: FontDefaultsOfferable
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
 [Files]
@@ -181,29 +182,92 @@ begin
             FileExists(ExpandConstant('{localappdata}\Microsoft\WindowsApps\notepad.exe'));
 end;
 
-// Pre-set the bundled fonts in npad's settings.json - only when the file
-// does not exist yet (never clobber an existing configuration).
-procedure PresetFontConfig();
-var
-  SettingsDir, SettingsFile, Json: String;
+// --- Default-font preset ('fontdefaults' task) ---------------------------
+// A font family counts as available when its component is being installed
+// OR it is already present on the system (user or machine font store).
+
+function FontFilePresent(const FileName: String): Boolean;
 begin
-  if not (WizardIsComponentSelected('fonts\intelonemono') or
-          WizardIsComponentSelected('fonts\roboto')) then
+  Result := FileExists(ExpandConstant('{localappdata}\Microsoft\Windows\Fonts\') + FileName) or
+            FileExists(ExpandConstant('{win}\Fonts\') + FileName);
+end;
+
+function MonoFontAvailable(): Boolean;
+begin
+  Result := WizardIsComponentSelected('fonts\intelonemono') or
+            FontFilePresent('IntelOneMono-Regular.ttf');
+end;
+
+function PropFontAvailable(): Boolean;
+begin
+  Result := WizardIsComponentSelected('fonts\roboto') or
+            FontFilePresent('Roboto-Regular.ttf');
+end;
+
+function FontDefaultsOfferable(): Boolean;
+begin
+  Result := MonoFontAvailable() or PropFontAvailable();
+end;
+
+// Set "Key": "Value" in the flat JSON string npad uses for settings.json:
+// replace the value when the key exists, append before the closing brace
+// otherwise. String-level and whitespace-tolerant, matching npad's parser.
+procedure UpsertJsonString(var Json: AnsiString; const Key, Value: AnsiString);
+var
+  P, C, Q1, Q2, B: Integer;
+begin
+  P := Pos('"' + Key + '"', Json);
+  if P > 0 then
+  begin
+    C := P + Length(Key) + 2;
+    while (C <= Length(Json)) and (Json[C] <> ':') do
+      C := C + 1;
+    Q1 := C;
+    while (Q1 <= Length(Json)) and (Json[Q1] <> '"') do
+      Q1 := Q1 + 1;
+    Q2 := Q1 + 1;
+    while (Q2 <= Length(Json)) and (Json[Q2] <> '"') do
+      if Json[Q2] = '\' then Q2 := Q2 + 2 else Q2 := Q2 + 1;
+    if Q2 <= Length(Json) then
+      Json := Copy(Json, 1, Q1) + Value + Copy(Json, Q2, Length(Json));
+  end
+  else
+  begin
+    B := Length(Json);
+    while (B > 0) and (Json[B] <> '}') do
+      B := B - 1;
+    if B = 0 then
+    begin
+      Json := '{' + #10 + '  "' + Key + '": "' + Value + '"' + #10 + '}';
+      Exit;
+    end;
+    if Pos('":', Json) > 0 then
+      Insert(',' + #10 + '  "' + Key + '": "' + Value + '"' + #10, Json, B)
+    else
+      Insert(#10 + '  "' + Key + '": "' + Value + '"' + #10, Json, B);
+  end;
+end;
+
+procedure ApplyFontDefaults();
+var
+  SettingsDir, SettingsFile: String;
+  Json: AnsiString;
+begin
+  if not WizardIsTaskSelected('fontdefaults') then
+    Exit;
+  if not (MonoFontAvailable() or PropFontAvailable()) then
     Exit;
   SettingsDir := ExpandConstant('{userappdata}\Platima\npad');
   SettingsFile := SettingsDir + '\settings.json';
+  Json := '';
   if FileExists(SettingsFile) then
-    Exit;
-  Json := '{';
-  if WizardIsComponentSelected('fonts\intelonemono') then
-    Json := Json + '"monospace_font": "Intel One Mono"';
-  if WizardIsComponentSelected('fonts\roboto') then
-  begin
-    if Length(Json) > 1 then
-      Json := Json + ', ';
-    Json := Json + '"proportional_font": "Roboto"';
-  end;
-  Json := Json + '}';
+    LoadStringFromFile(SettingsFile, Json);
+  if Trim(Json) = '' then
+    Json := '{' + #10 + '}';
+  if MonoFontAvailable() then
+    UpsertJsonString(Json, 'monospace_font', 'Intel One Mono');
+  if PropFontAvailable() then
+    UpsertJsonString(Json, 'proportional_font', 'Roboto');
   if ForceDirectories(SettingsDir) then
     SaveStringToFile(SettingsFile, Json, False);
 end;
@@ -211,5 +275,5 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
-    PresetFontConfig();
+    ApplyFontDefaults();
 end;
