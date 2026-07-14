@@ -20,17 +20,14 @@ jobs:
         sudo apt-get update -q
         sudo apt-get install -y -q cppcheck clang-format
     
+    # Use the canonical Makefile targets so CI and local runs always agree
+    # (a hand-rolled cppcheck invocation here once drifted: it lacked
+    # --inline-suppr, so the source's inline suppressions were ignored)
     - name: Run cppcheck
-      run: |
-        cppcheck --enable=all --std=c99 --platform=win32A \
-          --suppress=missingIncludeSystem \
-          --suppress=unusedFunction \
-          --error-exitcode=1 \
-          src/
-    
+      run: make lint
+
     - name: Check code formatting
-      run: |
-        find src/ -name "*.c" -o -name "*.h" | xargs clang-format --dry-run --Werror
+      run: make format-check
 
   build-windows:
     runs-on: ubuntu-latest
