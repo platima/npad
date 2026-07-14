@@ -165,10 +165,22 @@ Filename: "{app}\{#AppExe}"; Description: "Launch npad"; Flags: postinstall nowa
 ; Windows will not let installers set the default handler programmatically
 Filename: "ms-settings:defaultapps"; Description: "Open Default Apps settings (make npad the default editor)"; Flags: postinstall shellexec skipifsilent unchecked
 ; The Windows 11 Store Notepad alias must be disabled by hand:
-; Apps > Advanced app settings > App execution aliases > Notepad (off)
-Filename: "ms-settings:advanced-apps"; Description: "Open Settings to disable the Windows 11 Notepad alias (App execution aliases)"; Flags: postinstall shellexec skipifsilent; Check: WizardIsTaskSelected('notepadalias')
+; Apps > Advanced app settings > App execution aliases > Notepad (off).
+; Only offered when that alias stub actually exists on this machine -
+; without it npad's App Paths entry already owns 'notepad' everywhere.
+Filename: "ms-settings:advanced-apps"; Description: "Open Settings to disable the Windows 11 Notepad alias (App execution aliases)"; Flags: postinstall shellexec skipifsilent; Check: ShouldOfferAliasSettings
 
 [Code]
+// The App-execution-aliases Settings page is only useful when the Windows
+// 11 Store Notepad has planted its 'notepad.exe' alias stub, which can
+// still win over npad's App Paths entry in some contexts (e.g. cmd.exe
+// PATH lookup). Installers cannot disable that stub programmatically.
+function ShouldOfferAliasSettings(): Boolean;
+begin
+  Result := WizardIsTaskSelected('notepadalias') and
+            FileExists(ExpandConstant('{localappdata}\Microsoft\WindowsApps\notepad.exe'));
+end;
+
 // Pre-set the bundled fonts in npad's settings.json - only when the file
 // does not exist yet (never clobber an existing configuration).
 procedure PresetFontConfig();

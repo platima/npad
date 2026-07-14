@@ -71,9 +71,20 @@ MAJOR = $(shell grep '^#define NPAD_VERSION_MAJOR' src/main.h | cut -d' ' -f3)
 MINOR = $(shell grep '^#define NPAD_VERSION_MINOR' src/main.h | cut -d' ' -f3)
 PATCH = $(shell grep '^#define NPAD_VERSION_PATCH' src/main.h | cut -d' ' -f3)
 RELEASE = $(shell grep '^#define NPAD_VERSION_RELEASE' src/main.h | cut -d' ' -f3 | tr -d '"')
-HEADER_VERSION = v$(MAJOR).$(MINOR).$(PATCH)-$(RELEASE)
+BASE_VERSION = v$(MAJOR).$(MINOR).$(PATCH)
+HEADER_VERSION = $(BASE_VERSION)-$(RELEASE)
+GIT_EXACT_TAG = $(shell git describe --tags --exact-match --dirty 2>/dev/null)
 GIT_COMMIT = $(shell git describe --tags --always --dirty 2>/dev/null)
-VERSION ?= $(shell test -n "$(HEADER_VERSION)" && echo "$(HEADER_VERSION) ($(GIT_COMMIT))")
+# Building exactly at the matching release tag (clean tree): plain "v0.10.1".
+# Otherwise a dev build: "v0.10.2-dev (v0.10.1-3-gabc123)"; without git
+# available (e.g. some CI shells), just "v0.10.2-dev" - never empty parens.
+ifeq ($(GIT_EXACT_TAG),$(BASE_VERSION))
+VERSION ?= $(BASE_VERSION)
+else ifneq ($(GIT_COMMIT),)
+VERSION ?= $(HEADER_VERSION) ($(GIT_COMMIT))
+else
+VERSION ?= $(HEADER_VERSION)
+endif
 CFLAGS += -DNPAD_VERSION='"$(VERSION)"'
 
 # Debug build support

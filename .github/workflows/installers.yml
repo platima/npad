@@ -33,11 +33,14 @@ jobs:
         with:
           msystem: MINGW64
           update: false
-          install: mingw-w64-x86_64-gcc make
+          install: mingw-w64-x86_64-gcc make git
 
       - name: Build npad.exe
         shell: msys2 {0}
+        # git must see the checkout so the Makefile derives the release
+        # version string (a tagged build reports plain "vX.Y.Z")
         run: |
+          git config --global --add safe.directory '*'
           make windows
           ls -la npad.exe
 

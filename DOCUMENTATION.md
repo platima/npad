@@ -39,10 +39,13 @@ the fonts folder to `C:\Windows\Fonts` regardless of scope, so the feature
 is skipped on per-user installs (use the setup EXE for per-user fonts).
 
 **The 'notepad' alias**: the task points `notepad` (Win+R, ShellExecute) at
-npad via the App Paths registry key. Windows 11's Store Notepad also owns a
-`notepad.exe` *app execution alias* that installers cannot disable; the
-setup offers the Settings page after install - turn off **Notepad** under
-Apps > Advanced app settings > App execution aliases for a full takeover.
+npad via the App Paths registry key - this mechanism is invisible on the
+App execution aliases page, which is normal. Windows 11's Store Notepad
+additionally owns a `notepad.exe` *app execution alias* that can still win
+in some contexts (e.g. typing `notepad` in cmd) and that installers cannot
+disable; when that alias stub is detected, the setup offers the Settings
+page after install - turn off **Notepad** under Apps > Advanced app
+settings > App execution aliases for a full takeover.
 
 **Default editor**: Windows does not let installers set the default app for
 a file type. The installers register npad for the chosen extensions (it
