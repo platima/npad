@@ -1,0 +1,13 @@
+# Normalize all text files to LF in the repository so mixed-environment
+# checkouts (Windows git, WSL git, MSYS2 git in CI) agree on cleanliness -
+# otherwise `git describe --dirty` reports phantom-dirty trees and release
+# builds lose their clean version string.
+* text=auto
+
+# Explicit binaries
+*.ico binary
+*.png binary
+*.ttf binary
+*.otf binary
+*.exe binary
+*.msi binary
