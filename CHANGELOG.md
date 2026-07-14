@@ -5,6 +5,16 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.4] - 2026-07-15
+
+### 🧹 Housekeeping
+- **Releases ship only the implemented product**: the Windows installer,
+  MSI and portable GUI exe. The Linux (X11/Wayland/terminal) and Windows
+  terminal variants are unimplemented stubs - CI still compile-checks
+  them, but they are no longer published as release downloads. Release
+  validation now asserts the expected Windows asset set (presence,
+  plausible sizes, checksum spot-check) instead of executing a stub.
+
 ## [0.10.3] - 2026-07-14
 
 ### ✨ Features

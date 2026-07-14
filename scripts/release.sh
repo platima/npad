@@ -129,6 +129,6 @@ echo
 print_status "Release $VERSION initiated successfully! 🎉"
 print_status "The automated build will create release artifacts for:"
 print_status "  - Windows installer (npad-setup-<v>.exe) and MSI"
-print_status "  - Windows portable GUI + terminal executables"
-print_status "  - Linux X11 / Wayland / terminal builds"
+print_status "  - Windows portable GUI executable"
 print_status "  - SHA256 checksums for everything"
+print_status "(Linux/terminal variants are unimplemented stubs: compile-checked in CI, not released)"

@@ -47,13 +47,7 @@ jobs:
           - `npad-setup-${{ steps.get_version.outputs.version }}.exe` - Windows installer (per-user by default; system-wide available)
           - `npad-${{ steps.get_version.outputs.version }}.msi` - Windows MSI for silent/managed deployment (`msiexec /i ... /qn`)
           - `npad-${{ steps.get_version.outputs.version }}-windows-gui.exe` - Portable GUI version for Windows (no install needed)
-          - `npad-${{ steps.get_version.outputs.version }}-windows-terminal.exe` - Terminal version for Windows
-          
-          **Linux Builds:**
-          - `npad-${{ steps.get_version.outputs.version }}-linux-x11` - X11/Xorg version for Linux
-          - `npad-${{ steps.get_version.outputs.version }}-linux-wayland` - Wayland version for Linux  
-          - `npad-${{ steps.get_version.outputs.version }}-linux-terminal` - Terminal version for Linux
-          
+
           **Verification:**
           - `CHECKSUMS.txt` - SHA256 checksums for all files
           - Verify with: `sha256sum -c CHECKSUMS.txt` (Linux/macOS) or `Get-FileHash` (Windows)
@@ -61,14 +55,13 @@ jobs:
           ### Installation
           1. Download the appropriate file for your system from the Assets below
           2. **Windows**: Run `npad-setup-*.exe` to install (or `msiexec /i npad-*.msi /qn` for silent), or run the portable exe directly
-          3. **Linux**: Make executable with `chmod +x filename` and run
-          4. **Verification**: Check the file integrity using the provided checksums
-          
+          3. **Verification**: Check the file integrity using the provided checksums
+
           ### Changes
           See the [commit history](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}) for detailed changes in this release.
-          
+
           ---
-          
+
           **Build Info:**
           - Commit: `${{ github.sha }}`
           - Built: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
@@ -77,6 +70,10 @@ jobs:
         prerelease: ${{ contains(steps.get_version.outputs.version, '-') }}
         generate_release_notes: true
 
+  # Only the implemented product ships as release assets: the Windows GUI
+  # (portable exe here; installers via build-installers). The Linux and
+  # terminal variants are unimplemented stubs - CI still compile-checks
+  # them, but they are not published as downloads.
   build-and-upload:
     runs-on: ubuntu-latest
     needs: create-release
@@ -89,26 +86,6 @@ jobs:
             make_target: windows
             output: npad.exe
             asset_name: npad-${{ needs.create-release.outputs.version }}-windows-gui.exe
-          - target: windows-terminal
-            cc: x86_64-w64-mingw32-gcc  
-            make_target: windows
-            output: npad-terminal.exe
-            asset_name: npad-${{ needs.create-release.outputs.version }}-windows-terminal.exe
-          - target: linux-x11
-            cc: gcc
-            make_target: linux
-            output: npad-linux-x11
-            asset_name: npad-${{ needs.create-release.outputs.version }}-linux-x11
-          - target: linux-wayland
-            cc: gcc
-            make_target: linux
-            output: npad-linux-wayland
-            asset_name: npad-${{ needs.create-release.outputs.version }}-linux-wayland
-          - target: linux-terminal
-            cc: gcc
-            make_target: linux
-            output: npad-linux-terminal
-            asset_name: npad-${{ needs.create-release.outputs.version }}-linux-terminal
 
     steps:
     - uses: actions/checkout@v7
@@ -123,57 +100,20 @@ jobs:
       run: |
         make clean
         CC=${{ matrix.cc }} make ${{ matrix.make_target }}
-        
-        # Verify the build output exists
+
         if [ ! -f "${{ matrix.output }}" ]; then
           echo "ERROR: Expected output file ${{ matrix.output }} not found"
           ls -la
           exit 1
         fi
-        
+
         echo "Build successful: ${{ matrix.output }}"
         ls -la ${{ matrix.output }}
-        
-        # Test version output (Linux builds only, Windows cross-compiled can't run)
-        if [[ "${{ matrix.target }}" == linux-* ]]; then
-          echo "Testing version output..."
-          if timeout 10s ./${{ matrix.output }} --version; then
-            echo "✓ Version command successful"
-          else
-            echo "ERROR: Version command failed"
-            exit 1
-          fi
-          
-          # Extract version for validation if this is a tagged release
-          version_output=$(timeout 10s ./${{ matrix.output }} --version | head -1)
-          echo "Version output: $version_output"
-          
-          # Validate version matches tag (if we have a tag)
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            tag_version="${GITHUB_REF#refs/tags/}"
-            if [[ "$version_output" == *"$tag_version"* ]]; then
-              echo "✓ Version matches release tag: $tag_version"
-            else
-              echo "WARNING: Version output doesn't contain tag $tag_version"
-              echo "Version: $version_output"
-              echo "Tag: $tag_version"
-              # Don't fail here as version might be different format
-            fi
-          fi
-        fi
-        
-        # Strip debugging symbols for release (if Linux)
-        if [[ "${{ matrix.target }}" == linux-* ]]; then
-          strip ${{ matrix.output }}
-          echo "Stripped debug symbols from ${{ matrix.output }}"
-        fi
-        
-        # Rename to versioned filename
+
+        # Rename to versioned filename and checksum
         mv ${{ matrix.output }} ${{ matrix.asset_name }}
-        
-        # Generate checksum
         sha256sum ${{ matrix.asset_name }} > ${{ matrix.asset_name }}.sha256
-        
+
         echo "Final asset: ${{ matrix.asset_name }}"
         echo "Size: $(stat -c%s ${{ matrix.asset_name }}) bytes"
         echo "SHA256: $(cat ${{ matrix.asset_name }}.sha256)"
@@ -195,69 +135,68 @@ jobs:
     permissions:
       contents: write
 
+  # The published binaries are Windows-only (nothing releasable can execute
+  # on this runner), so validation asserts the complete expected asset set
+  # exists on the release with plausible sizes and matching checksums.
   validate-release:
     runs-on: ubuntu-latest
-    needs: [create-release, build-and-upload]
+    needs: [create-release, build-and-upload, build-installers]
     steps:
-    - name: Download and validate release assets
+    - name: Validate release assets
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        VERSION: ${{ needs.create-release.outputs.version }}
       run: |
-        # Get release information
+        echo "=== Validating Release Assets for $VERSION ==="
         release_id=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-          "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ needs.create-release.outputs.version }}" \
+          "https://api.github.com/repos/${{ github.repository }}/releases/tags/$VERSION" \
           | jq -r '.id')
-        
-        echo "=== Validating Release Assets ==="
-        echo "Release ID: $release_id"
-        echo "Version: ${{ needs.create-release.outputs.version }}"
-        
-        # Download and test Linux executables for version validation
-        mkdir -p validation
-        cd validation
-        
-        # Download Linux X11 build for testing
-        # endswith so the .sha256 companion file is not also matched
-        linux_x11_url=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-          "https://api.github.com/repos/${{ github.repository }}/releases/$release_id/assets" \
-          | jq -r '.[] | select(.name | endswith("-linux-x11")) | .browser_download_url')
-        
-        if [ -n "$linux_x11_url" ]; then
-          echo "Downloading Linux X11 build for validation..."
-          curl -L -s "$linux_x11_url" -o npad-linux-x11-test
-          chmod +x npad-linux-x11-test
-          
-          echo "Testing version output..."
-          if timeout 10s ./npad-linux-x11-test --version; then
-            version_output=$(timeout 10s ./npad-linux-x11-test --version | head -1)
-            echo "✓ Version command successful: $version_output"
-            
-            # Check if version output contains the tag
-            tag_version="${{ needs.create-release.outputs.version }}"
-            if [[ "$version_output" == *"$tag_version"* ]]; then
-              echo "✓ Version matches release tag: $tag_version"
-            else
-              echo "ℹ️  Version format: $version_output"
-              echo "ℹ️  Release tag: $tag_version"
-              echo "ℹ️  Note: Version format may differ from tag format"
-            fi
+        assets=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+          "https://api.github.com/repos/${{ github.repository }}/releases/$release_id/assets")
+
+        # version without the leading 'v' for the installer asset names
+        ver_num="${VERSION#v}"
+        failed=0
+        for asset in \
+          "npad-setup-$ver_num.exe:1000000" \
+          "npad-$ver_num.msi:500000" \
+          "npad-$VERSION-windows-gui.exe:100000"
+        do
+          name="${asset%%:*}"
+          min_size="${asset##*:}"
+          size=$(echo "$assets" | jq -r --arg n "$name" '.[] | select(.name == $n) | .size')
+          if [ -z "$size" ]; then
+            echo "ERROR: missing asset $name"
+            failed=1
+          elif [ "$size" -lt "$min_size" ]; then
+            echo "ERROR: $name is implausibly small ($size bytes, expected >= $min_size)"
+            failed=1
           else
-            echo "ERROR: Version command failed for release build"
-            exit 1
+            echo "OK: $name ($size bytes)"
           fi
-          
-          echo "Testing help output..."
-          if timeout 10s ./npad-linux-x11-test --help >/dev/null 2>&1; then
-            echo "✓ Help command successful"
+          # each binary must have its checksum companion
+          if ! echo "$assets" | jq -e --arg n "$name.sha256" '.[] | select(.name == $n)' >/dev/null; then
+            echo "ERROR: missing checksum $name.sha256"
+            failed=1
+          fi
+        done
+
+        # Spot-check one download against its published checksum
+        url=$(echo "$assets" | jq -r --arg n "npad-$VERSION-windows-gui.exe" '.[] | select(.name == $n) | .browser_download_url')
+        sha_url=$(echo "$assets" | jq -r --arg n "npad-$VERSION-windows-gui.exe.sha256" '.[] | select(.name == $n) | .browser_download_url')
+        if [ -n "$url" ] && [ -n "$sha_url" ]; then
+          curl -L -s "$url" -o portable.exe
+          expected=$(curl -L -s "$sha_url" | awk '{print $1}')
+          actual=$(sha256sum portable.exe | awk '{print $1}')
+          if [ "$expected" = "$actual" ]; then
+            echo "OK: portable exe checksum verified ($actual)"
           else
-            echo "ERROR: Help command failed for release build"
-            exit 1
+            echo "ERROR: checksum mismatch (expected $expected, got $actual)"
+            failed=1
           fi
-        else
-          echo "WARNING: Could not find Linux X11 build for validation"
         fi
-        
-        echo "✓ Release validation completed"
+
+        [ "$failed" -eq 0 ] && echo "✓ Release validation completed" || exit 1
 
   create-checksums:
     runs-on: ubuntu-latest
@@ -332,23 +271,16 @@ jobs:
           - `npad-setup-${{ needs.create-release.outputs.version }}.exe` - Windows installer (per-user by default; system-wide available)
           - `npad-${{ needs.create-release.outputs.version }}.msi` - Windows MSI for silent/managed deployment (`msiexec /i ... /qn`)
           - `npad-${{ needs.create-release.outputs.version }}-windows-gui.exe` - Portable GUI version for Windows (no install needed)
-          - `npad-${{ needs.create-release.outputs.version }}-windows-terminal.exe` - Terminal version for Windows
-          
-          **Linux Builds:**
-          - `npad-${{ needs.create-release.outputs.version }}-linux-x11` - X11/Xorg version for Linux
-          - `npad-${{ needs.create-release.outputs.version }}-linux-wayland` - Wayland version for Linux  
-          - `npad-${{ needs.create-release.outputs.version }}-linux-terminal` - Terminal version for Linux
-          
+
           **Verification:**
           - `CHECKSUMS.txt` - SHA256 checksums for all files
           - Individual `.sha256` files for each binary
           - Verify with: `sha256sum -c CHECKSUMS.txt` (Linux/macOS) or `Get-FileHash` (Windows)
           
           ### Installation
-          1. Download the appropriate file for your system from the Assets below
+          1. Download the appropriate file from the Assets below
           2. **Windows**: Run `npad-setup-*.exe` to install (or `msiexec /i npad-*.msi /qn` for silent), or run the portable exe directly
-          3. **Linux**: Make executable with `chmod +x filename` and run
-          4. **Verification**: Check the file integrity using the provided checksums
+          3. **Verification**: Check the file integrity using the provided checksums
           
           ### Changes
           See the [commit history](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}) for detailed changes in this release.
