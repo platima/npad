@@ -87,21 +87,21 @@ make format-check || {
 # Build all targets to ensure they compile
 print_status "Testing builds..."
 
-print_status "Building Windows x64..."
-make clean && make windows-x64 || {
-    print_error "Windows x64 build failed"
+print_status "Building Windows (x64 GUI + terminal)..."
+make clean && make windows || {
+    print_error "Windows build failed"
     exit 1
 }
 
-print_status "Building Windows x86..."
-make clean && make windows-x86 || {
-    print_error "Windows x86 build failed"
-    exit 1
-}
-
-print_status "Building Linux..."
+print_status "Building Linux variants..."
 make clean && make linux || {
     print_error "Linux build failed"
+    exit 1
+}
+
+print_status "Running unit tests..."
+make test || {
+    print_error "Unit tests failed"
     exit 1
 }
 
@@ -128,6 +128,7 @@ print_status "Check the progress at: https://github.com/platima/npad/actions"
 echo
 print_status "Release $VERSION initiated successfully! 🎉"
 print_status "The automated build will create release artifacts for:"
-print_status "  - Windows x64"
-print_status "  - Windows x86" 
-print_status "  - Linux x64"
+print_status "  - Windows installer (npad-setup-<v>.exe) and MSI"
+print_status "  - Windows portable GUI + terminal executables"
+print_status "  - Linux X11 / Wayland / terminal builds"
+print_status "  - SHA256 checksums for everything"
