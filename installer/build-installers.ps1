@@ -73,7 +73,8 @@ try {
 # --- Checksums ---
 foreach ($f in @($setupExe, $msi)) {
     $hash = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower()
-    "$hash  $(Split-Path -Leaf $f)" | Set-Content -NoNewline "$f.sha256"
+    # Trailing newline matters: these get concatenated into CHECKSUMS.txt
+    "$hash  $(Split-Path -Leaf $f)`n" | Set-Content -NoNewline "$f.sha256"
     Write-Host ("{0}  {1}  ({2:N0} bytes)" -f $hash, (Split-Path -Leaf $f), (Get-Item $f).Length)
 }
 Write-Host "Installers ready in $dist"
