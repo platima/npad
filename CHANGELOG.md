@@ -5,6 +5,36 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-07-13
+
+### ✨ Features
+- **Windows installers.** Two flavours, both defaulting to a per-user install
+  (no admin needed) with system-wide available when elevated or chosen:
+  - `npad-setup-<version>.exe` (Inno Setup) - interactive installer with
+    optional bundled fonts (Intel One Mono, Roboto, OpenDyslexic; SIL OFL),
+    file-association tasks (.txt on by default; .log/.ini/.cfg/.conf opt-in),
+    a 'notepad' alias task (on by default, per the roadmap), desktop icon,
+    and silent support (`/VERYSILENT [/ALLUSERS]`). Installing fonts pre-sets
+    them in a fresh settings.json (never overwrites an existing one).
+  - `npad-<version>.msi` (WiX) - silent/managed deployment
+    (`msiexec /i npad.msi /qn`, add `ALLUSERS=1` for machine-wide); features
+    selectable via `ADDLOCAL` mirror the Inno defaults. Fonts install in
+    machine-wide mode only (Windows MSI limitation: FontsFolder does not
+    redirect per-user).
+  - Fonts are fetched at installer-build time from SHA256-pinned upstream
+    releases (`installer/fetch-fonts.ps1`); nothing binary enters the repo.
+  - CI: new `installers.yml` workflow (hosted Windows runner) builds both,
+    runs standalone via workflow_dispatch and attaches artifacts to releases
+    from `release.yml`.
+
+### 📝 Notes
+- Setting the *default* app for a file type and disabling the Windows 11
+  Store Notepad execution alias cannot be automated; the installer registers
+  npad and offers the relevant Settings pages after install (documented in
+  DOCUMENTATION.md).
+- Uninstall removes all installer registry entries and files but keeps user
+  settings and any installed fonts.
+
 ## [0.9.1] - 2026-07-13
 
 ### 🧹 Housekeeping

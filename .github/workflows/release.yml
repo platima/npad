@@ -39,7 +39,9 @@ jobs:
           ### Downloads
           
           **Windows Builds:**
-          - `npad-${{ steps.get_version.outputs.version }}-windows-gui.exe` - GUI version for Windows
+          - `npad-setup-${{ steps.get_version.outputs.version }}.exe` - Windows installer (per-user by default; system-wide available)
+          - `npad-${{ steps.get_version.outputs.version }}.msi` - Windows MSI for silent/managed deployment (`msiexec /i ... /qn`)
+          - `npad-${{ steps.get_version.outputs.version }}-windows-gui.exe` - Portable GUI version for Windows (no install needed)
           - `npad-${{ steps.get_version.outputs.version }}-windows-terminal.exe` - Terminal version for Windows
           
           **Linux Builds:**
@@ -53,7 +55,7 @@ jobs:
           
           ### Installation
           1. Download the appropriate file for your system from the Assets below
-          2. **Windows**: Run the executable directly (portable) or place in your PATH
+          2. **Windows**: Run `npad-setup-*.exe` to install (or `msiexec /i npad-*.msi /qn` for silent), or run the portable exe directly
           3. **Linux**: Make executable with `chmod +x filename` and run
           4. **Verification**: Check the file integrity using the provided checksums
           
@@ -181,6 +183,15 @@ jobs:
           ${{ matrix.asset_name }}
           ${{ matrix.asset_name }}.sha256
 
+  build-installers:
+    needs: create-release
+    uses: ./.github/workflows/installers.yml
+    with:
+      release_tag: ${{ needs.create-release.outputs.version }}
+    secrets: inherit
+    permissions:
+      contents: write
+
   validate-release:
     runs-on: self-hosted
     needs: [create-release, build-and-upload]
@@ -246,7 +257,7 @@ jobs:
 
   create-checksums:
     runs-on: self-hosted
-    needs: [create-release, build-and-upload, validate-release]
+    needs: [create-release, build-and-upload, build-installers, validate-release]
     steps:
     - uses: actions/checkout@v4
     
@@ -314,7 +325,9 @@ jobs:
           ### Downloads
           
           **Windows Builds:**
-          - `npad-${{ needs.create-release.outputs.version }}-windows-gui.exe` - GUI version for Windows
+          - `npad-setup-${{ needs.create-release.outputs.version }}.exe` - Windows installer (per-user by default; system-wide available)
+          - `npad-${{ needs.create-release.outputs.version }}.msi` - Windows MSI for silent/managed deployment (`msiexec /i ... /qn`)
+          - `npad-${{ needs.create-release.outputs.version }}-windows-gui.exe` - Portable GUI version for Windows (no install needed)
           - `npad-${{ needs.create-release.outputs.version }}-windows-terminal.exe` - Terminal version for Windows
           
           **Linux Builds:**
@@ -329,7 +342,7 @@ jobs:
           
           ### Installation
           1. Download the appropriate file for your system from the Assets below
-          2. **Windows**: Run the executable directly (portable) or place in your PATH
+          2. **Windows**: Run `npad-setup-*.exe` to install (or `msiexec /i npad-*.msi /qn` for silent), or run the portable exe directly
           3. **Linux**: Make executable with `chmod +x filename` and run
           4. **Verification**: Check the file integrity using the provided checksums
           

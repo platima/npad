@@ -4,6 +4,61 @@ Reference for npad's settings, keyboard shortcuts, status bar, command line
 and behaviour. For per-release notes see [CHANGELOG.md](CHANGELOG.md); the raw
 commit history lives in `git log`.
 
+## Installation (Windows)
+
+Three ways to run npad; all default to the current user and need no admin
+rights:
+
+| Artifact | Use |
+|----------|-----|
+| `npad-setup-<v>.exe` | Interactive installer (Inno Setup) |
+| `npad-<v>.msi` | Silent/managed deployment (`msiexec`) |
+| `npad-<v>-windows-gui.exe` | Portable - run from anywhere, no install |
+
+**Install scope**: both installers default to a **per-user** install
+(`%LOCALAPPDATA%\Programs\npad`, HKCU registry). System-wide
+(`Program Files`, HKLM) is used when the installer runs elevated or when
+chosen: the setup EXE asks (or accepts `/ALLUSERS`); the MSI takes
+`ALLUSERS=1`.
+
+**Setup EXE options** (interactive or `/VERYSILENT /SUPPRESSMSGBOXES`):
+- *Components*: bundled fonts - Intel One Mono (monospace), Roboto
+  (proportional), OpenDyslexic (reading assistance); all SIL OFL licensed,
+  installed on by default. If npad has no settings.json yet, installed fonts
+  are pre-set as the default faces. Per-user installs use the Windows 10
+  1809+ per-user font store.
+- *Tasks*: file associations (.txt on by default; .log/.ini/.cfg/.conf
+  opt-in), 'notepad' alias (on by default - see below), desktop icon (off).
+
+**MSI features** (silent-deployment oriented, no UI - use `/qn` or `/qb`):
+`Main`, `AssocTxt`, `NotepadAlias`, `Fonts` install by default;
+`AssocLog`/`AssocIni`/`AssocCfg`/`AssocConf` via `ADDLOCAL`, e.g.
+`msiexec /i npad-<v>.msi /qn ADDLOCAL=Main,AssocTxt,NotepadAlias,AssocLog`.
+Fonts install in machine-wide mode only (`ALLUSERS=1`): Windows MSI resolves
+the fonts folder to `C:\Windows\Fonts` regardless of scope, so the feature
+is skipped on per-user installs (use the setup EXE for per-user fonts).
+
+**The 'notepad' alias**: the task points `notepad` (Win+R, ShellExecute) at
+npad via the App Paths registry key. Windows 11's Store Notepad also owns a
+`notepad.exe` *app execution alias* that installers cannot disable; the
+setup offers the Settings page after install - turn off **Notepad** under
+Apps > Advanced app settings > App execution aliases for a full takeover.
+
+**Default editor**: Windows does not let installers set the default app for
+a file type. The installers register npad for the chosen extensions (it
+appears in "Open with" and Default Apps); the setup EXE offers the Default
+Apps Settings page after install to make it the default for .txt.
+
+**Uninstall** removes the program, shortcuts and every registry entry the
+installer wrote, but keeps your settings (`%APPDATA%\Platima\npad`) and any
+installed fonts.
+
+**Building the installers** (repo checkout, Windows): `pwsh
+installer/build-installers.ps1` - needs Inno Setup 6, the WiX dotnet tool
+and a built `npad.exe`; fonts are downloaded from SHA256-pinned upstream
+releases by `installer/fetch-fonts.ps1`. CI builds both via
+`.github/workflows/installers.yml`.
+
 ## File locations
 
 | What | Where (Windows) |

@@ -1,0 +1,202 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  npad MSI (silent-install oriented; no UI suite - use msiexec /qn or /qb).
+
+  Build: wix build npad.wxs -arch x64 -d Version=x.y.z -o ../dist/npad-x.y.z.msi
+
+  Scope: per-user by default; machine-wide with ALLUSERS=1:
+    msiexec /i npad.msi /qn                  (current user)
+    msiexec /i npad.msi /qn ALLUSERS=1       (system-wide; needs elevation)
+
+  Feature selection for deployments (defaults mirror the Inno installer):
+    Main (required), AssocTxt + NotepadAlias + Fonts (on by default),
+    AssocLog / AssocIni / AssocCfg / AssocConf (off; enable via
+    e.g. ADDLOCAL=AssocLog,AssocIni)
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="npad"
+           Manufacturer="Platima"
+           Version="$(var.Version)"
+           UpgradeCode="6C9F1E28-4B57-4A0D-BE73-8A51F2D90C44"
+           Scope="perUserOrMachine"
+           InstallerVersion="500">
+
+    <SummaryInformation Description="npad - lightweight cross-platform text editor" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of npad is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="npadIcon" SourceFile="..\src\platform\npad.ico" />
+    <Property Id="ARPPRODUCTICON" Value="npadIcon" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/platima/npad" />
+
+    <!-- ============================ Files ============================ -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="npad">
+        <Component Id="MainExecutable">
+          <File Id="npadExe" Source="..\npad.exe" KeyPath="yes" />
+        </Component>
+        <Component Id="Docs" Guid="D8BDF90B-67FC-4E05-9539-B51C29881D4B">
+          <File Source="..\LICENSE" />
+          <File Source="..\README.md" />
+          <File Source="..\DOCUMENTATION.md" />
+        </Component>
+        <Directory Id="LicensesDir" Name="licenses">
+          <Directory Id="LicIntelDir" Name="IntelOneMono">
+            <Component Id="LicIntel">
+              <File Id="OflIntel" Source="fonts\IntelOneMono\OFL.txt" />
+            </Component>
+          </Directory>
+          <Directory Id="LicRobotoDir" Name="Roboto">
+            <Component Id="LicRoboto">
+              <File Id="OflRoboto" Source="fonts\Roboto\OFL.txt" />
+            </Component>
+          </Directory>
+          <Directory Id="LicOpenDysDir" Name="OpenDyslexic">
+            <Component Id="LicOpenDys">
+              <File Id="OflOpenDys" Source="fonts\OpenDyslexic\OFL.txt" />
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <!-- ======================= Start Menu shortcut ======================= -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut">
+        <Shortcut Id="npadShortcut" Name="npad"
+                  Target="[INSTALLFOLDER]npad.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKMU" Key="Software\Platima\npad"
+                       Name="startmenu" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <!-- ========================= Fonts (optional) ========================= -->
+    <!-- FontsFolder resolves per scope; TrueType registers via the Font table -->
+    <StandardDirectory Id="FontsFolder">
+      <Component Id="FontsIntel" Guid="7AD5CEB1-54DB-48B5-9E6D-5744BF6BE443" Permanent="yes">
+        <File Source="fonts\IntelOneMono\IntelOneMono-Regular.ttf" TrueType="yes" KeyPath="yes" />
+        <File Source="fonts\IntelOneMono\IntelOneMono-Bold.ttf" TrueType="yes" />
+        <File Source="fonts\IntelOneMono\IntelOneMono-Italic.ttf" TrueType="yes" />
+        <File Source="fonts\IntelOneMono\IntelOneMono-BoldItalic.ttf" TrueType="yes" />
+      </Component>
+      <Component Id="FontsRoboto" Guid="14507314-1751-4A6F-BC42-2D62EECC8211" Permanent="yes">
+        <File Source="fonts\Roboto\Roboto-Regular.ttf" TrueType="yes" KeyPath="yes" />
+        <File Source="fonts\Roboto\Roboto-Bold.ttf" TrueType="yes" />
+        <File Source="fonts\Roboto\Roboto-Italic.ttf" TrueType="yes" />
+        <File Source="fonts\Roboto\Roboto-BoldItalic.ttf" TrueType="yes" />
+      </Component>
+      <Component Id="FontsOpenDys" Guid="72216378-D4A1-42A5-8C9C-DCD233CF33CA" Permanent="yes">
+        <File Source="fonts\OpenDyslexic\OpenDyslexic-Regular.otf" TrueType="yes" KeyPath="yes" />
+        <File Source="fonts\OpenDyslexic\OpenDyslexic-Bold.otf" TrueType="yes" />
+        <File Source="fonts\OpenDyslexic\OpenDyslexic-Italic.otf" TrueType="yes" />
+        <File Source="fonts\OpenDyslexic\OpenDyslexic-BoldItalic.otf" TrueType="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <!-- ==================== Registry: app registration ==================== -->
+    <Component Id="AppPathsNpad" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKMU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\npad.exe"
+                     Type="string" Value="[INSTALLFOLDER]npad.exe" KeyPath="yes" />
+    </Component>
+    <Component Id="Capabilities" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKMU" Key="Software\Platima\npad\Capabilities"
+                     Name="ApplicationName" Type="string" Value="npad" KeyPath="yes" />
+      <RegistryValue Root="HKMU" Key="Software\Platima\npad\Capabilities"
+                     Name="ApplicationDescription" Type="string"
+                     Value="Lightweight cross-platform text editor" />
+      <RegistryValue Root="HKMU" Key="Software\RegisteredApplications"
+                     Name="npad" Type="string" Value="Software\Platima\npad\Capabilities" />
+    </Component>
+
+    <!-- 'notepad' alias takeover (Run box / ShellExecute). The Windows 11
+         Store Notepad execution alias must be disabled by hand in Settings. -->
+    <Component Id="NotepadAliasReg" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKMU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\notepad.exe"
+                     Type="string" Value="[INSTALLFOLDER]npad.exe" KeyPath="yes" />
+    </Component>
+
+    <!-- ================= Registry: per-extension associations ================= -->
+    <Component Id="AssocTxtReg" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.txt" Type="string" Value="Text File" KeyPath="yes" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.txt\DefaultIcon" Type="string" Value="[INSTALLFOLDER]npad.exe,0" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.txt\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]npad.exe&quot; &quot;%1&quot;" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.txt" Type="string" Value="npad.txt" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.txt\OpenWithProgids" Name="npad.txt" Type="string" Value="" />
+      <RegistryValue Root="HKMU" Key="Software\Platima\npad\Capabilities\FileAssociations" Name=".txt" Type="string" Value="npad.txt" />
+    </Component>
+    <Component Id="AssocLogReg" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.log" Type="string" Value="Log File" KeyPath="yes" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.log\DefaultIcon" Type="string" Value="[INSTALLFOLDER]npad.exe,0" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.log\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]npad.exe&quot; &quot;%1&quot;" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.log" Type="string" Value="npad.log" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.log\OpenWithProgids" Name="npad.log" Type="string" Value="" />
+      <RegistryValue Root="HKMU" Key="Software\Platima\npad\Capabilities\FileAssociations" Name=".log" Type="string" Value="npad.log" />
+    </Component>
+    <Component Id="AssocIniReg" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.ini" Type="string" Value="INI Configuration File" KeyPath="yes" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.ini\DefaultIcon" Type="string" Value="[INSTALLFOLDER]npad.exe,0" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.ini\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]npad.exe&quot; &quot;%1&quot;" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.ini" Type="string" Value="npad.ini" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.ini\OpenWithProgids" Name="npad.ini" Type="string" Value="" />
+      <RegistryValue Root="HKMU" Key="Software\Platima\npad\Capabilities\FileAssociations" Name=".ini" Type="string" Value="npad.ini" />
+    </Component>
+    <Component Id="AssocCfgReg" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.cfg" Type="string" Value="Config File" KeyPath="yes" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.cfg\DefaultIcon" Type="string" Value="[INSTALLFOLDER]npad.exe,0" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.cfg\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]npad.exe&quot; &quot;%1&quot;" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.cfg" Type="string" Value="npad.cfg" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.cfg\OpenWithProgids" Name="npad.cfg" Type="string" Value="" />
+      <RegistryValue Root="HKMU" Key="Software\Platima\npad\Capabilities\FileAssociations" Name=".cfg" Type="string" Value="npad.cfg" />
+    </Component>
+    <Component Id="AssocConfReg" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.conf" Type="string" Value="Config File" KeyPath="yes" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.conf\DefaultIcon" Type="string" Value="[INSTALLFOLDER]npad.exe,0" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.conf\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]npad.exe&quot; &quot;%1&quot;" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.conf" Type="string" Value="npad.conf" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.conf\OpenWithProgids" Name="npad.conf" Type="string" Value="" />
+      <RegistryValue Root="HKMU" Key="Software\Platima\npad\Capabilities\FileAssociations" Name=".conf" Type="string" Value="npad.conf" />
+    </Component>
+
+    <!-- ============================ Features ============================ -->
+    <Feature Id="Main" Title="npad text editor" Level="1" AllowAbsent="no">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="Docs" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="AppPathsNpad" />
+      <ComponentRef Id="Capabilities" />
+    </Feature>
+    <Feature Id="AssocTxt" Title="Associate .txt files" Level="1">
+      <ComponentRef Id="AssocTxtReg" />
+    </Feature>
+    <Feature Id="AssocLog" Title="Associate .log files" Level="2">
+      <ComponentRef Id="AssocLogReg" />
+    </Feature>
+    <Feature Id="AssocIni" Title="Associate .ini files" Level="2">
+      <ComponentRef Id="AssocIniReg" />
+    </Feature>
+    <Feature Id="AssocCfg" Title="Associate .cfg files" Level="2">
+      <ComponentRef Id="AssocCfgReg" />
+    </Feature>
+    <Feature Id="AssocConf" Title="Associate .conf files" Level="2">
+      <ComponentRef Id="AssocConfReg" />
+    </Feature>
+    <Feature Id="NotepadAlias" Title="Open 'notepad' with npad" Level="1">
+      <ComponentRef Id="NotepadAliasReg" />
+    </Feature>
+    <!-- MSI's FontsFolder always resolves to C:\Windows\Fonts (no per-user
+         redirect), so fonts are a per-machine-only feature here: a per-user
+         install would fail writing them (error 1603). Per-user font installs
+         are available via the Inno Setup installer instead. -->
+    <Feature Id="Fonts" Title="Bundled open-source fonts (SIL OFL; machine-wide installs only)" Level="1">
+      <Level Value="0" Condition="MSIINSTALLPERUSER = 1" />
+      <ComponentRef Id="FontsIntel" />
+      <ComponentRef Id="FontsRoboto" />
+      <ComponentRef Id="FontsOpenDys" />
+      <ComponentRef Id="LicIntel" />
+      <ComponentRef Id="LicRoboto" />
+      <ComponentRef Id="LicOpenDys" />
+    </Feature>
+  </Package>
+</Wix>

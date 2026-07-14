@@ -22,6 +22,14 @@ npad is a lightweight, cross-platform text editor inspired by classic Windows No
 - `make format-check` - Verify code formatting without changes
 - `make test` - Build and run the unit test suites (file ops, errors, encoding)
 
+**Installers (Windows-only build step):**
+- `pwsh installer/build-installers.ps1` - builds `dist/npad-setup-<v>.exe`
+  (Inno Setup, interactive) and `dist/npad-<v>.msi` (WiX, silent). Requires
+  Inno Setup 6 + the WiX dotnet tool + a built npad.exe; bundled fonts are
+  fetched from SHA256-pinned releases by `installer/fetch-fonts.ps1`.
+- CI equivalent: `.github/workflows/installers.yml` (workflow_dispatch, and
+  called from release.yml to attach installers to releases)
+
 **Cross-compilation:**
 The project is designed for cross-compilation from Linux to Windows using MinGW-w64 (`x86_64-w64-mingw32-gcc`). On Windows itself, a native MinGW toolchain (MSYS2 / Git Bash) is used automatically; override with `MINGW_CC`/`MINGW_WINDRES`/`MINGW_STRIP`. The setup script `./scripts/setup-runner.sh` installs necessary dependencies on Linux.
 

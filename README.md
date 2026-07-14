@@ -149,13 +149,22 @@ Your support makes a real difference in keeping this project alive and thriving!
 
 ### Pre-Built
 
-Download builds from the [**Releases page**](https://github.com/platima/npad/releases) when available.
+Download from the [**Releases page**](https://github.com/platima/npad/releases):
 
-**Planned distribution options:**
-- 📦 **Portable EXE** - Just download and run, no installation required
-- 🛠️ **EXE Installer** - Traditional Windows installer with registry integration
-- 📋 **MSI Package** - For enterprise deployment
-- 🎁 **Winget** - For `winget install npad`
+- 🛠️ **`npad-setup-<version>.exe`** - Windows installer. Per-user by default
+  (no admin needed); system-wide when run elevated or chosen in the dialog.
+  Optional bundled fonts (Intel One Mono, Roboto, OpenDyslexic), file
+  associations, and a 'notepad' alias. Silent: `/VERYSILENT [/ALLUSERS]`.
+- 📋 **`npad-<version>.msi`** - For silent/enterprise deployment:
+  `msiexec /i npad-<version>.msi /qn` (add `ALLUSERS=1` for machine-wide;
+  features selectable via `ADDLOCAL`).
+- 📦 **`npad-<version>-windows-gui.exe`** - Portable: download and run, no
+  installation required.
+
+See [DOCUMENTATION.md](DOCUMENTATION.md#installation-windows) for the full
+installer reference (tasks, features, fonts, the Windows 11 notepad alias).
+
+**Planned:** 🎁 **Winget** - for `winget install npad`.
 
 ### Compile Yourself
 
@@ -313,14 +322,14 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [ ] Custom keyboard shortcuts
   - [x] Solarized color schemes
 - [ ] **Distribution & Installation**
-  - [ ] Portable EXE build
-  - [ ] Windows installer (EXE)
-    - [ ] Bundle & offer open-source fonts (Intel One Mono, Roboto, OpenDyslexic), pre-setting them in the config
-    - [ ] Default to associating the `notepad` app execution alias on Windows 11
-    - [ ] On install, offer to open Settings to remove any existing `notepad` app execution alias (if it cannot be done programmatically)
-  - [ ] MSI package
+  - [x] Portable EXE build (every release's `-windows-gui.exe` runs standalone)
+  - [x] Windows installer (EXE)
+    - [x] Bundle & offer open-source fonts (Intel One Mono, Roboto, OpenDyslexic), pre-setting them in the config
+    - [x] Default to associating the `notepad` app execution alias on Windows 11
+    - [x] On install, offer to open Settings to remove any existing `notepad` app execution alias (if it cannot be done programmatically)
+  - [x] MSI package
   - [ ] Winget integration
-  - [ ] Optional 'notepad' command replacement
+  - [x] Optional 'notepad' command replacement (App Paths alias task in both installers)
 - [ ] **Cross-Platform Expansion**
   - [ ] macOS Cocoa implementation
   - [ ] Linux X11/Wayland implementation

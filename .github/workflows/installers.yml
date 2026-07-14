@@ -1,0 +1,68 @@
+name: Installers
+
+# Builds the Windows installers (Inno Setup EXE + WiX MSI) on a hosted
+# Windows runner. Runs standalone via workflow_dispatch for testing, or is
+# called from release.yml with a release tag to attach the artifacts.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: "Release tag to upload the installers to (empty = artifacts only)"
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build-installers:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSYS2 (native MinGW build of npad.exe)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gcc make
+
+      - name: Build npad.exe
+        shell: msys2 {0}
+        run: |
+          make windows
+          ls -la npad.exe
+
+      - name: Install WiX
+        shell: pwsh
+        run: dotnet tool install --global wix
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installers
+        shell: pwsh
+        run: pwsh -NoProfile -File installer/build-installers.ps1
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: npad-installers
+          path: |
+            dist/*.exe
+            dist/*.msi
+            dist/*.sha256
+
+      - name: Upload to release
+        if: inputs.release_tag != ''
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          files: |
+            dist/*.exe
+            dist/*.msi
+            dist/*.sha256
