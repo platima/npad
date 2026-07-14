@@ -32,7 +32,7 @@ jobs:
     
     - name: Create Release
       id: create_release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ github.ref }}
         name: npad ${{ steps.get_version.outputs.version }}
@@ -111,7 +111,7 @@ jobs:
             asset_name: npad-${{ needs.create-release.outputs.version }}-linux-terminal
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Install dependencies
       run: |
@@ -179,7 +179,7 @@ jobs:
         echo "SHA256: $(cat ${{ matrix.asset_name }}.sha256)"
     
     - name: Upload Release Asset
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ needs.create-release.outputs.version }}
         files: |
@@ -263,7 +263,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [create-release, build-and-upload, build-installers, validate-release]
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     
     - name: Download release assets to create master checksum
       env:
@@ -308,7 +308,7 @@ jobs:
         cat CHECKSUMS.txt
     
     - name: Upload master checksums
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ needs.create-release.outputs.version }}
         files: CHECKSUMS.txt
@@ -318,7 +318,7 @@ jobs:
     needs: [create-release, build-and-upload, validate-release, create-checksums]
     steps:
     - name: Update release with final info
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ needs.create-release.outputs.version }}
         body: |
