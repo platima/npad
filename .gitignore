@@ -65,3 +65,7 @@ tests/test_session
 # Installer build outputs (fonts are fetched by installer/fetch-fonts.ps1)
 installer/fonts/
 dist/
+
+# Local editor/agent config (never commit)
+.claude/
+npad.code-workspace
