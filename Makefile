@@ -202,13 +202,18 @@ lint:
 		--error-exitcode=1 \
 		src/
 
+# Formatting is canonical against clang-format 18 (what ubuntu-latest CI
+# runs). If your distro ships another major version, install a pinned one
+# (e.g. pip install clang-format==18.1.8) and point CLANG_FORMAT at it.
+CLANG_FORMAT ?= clang-format
+
 format:
-	@command -v clang-format >/dev/null 2>&1 || { echo "clang-format not found. Install with: sudo apt-get install clang-format"; exit 1; }
-	find src/ -name "*.c" -o -name "*.h" | xargs clang-format -i
+	@command -v $(CLANG_FORMAT) >/dev/null 2>&1 || { echo "$(CLANG_FORMAT) not found. Install with: sudo apt-get install clang-format"; exit 1; }
+	find src/ -name "*.c" -o -name "*.h" | xargs $(CLANG_FORMAT) -i
 
 format-check:
-	@command -v clang-format >/dev/null 2>&1 || { echo "clang-format not found. Install with: sudo apt-get install clang-format"; exit 1; }
-	find src/ -name "*.c" -o -name "*.h" | xargs clang-format --dry-run --Werror
+	@command -v $(CLANG_FORMAT) >/dev/null 2>&1 || { echo "$(CLANG_FORMAT) not found. Install with: sudo apt-get install clang-format"; exit 1; }
+	find src/ -name "*.c" -o -name "*.h" | xargs $(CLANG_FORMAT) --dry-run --Werror
 
 # Testing targets
 test: test-file-ops test-error test-encoding test-session

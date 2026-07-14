@@ -20,6 +20,8 @@ npad is a lightweight, cross-platform text editor inspired by classic Windows No
 - `make lint` - Run cppcheck static analysis (requires cppcheck)
 - `make format` - Auto-format code with clang-format
 - `make format-check` - Verify code formatting without changes
+  (canonical against clang-format 18, matching CI; override the binary with
+  `CLANG_FORMAT=... make format-check` if your distro ships another major)
 - `make test` - Build and run the unit test suites (file ops, errors, encoding)
 
 **Installers (Windows-only build step):**
