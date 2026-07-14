@@ -6,6 +6,10 @@ name: Installers
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - "installer/**"
+      - ".github/workflows/installers.yml"
   workflow_call:
     inputs:
       release_tag:
