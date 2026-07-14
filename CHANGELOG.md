@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Move stray design assets (`icon_v1*.png`) into `assets/`
 - LICENSE copyright year updated to 2025-2026
 - Full-history audit: no secrets or personal paths found in any commit
+- CI and release workflows moved from the self-hosted runner to GitHub-hosted
+  runners (`ubuntu-latest` + explicit dependency installs) so fork PRs never
+  execute on private hardware once the repository is public
 
 ## [0.10.0] - 2026-07-13
 

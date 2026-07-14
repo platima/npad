@@ -15,7 +15,7 @@ jobs:
     secrets: inherit
 
   create-release:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: ci-validation
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
@@ -73,7 +73,7 @@ jobs:
         generate_release_notes: true
 
   build-and-upload:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: create-release
     strategy:
       fail-fast: false
@@ -107,14 +107,12 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    
-    - name: Check dependencies
+
+    - name: Install dependencies
       run: |
-        echo "Checking for required tools..."
-        which cppcheck || echo "WARNING: cppcheck not found"
-        which clang-format || echo "WARNING: clang-format not found"
-        which x86_64-w64-mingw32-gcc || echo "WARNING: mingw64 not found"
-        which gcc || echo "WARNING: gcc not found"
+        sudo apt-get update -q
+        sudo apt-get install -y -q build-essential gcc-mingw-w64-x86-64 \
+          libx11-dev libwayland-dev libncurses-dev
     
     - name: Build and validate ${{ matrix.target }}
       run: |
@@ -193,7 +191,7 @@ jobs:
       contents: write
 
   validate-release:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: [create-release, build-and-upload]
     steps:
     - name: Download and validate release assets
@@ -256,7 +254,7 @@ jobs:
         echo "✓ Release validation completed"
 
   create-checksums:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: [create-release, build-and-upload, build-installers, validate-release]
     steps:
     - uses: actions/checkout@v4
@@ -310,7 +308,7 @@ jobs:
         files: CHECKSUMS.txt
 
   update-release-notes:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: [create-release, build-and-upload, validate-release, create-checksums]
     steps:
     - name: Update release with final info
