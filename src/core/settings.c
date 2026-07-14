@@ -120,7 +120,7 @@ char *settings_get_string(const char *key, const char *default_value) {
         return NULL;
 
     npad_mutex_lock(&g_settings_mutex);
-    SettingEntry *entry = find_setting(key);
+    const SettingEntry *entry = find_setting(key);
     char *result = NULL;
 
     if (entry && entry->value) {
@@ -190,7 +190,7 @@ bool settings_has_key(const char *key) {
         return false;
 
     npad_mutex_lock(&g_settings_mutex);
-    SettingEntry *entry = find_setting(key);
+    const SettingEntry *entry = find_setting(key);
     npad_mutex_unlock(&g_settings_mutex);
     return entry != NULL;
 }
@@ -498,7 +498,7 @@ static char *get_settings_directory(void) {
 #else
     const char *home = getenv("HOME");
     if (!home) {
-        struct passwd *pw = getpwuid(getuid());
+        const struct passwd *pw = getpwuid(getuid());
         if (pw) {
             home = pw->pw_dir;
         }
@@ -598,7 +598,7 @@ static bool parse_settings_file(const char *content) {
     }
 
     char *current = json_start + 1;
-    char *content_end = content_copy + content_len;
+    const char *content_end = content_copy + content_len;
 
     while (current < content_end && *current && *current != '}') {
         // Skip whitespace
@@ -614,7 +614,7 @@ static bool parse_settings_file(const char *content) {
         }
 
         current++; // Skip opening quote
-        char *key_start = current;
+        const char *key_start = current;
 
         // Find end of key
         while (current < content_end && *current && *current != '"') {
@@ -638,7 +638,7 @@ static bool parse_settings_file(const char *content) {
         if (current < content_end && *current == '"') {
             // String value
             current++; // Skip opening quote
-            char *value_start = current;
+            const char *value_start = current;
 
             // Find end of value, handling escaped quotes
             while (current < content_end && *current && *current != '"') {
@@ -656,7 +656,7 @@ static bool parse_settings_file(const char *content) {
             }
         } else if (current < content_end) {
             // Non-string value (number, boolean, etc.)
-            char *value_start = current;
+            const char *value_start = current;
 
             // Find end of value
             while (current < content_end && *current && *current != ',' && *current != '}' &&

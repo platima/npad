@@ -235,7 +235,7 @@ char **session_list_slots(const char *dir, int *count) {
 #else
     DIR *d = opendir(dir);
     if (d) {
-        struct dirent *entry;
+        const struct dirent *entry;
         while ((entry = readdir(d)) != NULL) {
             add_slot_from_meta(&slots, &n, &cap, entry->d_name);
         }

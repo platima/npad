@@ -34,7 +34,7 @@ static void default_error_callback(const npad_error_info_t *error) {
 
     // Get current timestamp
     time_t now = time(NULL);
-    struct tm *tm_info = localtime(&now);
+    const struct tm *tm_info = localtime(&now);
     char timestamp[32];
     strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", tm_info);
 

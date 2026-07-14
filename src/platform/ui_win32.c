@@ -177,7 +177,7 @@ static void update_menu_states(Window *window);
 static void rebuild_recent_menu(Window *window);
 static void show_font_dialog(Window *window, const char *font_key, const char *default_face);
 static void show_goto_dialog(Window *window);
-static void show_preferences_dialog(Window *window);
+static void show_preferences_dialog(const Window *window);
 static void show_context_menu(Window *window, int x, int y);
 static void show_line_ending_popup(Window *window);
 static void show_encoding_popup(Window *window);
@@ -913,7 +913,7 @@ static wchar_t *build_filter(const char *filter) {
     return result;
 }
 
-static char *show_file_dialog(Window *parent, FileDialogParams *params, bool save) {
+static char *show_file_dialog(Window *parent, const FileDialogParams *params, bool save) {
     OPENFILENAMEW ofn;
     wchar_t filename[MAX_PATH] = L"";
 
@@ -1853,7 +1853,7 @@ static bool font_is_installed(const wchar_t *face) {
 
 // Fill cf with the window's configured font (face, size, weight, italic)
 // and the current scheme's text color
-static void build_char_format(Window *window, CHARFORMAT2W *cf) {
+static void build_char_format(const Window *window, CHARFORMAT2W *cf) {
     const char *default_face = DEFAULT_MONO_FONT;
     const char *key = active_font_key(window, &default_face);
     char *face = settings_get_string(key, default_face);
@@ -2106,7 +2106,7 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
         }
 
         case WM_NOTIFY: {
-            NMHDR *nmhdr = (NMHDR *) lparam;
+            const NMHDR *nmhdr = (const NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
                 BOOL ok = FALSE;
 
@@ -2218,7 +2218,7 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
         }
 
         case WM_NOTIFY: {
-            NMHDR *nmhdr = (NMHDR *) lparam;
+            const NMHDR *nmhdr = (const NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
                 int sel = (int) SendDlgItemMessageW(page, ID_PREF_SCHEME, CB_GETCURSEL, 0, 0);
                 if (sel < 0 || sel >= SCHEME_COUNT) {
@@ -2418,7 +2418,7 @@ static INT_PTR CALLBACK prefs_defaults_proc(HWND page, UINT msg, WPARAM wparam, 
         }
 
         case WM_NOTIFY: {
-            NMHDR *nmhdr = (NMHDR *) lparam;
+            const NMHDR *nmhdr = (const NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
                 LRESULT enc =
                     SendMessageW(GetDlgItem(page, ID_PREF_DEFAULT_ENCODING), CB_GETCURSEL, 0, 0);
@@ -2476,7 +2476,7 @@ static INT_PTR CALLBACK prefs_backup_proc(HWND page, UINT msg, WPARAM wparam, LP
             break;
 
         case WM_NOTIFY: {
-            NMHDR *nmhdr = (NMHDR *) lparam;
+            const NMHDR *nmhdr = (const NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
                 // Nothing page-local to apply; export/import act immediately
                 SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
@@ -2488,7 +2488,7 @@ static INT_PTR CALLBACK prefs_backup_proc(HWND page, UINT msg, WPARAM wparam, LP
     return FALSE;
 }
 
-static void show_preferences_dialog(Window *window) {
+static void show_preferences_dialog(const Window *window) {
     if (!window)
         return;
 
@@ -3404,13 +3404,13 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 
         case WM_NOTIFY: {
             if (window) {
-                NMHDR *nmhdr = (NMHDR *) lparam;
+                const NMHDR *nmhdr = (const NMHDR *) lparam;
                 if (nmhdr->idFrom == ID_EDIT_CONTROL && nmhdr->code == EN_SELCHANGE) {
                     update_status_bar(window);
                 } else if (nmhdr->hwndFrom == window->status_hwnd && nmhdr->code == NM_CLICK) {
                     // Status bar part clicks: Ln/Col -> Go To, zoom -> reset,
                     // font mode -> toggle monospace, line ending / encoding -> pickers
-                    NMMOUSE *mouse = (NMMOUSE *) lparam;
+                    const NMMOUSE *mouse = (const NMMOUSE *) lparam;
                     switch ((int) mouse->dwItemSpec) {
                         case 1:
                             show_goto_dialog(window);
