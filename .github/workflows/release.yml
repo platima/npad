@@ -57,6 +57,8 @@ jobs:
           2. **Windows**: Run `npad-setup-*.exe` to install (or `msiexec /i npad-*.msi /qn` for silent), or run the portable exe directly
           3. **Verification**: Check the file integrity using the provided checksums
 
+          > **SmartScreen / Defender blocking the download?** Releases are not code-signed yet. Right-click the file → **Properties** → tick **Unblock** → **Apply**, or choose "More info" → "Run anyway". Verify the SHA256 against `CHECKSUMS.txt` first if unsure.
+
           ### Changes
           See the [commit history](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}) for detailed changes in this release.
 
@@ -281,12 +283,14 @@ jobs:
           1. Download the appropriate file from the Assets below
           2. **Windows**: Run `npad-setup-*.exe` to install (or `msiexec /i npad-*.msi /qn` for silent), or run the portable exe directly
           3. **Verification**: Check the file integrity using the provided checksums
-          
+
+          > **SmartScreen / Defender blocking the download?** Releases are not code-signed yet. Right-click the file → **Properties** → tick **Unblock** → **Apply**, or choose "More info" → "Run anyway". Verify the SHA256 against `CHECKSUMS.txt` first if unsure.
+
           ### Changes
           See the [commit history](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}) for detailed changes in this release.
-          
+
           ---
-          
+
           **Build Info:**
           - Commit: `${{ github.sha }}`
           - Built: $(date -u '+%Y-%m-%d %H:%M:%S UTC')

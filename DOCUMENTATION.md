@@ -15,6 +15,13 @@ rights:
 | `npad-<v>.msi` | Silent/managed deployment (`msiexec`) |
 | `npad-<v>-windows-gui.exe` | Portable - run from anywhere, no install |
 
+**SmartScreen / Defender**: releases are not code-signed yet, so Windows
+may block or warn about the downloaded installer or portable exe. Fix:
+right-click the file → **Properties** → tick **Unblock** → **Apply** (this
+clears the mark-of-the-web), or choose "More info" → "Run anyway" on the
+SmartScreen prompt. When unsure, verify the file's SHA256 against the
+release's `CHECKSUMS.txt` before unblocking.
+
 **Install scope**: both installers default to a **per-user** install
 (`%LOCALAPPDATA%\Programs\npad`, HKCU registry). System-wide
 (`Program Files`, HKLM) is used when the installer runs elevated or when

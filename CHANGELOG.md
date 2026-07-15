@@ -5,6 +5,15 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.5] - 2026-07-15
+
+### 📝 Documentation
+- README, DOCUMENTATION.md and the release-notes template now explain the
+  SmartScreen/Defender workaround for the unsigned downloads: right-click →
+  Properties → tick **Unblock** → Apply (or "More info" → "Run anyway"),
+  ideally after verifying the SHA256 against `CHECKSUMS.txt`
+- Roadmap: code-signing the releases added as a planned item
+
 ## [0.10.4] - 2026-07-15
 
 ### 🧹 Housekeeping

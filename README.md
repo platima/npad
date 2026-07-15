@@ -164,6 +164,12 @@ Download from the [**Releases page**](https://github.com/platima/npad/releases):
 See [DOCUMENTATION.md](DOCUMENTATION.md#installation-windows) for the full
 installer reference (tasks, features, fonts, the Windows 11 notepad alias).
 
+> **SmartScreen / Defender blocking the download?** Releases are not
+> code-signed yet, so Windows may block the installer or portable exe.
+> Right-click the downloaded file → **Properties** → tick **Unblock** →
+> **Apply** (or choose "More info" → "Run anyway" on the SmartScreen
+> prompt). Verify the SHA256 against `CHECKSUMS.txt` first if unsure.
+
 **Planned:** 🎁 **Winget** - for `winget install npad`.
 
 ### Compile Yourself
@@ -329,6 +335,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
     - [x] On install, offer to open Settings to remove any existing `notepad` app execution alias (if it cannot be done programmatically)
   - [x] MSI package
   - [ ] Winget integration
+  - [ ] Code-sign the release binaries and installers (removes the SmartScreen/Defender unblock step)
   - [x] Optional 'notepad' command replacement (App Paths alias task in both installers)
 - [ ] **Cross-Platform Expansion**
   - [ ] macOS Cocoa implementation
