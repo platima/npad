@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preference to its default while keeping recent files, window position and
   Find/Replace history; applies live to all open windows
 
+### 🐛 Bug Fixes
+- **Installer**: Add/Remove Programs now lists the app as "npad" instead of
+  "npad version x.y.z" (the version has its own column there)
+
 ### ⚡ Performance
 - **Instant startup**: the crash-recovery scan now runs just after the first
   paint instead of before the window appears, so launch feels immediate even

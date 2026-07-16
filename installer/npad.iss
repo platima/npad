@@ -23,6 +23,8 @@ AppSupportURL={#AppURL}/issues
 AppUpdatesURL={#AppURL}/releases
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
+; Add/Remove Programs shows just "npad" - the version has its own column
+UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExe}
 OutputDir=..\dist
 OutputBaseFilename=npad-setup-{#AppVersion}
