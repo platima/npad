@@ -32,6 +32,7 @@ double settings_get_double(const char *key, double default_value);
 bool settings_has_key(const char *key);
 bool settings_remove_key(const char *key);
 bool settings_clear_all(void);
+int settings_count(void); // Number of stored entries (Debug page diagnostics)
 
 // File operations
 bool settings_save(void);

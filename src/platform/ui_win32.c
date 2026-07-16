@@ -23,7 +23,9 @@
 #include "../main.h"
 #include "../core/editor.h"
 #include "../core/error.h"
+#include "../core/session.h"
 #include "../core/settings.h"
+#include "../core/startup_prof.h"
 #include "resource.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,6 +48,25 @@
 // Timers
 #define NPAD_AUTO_SAVE_TIMER_ID 1
 #define NPAD_SESSION_TIMER_ID 2
+#define NPAD_STARTUP_TIMER_ID 3
+#define NPAD_STATUS_TIMER_ID 4
+
+// Live edit-control counters surfaced on the hidden Debug preferences page
+// (scroll/paint performance diagnostics)
+static unsigned g_paint_count = 0;
+static unsigned g_selchange_count = 0;
+static double g_last_paint_ms = 0.0;
+static double g_paint_total_ms = 0.0;
+
+static double qpc_ms(void) {
+    static LARGE_INTEGER freq;
+    LARGE_INTEGER counter;
+    if (freq.QuadPart == 0) {
+        QueryPerformanceFrequency(&freq);
+    }
+    QueryPerformanceCounter(&counter);
+    return (double) counter.QuadPart * 1000.0 / (double) freq.QuadPart;
+}
 
 // Default font faces for Windows. The monospace and proportional defaults
 // differ so the Monospace toggle produces a visible change out of the box.
@@ -68,6 +89,9 @@
 #define ID_FILE_CLOSE 2009
 #define ID_FILE_RECENT_BASE 2010 // 2010..2019 reserved for recent files
 #define ID_FILE_CLOSE_ALL 2020
+// Hidden: opens Preferences with the Debug page (Ctrl+Shift+. or
+// Shift+click on the Preferences menu item)
+#define ID_FILE_PREFERENCES_DEBUG 2021
 
 // Control ids for the modern Save dialog's custom encoding dropdown
 #define SAVE_ENC_GROUP_ID 1200
@@ -117,6 +141,8 @@ typedef struct Window {
     bool monospace_current;      // Per-window view state (starts from default_font_mono)
     char status_encoding[32];    // e.g. "UTF-8" (set by the editor core)
     char status_line_ending[32]; // e.g. "Windows (CRLF)"
+    bool status_update_pending;  // Coalescing timer armed (see schedule_status_update)
+    wchar_t status_cache[6][64]; // Last text sent per status part; skip identical sends
 } Window;
 
 // Global variables
@@ -166,6 +192,7 @@ static void apply_new_window_pref(Window *window);
 static void launch_new_window(void);
 static void handle_command(Window *window, WORD command);
 static void update_status_bar(Window *window);
+static void schedule_status_update(Window *window);
 static void resize_controls(Window *window);
 static bool register_window_class(void);
 static void apply_theme(Window *window);
@@ -177,7 +204,9 @@ static void update_menu_states(Window *window);
 static void rebuild_recent_menu(Window *window);
 static void show_font_dialog(Window *window, const char *font_key, const char *default_face);
 static void show_goto_dialog(Window *window);
-static void show_preferences_dialog(const Window *window);
+static void show_preferences_dialog(const Window *window, bool show_debug);
+static void reload_and_apply_settings(Window *window);
+static int count_npad_windows(void);
 static void show_context_menu(Window *window, int x, int y);
 static void show_line_ending_popup(Window *window);
 static void show_encoding_popup(Window *window);
@@ -306,12 +335,28 @@ static bool resolve_theme_dark_mode(void) {
 static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam,
                                            UINT_PTR id, DWORD_PTR ref) {
     (void) ref;
-    LRESULT result = DefSubclassProc(hwnd, msg, wparam, lparam);
+    LRESULT result;
+    if (msg == WM_PAINT) {
+        // Time the paint for the Debug page's counters, and mark the first
+        // one as the end of the perceived startup time
+        double t0 = qpc_ms();
+        result = DefSubclassProc(hwnd, msg, wparam, lparam);
+        g_last_paint_ms = qpc_ms() - t0;
+        g_paint_total_ms += g_last_paint_ms;
+        g_paint_count++;
+        if (g_paint_count == 1) {
+            startup_prof_mark("first paint");
+        }
+    } else {
+        result = DefSubclassProc(hwnd, msg, wparam, lparam);
+    }
 
     switch (msg) {
         case WM_MOUSEWHEEL:
             if (g_main_window) {
-                update_status_bar(g_main_window);
+                // Coalesced: plain scrolling must stay realtime, so no
+                // synchronous Ln/Col recompute per wheel notch
+                schedule_status_update(g_main_window);
                 // Ctrl+wheel is RichEdit's native zoom: treat it as a
                 // user-initiated view-state change (sync / auto-defaults)
                 if (GET_KEYSTATE_WPARAM(wparam) & MK_CONTROL) {
@@ -322,7 +367,7 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, L
         case WM_KEYUP:
         case WM_LBUTTONUP:
             if (g_main_window) {
-                update_status_bar(g_main_window);
+                schedule_status_update(g_main_window);
             }
             break;
         case WM_NCDESTROY:
@@ -589,6 +634,11 @@ void ui_platform_show_window(Window *window) {
     if (window && window->hwnd) {
         ShowWindow(window->hwnd, SW_SHOW);
         UpdateWindow(window->hwnd);
+        // Deferred startup work (crash-recovery scan) runs shortly after the
+        // window is up. WM_TIMER is lowest-priority, so the first paint always
+        // wins and the window appears instantly regardless of how much the
+        // deferred work has to chew through.
+        SetTimer(window->hwnd, NPAD_STARTUP_TIMER_ID, 50, NULL);
     }
 }
 
@@ -2352,6 +2402,186 @@ static void import_settings(HWND owner) {
                 L"npad", MB_OK | MB_ICONINFORMATION);
 }
 
+// Reset every preference to its default (Backup page). Recent files, window
+// geometry and Find/Replace history are deliberately kept - only the keys
+// exposed in the Preferences tabs (plus word wrap) are removed; the getters
+// fall back to their defaults for missing keys.
+static void reset_all_preferences(HWND owner) {
+    static const char *pref_keys[] = {
+        // General
+        "auto_save_enabled", "auto_save_interval", "large_file_warning_mb", "recent_files_max",
+        "session_resume_enabled", "session_interval", "ctrl_n_new_window",
+        // Appearance
+        "theme", "monospace_font", "proportional_font", "font_size", "font_weight", "font_italic",
+        "opendyslexic_enabled", "opendyslexic_font", "status_bar_visible", "sync_view_state",
+        // Defaults
+        "default_encoding", "default_line_ending", "default_font_mono", "default_zoom",
+        "auto_update_defaults",
+        // Other shared options
+        "word_wrap"
+    };
+
+    if (MessageBoxW(owner,
+                    L"Reset all preferences to their defaults?\n\n"
+                    L"Recent files, window position and Find/Replace history are kept.\n"
+                    L"The Preferences window will close.",
+                    L"npad", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) {
+        return;
+    }
+
+    for (size_t i = 0; i < sizeof(pref_keys) / sizeof(pref_keys[0]); i++) {
+        settings_remove_key(pref_keys[i]);
+    }
+    settings_save();
+
+    // Re-apply everything that can change live (same path as a cross-instance
+    // settings change), then tell other running instances
+    if (g_main_window) {
+        reload_and_apply_settings(g_main_window);
+    }
+    ui_platform_notify_settings_changed();
+
+    // The sheet's controls still show pre-reset values; close it rather than
+    // leave stale state on screen
+    PropSheet_PressButton(GetParent(owner), PSBTN_CANCEL);
+}
+
+// --- Debug page (hidden: Ctrl+Shift+. or Shift+click on Preferences) ------
+
+// Diagnostics text for the Debug page (malloc'd wide string; caller frees)
+static wchar_t *build_diagnostics_text(void) {
+    const size_t cap = 8192;
+    wchar_t *buf = malloc(cap * sizeof(wchar_t));
+    if (!buf)
+        return NULL;
+    size_t used = 0;
+#define DIAG_APPEND(...)                                                                           \
+    do {                                                                                           \
+        if (used < cap - 1) {                                                                      \
+            int n = _snwprintf(buf + used, cap - used - 1, __VA_ARGS__);                           \
+            if (n > 0)                                                                             \
+                used += (size_t) n;                                                                \
+        }                                                                                          \
+    } while (0)
+
+    wchar_t *version = utf8_to_wide(NPAD_VERSION);
+    DIAG_APPEND(L"npad %ls\r\n", version ? version : L"?");
+    free(version);
+
+    wchar_t exe_path[MAX_PATH];
+    if (GetModuleFileNameW(NULL, exe_path, MAX_PATH)) {
+        DIAG_APPEND(L"Executable: %ls\r\n", exe_path);
+    }
+
+    const char *settings_path = settings_get_file_path();
+    if (settings_path) {
+        wchar_t *wide = utf8_to_wide(settings_path);
+        if (wide) {
+            DIAG_APPEND(L"Settings: %ls (%d entries)\r\n", wide, settings_count());
+            free(wide);
+        }
+    }
+
+    char *recovery_dir = editor_session_dir();
+    if (recovery_dir) {
+        int slot_count = 0;
+        char **slots = session_list_slots(recovery_dir, &slot_count);
+        session_free_slots(slots, slot_count);
+        wchar_t *wide = utf8_to_wide(recovery_dir);
+        if (wide) {
+            DIAG_APPEND(L"Recovery: %ls (%d slots)\r\n", wide, slot_count);
+            free(wide);
+        }
+        free(recovery_dir);
+    }
+
+    DIAG_APPEND(L"Open npad windows: %d\r\n", count_npad_windows());
+
+    DIAG_APPEND(L"\r\nStartup profile:\r\n");
+    for (int i = 0; i < startup_prof_count(); i++) {
+        double at = startup_prof_ms(i);
+        double delta = (i > 0) ? at - startup_prof_ms(i - 1) : 0.0;
+        wchar_t *phase = utf8_to_wide(startup_prof_name(i));
+        DIAG_APPEND(L"  %8.1f ms  (+%6.1f)  %ls\r\n", at, delta, phase ? phase : L"?");
+        free(phase);
+    }
+
+    DIAG_APPEND(L"\r\nEditor counters (since launch):\r\n");
+    DIAG_APPEND(L"  Paints: %u (last %.2f ms, avg %.2f ms)\r\n", g_paint_count, g_last_paint_ms,
+                g_paint_count ? g_paint_total_ms / g_paint_count : 0.0);
+    DIAG_APPEND(L"  Selection changes: %u\r\n", g_selchange_count);
+
+#undef DIAG_APPEND
+    buf[cap - 1] = L'\0';
+    return buf;
+}
+
+static INT_PTR CALLBACK prefs_debug_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
+    static HFONT mono_font = NULL;
+
+    switch (msg) {
+        case WM_INITDIALOG: {
+            if (!mono_font) {
+                mono_font = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                        CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
+            }
+            if (mono_font) {
+                SendDlgItemMessageW(page, ID_PREF_DEBUG_TEXT, WM_SETFONT, (WPARAM) mono_font,
+                                    FALSE);
+            }
+            wchar_t *text = build_diagnostics_text();
+            if (text) {
+                SetDlgItemTextW(page, ID_PREF_DEBUG_TEXT, text);
+                free(text);
+            }
+            return TRUE;
+        }
+
+        case WM_COMMAND:
+            if (LOWORD(wparam) == ID_PREF_COPY_DIAG) {
+                HWND edit = GetDlgItem(page, ID_PREF_DEBUG_TEXT);
+                int len = GetWindowTextLengthW(edit);
+                HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, ((size_t) len + 1) * sizeof(wchar_t));
+                if (mem) {
+                    wchar_t *p = (wchar_t *) GlobalLock(mem);
+                    if (p) {
+                        GetWindowTextW(edit, p, len + 1);
+                        GlobalUnlock(mem);
+                        if (OpenClipboard(page)) {
+                            EmptyClipboard();
+                            SetClipboardData(CF_UNICODETEXT, mem);
+                            CloseClipboard();
+                            mem = NULL; // Owned by the clipboard now
+                        }
+                    }
+                    if (mem) {
+                        GlobalFree(mem);
+                    }
+                }
+                return TRUE;
+            }
+            break;
+
+        case WM_NOTIFY: {
+            const NMHDR *nmhdr = (const NMHDR *) lparam;
+            if (nmhdr->code == PSN_APPLY) {
+                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                return TRUE;
+            }
+            break;
+        }
+
+        case WM_DESTROY:
+            if (mono_font) {
+                DeleteObject(mono_font);
+                mono_font = NULL;
+            }
+            break;
+    }
+    return FALSE;
+}
+
 // Preferences: Defaults page - the initial state for new windows/files
 static INT_PTR CALLBACK prefs_defaults_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
@@ -2473,6 +2703,10 @@ static INT_PTR CALLBACK prefs_backup_proc(HWND page, UINT msg, WPARAM wparam, LP
                 import_settings(page);
                 return TRUE;
             }
+            if (LOWORD(wparam) == ID_PREF_RESET_DEFAULTS) {
+                reset_all_preferences(page);
+                return TRUE;
+            }
             break;
 
         case WM_NOTIFY: {
@@ -2488,11 +2722,11 @@ static INT_PTR CALLBACK prefs_backup_proc(HWND page, UINT msg, WPARAM wparam, LP
     return FALSE;
 }
 
-static void show_preferences_dialog(const Window *window) {
+static void show_preferences_dialog(const Window *window, bool show_debug) {
     if (!window)
         return;
 
-    PROPSHEETPAGEW pages[4];
+    PROPSHEETPAGEW pages[5];
     ZeroMemory(pages, sizeof(pages));
 
     pages[0].dwSize = sizeof(PROPSHEETPAGEW);
@@ -2515,6 +2749,13 @@ static void show_preferences_dialog(const Window *window) {
     pages[3].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_BACKUP);
     pages[3].pfnDlgProc = prefs_backup_proc;
 
+    // Hidden diagnostics page: only present when opened via Ctrl+Shift+.
+    // or a Shift+click on the Preferences menu item
+    pages[4].dwSize = sizeof(PROPSHEETPAGEW);
+    pages[4].hInstance = g_hinstance;
+    pages[4].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_DEBUG);
+    pages[4].pfnDlgProc = prefs_debug_proc;
+
     PROPSHEETHEADERW psh;
     ZeroMemory(&psh, sizeof(psh));
     psh.dwSize = sizeof(PROPSHEETHEADERW);
@@ -2523,7 +2764,8 @@ static void show_preferences_dialog(const Window *window) {
     psh.hwndParent = window->hwnd;
     psh.hInstance = g_hinstance;
     psh.pszCaption = L"Preferences";
-    psh.nPages = 4;
+    psh.nPages = show_debug ? 5 : 4;
+    psh.nStartPage = show_debug ? 4 : 0;
     psh.ppsp = pages;
 
     PropertySheetW(&psh);
@@ -2639,6 +2881,8 @@ static void build_accelerators(Window *window) {
                       { FCONTROL | FVIRTKEY, 'M', ID_FORMAT_MONOSPACE },
                       { FCONTROL | FVIRTKEY, 'E', ID_FORMAT_EOL_CYCLE },
                       { FCONTROL | FVIRTKEY, VK_OEM_COMMA, ID_FILE_PREFERENCES },
+                      // Hidden: Preferences opened on the Debug diagnostics page
+                      { FCONTROL | FSHIFT | FVIRTKEY, VK_OEM_PERIOD, ID_FILE_PREFERENCES_DEBUG },
                       { FCONTROL | FVIRTKEY, VK_OEM_PLUS, ID_VIEW_ZOOM_IN },
                       { FCONTROL | FVIRTKEY, VK_ADD, ID_VIEW_ZOOM_IN },
                       { FCONTROL | FVIRTKEY, VK_OEM_MINUS, ID_VIEW_ZOOM_OUT },
@@ -3102,7 +3346,11 @@ static void handle_command(Window *window, WORD command) {
             rebuild_recent_menu(window);
             break;
         case ID_FILE_PREFERENCES:
-            show_preferences_dialog(window);
+            // Shift+click reveals the hidden Debug diagnostics page
+            show_preferences_dialog(window, (GetKeyState(VK_SHIFT) & 0x8000) != 0);
+            break;
+        case ID_FILE_PREFERENCES_DEBUG: // Ctrl+Shift+. accelerator
+            show_preferences_dialog(window, true);
             break;
         case ID_FILE_CLOSE:
             // One document per window, so "close" is the window's save-checked
@@ -3218,6 +3466,19 @@ static void handle_command(Window *window, WORD command) {
     }
 }
 
+// Send part text only when it changed since the last send: scrolling and
+// caret movement hammer this path, and redundant SB_SETTEXT repaints were a
+// visible drag when holding a scroll key on large documents
+static void set_status_part(Window *window, int part, const wchar_t *text) {
+    if (!text || part < 0 || part > 5)
+        return;
+    if (wcsncmp(window->status_cache[part], text, 63) == 0)
+        return;
+    wcsncpy(window->status_cache[part], text, 63);
+    window->status_cache[part][63] = L'\0';
+    SendMessageW(window->status_hwnd, SB_SETTEXTW, (WPARAM) part, (LPARAM) text);
+}
+
 static void update_status_bar(Window *window) {
     if (!window || !window->status_hwnd || !window->edit_hwnd || !window->status_bar_visible)
         return;
@@ -3229,26 +3490,35 @@ static void update_status_bar(Window *window) {
 
     _snwprintf(text, 127, L"Ln %d, Col %d", line, column);
     text[127] = L'\0';
-    SendMessageW(window->status_hwnd, SB_SETTEXTW, 1, (LPARAM) text);
+    set_status_part(window, 1, text);
 
     _snwprintf(text, 127, L"%d%%", get_zoom(window));
     text[127] = L'\0';
-    SendMessageW(window->status_hwnd, SB_SETTEXTW, 2, (LPARAM) text);
+    set_status_part(window, 2, text);
 
-    SendMessageW(window->status_hwnd, SB_SETTEXTW, 3,
-                 (LPARAM) (window->monospace_current ? L"Mono" : L"Prop"));
+    set_status_part(window, 3, window->monospace_current ? L"Mono" : L"Prop");
 
     wchar_t *eol = utf8_to_wide(window->status_line_ending);
     if (eol) {
-        SendMessageW(window->status_hwnd, SB_SETTEXTW, 4, (LPARAM) eol);
+        set_status_part(window, 4, eol);
         free(eol);
     }
 
     wchar_t *encoding = utf8_to_wide(window->status_encoding);
     if (encoding) {
-        SendMessageW(window->status_hwnd, SB_SETTEXTW, 5, (LPARAM) encoding);
+        set_status_part(window, 5, encoding);
         free(encoding);
     }
+}
+
+// Coalesce status-bar refreshes from hot paths (scrolling, caret movement):
+// arm a short one-shot timer instead of recomputing Ln/Col synchronously on
+// every wheel notch / key repeat. At most ~30 refreshes/second.
+static void schedule_status_update(Window *window) {
+    if (!window || !window->hwnd || window->status_update_pending)
+        return;
+    window->status_update_pending = true;
+    SetTimer(window->hwnd, NPAD_STATUS_TIMER_ID, 33, NULL);
 }
 
 static void resize_controls(Window *window) {
@@ -3406,7 +3676,11 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
             if (window) {
                 const NMHDR *nmhdr = (const NMHDR *) lparam;
                 if (nmhdr->idFrom == ID_EDIT_CONTROL && nmhdr->code == EN_SELCHANGE) {
-                    update_status_bar(window);
+                    // Fires per caret step during keyboard scrolling and per
+                    // character while selecting - coalesce, never recompute
+                    // synchronously here
+                    g_selchange_count++;
+                    schedule_status_update(window);
                 } else if (nmhdr->hwndFrom == window->status_hwnd && nmhdr->code == NM_CLICK) {
                     // Status bar part clicks: Ln/Col -> Go To, zoom -> reset,
                     // font mode -> toggle monospace, line ending / encoding -> pickers
@@ -3476,6 +3750,14 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                 ui_post_event(UI_EVENT_AUTO_SAVE, window, NULL);
             } else if (window && wparam == NPAD_SESSION_TIMER_ID) {
                 ui_post_event(UI_EVENT_SESSION_SNAPSHOT, window, NULL);
+            } else if (window && wparam == NPAD_STARTUP_TIMER_ID) {
+                KillTimer(hwnd, NPAD_STARTUP_TIMER_ID); // One-shot
+                startup_prof_mark("deferred tasks");
+                ui_post_event(UI_EVENT_STARTUP_DEFERRED, window, NULL);
+            } else if (window && wparam == NPAD_STATUS_TIMER_ID) {
+                KillTimer(hwnd, NPAD_STATUS_TIMER_ID); // One-shot (coalescing)
+                window->status_update_pending = false;
+                update_status_bar(window);
             }
             return 0;
         }

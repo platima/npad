@@ -5,6 +5,27 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-07-16
+
+### ✨ Features
+- **Hidden Debug page in Preferences** (Ctrl+Shift+. or Shift+click the
+  Preferences menu item): startup phase profile (per-phase timings through
+  first paint), paths and counts (settings entries, recovery slots, open
+  windows), live editor counters (paints with last/avg duration, selection
+  changes), and a Copy Diagnostics button
+- **Reset All Preferences** button on the Backup tab: restores every
+  preference to its default while keeping recent files, window position and
+  Find/Replace history; applies live to all open windows
+
+### ⚡ Performance
+- **Instant startup**: the crash-recovery scan now runs just after the first
+  paint instead of before the window appears, so launch feels immediate even
+  with a large recovery directory
+- **Realtime scrolling on large documents**: status-bar updates from
+  scrolling/caret movement are coalesced onto a short timer (max ~30/s)
+  instead of recomputing Ln/Col synchronously on every wheel notch and key
+  repeat, and unchanged status segments are no longer repainted
+
 ## [0.10.5] - 2026-07-15
 
 ### 📝 Documentation

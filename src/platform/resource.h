@@ -20,6 +20,7 @@
 #define IDD_PREFS_APPEARANCE 211
 #define IDD_PREFS_BACKUP 212
 #define IDD_PREFS_DEFAULTS 214
+#define IDD_PREFS_DEBUG 215
 
 // Control IDs for Find Dialog
 #define ID_FIND_TEXT 3001
@@ -71,6 +72,11 @@
 // Preferences: Backup page
 #define ID_PREF_EXPORT 3122
 #define ID_PREF_IMPORT 3123
+#define ID_PREF_RESET_DEFAULTS 3128
+
+// Preferences: Debug page (hidden; Ctrl+Shift+. or Shift+click Preferences)
+#define ID_PREF_DEBUG_TEXT 3129
+#define ID_PREF_COPY_DIAG 3130
 
 // Static text controls
 #define IDC_STATIC -1

@@ -80,7 +80,8 @@ static void editor_apply_session_timer(void) {
 
 // The directory recovery snapshots live in (a subdirectory of the config
 // dir so they sit apart from settings.json). Caller frees; NULL on error.
-static char *editor_session_dir(void) {
+// Public (editor.h) so the Debug preferences page can report on it.
+char *editor_session_dir(void) {
     char *config = settings_get_config_dir();
     if (!config)
         return NULL;
@@ -298,12 +299,8 @@ void editor_set_main_window(Window *window) {
     editor_update_status_info();
     editor_apply_auto_save_timer();
     editor_apply_session_timer();
-
-    // Offer to restore anything a previous crash left behind (only when no
-    // startup file was requested, so we do not clobber an explicit open)
-    if (!g_startup_file) {
-        editor_check_session_recovery();
-    }
+    // The crash-recovery scan runs via UI_EVENT_STARTUP_DEFERRED (shortly
+    // after the first paint) so window startup stays instant
 }
 
 bool editor_new_file(void) {
@@ -738,6 +735,16 @@ bool editor_handle_event(const UIEvent *event) {
 
         case UI_EVENT_SESSION_SNAPSHOT:
             editor_snapshot_session();
+            return true;
+
+        case UI_EVENT_STARTUP_DEFERRED:
+            // Offer to restore anything a previous crash left behind (only
+            // when no startup file was requested, so we do not clobber an
+            // explicit open). Runs after the first paint - see the platform's
+            // startup timer - so launching feels instant.
+            if (!g_startup_file) {
+                editor_check_session_recovery();
+            }
             return true;
 
         case UI_EVENT_EDIT_UNDO:

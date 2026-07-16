@@ -28,7 +28,7 @@ MINGW_STRIP ?= x86_64-w64-mingw32-strip
 endif
 
 # Source files
-CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c
+CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/startup_prof.c
 SHARED_SOURCES = src/ui_interface.c
 
 # Test sources

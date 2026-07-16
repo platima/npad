@@ -168,6 +168,7 @@ propagates live to all open npad windows.
 | Ctrl+E | Cycle line endings (CRLF > LF > CR) |
 | Ctrl+Plus / Ctrl+Minus / Ctrl+0 | Zoom in / out / reset (this window; Ctrl+Scroll also zooms) |
 | Ctrl+, | Preferences |
+| Ctrl+Shift+. | Preferences opened on the hidden Debug page (also: Shift+click the Preferences menu item) |
 
 ## Status bar
 
@@ -217,6 +218,15 @@ position). Not intended for direct use.
 - **Emoji & mixed scripts**: characters the configured font lacks (emoji,
   CJK, etc.) render via Windows font fallback - when typed, when a file is
   opened, and across font or theme changes.
+- **Debug diagnostics**: a hidden Preferences page (Ctrl+Shift+. or
+  Shift+click the Preferences menu item) shows the startup phase profile,
+  settings/recovery paths and counts, and live paint/selection counters,
+  with a Copy Diagnostics button - useful when reporting performance issues.
+- **Reset All Preferences** (Preferences > Backup): restores every
+  preference to its default; recent files, window position and Find/Replace
+  history are kept. Applies live to all open windows.
+- **Startup**: the window appears before any deferred work (crash-recovery
+  scanning) runs, so launch is not delayed by recovery-slot checks.
 - **Crash recovery**: with session resume enabled, each window snapshots
   unsaved work to its own recovery slot. After an unclean exit, npad offers
   to restore; the first document opens in the current window and the rest in

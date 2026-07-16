@@ -14,8 +14,8 @@
 #define NPAD_STRINGIFY(x) NPAD_STRINGIFY_HELPER(x)
 
 #define NPAD_VERSION_MAJOR 0
-#define NPAD_VERSION_MINOR 10
-#define NPAD_VERSION_PATCH 5
+#define NPAD_VERSION_MINOR 11
+#define NPAD_VERSION_PATCH 0
 #define NPAD_VERSION_RELEASE "dev"
 
 // Version information (the Makefile may override with a git-derived string)

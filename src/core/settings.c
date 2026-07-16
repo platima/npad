@@ -115,6 +115,18 @@ bool settings_set_string(const char *key, const char *value) {
     return true;
 }
 
+int settings_count(void) {
+    npad_mutex_lock(&g_settings_mutex);
+    int count = 0;
+    const SettingEntry *current = g_settings_head;
+    while (current) {
+        count++;
+        current = current->next;
+    }
+    npad_mutex_unlock(&g_settings_mutex);
+    return count;
+}
+
 char *settings_get_string(const char *key, const char *default_value) {
     if (!key)
         return NULL;

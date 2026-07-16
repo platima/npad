@@ -29,6 +29,7 @@ __declspec(dllimport) BOOL WINAPI SetProcessDPIAware(void);
 #include "core/editor.h"
 #include "core/error.h"
 #include "core/settings.h"
+#include "core/startup_prof.h"
 #include "core/thread_safety.h"
 #include "ui_interface.h"
 
@@ -90,6 +91,8 @@ int main(int argc, char *argv[]) {
     }
 #endif
 
+    startup_prof_mark("main enter");
+
     // Parse command line arguments
     parse_command_line(argc, argv);
 
@@ -105,6 +108,7 @@ int main(int argc, char *argv[]) {
         thread_safety_cleanup();
         return 1;
     }
+    startup_prof_mark("settings loaded");
 
     // Initialize the UI system
     if (!ui_init()) {
@@ -125,6 +129,7 @@ int main(int argc, char *argv[]) {
         npad_error_cleanup();
         return 1;
     }
+    startup_prof_mark("ui + editor init");
 
     // Create main window
     Window *main_window = ui_create_main_window();
@@ -159,6 +164,8 @@ int main(int argc, char *argv[]) {
     ui_set_window_size(main_window, width, height);
     ui_set_window_position(main_window, x, y);
 
+    startup_prof_mark("window created");
+
     // Attach the window to the editor before it becomes visible so early
     // UI events always see a valid main window
     editor_set_main_window(main_window);
@@ -176,6 +183,7 @@ int main(int argc, char *argv[]) {
     }
 
     DEBUG_PRINT("Entering message loop...");
+    startup_prof_mark("message loop");
 
     // Main message loop
     int result = ui_message_loop();

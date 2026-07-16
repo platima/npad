@@ -58,6 +58,10 @@ void editor_set_startup_file(const char *filename);
 // on windows spawned to reopen extra crashed sessions)
 void editor_set_recover_slot(const char *slot);
 
+// Directory recovery snapshots live in (malloc'd; caller frees). NULL on
+// error. Exposed for the Debug preferences page diagnostics.
+char *editor_session_dir(void);
+
 // Document format (applied when the file is next saved; marks modified)
 void editor_set_line_ending(LineEnding line_ending);
 LineEnding editor_get_line_ending(void);
