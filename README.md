@@ -44,7 +44,7 @@ Current features (Windows build):
 - **🌍 Unicode throughout** - Detects and preserves UTF-8, UTF-8 BOM, UTF-16 LE/BE and ANSI encodings
 - **↩️ Line ending aware** - Detects and preserves Windows (CRLF), Unix (LF) and Mac (CR) line endings, shown in the status bar
 - **🔧 Quality-of-life enhancements:**
-  - Tabbed Preferences dialog (Edit menu, Ctrl+,) with an Apply button: General, Appearance, Defaults and Backup pages (see [DOCUMENTATION.md](DOCUMENTATION.md) for every setting)
+  - Tabbed Preferences dialog (Edit menu, Ctrl+,) with an Apply button: General, Appearance, Defaults, Lists and Backup pages (see [DOCUMENTATION.md](DOCUMENTATION.md) for every setting)
   - Optional auto-save (enabled by default, configurable)
   - Optional session resume / crash recovery (disabled by default, configurable); restores every window that was open, each in its own instance
   - Theme support: light (default), dark, follow-system, and Solarized Light / Dark colour schemes (chosen in Preferences); changes apply to all open windows live
@@ -62,6 +62,7 @@ Current features (Windows build):
   - Close (Ctrl+W) closes the current window, Close All Windows (Ctrl+Shift+W) closes them all - each save-checked
   - Separate monospace and proportional fonts, each with its own picker; font type and zoom are per-window (Ctrl+M / Ctrl+Scroll), with configurable defaults, a 'Use Current' capture, and optional live sync across windows or auto-updating defaults
   - OpenDyslexic font option for reading assistance (Preferences > Appearance; requires the font to be installed)
+  - Optional **list tools** (Preferences > Lists, off by default): Sort and Unique lines, Convert Delimiters (a find/replace for delimiters with `\n`/`\t`/`\uXXXX` escapes), and Indent/Unindent (Ctrl+] / Ctrl+[) with markdown-style markers - in a List menu and the right-click menu
   - Recent files menu (size configurable)
   - Drag-and-drop to open files; Ctrl+Drop inserts the file at the caret
   - Export / Import settings (Preferences > Backup) for backup or moving between machines
@@ -320,6 +321,9 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] Separate monospace / proportional fonts
   - [x] OpenDyslexic font option (reading assistance)
   - [x] Config backup / export & import
+  - [x] Optional list tools (Sort, Unique, Convert Delimiters, Indent/Unindent; off by default)
+  - [ ] 'Highlight all' matches in Find / Find & Replace
+  - [ ] Optional word / character / line count in the status bar (off by default)
 - [ ] **Advanced Features**
   - [ ] Tabbed interface (optional)
   - [ ] Multi-language support

@@ -23,6 +23,7 @@
 #include "../main.h"
 #include "../core/editor.h"
 #include "../core/error.h"
+#include "../core/list_ops.h"
 #include "../core/session.h"
 #include "../core/settings.h"
 #include "../core/startup_prof.h"
@@ -122,6 +123,15 @@ static double qpc_ms(void) {
 #define ID_VIEW_ZOOM_IN 2303
 #define ID_VIEW_ZOOM_OUT 2304
 #define ID_VIEW_ZOOM_RESET 2305
+// List tools (optional; shown when list_tools_enabled)
+#define ID_LIST_SORT_ASC 2114
+#define ID_LIST_SORT_DESC 2115
+#define ID_LIST_SORT_CASE 2116
+#define ID_LIST_UNIQUE 2117
+#define ID_LIST_CONVERT_DELIM 2118
+#define ID_LIST_INDENT 2119      // Ctrl+], default format
+#define ID_LIST_UNINDENT 2120    // Ctrl+[
+#define ID_LIST_INDENT_BASE 2121 // 2121..2126, one per ListIndentFormat
 #define ID_HELP_ABOUT 2401
 
 #define MAX_RECENT_MENU_FILES 10
@@ -143,6 +153,7 @@ typedef struct Window {
     char status_line_ending[32]; // e.g. "Windows (CRLF)"
     bool status_update_pending;  // Coalescing timer armed (see schedule_status_update)
     wchar_t status_cache[6][64]; // Last text sent per status part; skip identical sends
+    bool list_menu_present;      // The optional top-level List menu is inserted
 } Window;
 
 // Global variables
@@ -188,6 +199,8 @@ static GetDpiForWindowFunc g_GetDpiForWindow = NULL;
 static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
 static void create_menu(Window *window);
 static void build_accelerators(Window *window);
+static void apply_list_tools_menu(Window *window);
+static void show_convert_delim_dialog(Window *window);
 static void apply_new_window_pref(Window *window);
 static void launch_new_window(void);
 static void handle_command(Window *window, WORD command);
@@ -2722,11 +2735,69 @@ static INT_PTR CALLBACK prefs_backup_proc(HWND page, UINT msg, WPARAM wparam, LP
     return FALSE;
 }
 
+// Preferences: Lists page - optional list tools (off by default)
+static const wchar_t *const INDENT_FORMAT_LABELS[] = { L"Spaces",
+                                                       L"Tab",
+                                                       L"Asterisk (*)",
+                                                       L"Hyphen (-)",
+                                                       L"Asterisk, leading space ( *)",
+                                                       L"Hyphen, leading space ( -)" };
+#define INDENT_FORMAT_COUNT 6
+
+static INT_PTR CALLBACK prefs_lists_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
+    switch (msg) {
+        case WM_INITDIALOG: {
+            CheckDlgButton(page, ID_PREF_LIST_ENABLED,
+                           settings_get_bool("list_tools_enabled", false) ? BST_CHECKED
+                                                                          : BST_UNCHECKED);
+            HWND combo = GetDlgItem(page, ID_PREF_LIST_INDENT_FORMAT);
+            for (int i = 0; i < INDENT_FORMAT_COUNT; i++)
+                SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM) INDENT_FORMAT_LABELS[i]);
+            int sel = settings_get_int("list_default_indent_format", 0);
+            if (sel < 0 || sel >= INDENT_FORMAT_COUNT)
+                sel = 0;
+            SendMessageW(combo, CB_SETCURSEL, (WPARAM) sel, 0);
+            return TRUE;
+        }
+
+        case WM_COMMAND:
+            if ((HIWORD(wparam) == BN_CLICKED && LOWORD(wparam) == ID_PREF_LIST_ENABLED) ||
+                (HIWORD(wparam) == CBN_SELCHANGE && LOWORD(wparam) == ID_PREF_LIST_INDENT_FORMAT)) {
+                mark_prefs_dirty(page);
+            }
+            break;
+
+        case WM_NOTIFY: {
+            const NMHDR *nmhdr = (const NMHDR *) lparam;
+            if (nmhdr->code == PSN_APPLY) {
+                settings_set_bool("list_tools_enabled",
+                                  IsDlgButtonChecked(page, ID_PREF_LIST_ENABLED) == BST_CHECKED);
+                LRESULT sel =
+                    SendMessageW(GetDlgItem(page, ID_PREF_LIST_INDENT_FORMAT), CB_GETCURSEL, 0, 0);
+                if (sel >= 0)
+                    settings_set_int("list_default_indent_format", (int) sel);
+                settings_save();
+                // Apply the enable toggle to this window right away (menu +
+                // Ctrl+]/[ accelerators), then propagate to other instances
+                if (g_main_window) {
+                    apply_list_tools_menu(g_main_window);
+                    build_accelerators(g_main_window);
+                }
+                ui_platform_notify_settings_changed();
+                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                return TRUE;
+            }
+            break;
+        }
+    }
+    return FALSE;
+}
+
 static void show_preferences_dialog(const Window *window, bool show_debug) {
     if (!window)
         return;
 
-    PROPSHEETPAGEW pages[5];
+    PROPSHEETPAGEW pages[6];
     ZeroMemory(pages, sizeof(pages));
 
     pages[0].dwSize = sizeof(PROPSHEETPAGEW);
@@ -2746,15 +2817,20 @@ static void show_preferences_dialog(const Window *window, bool show_debug) {
 
     pages[3].dwSize = sizeof(PROPSHEETPAGEW);
     pages[3].hInstance = g_hinstance;
-    pages[3].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_BACKUP);
-    pages[3].pfnDlgProc = prefs_backup_proc;
+    pages[3].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_LISTS);
+    pages[3].pfnDlgProc = prefs_lists_proc;
+
+    pages[4].dwSize = sizeof(PROPSHEETPAGEW);
+    pages[4].hInstance = g_hinstance;
+    pages[4].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_BACKUP);
+    pages[4].pfnDlgProc = prefs_backup_proc;
 
     // Hidden diagnostics page: only present when opened via Ctrl+Shift+.
     // or a Shift+click on the Preferences menu item
-    pages[4].dwSize = sizeof(PROPSHEETPAGEW);
-    pages[4].hInstance = g_hinstance;
-    pages[4].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_DEBUG);
-    pages[4].pfnDlgProc = prefs_debug_proc;
+    pages[5].dwSize = sizeof(PROPSHEETPAGEW);
+    pages[5].hInstance = g_hinstance;
+    pages[5].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_DEBUG);
+    pages[5].pfnDlgProc = prefs_debug_proc;
 
     PROPSHEETHEADERW psh;
     ZeroMemory(&psh, sizeof(psh));
@@ -2764,8 +2840,8 @@ static void show_preferences_dialog(const Window *window, bool show_debug) {
     psh.hwndParent = window->hwnd;
     psh.hInstance = g_hinstance;
     psh.pszCaption = L"Preferences";
-    psh.nPages = show_debug ? 5 : 4;
-    psh.nStartPage = show_debug ? 4 : 0;
+    psh.nPages = show_debug ? 6 : 5;
+    psh.nStartPage = show_debug ? 5 : 0;
     psh.ppsp = pages;
 
     PropertySheetW(&psh);
@@ -2888,9 +2964,17 @@ static void build_accelerators(Window *window) {
                       { FCONTROL | FVIRTKEY, VK_OEM_MINUS, ID_VIEW_ZOOM_OUT },
                       { FCONTROL | FVIRTKEY, VK_SUBTRACT, ID_VIEW_ZOOM_OUT },
                       { FCONTROL | FVIRTKEY, '0', ID_VIEW_ZOOM_RESET },
-                      { FCONTROL | FVIRTKEY, VK_NUMPAD0, ID_VIEW_ZOOM_RESET } };
+                      { FCONTROL | FVIRTKEY, VK_NUMPAD0, ID_VIEW_ZOOM_RESET },
+                      // List indent/unindent - kept LAST so they can be trimmed
+                      // from the table when the list tools are disabled
+                      { FCONTROL | FVIRTKEY, VK_OEM_6, ID_LIST_INDENT },     // ']'
+                      { FCONTROL | FVIRTKEY, VK_OEM_4, ID_LIST_UNINDENT } }; // '['
 
-    HACCEL new_table = CreateAcceleratorTableW(accel, sizeof(accel) / sizeof(accel[0]));
+    int accel_count = (int) (sizeof(accel) / sizeof(accel[0]));
+    if (!settings_get_bool("list_tools_enabled", false))
+        accel_count -= 2; // Drop the two list accelerators
+
+    HACCEL new_table = CreateAcceleratorTableW(accel, accel_count);
     if (!new_table) {
         NPAD_ERROR_WARNING(NPAD_ERROR_SYSTEM, GetLastError(), "Accelerator table creation",
                            "Failed to create accelerator table - keyboard shortcuts will not work");
@@ -3033,6 +3117,303 @@ bool ui_platform_pid_is_running(long pid) {
     return running;
 }
 
+// ===========================================================================
+// List tools (optional; gated on the list_tools_enabled preference)
+// ===========================================================================
+
+// Normalize CRLF/CR line breaks to '\n' in place (result is same length or
+// shorter). Used on text extracted from the control before list_ops.
+static void normalize_to_lf(char *s) {
+    char *w = s;
+    for (char *r = s; *r; r++) {
+        if (r[0] == '\r') {
+            *w++ = '\n';
+            if (r[1] == '\n')
+                r++; // Skip the LF of a CRLF pair
+        } else {
+            *w++ = *r;
+        }
+    }
+    *w = '\0';
+}
+
+// Resolve the character range a list op should act on.
+//   mode 0 (sort/unique): a selection spanning a line break -> those full
+//     lines; otherwise the whole document.
+//   mode 1 (indent):      the selected full lines, or the current line.
+//   mode 2 (delimiter):   the exact selection when sel_only, else whole doc.
+static void list_target_range(const Window *window, int mode, bool sel_only, LONG *out_min,
+                              LONG *out_max) {
+    HWND e = window->edit_hwnd;
+    CHARRANGE sel = { 0, 0 };
+    SendMessageW(e, EM_EXGETSEL, 0, (LPARAM) &sel);
+    LONG total = (LONG) GetWindowTextLengthW(e);
+    bool has_sel = sel.cpMax > sel.cpMin;
+
+    if (mode == 2) {
+        if (sel_only && has_sel) {
+            *out_min = sel.cpMin;
+            *out_max = sel.cpMax;
+        } else {
+            *out_min = 0;
+            *out_max = total;
+        }
+        return;
+    }
+
+    LONG line_a = (LONG) SendMessageW(e, EM_EXLINEFROMCHAR, 0, (LPARAM) sel.cpMin);
+    LONG line_b = (LONG) SendMessageW(e, EM_EXLINEFROMCHAR, 0, (LPARAM) sel.cpMax);
+    bool spans_newline = has_sel && line_b > line_a;
+
+    // A selection ending exactly at a line start does not include that line
+    if (has_sel && line_b > line_a) {
+        LONG start_b = (LONG) SendMessageW(e, EM_LINEINDEX, (WPARAM) line_b, 0);
+        if (start_b == sel.cpMax)
+            line_b--;
+    }
+
+    LONG start_first = (LONG) SendMessageW(e, EM_LINEINDEX, (WPARAM) line_a, 0);
+    LONG start_last = (LONG) SendMessageW(e, EM_LINEINDEX, (WPARAM) line_b, 0);
+    LONG end_last = start_last + (LONG) SendMessageW(e, EM_LINELENGTH, (WPARAM) start_last, 0);
+
+    if (mode == 0 && !spans_newline) {
+        *out_min = 0; // Sort/Unique with no multi-line selection: whole document
+        *out_max = total;
+    } else {
+        *out_min = start_first;
+        *out_max = end_last;
+    }
+}
+
+// Extract [cpMin,cpMax] as UTF-8 with '\n' line breaks (caller frees).
+static char *list_extract(HWND e, LONG cpMin, LONG cpMax) {
+    if (cpMax < cpMin)
+        return NULL;
+    LONG n = cpMax - cpMin;
+    wchar_t *wbuf = malloc(((size_t) n + 1) * sizeof(wchar_t));
+    if (!wbuf)
+        return NULL;
+    TEXTRANGEW tr;
+    tr.chrg.cpMin = cpMin;
+    tr.chrg.cpMax = cpMax;
+    tr.lpstrText = wbuf;
+    LRESULT got = SendMessageW(e, EM_GETTEXTRANGE, 0, (LPARAM) &tr);
+    if (got < 0)
+        got = 0;
+    wbuf[got] = L'\0';
+    char *utf8 = wide_to_utf8(wbuf);
+    free(wbuf);
+    if (utf8)
+        normalize_to_lf(utf8);
+    return utf8;
+}
+
+// Replace [cpMin,cpMax] with utf8_lf as one undo step; reselect the result.
+static void list_replace(const Window *window, LONG cpMin, LONG cpMax, const char *utf8_lf) {
+    HWND e = window->edit_hwnd;
+    // The control's line breaks are CRLF on the way in; normalize whatever the
+    // transform produced to LF, then emit CRLF uniformly (guards against a
+    // delimiter conversion that injected raw CR/LF)
+    char *norm = malloc(strlen(utf8_lf) + 1);
+    if (!norm)
+        return;
+    strcpy(norm, utf8_lf);
+    normalize_to_lf(norm);
+
+    size_t breaks = 0;
+    for (const char *p = norm; *p; p++)
+        if (*p == '\n')
+            breaks++;
+    char *crlf = malloc(strlen(norm) + breaks + 1);
+    if (!crlf) {
+        free(norm);
+        return;
+    }
+    char *w = crlf;
+    for (const char *p = norm; *p; p++) {
+        if (*p == '\n')
+            *w++ = '\r';
+        *w++ = *p;
+    }
+    *w = '\0';
+    free(norm);
+
+    wchar_t *wide = utf8_to_wide(crlf);
+    free(crlf);
+    if (!wide)
+        return;
+
+    CHARRANGE target = { cpMin, cpMax };
+    SendMessageW(e, EM_EXSETSEL, 0, (LPARAM) &target);
+    SendMessageW(e, EM_REPLACESEL, TRUE, (LPARAM) wide); // TRUE = single undo unit
+    free(wide);
+
+    CHARRANGE after = { 0, 0 };
+    SendMessageW(e, EM_EXGETSEL, 0, (LPARAM) &after);
+    CHARRANGE reselect = { cpMin, after.cpMax };
+    SendMessageW(e, EM_EXSETSEL, 0, (LPARAM) &reselect);
+    SendMessageW(e, EM_SCROLLCARET, 0, 0);
+}
+
+// op: 0 sort, 1 unique, 2 indent, 3 unindent. arg = descending (sort) or
+// ListIndentFormat (indent/unindent).
+static void list_do(const Window *window, int op, int arg) {
+    if (!window || !window->edit_hwnd)
+        return;
+    int mode = (op == 0 || op == 1) ? 0 : 1;
+    LONG cpMin, cpMax;
+    list_target_range(window, mode, false, &cpMin, &cpMax);
+    char *text = list_extract(window->edit_hwnd, cpMin, cpMax);
+    if (!text)
+        return;
+
+    char *out = NULL;
+    switch (op) {
+        case 0:
+            out = list_sort_lines(text, arg != 0,
+                                  settings_get_bool("list_sort_case_sensitive", false));
+            break;
+        case 1:
+            out = list_unique_lines(text);
+            break;
+        case 2:
+            out = list_indent_lines(text, (ListIndentFormat) arg);
+            break;
+        case 3:
+            out = list_unindent_lines(text, (ListIndentFormat) arg);
+            break;
+        default:
+            break;
+    }
+    free(text);
+    if (out) {
+        list_replace(window, cpMin, cpMax, out);
+        free(out);
+    }
+}
+
+// Append the list-tool items into an existing menu (used by both the List
+// menu-bar popup and the right-click context menu).
+static void populate_list_menu(HMENU menu) {
+    HMENU sort = CreatePopupMenu();
+    AppendMenuW(sort, MF_STRING, ID_LIST_SORT_ASC, L"&Ascending");
+    AppendMenuW(sort, MF_STRING, ID_LIST_SORT_DESC, L"&Descending");
+    AppendMenuW(sort, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(sort, MF_STRING, ID_LIST_SORT_CASE, L"&Case sensitive");
+    CheckMenuItem(sort, ID_LIST_SORT_CASE,
+                  settings_get_bool("list_sort_case_sensitive", false) ? MF_CHECKED : MF_UNCHECKED);
+    AppendMenuW(menu, MF_STRING | MF_POPUP, (UINT_PTR) sort, L"&Sort");
+    AppendMenuW(menu, MF_STRING, ID_LIST_UNIQUE, L"&Unique");
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(menu, MF_STRING, ID_LIST_CONVERT_DELIM, L"Convert &Delimiters...");
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+
+    HMENU indent = CreatePopupMenu();
+    AppendMenuW(indent, MF_STRING, ID_LIST_INDENT, L"&Indent (default)\tCtrl+]");
+    AppendMenuW(indent, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 0, L"&Spaces");
+    AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 1, L"&Tab");
+    AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 2, L"&Asterisk (*)");
+    AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 3, L"&Hyphen (-)");
+    AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 4, L"Asterisk, &leading space ( *)");
+    AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 5, L"Hyphen, l&eading space ( -)");
+    AppendMenuW(menu, MF_STRING | MF_POPUP, (UINT_PTR) indent, L"Inden&t");
+    AppendMenuW(menu, MF_STRING, ID_LIST_UNINDENT, L"&Unindent\tCtrl+[");
+}
+
+// Insert or remove the top-level List menu to match the preference. Called at
+// window creation and whenever settings change (live toggle).
+static void apply_list_tools_menu(Window *window) {
+    if (!window || !window->hmenu)
+        return;
+    bool enabled = settings_get_bool("list_tools_enabled", false);
+    if (window->list_menu_present) {
+        RemoveMenu(window->hmenu, 3, MF_BYPOSITION); // List sits after Format
+        window->list_menu_present = false;
+    }
+    if (enabled) {
+        HMENU list = CreatePopupMenu();
+        populate_list_menu(list);
+        InsertMenuW(window->hmenu, 3, MF_BYPOSITION | MF_POPUP | MF_STRING, (UINT_PTR) list,
+                    L"&List");
+        window->list_menu_present = true;
+    }
+    if (window->hwnd)
+        DrawMenuBar(window->hwnd);
+}
+
+static INT_PTR CALLBACK convert_delim_proc(HWND dlg, UINT msg, WPARAM wparam, LPARAM lparam) {
+    static Window *win = NULL;
+    switch (msg) {
+        case WM_INITDIALOG: {
+            win = (Window *) lparam;
+            static const wchar_t *const presets[] = { L",",   L";",      L"|", L"\\t",
+                                                      L"\\n", L"\\r\\n", L" " };
+            HWND from = GetDlgItem(dlg, ID_DELIM_FROM);
+            HWND to = GetDlgItem(dlg, ID_DELIM_TO);
+            for (size_t i = 0; i < sizeof(presets) / sizeof(presets[0]); i++) {
+                SendMessageW(from, CB_ADDSTRING, 0, (LPARAM) presets[i]);
+                SendMessageW(to, CB_ADDSTRING, 0, (LPARAM) presets[i]);
+            }
+            SetDlgItemTextW(dlg, ID_DELIM_FROM, L",");
+            SetDlgItemTextW(dlg, ID_DELIM_TO, L"\\r\\n"); // OS default line ending
+            bool has_sel = win && ui_platform_has_selection(win);
+            EnableWindow(GetDlgItem(dlg, ID_DELIM_SEL_ONLY), has_sel);
+            CheckDlgButton(dlg, ID_DELIM_SEL_ONLY, has_sel ? BST_CHECKED : BST_UNCHECKED);
+            return TRUE;
+        }
+
+        case WM_COMMAND:
+            if (LOWORD(wparam) == IDOK) {
+                wchar_t wfrom[256] = L"", wto[256] = L"";
+                GetDlgItemTextW(dlg, ID_DELIM_FROM, wfrom, 256);
+                GetDlgItemTextW(dlg, ID_DELIM_TO, wto, 256);
+                bool sel_only = IsDlgButtonChecked(dlg, ID_DELIM_SEL_ONLY) == BST_CHECKED;
+
+                char *from8 = wide_to_utf8(wfrom);
+                char *to8 = wide_to_utf8(wto);
+                char *from_u = from8 ? list_unescape(from8) : NULL;
+                char *to_u = to8 ? list_unescape(to8) : NULL;
+                if (win && from_u && from_u[0] != '\0') {
+                    LONG cpMin, cpMax;
+                    list_target_range(win, 2, sel_only, &cpMin, &cpMax);
+                    char *text = list_extract(win->edit_hwnd, cpMin, cpMax);
+                    if (text) {
+                        char *out = list_replace_all(text, from_u, to_u ? to_u : "");
+                        if (out) {
+                            list_replace(win, cpMin, cpMax, out);
+                            free(out);
+                        }
+                        free(text);
+                    }
+                }
+                free(from8);
+                free(to8);
+                free(from_u);
+                free(to_u);
+                EndDialog(dlg, 1);
+                return TRUE;
+            }
+            if (LOWORD(wparam) == IDCANCEL) {
+                EndDialog(dlg, 0);
+                return TRUE;
+            }
+            break;
+
+        case WM_CLOSE:
+            EndDialog(dlg, 0);
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static void show_convert_delim_dialog(Window *window) {
+    if (!window)
+        return;
+    DialogBoxParamW(g_hinstance, MAKEINTRESOURCEW(IDD_CONVERT_DELIM), window->hwnd,
+                    convert_delim_proc, (LPARAM) window);
+}
+
 static void create_menu(Window *window) {
     HMENU hmenu = CreateMenu();
     HMENU hfile = CreatePopupMenu();
@@ -3125,12 +3506,14 @@ static void create_menu(Window *window) {
 
     window->hmenu = hmenu;
     window->recent_menu = hrecent;
+    window->list_menu_present = false;
 
     CheckMenuItem(hmenu, ID_FORMAT_WORD_WRAP,
                   window->word_wrap_enabled ? MF_CHECKED : MF_UNCHECKED);
     CheckMenuItem(hmenu, ID_VIEW_STATUS_BAR,
                   window->status_bar_visible ? MF_CHECKED : MF_UNCHECKED);
     rebuild_recent_menu(window);
+    apply_list_tools_menu(window); // Insert the List menu when enabled
 }
 
 // Rebuild the File > Recent Files submenu from settings
@@ -3192,6 +3575,18 @@ static void apply_edit_command_states(Window *window, HMENU menu) {
     EnableMenuItem(menu, ID_EDIT_FIND_PREV,
                    (has_text && g_search_text[0] != L'\0') ? enabled : disabled);
     EnableMenuItem(menu, ID_EDIT_REPLACE, has_text ? enabled : disabled);
+
+    // List tools (only present in the menu when enabled; harmless otherwise).
+    // They operate on lines, so require a non-empty document.
+    UINT list_state = has_text ? enabled : disabled;
+    EnableMenuItem(menu, ID_LIST_SORT_ASC, list_state);
+    EnableMenuItem(menu, ID_LIST_SORT_DESC, list_state);
+    EnableMenuItem(menu, ID_LIST_UNIQUE, list_state);
+    EnableMenuItem(menu, ID_LIST_CONVERT_DELIM, list_state);
+    EnableMenuItem(menu, ID_LIST_INDENT, list_state);
+    EnableMenuItem(menu, ID_LIST_UNINDENT, list_state);
+    for (UINT i = 0; i < 6; i++)
+        EnableMenuItem(menu, ID_LIST_INDENT_BASE + i, list_state);
 }
 
 // Refresh enable states and checkmarks across the whole menu bar
@@ -3237,6 +3632,12 @@ static void show_context_menu(Window *window, int x, int y) {
     AppendMenuW(menu, MF_STRING, ID_EDIT_DELETE, L"&Delete");
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(menu, MF_STRING, ID_EDIT_SELECT_ALL, L"Select &All");
+
+    // List tools mirror the List menu when enabled
+    if (settings_get_bool("list_tools_enabled", false)) {
+        AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+        populate_list_menu(menu);
+    }
 
     apply_edit_command_states(window, menu);
 
@@ -3325,7 +3726,40 @@ static void handle_command(Window *window, WORD command) {
         return;
     }
 
+    // Explicit indent-format items from the List/Indent submenu
+    if (command >= ID_LIST_INDENT_BASE && command <= ID_LIST_INDENT_BASE + 5) {
+        list_do(window, 2, command - ID_LIST_INDENT_BASE);
+        return;
+    }
+
     switch (command) {
+        case ID_LIST_SORT_ASC:
+            list_do(window, 0, 0);
+            break;
+        case ID_LIST_SORT_DESC:
+            list_do(window, 0, 1);
+            break;
+        case ID_LIST_SORT_CASE: {
+            bool cs = !settings_get_bool("list_sort_case_sensitive", false);
+            settings_set_bool("list_sort_case_sensitive", cs);
+            settings_save();
+            if (window->hmenu)
+                CheckMenuItem(window->hmenu, ID_LIST_SORT_CASE, cs ? MF_CHECKED : MF_UNCHECKED);
+            ui_platform_notify_settings_changed();
+            break;
+        }
+        case ID_LIST_UNIQUE:
+            list_do(window, 1, 0);
+            break;
+        case ID_LIST_CONVERT_DELIM:
+            show_convert_delim_dialog(window);
+            break;
+        case ID_LIST_INDENT:
+            list_do(window, 2, settings_get_int("list_default_indent_format", 0));
+            break;
+        case ID_LIST_UNINDENT:
+            list_do(window, 3, settings_get_int("list_default_indent_format", 0));
+            break;
         case ID_FILE_NEW:
             ui_post_event(UI_EVENT_FILE_NEW, window, NULL);
             break;
@@ -3568,8 +4002,9 @@ static void reload_and_apply_settings(Window *window) {
     editor_reload_prefs(); // Re-read auto-save / session settings and timers
     apply_font(window);
     apply_theme(window);
-    apply_new_window_pref(window);
+    apply_new_window_pref(window); // Also rebuilds accelerators (list Ctrl+]/[ gating)
     rebuild_recent_menu(window);
+    apply_list_tools_menu(window); // Insert/remove the List menu per the pref
 
     // Sync shared window options; per-window view state (font type, zoom)
     // is deliberately left alone

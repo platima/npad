@@ -5,6 +5,26 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-07-16
+
+### ✨ Features
+- **List tools** (opt-in; off by default for classic-Notepad compatibility).
+  Enable in Preferences > Lists to add a **List** menu and matching
+  right-click items:
+  - **Sort** (Ascending / Descending, with a Case-sensitive toggle) and
+    **Unique** (remove duplicate lines, keeping the first). A selection
+    spanning multiple lines acts on those lines; otherwise the whole
+    document.
+  - **Convert Delimiters…** - a find/replace for delimiters with escape
+    sequences (`\n \r \t \\ \uXXXX`), e.g. turn commas into line breaks or
+    back. Applies to the selection or the whole document.
+  - **Indent** / **Unindent** (**Ctrl+]** / **Ctrl+[**) with six formats
+    (spaces, tab, `*`, `-`, ` *`, ` -`); the default is set in Preferences.
+    Indenting an already-marked line adds two spaces (markdown-style
+    nesting) rather than a second marker; unindent removes the current unit.
+  - New `src/core/list_ops.c` carries the transforms, covered by the
+    `test_list_ops` unit suite.
+
 ## [0.11.0] - 2026-07-16
 
 ### ✨ Features

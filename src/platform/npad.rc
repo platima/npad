@@ -14,8 +14,8 @@
 
 // Version Information (keep in sync with src/main.h)
 1 VERSIONINFO
-FILEVERSION 0,11,0,0
-PRODUCTVERSION 0,11,0,0
+FILEVERSION 0,12,0,0
+PRODUCTVERSION 0,12,0,0
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0x0L
 FILEOS VOS__WINDOWS32
@@ -28,12 +28,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Platima"
             VALUE "FileDescription", "npad - Lightweight Text Editor"
-            VALUE "FileVersion", "0.11.0.0"
+            VALUE "FileVersion", "0.12.0.0"
             VALUE "InternalName", "npad"
             VALUE "LegalCopyright", "Copyright © 2025 Platima"
             VALUE "OriginalFilename", "npad.exe"
             VALUE "ProductName", "npad"
-            VALUE "ProductVersion", "0.11.0.0"
+            VALUE "ProductVersion", "0.12.0.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -94,6 +94,22 @@ BEGIN
     PUSHBUTTON      "Cancel", IDCANCEL, 121, 42, 50, 14
 END
 
+// Convert Delimiters Dialog (list tools)
+IDD_CONVERT_DELIM DIALOGEX 0, 0, 240, 104
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Convert Delimiters"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "&From:", IDC_STATIC, 9, 11, 40, 8
+    COMBOBOX        ID_DELIM_FROM, 52, 9, 179, 90, CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "&To:", IDC_STATIC, 9, 29, 40, 8
+    COMBOBOX        ID_DELIM_TO, 52, 27, 179, 90, CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Escapes: \\n newline  \\r CR  \\t tab  \\\\ backslash  \\uXXXX", ID_DELIM_HINT, 9, 47, 222, 8
+    CONTROL         "&Selection only", ID_DELIM_SEL_ONLY, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 9, 62, 100, 10
+    DEFPUSHBUTTON   "&Convert", IDOK, 126, 84, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 181, 84, 50, 14
+END
+
 // Preferences: General page
 IDD_PREFS_GENERAL DIALOGEX 0, 0, 240, 196
 STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
@@ -129,6 +145,19 @@ BEGIN
     LTEXT           "Toggle monospace with Ctrl+M or the status bar.", IDC_STATIC, 18, 80, 206, 8
     CONTROL         "Show s&tatus bar", ID_PREF_STATUSBAR, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 10, 102, 150, 10
     CONTROL         "S&ync view (font type and zoom) across all instances", ID_PREF_SYNC_VIEW, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 120, 220, 18
+END
+
+// Preferences: Lists page (optional list tools)
+IDD_PREFS_LISTS DIALOGEX 0, 0, 240, 196
+STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+CAPTION "Lists"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    CONTROL         "&Enable list tools (Sort, Unique, Convert Delimiters, Indent)", ID_PREF_LIST_ENABLED, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 12, 220, 18
+    LTEXT           "Adds a List menu and right-click items. Off by default for classic Notepad compatibility.", IDC_STATIC, 10, 34, 220, 16
+    LTEXT           "Default &indent format (Ctrl+] / Ctrl+[):", IDC_STATIC, 10, 58, 130, 8
+    COMBOBOX        ID_PREF_LIST_INDENT_FORMAT, 140, 56, 88, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Indenting an already-marked line adds two spaces (markdown-style nesting); unindent removes the current marker or indent.", IDC_STATIC, 10, 78, 220, 24
 END
 
 // Preferences: Defaults page (initial state for new windows)

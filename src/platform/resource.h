@@ -16,9 +16,11 @@
 #define IDD_FIND 200
 #define IDD_REPLACE 201
 #define IDD_GOTO 202
+#define IDD_CONVERT_DELIM 203
 #define IDD_PREFS_GENERAL 210
 #define IDD_PREFS_APPEARANCE 211
 #define IDD_PREFS_BACKUP 212
+#define IDD_PREFS_LISTS 213
 #define IDD_PREFS_DEFAULTS 214
 #define IDD_PREFS_DEBUG 215
 
@@ -77,6 +79,16 @@
 // Preferences: Debug page (hidden; Ctrl+Shift+. or Shift+click Preferences)
 #define ID_PREF_DEBUG_TEXT 3129
 #define ID_PREF_COPY_DIAG 3130
+
+// Preferences: Lists page
+#define ID_PREF_LIST_ENABLED 3131
+#define ID_PREF_LIST_INDENT_FORMAT 3132
+
+// Convert Delimiters dialog
+#define ID_DELIM_FROM 3133
+#define ID_DELIM_TO 3134
+#define ID_DELIM_SEL_ONLY 3135
+#define ID_DELIM_HINT 3136
 
 // Static text controls
 #define IDC_STATIC -1

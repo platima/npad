@@ -124,6 +124,14 @@ All settings live in `settings.json` and are editable in Preferences
 The **Use Current** button copies the active window's font type and zoom into
 the fields.
 
+### Lists (Preferences > Lists) - optional list tools
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `list_tools_enabled` | bool | `false` | Show the **List** menu and matching right-click items (Sort, Unique, Convert Delimiters, Indent/Unindent) and enable Ctrl+] / Ctrl+[. Off by default for classic-Notepad compatibility. |
+| `list_default_indent_format` | int | `0` (Spaces) | Format used by Ctrl+] / Ctrl+[ and the default indent: 0 spaces, 1 tab, 2 `*`, 3 `-`, 4 ` *`, 5 ` -`. |
+| `list_sort_case_sensitive` | bool | `false` | Sort compares case-sensitively (toggle from the Sort submenu). |
+
 ### Other persisted state (no dedicated UI)
 
 | Key | Description |
@@ -169,6 +177,7 @@ propagates live to all open npad windows.
 | Ctrl+Plus / Ctrl+Minus / Ctrl+0 | Zoom in / out / reset (this window; Ctrl+Scroll also zooms) |
 | Ctrl+, | Preferences |
 | Ctrl+Shift+. | Preferences opened on the hidden Debug page (also: Shift+click the Preferences menu item) |
+| Ctrl+] / Ctrl+[ | Indent / Unindent (list tools; only when enabled in Preferences > Lists) |
 
 ## Status bar
 
@@ -218,6 +227,21 @@ position). Not intended for direct use.
 - **Emoji & mixed scripts**: characters the configured font lacks (emoji,
   CJK, etc.) render via Windows font fallback - when typed, when a file is
   opened, and across font or theme changes.
+- **List tools** (Preferences > Lists, off by default): add a **List** menu
+  and right-click items.
+  - *Sort / Unique* treat each line as an entry. If the selection spans more
+    than one line, only those lines are affected (extended to whole lines);
+    otherwise the whole document is. Unique keeps the first occurrence.
+  - *Convert Delimiters…* is a find/replace for delimiters; both fields
+    interpret `\n \r \t \\ \0 \uXXXX`, so e.g. From `,` To `\r\n` turns a
+    comma-separated line into separate lines. It applies to the selection
+    (when "Selection only" is ticked) or the whole document.
+  - *Indent / Unindent* (Ctrl+] / Ctrl+[, or the Indent submenu) prefix each
+    target line. The six formats are spaces, tab, `*`, `-`, ` *`, ` -`.
+    Indenting a line that already has the marker adds two spaces instead of a
+    second marker (markdown-style nesting); unindent removes one unit - two
+    nesting spaces, then the marker itself. Whitespace formats add/remove a
+    tab or up to four spaces. Each operation is a single undo step.
 - **Debug diagnostics**: a hidden Preferences page (Ctrl+Shift+. or
   Shift+click the Preferences menu item) shows the startup phase profile,
   settings/recovery paths and counts, and live paint/selection counters,
