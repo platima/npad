@@ -61,6 +61,7 @@ tests/test_file_ops
 tests/test_error
 tests/test_encoding
 tests/test_session
+tests/test_list_ops
 
 # Installer build outputs (fonts are fetched by installer/fetch-fonts.ps1)
 installer/fonts/
