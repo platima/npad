@@ -184,6 +184,10 @@ static HWND g_find_dialog = NULL;
 // Last search parameters shared by Find, Replace and F3 (persisted)
 static wchar_t g_search_text[256] = L"";
 static wchar_t g_replace_text[256] = L"";
+// Effective (escape-interpreted, '\r'-normalized) forms actually searched
+// for / inserted; the raw buffers above are what the dialog shows
+static wchar_t g_search_eff[256] = L"";
+static wchar_t g_replace_eff[256] = L"";
 static bool g_match_case = false;
 static bool g_whole_word = false;
 static bool g_search_down = true;
@@ -191,9 +195,12 @@ static bool g_wrap_around = true;
 static bool g_interpret_escapes = false; // Interpret \n \t \\ \uXXXX in find/replace
 
 // A consumed WM_KEYDOWN (Tab indent, Enter list continuation) must also eat
-// the WM_CHAR that TranslateMessage already posted for the same keystroke
+// the WM_CHAR that TranslateMessage already posted for the same keystroke.
+// The matching Tab KEYUP is eaten too so the control never sees an orphan
+// key-up for a keystroke it knows nothing about.
 static bool g_swallow_tab_char = false;
 static bool g_swallow_return_char = false;
+static bool g_swallow_tab_keyup = false;
 
 // Last find/replace dialog position, remembered for the session
 static POINT g_find_dialog_pos;
@@ -545,9 +552,18 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, L
     // keys never reach the control. A consumed key still has its WM_CHAR
     // already queued by TranslateMessage, so that gets eaten too.
     if (msg == WM_KEYDOWN) {
-        if (wparam == VK_TAB && handle_markdown_tab(hwnd))
+        if (wparam == VK_TAB && handle_markdown_tab(hwnd)) {
+            g_swallow_tab_keyup = true;
             return 0;
+        }
         if (wparam == VK_RETURN && handle_markdown_return(hwnd)) {
+            if (g_main_window)
+                schedule_status_update(g_main_window);
+            return 0;
+        }
+    } else if (msg == WM_KEYUP) {
+        if (wparam == VK_TAB && g_swallow_tab_keyup) {
+            g_swallow_tab_keyup = false;
             if (g_main_window)
                 schedule_status_update(g_main_window);
             return 0;
@@ -1535,7 +1551,7 @@ static void count_matches(Window *window, const CHARRANGE *current, int *total, 
 
     while (*total < CAP) {
         memset(&ft, 0, sizeof(ft));
-        ft.lpstrText = g_search_text;
+        ft.lpstrText = g_search_eff;
         ft.chrg.cpMin = from;
         ft.chrg.cpMax = -1;
         if (SendMessageW(window->edit_hwnd, EM_FINDTEXTEXW, flags, (LPARAM) &ft) == -1)
@@ -1554,7 +1570,7 @@ static void count_matches(Window *window, const CHARRANGE *current, int *total, 
 static bool find_in_range(Window *window, LONG from, LONG to, bool down, CHARRANGE *found) {
     FINDTEXTEXW ft;
     memset(&ft, 0, sizeof(ft));
-    ft.lpstrText = g_search_text;
+    ft.lpstrText = g_search_eff;
     ft.chrg.cpMin = from;
     ft.chrg.cpMax = to;
 
@@ -1576,7 +1592,7 @@ static bool find_in_range(Window *window, LONG from, LONG to, bool down, CHARRAN
 // Search from the current selection in the given direction, wrapping around
 // if enabled, select the match, and report failure like Notepad.
 static bool find_next(Window *window, bool down) {
-    if (!window || !window->edit_hwnd || g_search_text[0] == L'\0')
+    if (!window || !window->edit_hwnd || g_search_eff[0] == L'\0')
         return false;
 
     CHARRANGE sel = { 0, 0 };
@@ -1751,19 +1767,18 @@ static void read_search_fields(HWND dialog, bool has_replace) {
     settings_set_bool("find_search_down", g_search_down);
     settings_set_bool("find_interpret_escapes", g_interpret_escapes);
 
-    // History records the RAW typed text; escapes are applied afterwards so
-    // the combo round-trips exactly what the user entered
+    // History and the dialog keep the RAW typed text; the search machinery
+    // uses the effective copies (escape-interpreted when enabled)
     history_push("find_hist", g_search_text);
     if (has_replace) {
         history_push("replace_hist", g_replace_text);
     }
 
+    wcscpy(g_search_eff, g_search_text);
+    wcscpy(g_replace_eff, g_replace_text);
     if (g_interpret_escapes) {
-        unescape_search_buffer(g_search_text, sizeof(g_search_text) / sizeof(g_search_text[0]));
-        if (has_replace) {
-            unescape_search_buffer(g_replace_text,
-                                   sizeof(g_replace_text) / sizeof(g_replace_text[0]));
-        }
+        unescape_search_buffer(g_search_eff, sizeof(g_search_eff) / sizeof(g_search_eff[0]));
+        unescape_search_buffer(g_replace_eff, sizeof(g_replace_eff) / sizeof(g_replace_eff[0]));
     }
 }
 
@@ -1780,9 +1795,9 @@ static bool selection_matches_search(Window *window) {
 
     bool matches;
     if (g_match_case) {
-        matches = wcscmp(wide, g_search_text) == 0;
+        matches = wcscmp(wide, g_search_eff) == 0;
     } else {
-        matches = _wcsicmp(wide, g_search_text) == 0;
+        matches = _wcsicmp(wide, g_search_eff) == 0;
     }
     free(wide);
     return matches;
@@ -1790,13 +1805,13 @@ static bool selection_matches_search(Window *window) {
 
 static void replace_current(Window *window) {
     if (selection_matches_search(window)) {
-        SendMessageW(window->edit_hwnd, EM_REPLACESEL, TRUE, (LPARAM) g_replace_text);
+        SendMessageW(window->edit_hwnd, EM_REPLACESEL, TRUE, (LPARAM) g_replace_eff);
     }
     find_next(window, g_search_down);
 }
 
 static void replace_all(Window *window) {
-    if (!window || !window->edit_hwnd || g_search_text[0] == L'\0')
+    if (!window || !window->edit_hwnd || g_search_eff[0] == L'\0')
         return;
 
     WPARAM flags = FR_DOWN;
@@ -1811,7 +1826,7 @@ static void replace_all(Window *window) {
     for (;;) {
         FINDTEXTEXW ft;
         memset(&ft, 0, sizeof(ft));
-        ft.lpstrText = g_search_text;
+        ft.lpstrText = g_search_eff;
         ft.chrg.cpMin = start;
         ft.chrg.cpMax = -1;
 
@@ -1820,8 +1835,8 @@ static void replace_all(Window *window) {
             break;
 
         SendMessageW(window->edit_hwnd, EM_EXSETSEL, 0, (LPARAM) &ft.chrgText);
-        SendMessageW(window->edit_hwnd, EM_REPLACESEL, TRUE, (LPARAM) g_replace_text);
-        start = ft.chrgText.cpMin + (LONG) wcslen(g_replace_text);
+        SendMessageW(window->edit_hwnd, EM_REPLACESEL, TRUE, (LPARAM) g_replace_eff);
+        start = ft.chrgText.cpMin + (LONG) wcslen(g_replace_eff);
         replaced++;
     }
 
@@ -4082,9 +4097,9 @@ static void apply_edit_command_states(Window *window, HMENU menu) {
     EnableMenuItem(menu, ID_EDIT_PASTE, can_paste ? enabled : disabled);
     EnableMenuItem(menu, ID_EDIT_FIND, has_text ? enabled : disabled);
     EnableMenuItem(menu, ID_EDIT_FIND_NEXT,
-                   (has_text && g_search_text[0] != L'\0') ? enabled : disabled);
+                   (has_text && g_search_eff[0] != L'\0') ? enabled : disabled);
     EnableMenuItem(menu, ID_EDIT_FIND_PREV,
-                   (has_text && g_search_text[0] != L'\0') ? enabled : disabled);
+                   (has_text && g_search_eff[0] != L'\0') ? enabled : disabled);
     EnableMenuItem(menu, ID_EDIT_REPLACE, has_text ? enabled : disabled);
 
     // Markdown tools (only present in the menu when enabled; harmless
@@ -4345,14 +4360,14 @@ static void handle_command(Window *window, WORD command) {
             ui_post_event(UI_EVENT_EDIT_FIND, window, NULL);
             break;
         case ID_EDIT_FIND_NEXT:
-            if (g_search_text[0] != L'\0') {
+            if (g_search_eff[0] != L'\0') {
                 find_next(window, true);
             } else {
                 ui_post_event(UI_EVENT_EDIT_FIND, window, NULL);
             }
             break;
         case ID_EDIT_FIND_PREV:
-            if (g_search_text[0] != L'\0') {
+            if (g_search_eff[0] != L'\0') {
                 find_next(window, false);
             } else {
                 ui_post_event(UI_EVENT_EDIT_FIND, window, NULL);
