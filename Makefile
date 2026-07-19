@@ -74,10 +74,18 @@ RELEASE = $(shell grep '^#define NPAD_VERSION_RELEASE' src/main.h | cut -d' ' -f
 BASE_VERSION = v$(MAJOR).$(MINOR).$(PATCH)
 HEADER_VERSION = $(BASE_VERSION)-$(RELEASE)
 GIT_EXACT_TAG = $(shell git describe --tags --exact-match --dirty 2>/dev/null)
-GIT_COMMIT = $(shell git describe --tags --always --dirty 2>/dev/null)
+# Bare short hash (plus -dirty), NOT git describe --tags: describe leads with
+# the most recent tag, so a dev build's About box would read "v0.12.0-dev
+# (v0.11.0-2-gabc123)" and look like the wrong version.
+GIT_COMMIT_RAW = $(shell git rev-parse --short HEAD 2>/dev/null)
+ifneq ($(GIT_COMMIT_RAW),)
+GIT_COMMIT = $(GIT_COMMIT_RAW)$(shell git diff-index --quiet HEAD -- 2>/dev/null || echo -dirty)
+else
+GIT_COMMIT =
+endif
 # Building exactly at the matching release tag (clean tree): plain "v0.10.1".
-# Otherwise a dev build: "v0.10.2-dev (v0.10.1-3-gabc123)"; without git
-# available (e.g. some CI shells), just "v0.10.2-dev" - never empty parens.
+# Otherwise a dev build: "v0.10.2-dev (abc1234)"; without git available
+# (e.g. some CI shells), just "v0.10.2-dev" - never empty parens.
 ifeq ($(GIT_EXACT_TAG),$(BASE_VERSION))
 VERSION ?= $(BASE_VERSION)
 else ifneq ($(GIT_COMMIT),)

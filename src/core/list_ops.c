@@ -337,43 +337,82 @@ static const char *indent_prefix(ListIndentFormat fmt) {
         case LIST_INDENT_TAB:
             return "\t";
         case LIST_INDENT_ASTERISK:
-            return "*";
+            return "* ";
         case LIST_INDENT_HYPHEN:
-            return "-";
+            return "- ";
         case LIST_INDENT_ASTERISK_LSP:
-            return " *";
+            return " * ";
         case LIST_INDENT_HYPHEN_LSP:
-            return " -";
+            return " - ";
+        case LIST_INDENT_CUSTOM:
+            break; // Caller-supplied; resolved by effective_prefix
     }
     return "    ";
 }
 
-static bool is_marker_format(ListIndentFormat fmt) {
-    return fmt != LIST_INDENT_SPACES && fmt != LIST_INDENT_TAB;
+// The prefix actually in effect: the custom string for LIST_INDENT_CUSTOM,
+// otherwise the built-in table above.
+static const char *effective_prefix(ListIndentFormat fmt, const char *custom) {
+    if (fmt == LIST_INDENT_CUSTOM)
+        return custom ? custom : "";
+    return indent_prefix(fmt);
 }
 
-// The single marker character for a marker format ('*' or '-').
-static char marker_char(ListIndentFormat fmt) {
-    if (fmt == LIST_INDENT_ASTERISK || fmt == LIST_INDENT_ASTERISK_LSP)
-        return '*';
-    return '-';
+static bool prefix_is_whitespace(const char *p) {
+    for (; *p; p++) {
+        if (*p != ' ' && *p != '\t')
+            return false;
+    }
+    return true; // Empty counts as whitespace-only
+}
+
+// Marker formats get markdown-style nesting; whitespace formats (and
+// whitespace-only custom prefixes) stack literally.
+static bool is_marker_format(ListIndentFormat fmt, const char *custom) {
+    if (fmt == LIST_INDENT_SPACES || fmt == LIST_INDENT_TAB)
+        return false;
+    if (fmt == LIST_INDENT_CUSTOM)
+        return custom && *custom && !prefix_is_whitespace(custom);
+    return true;
+}
+
+// The marker body: the effective prefix with its leading whitespace stripped
+// (e.g. "* " for both asterisk formats). Sets *body_len.
+static const char *marker_body(ListIndentFormat fmt, const char *custom, size_t *body_len) {
+    const char *p = effective_prefix(fmt, custom);
+    while (*p == ' ' || *p == '\t')
+        p++;
+    *body_len = strlen(p);
+    return p;
 }
 
 #define NEST "  " // Two spaces: markdown nesting step for an already-marked line
 
 // Does the line already carry this marker (optionally behind nesting spaces)?
-static bool line_has_marker(const char *line, size_t len, ListIndentFormat fmt) {
-    char mc = marker_char(fmt);
+// Matches the full marker body ("* " incl. its trailing space) or, so empty
+// bullets and pre-0.13 space-less bullets still count, the body minus trailing
+// whitespace when the line ends right after it. "*emphasis*" is NOT a bullet.
+static bool line_has_marker(const char *line, size_t len, ListIndentFormat fmt,
+                            const char *custom) {
+    size_t bl;
+    const char *body = marker_body(fmt, custom, &bl);
+    size_t tl = bl;
+    while (tl > 0 && (body[tl - 1] == ' ' || body[tl - 1] == '\t'))
+        tl--;
     size_t i = 0;
     while (i < len && line[i] == ' ')
         i++;
-    return i < len && line[i] == mc;
+    if (len - i >= bl && memcmp(line + i, body, bl) == 0)
+        return true;
+    return tl > 0 && len - i == tl && memcmp(line + i, body, tl) == 0;
 }
 
-// Build a transformed document by applying fn(line,len,out,fmt) per line.
-typedef size_t (*LineXform)(const char *line, size_t len, char *out, ListIndentFormat fmt);
+// Build a transformed document by applying fn(line,len,out,fmt,custom) per line.
+typedef size_t (*LineXform)(const char *line, size_t len, char *out, ListIndentFormat fmt,
+                            const char *custom);
 
-static char *apply_per_line(const char *text, ListIndentFormat fmt, LineXform fn, size_t max_grow) {
+static char *apply_per_line(const char *text, ListIndentFormat fmt, const char *custom,
+                            LineXform fn, size_t max_grow) {
     if (!text)
         return NULL;
     size_t count;
@@ -391,7 +430,7 @@ static char *apply_per_line(const char *text, ListIndentFormat fmt, LineXform fn
 
     size_t o = 0;
     for (size_t i = 0; i < count; i++) {
-        o += fn(lines[i].start, lines[i].len, out + o, fmt);
+        o += fn(lines[i].start, lines[i].len, out + o, fmt, custom);
         if (i + 1 < count)
             out[o++] = '\n';
     }
@@ -402,39 +441,52 @@ static char *apply_per_line(const char *text, ListIndentFormat fmt, LineXform fn
     return out;
 }
 
-static size_t indent_line(const char *line, size_t len, char *out, ListIndentFormat fmt) {
-    if (is_marker_format(fmt)) {
-        if (line_has_marker(line, len, fmt)) {
-            // Already a bullet: deepen with nesting spaces, keep one marker
-            memcpy(out, NEST, strlen(NEST));
-            memcpy(out + strlen(NEST), line, len);
-            return strlen(NEST) + len;
-        }
-        const char *p = indent_prefix(fmt);
-        size_t pl = strlen(p);
-        memcpy(out, p, pl);
-        memcpy(out + pl, line, len);
-        return pl + len;
+static size_t indent_line(const char *line, size_t len, char *out, ListIndentFormat fmt,
+                          const char *custom) {
+    if (is_marker_format(fmt, custom) && line_has_marker(line, len, fmt, custom)) {
+        // Already a bullet: deepen with nesting spaces, keep one marker
+        memcpy(out, NEST, strlen(NEST));
+        memcpy(out + strlen(NEST), line, len);
+        return strlen(NEST) + len;
     }
-    const char *p = indent_prefix(fmt);
+    const char *p = effective_prefix(fmt, custom);
     size_t pl = strlen(p);
     memcpy(out, p, pl);
     memcpy(out + pl, line, len);
     return pl + len;
 }
 
-static size_t unindent_line(const char *line, size_t len, char *out, ListIndentFormat fmt) {
-    if (is_marker_format(fmt)) {
+static size_t unindent_line(const char *line, size_t len, char *out, ListIndentFormat fmt,
+                            const char *custom) {
+    if (is_marker_format(fmt, custom)) {
         // Deepened bullet: strip one nesting step (two leading spaces) when it
         // sits in front of the marker
-        if (len >= 2 && line[0] == ' ' && line[1] == ' ' && line_has_marker(line, len, fmt)) {
+        if (len >= 2 && line[0] == ' ' && line[1] == ' ' &&
+            line_has_marker(line, len, fmt, custom)) {
             memcpy(out, line + 2, len - 2);
             return len - 2;
         }
-        // Base bullet: strip the marker prefix (e.g. " -" -> both chars)
-        const char *p = indent_prefix(fmt);
+        // Base bullet: strip the whole marker prefix (e.g. " - " -> all three)
+        const char *p = effective_prefix(fmt, custom);
         size_t pl = strlen(p);
         if (len >= pl && memcmp(line, p, pl) == 0) {
+            memcpy(out, line + pl, len - pl);
+            return len - pl;
+        }
+        // Empty bullet: the prefix minus its trailing whitespace with nothing
+        // after it (also covers pre-0.13 space-less bullets like " -")
+        size_t tl = pl;
+        while (tl > 0 && (p[tl - 1] == ' ' || p[tl - 1] == '\t'))
+            tl--;
+        if (tl > 0 && len == tl && memcmp(line, p, tl) == 0)
+            return 0;
+        memcpy(out, line, len); // No-op
+        return len;
+    }
+    if (fmt == LIST_INDENT_CUSTOM) {
+        // Whitespace-only custom prefix: strip one literal occurrence
+        size_t pl = strlen(custom ? custom : "");
+        if (pl > 0 && len >= pl && memcmp(line, custom, pl) == 0) {
             memcpy(out, line + pl, len - pl);
             return len - pl;
         }
@@ -455,11 +507,29 @@ static size_t unindent_line(const char *line, size_t len, char *out, ListIndentF
     return len - strip;
 }
 
-char *list_indent_lines(const char *text, ListIndentFormat fmt) {
-    // Longest prefix growth is four spaces
-    return apply_per_line(text, fmt, indent_line, 4);
+// A CUSTOM format with no prefix configured is a no-op (the UI prompts before
+// it gets here); returning a copy keeps the caller's free() contract uniform.
+static char *copy_text(const char *text) {
+    if (!text)
+        return NULL;
+    size_t len = strlen(text);
+    char *out = malloc(len + 1);
+    if (out)
+        memcpy(out, text, len + 1);
+    return out;
 }
 
-char *list_unindent_lines(const char *text, ListIndentFormat fmt) {
-    return apply_per_line(text, fmt, unindent_line, 0);
+char *list_indent_lines(const char *text, ListIndentFormat fmt, const char *custom_prefix) {
+    if (fmt == LIST_INDENT_CUSTOM && (!custom_prefix || !*custom_prefix))
+        return copy_text(text);
+    // Growth per line is the full prefix (NEST is shorter); keep the historic
+    // 4-byte floor for the built-in formats
+    size_t pl = strlen(effective_prefix(fmt, custom_prefix));
+    return apply_per_line(text, fmt, custom_prefix, indent_line, pl > 4 ? pl : 4);
+}
+
+char *list_unindent_lines(const char *text, ListIndentFormat fmt, const char *custom_prefix) {
+    if (fmt == LIST_INDENT_CUSTOM && (!custom_prefix || !*custom_prefix))
+        return copy_text(text);
+    return apply_per_line(text, fmt, custom_prefix, unindent_line, 0);
 }

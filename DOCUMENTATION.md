@@ -124,12 +124,14 @@ All settings live in `settings.json` and are editable in Preferences
 The **Use Current** button copies the active window's font type and zoom into
 the fields.
 
-### Lists (Preferences > Lists) - optional list tools
+### Markdown (Preferences > Markdown) - optional Markdown list tools
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `list_tools_enabled` | bool | `false` | Show the **List** menu and matching right-click items (Sort, Unique, Convert Delimiters, Indent/Unindent) and enable Ctrl+] / Ctrl+[. Off by default for classic-Notepad compatibility. |
-| `list_default_indent_format` | int | `0` (Spaces) | Format used by Ctrl+] / Ctrl+[ and the default indent: 0 spaces, 1 tab, 2 `*`, 3 `-`, 4 ` *`, 5 ` -`. |
+| `list_tools_enabled` | bool | `false` | Show the **Markdown** menu and matching right-click items (Sort, Unique, Convert Delimiters, Indent/Unindent), the indent shortcuts, cut-line Ctrl+X, and Enter list continuation. Off by default for classic-Notepad compatibility. |
+| `list_default_indent_format` | int | `0` (Spaces) | Format used by the default indent shortcut: 0 spaces, 1 tab, 2 `* `, 3 `- `, 4 ` * `, 5 ` - `, 6 custom. Markers include a trailing space. |
+| `list_custom_indent` | string | (unset) | The custom indent prefix (format 6), stored as typed; escapes (`\t` `\\` `\uXXXX`) are interpreted when used. Prompted for on first use if empty. |
+| `list_indent_shortcut_brackets` | bool | `false` | Use Ctrl+] / Ctrl+[ for indent/unindent instead of the default Tab / Shift+Tab. |
 | `list_sort_case_sensitive` | bool | `false` | Sort compares case-sensitively (toggle from the Sort submenu). |
 
 ### Other persisted state (no dedicated UI)
@@ -139,7 +141,7 @@ the fields.
 | `word_wrap` | Word wrap on/off (Format > Word Wrap, Alt+Z). |
 | `window_x/y/width/height/maximized` | Window geometry, saved on exit. First run uses ~48% x ~72% of the monitor work area, centred. |
 | `recent_file_0..9` | Recent files list. |
-| `find_match_case`, `find_whole_word`, `find_search_down`, `find_wrap_around` | Find/Replace options. |
+| `find_match_case`, `find_whole_word`, `find_search_down`, `find_wrap_around`, `find_interpret_escapes` | Find/Replace options (checkboxes in the dialogs). |
 | `find_hist_0..9`, `replace_hist_0..9` | Recent search/replace terms. |
 
 ## View state vs settings
@@ -177,7 +179,9 @@ propagates live to all open npad windows.
 | Ctrl+Plus / Ctrl+Minus / Ctrl+0 | Zoom in / out / reset (this window; Ctrl+Scroll also zooms) |
 | Ctrl+, | Preferences |
 | Ctrl+Shift+. | Preferences opened on the hidden Debug page (also: Shift+click the Preferences menu item) |
-| Ctrl+] / Ctrl+[ | Indent / Unindent (list tools; only when enabled in Preferences > Lists) |
+| Tab / Shift+Tab | Indent / Unindent the selected lines (Markdown tools; any selection - without one, Tab types a tab). A preference switches this binding to Ctrl+] / Ctrl+[. |
+| Ctrl+X (no selection) | Cut the whole current line (Markdown tools); Ctrl+V then pastes that line above the current line, keeping the caret in place, until the clipboard changes |
+| Enter (on a list line) | Continue the list: the new line starts with the same indent + marker (Markdown tools). On an empty bullet, removes the marker and inserts a plain newline (ends the list). |
 
 ## Status bar
 
@@ -227,8 +231,8 @@ position). Not intended for direct use.
 - **Emoji & mixed scripts**: characters the configured font lacks (emoji,
   CJK, etc.) render via Windows font fallback - when typed, when a file is
   opened, and across font or theme changes.
-- **List tools** (Preferences > Lists, off by default): add a **List** menu
-  and right-click items.
+- **Markdown list tools** (Preferences > Markdown, off by default): add a
+  **Markdown** menu and right-click items.
   - *Sort / Unique* treat each line as an entry. If the selection spans more
     than one line, only those lines are affected (extended to whole lines);
     otherwise the whole document is. Unique keeps the first occurrence.
@@ -236,12 +240,28 @@ position). Not intended for direct use.
     interpret `\n \r \t \\ \0 \uXXXX`, so e.g. From `,` To `\r\n` turns a
     comma-separated line into separate lines. It applies to the selection
     (when "Selection only" is ticked) or the whole document.
-  - *Indent / Unindent* (Ctrl+] / Ctrl+[, or the Indent submenu) prefix each
-    target line. The six formats are spaces, tab, `*`, `-`, ` *`, ` -`.
-    Indenting a line that already has the marker adds two spaces instead of a
-    second marker (markdown-style nesting); unindent removes one unit - two
-    nesting spaces, then the marker itself. Whitespace formats add/remove a
-    tab or up to four spaces. Each operation is a single undo step.
+  - *Indent / Unindent* (Tab / Shift+Tab on a selection by default - a
+    preference switches to Ctrl+] / Ctrl+[ - or the Indent submenu) prefix
+    each target line. The formats are spaces, tab, `* `, `- `, ` * `, ` - `
+    (markers include a trailing space) and *Custom…*, which prompts for any
+    prefix (escapes `\t \\ \uXXXX` allowed) and remembers it. Indenting a
+    line that already has its marker adds two spaces instead of a second
+    marker (markdown-style nesting); unindent removes one unit - two nesting
+    spaces, then the marker itself. Whitespace formats add/remove a tab or
+    up to four spaces. Each operation is a single undo step. Line scoping
+    follows logical lines, so word wrap does not fragment the target.
+  - *Enter continues lists*: pressing Enter on a line starting with a marker
+    (`* `, `- `, or the custom prefix, at any nesting depth) starts the next
+    line with the same indent and marker; pressing Enter on an empty bullet
+    removes the marker and inserts a plain newline, ending the list.
+  - *Cut line / paste above*: with nothing selected, Ctrl+X cuts the whole
+    current line (including its line break). Ctrl+V then pastes that line
+    above the current line while the caret stays put; this holds for repeat
+    pastes until something else is copied to the clipboard.
+- **Find/Replace escapes**: an "Interpret escapes" checkbox in the Find and
+  Replace dialogs makes both fields interpret `\n \r \t \\ \uXXXX`, so line
+  breaks can be searched for and inserted. Search history records the text
+  exactly as typed.
 - **Debug diagnostics**: a hidden Preferences page (Ctrl+Shift+. or
   Shift+click the Preferences menu item) shows the startup phase profile,
   settings/recovery paths and counts, and live paint/selection counters,

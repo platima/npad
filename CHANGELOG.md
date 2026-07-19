@@ -5,6 +5,45 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-07-19
+
+### ✨ Features
+- **Custom indent format**: the Indent submenu and Preferences gain a
+  **Custom…** option - any prefix (escapes `\t \\ \uXXXX` allowed), prompted
+  for with the saved value prefilled and remembered across sessions.
+  Non-whitespace custom prefixes behave like the built-in markers
+  (markdown-style nesting).
+- **Tab / Shift+Tab indent** (Markdown tools): with any selection, Tab
+  indents and Shift+Tab unindents using the default format; without one, Tab
+  still types a tab. A new preference switches the binding back to
+  **Ctrl+]** / **Ctrl+[**; menu labels follow the active binding.
+- **Enter continues lists** (Markdown tools): Enter on a `* ` / `- ` /
+  custom-marker line starts the next line with the same indent and marker;
+  Enter on an empty bullet removes the marker and inserts a plain newline,
+  ending the list.
+- **Cut line / paste above** (Markdown tools): Ctrl+X with no selection cuts
+  the whole current line; Ctrl+V then pastes it above the current line with
+  the caret staying put, until the clipboard changes hands.
+- **Find/Replace escapes**: a new "Interpret escapes" checkbox in both
+  dialogs makes the fields understand `\n \r \t \\ \uXXXX`, so line breaks
+  can be searched and inserted. History keeps the raw typed text.
+
+### 🔄 Changed
+- **Marker formats now include a trailing space** (`* `, `- `, ` * `, ` - `)
+  for real markdown output; unindent removes the marker including the space
+  (and still strips old space-less bullets).
+- The **Lists** preferences page and menu are now called **Markdown**
+  (settings keys are unchanged).
+- Go To Line and Convert Delimiters dialogs open centered on the npad
+  window instead of the top-left corner of the screen.
+- Sort/Unique/Indent line scoping now follows logical lines, so word wrap
+  no longer fragments the target into display lines.
+
+### 🐛 Bug Fixes
+- Help > About no longer shows the previous release's tag in the commit
+  suffix of dev builds (e.g. `v0.12.0-dev (v0.11.0-2-gabc123)`); it now
+  shows the plain commit hash.
+
 ## [0.12.0] - 2026-07-16
 
 ### ✨ Features

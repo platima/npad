@@ -17,6 +17,7 @@
 #define IDD_REPLACE 201
 #define IDD_GOTO 202
 #define IDD_CONVERT_DELIM 203
+#define IDD_CUSTOM_INDENT 204
 #define IDD_PREFS_GENERAL 210
 #define IDD_PREFS_APPEARANCE 211
 #define IDD_PREFS_BACKUP 212
@@ -31,6 +32,7 @@
 #define ID_FIND_CASE 3004
 #define ID_FIND_WHOLE_WORD 3005
 #define ID_FIND_WRAP 3007
+#define ID_FIND_ESCAPES 3139 // Shared by Find and Replace, like the options above
 
 // Control IDs for Replace Dialog
 #define ID_REPLACE_WITH 3006
@@ -80,15 +82,21 @@
 #define ID_PREF_DEBUG_TEXT 3129
 #define ID_PREF_COPY_DIAG 3130
 
-// Preferences: Lists page
+// Preferences: Markdown page
 #define ID_PREF_LIST_ENABLED 3131
 #define ID_PREF_LIST_INDENT_FORMAT 3132
+#define ID_PREF_LIST_CUSTOM_TEXT 3137
+#define ID_PREF_LIST_TAB_BRACKETS 3138
 
 // Convert Delimiters dialog
 #define ID_DELIM_FROM 3133
 #define ID_DELIM_TO 3134
 #define ID_DELIM_SEL_ONLY 3135
 #define ID_DELIM_HINT 3136
+
+// Custom Indent dialog
+#define ID_CUSTOM_INDENT_EDIT 3140
+#define ID_CUSTOM_INDENT_HINT 3141
 
 // Static text controls
 #define IDC_STATIC -1

@@ -123,7 +123,7 @@ static double qpc_ms(void) {
 #define ID_VIEW_ZOOM_IN 2303
 #define ID_VIEW_ZOOM_OUT 2304
 #define ID_VIEW_ZOOM_RESET 2305
-// List tools (optional; shown when list_tools_enabled)
+// Markdown list tools (optional; shown when list_tools_enabled)
 #define ID_LIST_SORT_ASC 2114
 #define ID_LIST_SORT_DESC 2115
 #define ID_LIST_SORT_CASE 2116
@@ -131,7 +131,7 @@ static double qpc_ms(void) {
 #define ID_LIST_CONVERT_DELIM 2118
 #define ID_LIST_INDENT 2119      // Ctrl+], default format
 #define ID_LIST_UNINDENT 2120    // Ctrl+[
-#define ID_LIST_INDENT_BASE 2121 // 2121..2126, one per ListIndentFormat
+#define ID_LIST_INDENT_BASE 2121 // 2121..2127, one per ListIndentFormat (2127 = Custom, prompts)
 #define ID_HELP_ABOUT 2401
 
 #define MAX_RECENT_MENU_FILES 10
@@ -153,7 +153,9 @@ typedef struct Window {
     char status_line_ending[32]; // e.g. "Windows (CRLF)"
     bool status_update_pending;  // Coalescing timer armed (see schedule_status_update)
     wchar_t status_cache[6][64]; // Last text sent per status part; skip identical sends
-    bool list_menu_present;      // The optional top-level List menu is inserted
+    bool list_menu_present;      // The optional top-level Markdown menu is inserted
+    bool line_cut_pending;       // Last Ctrl+X was a whole-line cut (paste-above mode)
+    DWORD line_cut_clip_seq;     // Clipboard sequence number right after that cut
 } Window;
 
 // Global variables
@@ -186,6 +188,12 @@ static bool g_match_case = false;
 static bool g_whole_word = false;
 static bool g_search_down = true;
 static bool g_wrap_around = true;
+static bool g_interpret_escapes = false; // Interpret \n \t \\ \uXXXX in find/replace
+
+// A consumed WM_KEYDOWN (Tab indent, Enter list continuation) must also eat
+// the WM_CHAR that TranslateMessage already posted for the same keystroke
+static bool g_swallow_tab_char = false;
+static bool g_swallow_return_char = false;
 
 // Last find/replace dialog position, remembered for the session
 static POINT g_find_dialog_pos;
@@ -201,6 +209,10 @@ static void create_menu(Window *window);
 static void build_accelerators(Window *window);
 static void apply_list_tools_menu(Window *window);
 static void show_convert_delim_dialog(Window *window);
+static bool show_custom_indent_dialog(Window *window);
+static void list_do(const Window *window, int op, int arg);
+static void list_indent_default(Window *window, bool unindent);
+static char *get_custom_indent(void);
 static void apply_new_window_pref(Window *window);
 static void launch_new_window(void);
 static void handle_command(Window *window, WORD command);
@@ -231,6 +243,7 @@ static bool font_is_installed(const wchar_t *face);
 static void on_view_state_changed(Window *window);
 static void broadcast_to_npad_windows(UINT msg, LPARAM lparam);
 void ui_platform_notify_settings_changed(void);
+bool ui_platform_has_selection(Window *window);
 
 // ---------------------------------------------------------------------------
 // UTF-8 <-> UTF-16 helpers
@@ -342,12 +355,214 @@ static bool resolve_theme_dark_mode(void) {
     return theme_colors(NULL, NULL);
 }
 
+// Center a modal dialog on its owner window, clamped to the owner's monitor
+// work area. Rects are physical pixels, so this is DPI-agnostic.
+static void center_dialog_on_owner(HWND dlg) {
+    HWND owner = GetWindow(dlg, GW_OWNER);
+    if (!owner)
+        owner = GetParent(dlg);
+    if (!owner)
+        return;
+    RECT ro, rd;
+    if (!GetWindowRect(owner, &ro) || !GetWindowRect(dlg, &rd))
+        return;
+    int w = rd.right - rd.left;
+    int h = rd.bottom - rd.top;
+    int x = ro.left + ((ro.right - ro.left) - w) / 2;
+    int y = ro.top + ((ro.bottom - ro.top) - h) / 2;
+
+    MONITORINFO mi;
+    mi.cbSize = sizeof(mi);
+    if (GetMonitorInfoW(MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST), &mi)) {
+        if (x + w > mi.rcWork.right)
+            x = mi.rcWork.right - w;
+        if (y + h > mi.rcWork.bottom)
+            y = mi.rcWork.bottom - h;
+        if (x < mi.rcWork.left)
+            x = mi.rcWork.left;
+        if (y < mi.rcWork.top)
+            y = mi.rcWork.top;
+    }
+    SetWindowPos(dlg, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+// Precise character-position length of the control's text (RichEdit counts
+// each paragraph break as one '\r'; WM_GETTEXTLENGTH overcounts CRLF pairs).
+static LONG edit_text_cp_length(HWND e) {
+    GETTEXTLENGTHEX gtl;
+    gtl.flags = GTL_NUMCHARS | GTL_PRECISE;
+    gtl.codepage = 1200; // UTF-16
+    return (LONG) SendMessageW(e, EM_GETTEXTLENGTHEX, (WPARAM) &gtl, 0);
+}
+
+// Bounds of the logical line (paragraph) containing pos, excluding its break.
+// EM_LINEINDEX/EM_LINELENGTH work on *display* lines when word wrap is on, so
+// walk the actual '\r' breaks via EM_FINDTEXTEXW instead. Returns true when a
+// break follows the line (i.e. it is not the last line of the document).
+static bool get_paragraph_bounds(HWND e, LONG pos, LONG *start, LONG *end) {
+    FINDTEXTEXW ft;
+    ft.lpstrText = L"\r";
+    ft.chrgText.cpMin = -1;
+    ft.chrgText.cpMax = -1;
+
+    // Backward over [0, pos) for the previous break
+    ft.chrg.cpMin = pos;
+    ft.chrg.cpMax = 0;
+    LRESULT hit = SendMessageW(e, EM_FINDTEXTEXW, 0, (LPARAM) &ft);
+    *start = (hit >= 0) ? ft.chrgText.cpMax : 0;
+
+    // Forward from pos for the next break
+    ft.chrg.cpMin = pos;
+    ft.chrg.cpMax = -1;
+    hit = SendMessageW(e, EM_FINDTEXTEXW, FR_DOWN, (LPARAM) &ft);
+    if (hit >= 0) {
+        *end = ft.chrgText.cpMin;
+        return true;
+    }
+    *end = edit_text_cp_length(e);
+    return false;
+}
+
+// Tab/Shift+Tab indent handling (Markdown tools, default binding). Returns
+// true when the keystroke was consumed.
+static bool handle_markdown_tab(HWND hwnd) {
+    if (!g_main_window || hwnd != g_main_window->edit_hwnd)
+        return false;
+    if (!settings_get_bool("list_tools_enabled", false) ||
+        settings_get_bool("list_indent_shortcut_brackets", false))
+        return false;
+    if (GetKeyState(VK_CONTROL) < 0)
+        return false; // Ctrl+Tab is not ours
+    bool shift = GetKeyState(VK_SHIFT) < 0;
+    if (ui_platform_has_selection(g_main_window)) {
+        list_indent_default(g_main_window, shift);
+        g_swallow_tab_char = true;
+        return true;
+    }
+    if (shift) {
+        // Shift+Tab with no selection: consume as a no-op (RichEdit would
+        // otherwise insert a literal tab, which Shift+Tab never means)
+        g_swallow_tab_char = true;
+        return true;
+    }
+    return false; // Plain Tab types a tab, classic Notepad behavior
+}
+
+// Enter on a list line continues the marker on the new line; Enter on an
+// empty bullet removes the marker and inserts a plain newline (ends the
+// list). Returns true when the keystroke was consumed.
+static bool handle_markdown_return(HWND hwnd) {
+    if (!g_main_window || hwnd != g_main_window->edit_hwnd)
+        return false;
+    if (!settings_get_bool("list_tools_enabled", false))
+        return false;
+    if (GetKeyState(VK_CONTROL) < 0 || GetKeyState(VK_SHIFT) < 0)
+        return false;
+
+    CHARRANGE sel = { 0, 0 };
+    SendMessageW(hwnd, EM_EXGETSEL, 0, (LPARAM) &sel);
+    if (sel.cpMin != sel.cpMax)
+        return false; // Selection: stock replace-selection Enter
+
+    LONG start, end;
+    get_paragraph_bounds(hwnd, sel.cpMin, &start, &end);
+    if (end <= start)
+        return false;
+
+    // Fetch the head of the line; any real prefix fits well within this
+    LONG fetch_end = (end - start > 256) ? start + 256 : end;
+    wchar_t buf[257];
+    TEXTRANGEW tr;
+    tr.chrg.cpMin = start;
+    tr.chrg.cpMax = fetch_end;
+    tr.lpstrText = buf;
+    LONG got = (LONG) SendMessageW(hwnd, EM_GETTEXTRANGE, 0, (LPARAM) &tr);
+    if (got <= 0)
+        return false;
+    buf[got] = L'\0';
+
+    // Parse leading whitespace, then a marker: the custom prefix (if any,
+    // whitespace-stripped) first, then the built-in "* " / "- "
+    LONG ws = 0;
+    while (ws < got && (buf[ws] == L' ' || buf[ws] == L'\t'))
+        ws++;
+    LONG marker_len = 0;
+    char *custom = get_custom_indent();
+    if (custom && custom[0]) {
+        const char *body8 = custom;
+        while (*body8 == ' ' || *body8 == '\t')
+            body8++;
+        if (*body8) {
+            wchar_t *wbody = utf8_to_wide(body8);
+            if (wbody) {
+                size_t bl = wcslen(wbody);
+                if (bl > 0 && (size_t) (got - ws) >= bl && wcsncmp(buf + ws, wbody, bl) == 0)
+                    marker_len = (LONG) bl;
+                free(wbody);
+            }
+        }
+    }
+    free(custom);
+    if (marker_len == 0 && ws + 1 < got && (buf[ws] == L'*' || buf[ws] == L'-') &&
+        buf[ws + 1] == L' ')
+        marker_len = 2;
+    if (marker_len == 0)
+        return false;
+
+    LONG prefix_len = ws + marker_len;
+    LONG caret = sel.cpMin;
+    if (caret < start + prefix_len)
+        return false; // Caret inside the prefix: plain Enter
+
+    if (end - start == prefix_len) {
+        // Empty bullet: end the list - drop the marker, keep the newline
+        // (single EM_REPLACESEL, one undo unit)
+        CHARRANGE r = { start, caret };
+        SendMessageW(hwnd, EM_EXSETSEL, 0, (LPARAM) &r);
+        SendMessageW(hwnd, EM_REPLACESEL, TRUE, (LPARAM) L"\r");
+    } else {
+        // Continue the list: newline + the same whitespace/marker prefix
+        // (splits the line when the caret is mid-content)
+        wchar_t ins[260];
+        ins[0] = L'\r';
+        memcpy(ins + 1, buf, (size_t) prefix_len * sizeof(wchar_t));
+        ins[1 + prefix_len] = L'\0';
+        SendMessageW(hwnd, EM_REPLACESEL, TRUE, (LPARAM) ins);
+    }
+    SendMessageW(hwnd, EM_SCROLLCARET, 0, 0);
+    g_swallow_return_char = true;
+    return true;
+}
+
 // Subclass for the edit control: refresh the status bar after events that
 // EN_SELCHANGE does not reliably cover (native Ctrl+wheel zoom, caret
 // movement onto a new empty line, mouse-driven caret moves)
 static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam,
                                            UINT_PTR id, DWORD_PTR ref) {
     (void) ref;
+
+    // Markdown keyboard handling runs BEFORE the default proc so consumed
+    // keys never reach the control. A consumed key still has its WM_CHAR
+    // already queued by TranslateMessage, so that gets eaten too.
+    if (msg == WM_KEYDOWN) {
+        if (wparam == VK_TAB && handle_markdown_tab(hwnd))
+            return 0;
+        if (wparam == VK_RETURN && handle_markdown_return(hwnd)) {
+            if (g_main_window)
+                schedule_status_update(g_main_window);
+            return 0;
+        }
+    } else if (msg == WM_CHAR) {
+        if (wparam == L'\t' && g_swallow_tab_char) {
+            g_swallow_tab_char = false;
+            return 0;
+        }
+        if (wparam == L'\r' && g_swallow_return_char) {
+            g_swallow_return_char = false;
+            return 0;
+        }
+    }
+
     LRESULT result;
     if (msg == WM_PAINT) {
         // Time the paint for the Debug page's counters, and mark the first
@@ -453,6 +668,7 @@ bool ui_platform_init(void) {
     g_whole_word = settings_get_bool("find_whole_word", false);
     g_search_down = settings_get_bool("find_search_down", true);
     g_wrap_around = settings_get_bool("find_wrap_around", true);
+    g_interpret_escapes = settings_get_bool("find_interpret_escapes", false);
 
     return true;
 }
@@ -905,10 +1121,54 @@ int ui_platform_get_cursor_position(Window *window) {
 // Clipboard and undo
 // ---------------------------------------------------------------------------
 
-void ui_platform_cut(Window *window) {
-    if (window && window->edit_hwnd) {
-        SendMessageW(window->edit_hwnd, WM_CUT, 0, 0);
+// Read CF_UNICODETEXT from the clipboard (malloc'd copy; NULL if unavailable)
+static wchar_t *read_clipboard_text(HWND owner) {
+    if (!OpenClipboard(owner))
+        return NULL;
+    wchar_t *copy = NULL;
+    HANDLE h = GetClipboardData(CF_UNICODETEXT);
+    if (h) {
+        const wchar_t *src = GlobalLock(h);
+        if (src) {
+            size_t len = wcslen(src);
+            copy = malloc((len + 1) * sizeof(wchar_t));
+            if (copy)
+                memcpy(copy, src, (len + 1) * sizeof(wchar_t));
+            GlobalUnlock(h);
+        }
     }
+    CloseClipboard();
+    return copy;
+}
+
+void ui_platform_cut(Window *window) {
+    if (!window || !window->edit_hwnd)
+        return;
+    HWND e = window->edit_hwnd;
+    window->line_cut_pending = false;
+    if (settings_get_bool("list_tools_enabled", false) && !ui_platform_has_selection(window)) {
+        // Markdown tools: Ctrl+X with no selection cuts the whole logical
+        // line, including its line break, onto the clipboard
+        CHARRANGE sel = { 0, 0 };
+        SendMessageW(e, EM_EXGETSEL, 0, (LPARAM) &sel);
+        LONG start, end;
+        bool has_break = get_paragraph_bounds(e, sel.cpMin, &start, &end);
+        if (has_break)
+            end++; // Consume the following '\r' (one cp in RichEdit)
+        else if (start > 0)
+            start--; // Last line: consume the preceding break instead
+        if (start == end)
+            return; // Empty document: nothing to cut, clipboard untouched
+        CHARRANGE line = { start, end };
+        SendMessageW(e, EM_EXSETSEL, 0, (LPARAM) &line);
+        SendMessageW(e, WM_CUT, 0, 0);
+        // Read the sequence number after the cut so our own change counts;
+        // any later clipboard change invalidates paste-above mode
+        window->line_cut_pending = true;
+        window->line_cut_clip_seq = GetClipboardSequenceNumber();
+        return;
+    }
+    SendMessageW(e, WM_CUT, 0, 0);
 }
 
 void ui_platform_copy(Window *window) {
@@ -918,9 +1178,61 @@ void ui_platform_copy(Window *window) {
 }
 
 void ui_platform_paste(Window *window) {
-    if (window && window->edit_hwnd) {
-        SendMessageW(window->edit_hwnd, WM_PASTE, 0, 0);
+    if (!window || !window->edit_hwnd)
+        return;
+    HWND e = window->edit_hwnd;
+    if (settings_get_bool("list_tools_enabled", false) && window->line_cut_pending &&
+        GetClipboardSequenceNumber() == window->line_cut_clip_seq &&
+        !ui_platform_has_selection(window)) {
+        // Paste the line cut by Ctrl+X back ABOVE the current line, keeping
+        // the caret where it is within its own line. Stays in effect for
+        // repeat pastes until the clipboard changes hands.
+        wchar_t *clip = read_clipboard_text(window->hwnd);
+        if (clip && clip[0]) {
+            // A last-line cut starts with the preceding break: strip it, then
+            // guarantee a trailing break so the insert lands as a full line
+            const wchar_t *body = clip;
+            if (body[0] == L'\r' && body[1] == L'\n')
+                body += 2;
+            else if (body[0] == L'\r' || body[0] == L'\n')
+                body += 1;
+            size_t blen = wcslen(body);
+            wchar_t *ins = malloc((blen + 3) * sizeof(wchar_t));
+            if (ins) {
+                memcpy(ins, body, blen * sizeof(wchar_t));
+                size_t n = blen;
+                if (blen == 0 || (body[blen - 1] != L'\n' && body[blen - 1] != L'\r')) {
+                    ins[n++] = L'\r';
+                    ins[n++] = L'\n';
+                }
+                ins[n] = L'\0';
+
+                CHARRANGE sel = { 0, 0 };
+                SendMessageW(e, EM_EXGETSEL, 0, (LPARAM) &sel);
+                LONG caret = sel.cpMin;
+                LONG line_start, line_end;
+                get_paragraph_bounds(e, caret, &line_start, &line_end);
+                LONG offset = caret - line_start;
+
+                CHARRANGE at = { line_start, line_start };
+                SendMessageW(e, EM_EXSETSEL, 0, (LPARAM) &at);
+                SendMessageW(e, EM_REPLACESEL, TRUE, (LPARAM) ins);
+                // Measure the inserted length from the control: RichEdit
+                // stores each break as one cp, not the two chars we sent
+                CHARRANGE after = { 0, 0 };
+                SendMessageW(e, EM_EXGETSEL, 0, (LPARAM) &after);
+                CHARRANGE fin = { after.cpMax + offset, after.cpMax + offset };
+                SendMessageW(e, EM_EXSETSEL, 0, (LPARAM) &fin);
+                SendMessageW(e, EM_SCROLLCARET, 0, 0);
+                free(ins);
+                free(clip);
+                return;
+            }
+        }
+        free(clip); // Clipboard text unavailable: fall back to a normal paste
     }
+    window->line_cut_pending = false;
+    SendMessageW(e, WM_PASTE, 0, 0);
 }
 
 void ui_platform_undo(Window *window) {
@@ -1382,6 +1694,40 @@ static void history_push(const char *prefix, const wchar_t *value) {
     }
 }
 
+// Interpret backslash escapes in a search/replace buffer in place, then
+// normalize CRLF and lone LF to the single '\r' RichEdit uses internally --
+// required both for EM_FINDTEXTEXW to match line breaks and for replace_all's
+// position arithmetic (an inserted break is one cp, whatever we sent).
+static void unescape_search_buffer(wchar_t *buf, size_t cap) {
+    char *utf8 = wide_to_utf8(buf);
+    if (utf8) {
+        char *unescaped = list_unescape(utf8);
+        free(utf8);
+        if (unescaped) {
+            wchar_t *wide = utf8_to_wide(unescaped);
+            free(unescaped);
+            if (wide) {
+                // Unescaping only shrinks, but guard the copy anyway
+                wcsncpy(buf, wide, cap - 1);
+                buf[cap - 1] = L'\0';
+                free(wide);
+            }
+        }
+    }
+    wchar_t *w = buf;
+    for (const wchar_t *r = buf; *r; r++) {
+        if (*r == L'\r' && r[1] == L'\n') {
+            *w++ = L'\r';
+            r++;
+        } else if (*r == L'\n') {
+            *w++ = L'\r';
+        } else {
+            *w++ = *r;
+        }
+    }
+    *w = L'\0';
+}
+
 // Read search parameters out of the find/replace dialog controls and
 // persist them across sessions
 static void read_search_fields(HWND dialog, bool has_replace) {
@@ -1394,6 +1740,7 @@ static void read_search_fields(HWND dialog, bool has_replace) {
     g_match_case = IsDlgButtonChecked(dialog, ID_FIND_CASE) == BST_CHECKED;
     g_whole_word = IsDlgButtonChecked(dialog, ID_FIND_WHOLE_WORD) == BST_CHECKED;
     g_wrap_around = IsDlgButtonChecked(dialog, ID_FIND_WRAP) == BST_CHECKED;
+    g_interpret_escapes = IsDlgButtonChecked(dialog, ID_FIND_ESCAPES) == BST_CHECKED;
     if (GetDlgItem(dialog, IDC_RADIO_UP)) {
         g_search_down = IsDlgButtonChecked(dialog, IDC_RADIO_UP) != BST_CHECKED;
     }
@@ -1402,10 +1749,21 @@ static void read_search_fields(HWND dialog, bool has_replace) {
     settings_set_bool("find_whole_word", g_whole_word);
     settings_set_bool("find_wrap_around", g_wrap_around);
     settings_set_bool("find_search_down", g_search_down);
+    settings_set_bool("find_interpret_escapes", g_interpret_escapes);
 
+    // History records the RAW typed text; escapes are applied afterwards so
+    // the combo round-trips exactly what the user entered
     history_push("find_hist", g_search_text);
     if (has_replace) {
         history_push("replace_hist", g_replace_text);
+    }
+
+    if (g_interpret_escapes) {
+        unescape_search_buffer(g_search_text, sizeof(g_search_text) / sizeof(g_search_text[0]));
+        if (has_replace) {
+            unescape_search_buffer(g_replace_text,
+                                   sizeof(g_replace_text) / sizeof(g_replace_text[0]));
+        }
     }
 }
 
@@ -1497,6 +1855,8 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
             CheckDlgButton(dialog, ID_FIND_CASE, g_match_case ? BST_CHECKED : BST_UNCHECKED);
             CheckDlgButton(dialog, ID_FIND_WHOLE_WORD, g_whole_word ? BST_CHECKED : BST_UNCHECKED);
             CheckDlgButton(dialog, ID_FIND_WRAP, g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
+            CheckDlgButton(dialog, ID_FIND_ESCAPES,
+                           g_interpret_escapes ? BST_CHECKED : BST_UNCHECKED);
             if (GetDlgItem(dialog, IDC_RADIO_UP)) {
                 CheckRadioButton(dialog, IDC_RADIO_UP, IDC_RADIO_DOWN,
                                  g_search_down ? IDC_RADIO_DOWN : IDC_RADIO_UP);
@@ -2738,11 +3098,21 @@ static INT_PTR CALLBACK prefs_backup_proc(HWND page, UINT msg, WPARAM wparam, LP
 // Preferences: Lists page - optional list tools (off by default)
 static const wchar_t *const INDENT_FORMAT_LABELS[] = { L"Spaces",
                                                        L"Tab",
-                                                       L"Asterisk (*)",
-                                                       L"Hyphen (-)",
-                                                       L"Asterisk, leading space ( *)",
-                                                       L"Hyphen, leading space ( -)" };
-#define INDENT_FORMAT_COUNT 6
+                                                       L"Asterisk (\"* \")",
+                                                       L"Hyphen (\"- \")",
+                                                       L"Asterisk, leading space (\" * \")",
+                                                       L"Hyphen, leading space (\" - \")",
+                                                       L"Custom..." };
+#define INDENT_FORMAT_COUNT 7
+
+// Custom-prefix edit follows the combo selection; the Tab/bracket shortcut
+// choice only means something while the tools are enabled
+static void prefs_lists_sync_enables(HWND page) {
+    bool on = IsDlgButtonChecked(page, ID_PREF_LIST_ENABLED) == BST_CHECKED;
+    LRESULT sel = SendMessageW(GetDlgItem(page, ID_PREF_LIST_INDENT_FORMAT), CB_GETCURSEL, 0, 0);
+    EnableWindow(GetDlgItem(page, ID_PREF_LIST_CUSTOM_TEXT), sel == LIST_INDENT_CUSTOM);
+    EnableWindow(GetDlgItem(page, ID_PREF_LIST_TAB_BRACKETS), on);
+}
 
 static INT_PTR CALLBACK prefs_lists_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
@@ -2757,13 +3127,30 @@ static INT_PTR CALLBACK prefs_lists_proc(HWND page, UINT msg, WPARAM wparam, LPA
             if (sel < 0 || sel >= INDENT_FORMAT_COUNT)
                 sel = 0;
             SendMessageW(combo, CB_SETCURSEL, (WPARAM) sel, 0);
+            char *custom = settings_get_string("list_custom_indent", "");
+            if (custom) {
+                wchar_t *wide = utf8_to_wide(custom);
+                if (wide) {
+                    SetDlgItemTextW(page, ID_PREF_LIST_CUSTOM_TEXT, wide);
+                    free(wide);
+                }
+                free(custom);
+            }
+            CheckDlgButton(page, ID_PREF_LIST_TAB_BRACKETS,
+                           settings_get_bool("list_indent_shortcut_brackets", false)
+                               ? BST_CHECKED
+                               : BST_UNCHECKED);
+            prefs_lists_sync_enables(page);
             return TRUE;
         }
 
         case WM_COMMAND:
-            if ((HIWORD(wparam) == BN_CLICKED && LOWORD(wparam) == ID_PREF_LIST_ENABLED) ||
-                (HIWORD(wparam) == CBN_SELCHANGE && LOWORD(wparam) == ID_PREF_LIST_INDENT_FORMAT)) {
+            if ((HIWORD(wparam) == BN_CLICKED && (LOWORD(wparam) == ID_PREF_LIST_ENABLED ||
+                                                  LOWORD(wparam) == ID_PREF_LIST_TAB_BRACKETS)) ||
+                (HIWORD(wparam) == CBN_SELCHANGE && LOWORD(wparam) == ID_PREF_LIST_INDENT_FORMAT) ||
+                (HIWORD(wparam) == EN_CHANGE && LOWORD(wparam) == ID_PREF_LIST_CUSTOM_TEXT)) {
                 mark_prefs_dirty(page);
+                prefs_lists_sync_enables(page);
             }
             break;
 
@@ -2776,9 +3163,20 @@ static INT_PTR CALLBACK prefs_lists_proc(HWND page, UINT msg, WPARAM wparam, LPA
                     SendMessageW(GetDlgItem(page, ID_PREF_LIST_INDENT_FORMAT), CB_GETCURSEL, 0, 0);
                 if (sel >= 0)
                     settings_set_int("list_default_indent_format", (int) sel);
+                wchar_t wide_custom[128];
+                GetDlgItemTextW(page, ID_PREF_LIST_CUSTOM_TEXT, wide_custom, 128);
+                char *custom = wide_to_utf8(wide_custom);
+                if (custom) {
+                    // Stored raw (as typed); unescaped at point of use
+                    settings_set_string("list_custom_indent", custom);
+                    free(custom);
+                }
+                settings_set_bool("list_indent_shortcut_brackets",
+                                  IsDlgButtonChecked(page, ID_PREF_LIST_TAB_BRACKETS) ==
+                                      BST_CHECKED);
                 settings_save();
                 // Apply the enable toggle to this window right away (menu +
-                // Ctrl+]/[ accelerators), then propagate to other instances
+                // indent accelerators), then propagate to other instances
                 if (g_main_window) {
                     apply_list_tools_menu(g_main_window);
                     build_accelerators(g_main_window);
@@ -2859,6 +3257,7 @@ static INT_PTR CALLBACK goto_proc(HWND dialog, UINT msg, WPARAM wparam, LPARAM l
     (void) lparam;
     switch (msg) {
         case WM_INITDIALOG:
+            center_dialog_on_owner(dialog);
             SetDlgItemInt(dialog, ID_GOTO_EDIT, 1, FALSE);
             SendDlgItemMessageW(dialog, ID_GOTO_EDIT, EM_SETSEL, 0, -1);
             SetFocus(GetDlgItem(dialog, ID_GOTO_EDIT));
@@ -2905,6 +3304,64 @@ static void show_goto_dialog(Window *window) {
     SendMessageW(window->edit_hwnd, EM_EXSETSEL, 0, (LPARAM) &range);
     SendMessageW(window->edit_hwnd, EM_SCROLLCARET, 0, 0);
     update_status_bar(window);
+}
+
+// Custom Indent prompt: asks for the custom prefix (raw, escapes allowed) and
+// saves it; the caller then applies the indent. Mirrors the Go To Line dialog.
+static INT_PTR CALLBACK custom_indent_proc(HWND dialog, UINT msg, WPARAM wparam, LPARAM lparam) {
+    (void) lparam;
+    switch (msg) {
+        case WM_INITDIALOG: {
+            center_dialog_on_owner(dialog);
+            char *raw = settings_get_string("list_custom_indent", "");
+            if (raw) {
+                wchar_t *wide = utf8_to_wide(raw);
+                if (wide) {
+                    SetDlgItemTextW(dialog, ID_CUSTOM_INDENT_EDIT, wide);
+                    free(wide);
+                }
+                free(raw);
+            }
+            SendDlgItemMessageW(dialog, ID_CUSTOM_INDENT_EDIT, EM_SETSEL, 0, -1);
+            SetFocus(GetDlgItem(dialog, ID_CUSTOM_INDENT_EDIT));
+            return FALSE;
+        }
+
+        case WM_COMMAND:
+            switch (LOWORD(wparam)) {
+                case IDOK: {
+                    wchar_t wide[128];
+                    GetDlgItemTextW(dialog, ID_CUSTOM_INDENT_EDIT, wide, 128);
+                    char *raw = wide_to_utf8(wide);
+                    bool ok = raw && raw[0];
+                    if (ok) {
+                        // Stored raw (as typed); unescaped at point of use
+                        settings_set_string("list_custom_indent", raw);
+                        settings_save();
+                        ui_platform_notify_settings_changed();
+                    }
+                    free(raw);
+                    EndDialog(dialog, ok ? 1 : 0);
+                    return TRUE;
+                }
+                case IDCANCEL:
+                    EndDialog(dialog, 0);
+                    return TRUE;
+            }
+            break;
+
+        case WM_CLOSE:
+            EndDialog(dialog, 0);
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static bool show_custom_indent_dialog(Window *window) {
+    if (!window)
+        return false;
+    return DialogBoxParamW(g_hinstance, MAKEINTRESOURCEW(IDD_CUSTOM_INDENT), window->hwnd,
+                           custom_indent_proc, 0) == 1;
 }
 
 // Insert the current time and date at the caret, like Notepad's F5
@@ -2965,14 +3422,18 @@ static void build_accelerators(Window *window) {
                       { FCONTROL | FVIRTKEY, VK_SUBTRACT, ID_VIEW_ZOOM_OUT },
                       { FCONTROL | FVIRTKEY, '0', ID_VIEW_ZOOM_RESET },
                       { FCONTROL | FVIRTKEY, VK_NUMPAD0, ID_VIEW_ZOOM_RESET },
-                      // List indent/unindent - kept LAST so they can be trimmed
-                      // from the table when the list tools are disabled
+                      // Markdown indent/unindent - kept LAST so they can be
+                      // trimmed from the table when not in effect
                       { FCONTROL | FVIRTKEY, VK_OEM_6, ID_LIST_INDENT },     // ']'
                       { FCONTROL | FVIRTKEY, VK_OEM_4, ID_LIST_UNINDENT } }; // '['
 
     int accel_count = (int) (sizeof(accel) / sizeof(accel[0]));
-    if (!settings_get_bool("list_tools_enabled", false))
-        accel_count -= 2; // Drop the two list accelerators
+    // The Ctrl+]/Ctrl+[ pair only exists when the Markdown tools are on AND
+    // the bracket-shortcut preference is chosen (default is Tab/Shift+Tab,
+    // handled in the edit control subclass, not the accelerator table)
+    if (!settings_get_bool("list_tools_enabled", false) ||
+        !settings_get_bool("list_indent_shortcut_brackets", false))
+        accel_count -= 2;
 
     HACCEL new_table = CreateAcceleratorTableW(accel, accel_count);
     if (!new_table) {
@@ -3118,7 +3579,7 @@ bool ui_platform_pid_is_running(long pid) {
 }
 
 // ===========================================================================
-// List tools (optional; gated on the list_tools_enabled preference)
+// Markdown list tools (optional; gated on the list_tools_enabled preference)
 // ===========================================================================
 
 // Normalize CRLF/CR line breaks to '\n' in place (result is same length or
@@ -3147,7 +3608,7 @@ static void list_target_range(const Window *window, int mode, bool sel_only, LON
     HWND e = window->edit_hwnd;
     CHARRANGE sel = { 0, 0 };
     SendMessageW(e, EM_EXGETSEL, 0, (LPARAM) &sel);
-    LONG total = (LONG) GetWindowTextLengthW(e);
+    LONG total = edit_text_cp_length(e);
     bool has_sel = sel.cpMax > sel.cpMin;
 
     if (mode == 2) {
@@ -3161,27 +3622,29 @@ static void list_target_range(const Window *window, int mode, bool sel_only, LON
         return;
     }
 
-    LONG line_a = (LONG) SendMessageW(e, EM_EXLINEFROMCHAR, 0, (LPARAM) sel.cpMin);
-    LONG line_b = (LONG) SendMessageW(e, EM_EXLINEFROMCHAR, 0, (LPARAM) sel.cpMax);
-    bool spans_newline = has_sel && line_b > line_a;
+    // Logical-line bounds (paragraphs), so word wrap does not fragment the
+    // scope into display lines
+    LONG first_start, first_end;
+    get_paragraph_bounds(e, sel.cpMin, &first_start, &first_end);
+    bool spans_newline = has_sel && first_end < sel.cpMax;
 
     // A selection ending exactly at a line start does not include that line
-    if (has_sel && line_b > line_a) {
-        LONG start_b = (LONG) SendMessageW(e, EM_LINEINDEX, (WPARAM) line_b, 0);
-        if (start_b == sel.cpMax)
-            line_b--;
+    LONG last_pos = sel.cpMax;
+    if (spans_newline) {
+        LONG ls, le;
+        get_paragraph_bounds(e, last_pos, &ls, &le);
+        if (ls == last_pos)
+            last_pos--;
     }
-
-    LONG start_first = (LONG) SendMessageW(e, EM_LINEINDEX, (WPARAM) line_a, 0);
-    LONG start_last = (LONG) SendMessageW(e, EM_LINEINDEX, (WPARAM) line_b, 0);
-    LONG end_last = start_last + (LONG) SendMessageW(e, EM_LINELENGTH, (WPARAM) start_last, 0);
+    LONG last_start, last_end;
+    get_paragraph_bounds(e, last_pos, &last_start, &last_end);
 
     if (mode == 0 && !spans_newline) {
         *out_min = 0; // Sort/Unique with no multi-line selection: whole document
         *out_max = total;
     } else {
-        *out_min = start_first;
-        *out_max = end_last;
+        *out_min = first_start;
+        *out_max = last_end;
     }
 }
 
@@ -3255,6 +3718,19 @@ static void list_replace(const Window *window, LONG cpMin, LONG cpMax, const cha
     SendMessageW(e, EM_SCROLLCARET, 0, 0);
 }
 
+// The unescaped custom indent prefix, or NULL if none is configured. Caller
+// frees.
+static char *get_custom_indent(void) {
+    char *raw = settings_get_string("list_custom_indent", NULL);
+    if (!raw || !raw[0]) {
+        free(raw);
+        return NULL;
+    }
+    char *unescaped = list_unescape(raw);
+    free(raw);
+    return unescaped;
+}
+
 // op: 0 sort, 1 unique, 2 indent, 3 unindent. arg = descending (sort) or
 // ListIndentFormat (indent/unindent).
 static void list_do(const Window *window, int op, int arg) {
@@ -3277,11 +3753,13 @@ static void list_do(const Window *window, int op, int arg) {
             out = list_unique_lines(text);
             break;
         case 2:
-            out = list_indent_lines(text, (ListIndentFormat) arg);
+        case 3: {
+            char *custom = (arg == LIST_INDENT_CUSTOM) ? get_custom_indent() : NULL;
+            out = (op == 2) ? list_indent_lines(text, (ListIndentFormat) arg, custom)
+                            : list_unindent_lines(text, (ListIndentFormat) arg, custom);
+            free(custom);
             break;
-        case 3:
-            out = list_unindent_lines(text, (ListIndentFormat) arg);
-            break;
+        }
         default:
             break;
     }
@@ -3292,9 +3770,30 @@ static void list_do(const Window *window, int op, int arg) {
     }
 }
 
-// Append the list-tool items into an existing menu (used by both the List
-// menu-bar popup and the right-click context menu).
+// Indent/unindent with the configured default format (menu item, Tab, or
+// Ctrl+]/[). A Custom default with no prefix configured prompts first.
+static void list_indent_default(Window *window, bool unindent) {
+    int fmt = settings_get_int("list_default_indent_format", 0);
+    if (fmt < 0 || fmt >= INDENT_FORMAT_COUNT)
+        fmt = 0;
+    if (fmt == LIST_INDENT_CUSTOM) {
+        char *custom = get_custom_indent();
+        if (!custom) {
+            if (!show_custom_indent_dialog(window))
+                return;
+        } else {
+            free(custom);
+        }
+    }
+    list_do(window, unindent ? 3 : 2, fmt);
+}
+
+// Append the Markdown-tool items into an existing menu (used by both the
+// Markdown menu-bar popup and the right-click context menu).
 static void populate_list_menu(HMENU menu) {
+    // The indent/unindent shortcut labels track the active binding
+    bool brackets = settings_get_bool("list_indent_shortcut_brackets", false);
+
     HMENU sort = CreatePopupMenu();
     AppendMenuW(sort, MF_STRING, ID_LIST_SORT_ASC, L"&Ascending");
     AppendMenuW(sort, MF_STRING, ID_LIST_SORT_DESC, L"&Descending");
@@ -3309,33 +3808,40 @@ static void populate_list_menu(HMENU menu) {
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
 
     HMENU indent = CreatePopupMenu();
-    AppendMenuW(indent, MF_STRING, ID_LIST_INDENT, L"&Indent (default)\tCtrl+]");
+    AppendMenuW(indent, MF_STRING, ID_LIST_INDENT,
+                brackets ? L"&Indent (default)\tCtrl+]" : L"&Indent (default)\tTab");
     AppendMenuW(indent, MF_SEPARATOR, 0, NULL);
     AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 0, L"&Spaces");
     AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 1, L"&Tab");
-    AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 2, L"&Asterisk (*)");
-    AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 3, L"&Hyphen (-)");
-    AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 4, L"Asterisk, &leading space ( *)");
-    AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 5, L"Hyphen, l&eading space ( -)");
+    AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 2, L"&Asterisk (\"* \")");
+    AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 3, L"&Hyphen (\"- \")");
+    AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 4, L"Asterisk, &leading space (\" * \")");
+    AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 5, L"Hyphen, l&eading space (\" - \")");
+    AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 6, L"&Custom...");
     AppendMenuW(menu, MF_STRING | MF_POPUP, (UINT_PTR) indent, L"Inden&t");
-    AppendMenuW(menu, MF_STRING, ID_LIST_UNINDENT, L"&Unindent\tCtrl+[");
+    AppendMenuW(menu, MF_STRING, ID_LIST_UNINDENT,
+                brackets ? L"&Unindent\tCtrl+[" : L"&Unindent\tShift+Tab");
 }
 
-// Insert or remove the top-level List menu to match the preference. Called at
-// window creation and whenever settings change (live toggle).
+// Insert or remove the top-level Markdown menu to match the preference (always
+// rebuilt so shortcut labels stay current). Called at window creation and
+// whenever settings change (live toggle).
 static void apply_list_tools_menu(Window *window) {
     if (!window || !window->hmenu)
         return;
     bool enabled = settings_get_bool("list_tools_enabled", false);
     if (window->list_menu_present) {
-        RemoveMenu(window->hmenu, 3, MF_BYPOSITION); // List sits after Format
+        HMENU old = GetSubMenu(window->hmenu, 3); // Markdown sits after Format
+        RemoveMenu(window->hmenu, 3, MF_BYPOSITION);
+        if (old)
+            DestroyMenu(old);
         window->list_menu_present = false;
     }
     if (enabled) {
         HMENU list = CreatePopupMenu();
         populate_list_menu(list);
         InsertMenuW(window->hmenu, 3, MF_BYPOSITION | MF_POPUP | MF_STRING, (UINT_PTR) list,
-                    L"&List");
+                    L"&Markdown");
         window->list_menu_present = true;
     }
     if (window->hwnd)
@@ -3347,6 +3853,7 @@ static INT_PTR CALLBACK convert_delim_proc(HWND dlg, UINT msg, WPARAM wparam, LP
     switch (msg) {
         case WM_INITDIALOG: {
             win = (Window *) lparam;
+            center_dialog_on_owner(dlg);
             static const wchar_t *const presets[] = { L",",   L";",      L"|", L"\\t",
                                                       L"\\n", L"\\r\\n", L" " };
             HWND from = GetDlgItem(dlg, ID_DELIM_FROM);
@@ -3513,7 +4020,7 @@ static void create_menu(Window *window) {
     CheckMenuItem(hmenu, ID_VIEW_STATUS_BAR,
                   window->status_bar_visible ? MF_CHECKED : MF_UNCHECKED);
     rebuild_recent_menu(window);
-    apply_list_tools_menu(window); // Insert the List menu when enabled
+    apply_list_tools_menu(window); // Insert the Markdown menu when enabled
 }
 
 // Rebuild the File > Recent Files submenu from settings
@@ -3563,9 +4070,13 @@ static void apply_edit_command_states(Window *window, HMENU menu) {
     UINT enabled = MF_BYCOMMAND | MF_ENABLED;
     UINT disabled = MF_BYCOMMAND | MF_GRAYED;
 
+    // With the Markdown tools on, Ctrl+X without a selection cuts the whole
+    // line, so Cut only needs a non-empty document
+    bool can_cut = has_selection || (settings_get_bool("list_tools_enabled", false) && has_text);
+
     EnableMenuItem(menu, ID_EDIT_UNDO, ui_platform_can_undo(window) ? enabled : disabled);
     EnableMenuItem(menu, ID_EDIT_REDO, ui_platform_can_redo(window) ? enabled : disabled);
-    EnableMenuItem(menu, ID_EDIT_CUT, has_selection ? enabled : disabled);
+    EnableMenuItem(menu, ID_EDIT_CUT, can_cut ? enabled : disabled);
     EnableMenuItem(menu, ID_EDIT_COPY, has_selection ? enabled : disabled);
     EnableMenuItem(menu, ID_EDIT_DELETE, has_selection ? enabled : disabled);
     EnableMenuItem(menu, ID_EDIT_PASTE, can_paste ? enabled : disabled);
@@ -3576,8 +4087,8 @@ static void apply_edit_command_states(Window *window, HMENU menu) {
                    (has_text && g_search_text[0] != L'\0') ? enabled : disabled);
     EnableMenuItem(menu, ID_EDIT_REPLACE, has_text ? enabled : disabled);
 
-    // List tools (only present in the menu when enabled; harmless otherwise).
-    // They operate on lines, so require a non-empty document.
+    // Markdown tools (only present in the menu when enabled; harmless
+    // otherwise). They operate on lines, so require a non-empty document.
     UINT list_state = has_text ? enabled : disabled;
     EnableMenuItem(menu, ID_LIST_SORT_ASC, list_state);
     EnableMenuItem(menu, ID_LIST_SORT_DESC, list_state);
@@ -3585,7 +4096,7 @@ static void apply_edit_command_states(Window *window, HMENU menu) {
     EnableMenuItem(menu, ID_LIST_CONVERT_DELIM, list_state);
     EnableMenuItem(menu, ID_LIST_INDENT, list_state);
     EnableMenuItem(menu, ID_LIST_UNINDENT, list_state);
-    for (UINT i = 0; i < 6; i++)
+    for (UINT i = 0; i < 7; i++)
         EnableMenuItem(menu, ID_LIST_INDENT_BASE + i, list_state);
 }
 
@@ -3726,9 +4237,15 @@ static void handle_command(Window *window, WORD command) {
         return;
     }
 
-    // Explicit indent-format items from the List/Indent submenu
+    // Explicit indent-format items from the Markdown/Indent submenu
     if (command >= ID_LIST_INDENT_BASE && command <= ID_LIST_INDENT_BASE + 5) {
         list_do(window, 2, command - ID_LIST_INDENT_BASE);
+        return;
+    }
+    // Custom... always prompts (prefilled with the saved prefix), then indents
+    if (command == ID_LIST_INDENT_BASE + LIST_INDENT_CUSTOM) {
+        if (show_custom_indent_dialog(window))
+            list_do(window, 2, LIST_INDENT_CUSTOM);
         return;
     }
 
@@ -3755,10 +4272,10 @@ static void handle_command(Window *window, WORD command) {
             show_convert_delim_dialog(window);
             break;
         case ID_LIST_INDENT:
-            list_do(window, 2, settings_get_int("list_default_indent_format", 0));
+            list_indent_default(window, false);
             break;
         case ID_LIST_UNINDENT:
-            list_do(window, 3, settings_get_int("list_default_indent_format", 0));
+            list_indent_default(window, true);
             break;
         case ID_FILE_NEW:
             ui_post_event(UI_EVENT_FILE_NEW, window, NULL);
@@ -4004,7 +4521,7 @@ static void reload_and_apply_settings(Window *window) {
     apply_theme(window);
     apply_new_window_pref(window); // Also rebuilds accelerators (list Ctrl+]/[ gating)
     rebuild_recent_menu(window);
-    apply_list_tools_menu(window); // Insert/remove the List menu per the pref
+    apply_list_tools_menu(window); // Insert/remove the Markdown menu per the pref
 
     // Sync shared window options; per-window view state (font type, zoom)
     // is deliberately left alone

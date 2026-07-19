@@ -22,10 +22,11 @@
 typedef enum {
     LIST_INDENT_SPACES = 0,       // "    " (four spaces)
     LIST_INDENT_TAB = 1,          // "\t"
-    LIST_INDENT_ASTERISK = 2,     // "*"
-    LIST_INDENT_HYPHEN = 3,       // "-"
-    LIST_INDENT_ASTERISK_LSP = 4, // " *" (leading space)
-    LIST_INDENT_HYPHEN_LSP = 5    // " -" (leading space)
+    LIST_INDENT_ASTERISK = 2,     // "* "
+    LIST_INDENT_HYPHEN = 3,       // "- "
+    LIST_INDENT_ASTERISK_LSP = 4, // " * " (leading space)
+    LIST_INDENT_HYPHEN_LSP = 5,   // " - " (leading space)
+    LIST_INDENT_CUSTOM = 6        // Caller-supplied prefix string
 } ListIndentFormat;
 
 // Sort the lines. Stable; ascending unless descending. When not case_sensitive
@@ -48,7 +49,11 @@ char *list_replace_all(const char *text, const char *from, const char *to);
 // Indent / unindent each line per the format. See list_ops.c for the exact
 // model (whitespace formats prepend the prefix; marker formats add the marker
 // once then deepen with two spaces, markdown-style; unindent removes one unit).
-char *list_indent_lines(const char *text, ListIndentFormat fmt);
-char *list_unindent_lines(const char *text, ListIndentFormat fmt);
+// custom_prefix is the already-unescaped prefix used only by LIST_INDENT_CUSTOM
+// (NULL otherwise is fine); a non-whitespace custom prefix behaves like the
+// built-in markers, a whitespace-only one stacks/strips literally, and an
+// empty/NULL one makes the call a no-op copy.
+char *list_indent_lines(const char *text, ListIndentFormat fmt, const char *custom_prefix);
+char *list_unindent_lines(const char *text, ListIndentFormat fmt, const char *custom_prefix);
 
 #endif // LIST_OPS_H
