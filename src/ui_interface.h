@@ -130,6 +130,16 @@ bool ui_show_message_box(Window *parent, const char *title, const char *message,
 SavePromptResult ui_show_save_prompt(Window *parent, const char *filename);
 void ui_show_about_dialog(Window *parent);
 
+// What to do with a file that looks binary
+typedef enum { UI_OPEN_CANCEL = 0, UI_OPEN_IN_NPAD, UI_OPEN_WITH_DEFAULT } UiOpenChoice;
+
+// Ask how to open a binary-looking file (Cancel / Open in npad / Open with
+// the system default application)
+UiOpenChoice ui_prompt_binary_open(Window *parent, const char *filename);
+
+// Hand the file to the platform's default application for its type
+void ui_open_with_default_app(const char *filename);
+
 // Find/Replace (modeless dialogs owned and closed by the platform layer)
 void ui_show_find_dialog(Window *parent);
 void ui_show_replace_dialog(Window *parent);

@@ -242,13 +242,16 @@ static void load_default_file_info(TextFileInfo *info) {
 bool editor_init(void) {
     memset(&g_editor, 0, sizeof(EditorState));
 
-    g_editor.auto_save_enabled = settings_get_bool("auto_save_enabled", true);
+    // Notepad-alignment defaults: auto-save is destructive (overwrites the
+    // file from a timer) so it is opt-in; crash-recovery snapshots never
+    // touch the user's file, so they are on by default
+    g_editor.auto_save_enabled = settings_get_bool("auto_save_enabled", false);
     g_editor.auto_save_interval = settings_get_int("auto_save_interval", 300);
     if (g_editor.auto_save_interval < 10) {
         g_editor.auto_save_interval = 10; // Sanity floor
     }
 
-    g_editor.session_resume_enabled = settings_get_bool("session_resume_enabled", false);
+    g_editor.session_resume_enabled = settings_get_bool("session_resume_enabled", true);
     g_editor.session_interval = settings_get_int("session_interval", DEFAULT_SESSION_INTERVAL_SEC);
     if (g_editor.session_interval < 5) {
         g_editor.session_interval = 5;
@@ -330,9 +333,19 @@ bool editor_open_file(const char *filename) {
     if (!filename)
         return false;
 
-    // Check if current file needs saving
-    if (!editor_prompt_save_changes()) {
-        return false; // User cancelled
+    // Pre-open checks run before the save prompt so declining either one
+    // never costs the user a pointless "save changes?" round trip
+
+    // A binary-looking file is usually a mistake: offer the system's own
+    // handler for it instead of a wall of control characters
+    if (file_looks_binary(filename)) {
+        UiOpenChoice choice = ui_prompt_binary_open(g_editor.main_window, filename);
+        if (choice == UI_OPEN_CANCEL)
+            return false;
+        if (choice == UI_OPEN_WITH_DEFAULT) {
+            ui_open_with_default_app(filename);
+            return false; // Current document stays untouched
+        }
     }
 
     // Warn before opening very large files
@@ -349,6 +362,11 @@ bool editor_open_file(const char *filename) {
                 return false;
             }
         }
+    }
+
+    // Check if current file needs saving
+    if (!editor_prompt_save_changes()) {
+        return false; // User cancelled
     }
 
     // Load file content, detecting encoding and line endings
@@ -636,13 +654,13 @@ bool editor_is_session_resume_enabled(void) {
 }
 
 void editor_reload_prefs(void) {
-    g_editor.auto_save_enabled = settings_get_bool("auto_save_enabled", true);
+    g_editor.auto_save_enabled = settings_get_bool("auto_save_enabled", false);
     g_editor.auto_save_interval = settings_get_int("auto_save_interval", 300);
     if (g_editor.auto_save_interval < 10) {
         g_editor.auto_save_interval = 10;
     }
 
-    g_editor.session_resume_enabled = settings_get_bool("session_resume_enabled", false);
+    g_editor.session_resume_enabled = settings_get_bool("session_resume_enabled", true);
     g_editor.session_interval = settings_get_int("session_interval", DEFAULT_SESSION_INTERVAL_SEC);
     if (g_editor.session_interval < 5) {
         g_editor.session_interval = 5;

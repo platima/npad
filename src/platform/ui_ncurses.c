@@ -228,6 +228,15 @@ void ui_platform_show_about_dialog(Window *parent) {
     (void) parent;
 }
 
+UiOpenChoice ui_platform_prompt_binary_open(Window *parent, const char *filename) {
+    (void) parent;
+    (void) filename;
+    return UI_OPEN_IN_NPAD; // No prompt UI here; open as text
+}
+void ui_platform_open_with_default_app(const char *filename) {
+    (void) filename;
+}
+
 void ui_platform_show_find_dialog(Window *parent) {
     (void) parent;
 }

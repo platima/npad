@@ -32,7 +32,12 @@ A lightweight, cross-platform text editor inspired by the simplicity and speed o
 
 ## Philosophy 💭
 
-npad aims to recreate the beloved simplicity of original Windows Notepad while adding essential quality-of-life improvements. No AI integration, no spell check - just fast, reliable text editing.
+npad aims to recreate the beloved simplicity of original Windows Notepad while adding essential quality-of-life improvements. No AI integration, no spell check - just fast, reliable text editing. It's like notepad, but quicker and easier. (And yes, the name is **npad**, always lowercase.)
+
+**Core principle: out of the box, npad behaves as close to Windows 10 notepad.exe as possible.** Enhancements are judged by one rule:
+
+- **Non-destructive enhancements that don't change the original core behaviour are ON by default** - e.g. crash recovery (it never touches your file and doesn't alter how editing works), the status bar, recent files, atomic saves.
+- **Anything that alters or could destroy that original behaviour is OFF by default and opt-in** - e.g. auto-save (it overwrites your file from a timer), following the system colour scheme (notepad is always light), and the Markdown list tools (they change what Tab/Enter/Ctrl+X do).
 
 ## Features ✨
 
@@ -45,8 +50,8 @@ Current features (Windows build):
 - **↩️ Line ending aware** - Detects and preserves Windows (CRLF), Unix (LF) and Mac (CR) line endings, shown in the status bar
 - **🔧 Quality-of-life enhancements:**
   - Tabbed Preferences dialog (Edit menu, Ctrl+,) with an Apply button: General, Appearance, Defaults, Markdown and Backup pages (see [DOCUMENTATION.md](DOCUMENTATION.md) for every setting)
-  - Optional auto-save (enabled by default, configurable)
-  - Optional session resume / crash recovery (disabled by default, configurable); restores every window that was open, each in its own instance
+  - Optional auto-save (disabled by default - it overwrites your file, so it's opt-in; configurable)
+  - Session resume / crash recovery (enabled by default - non-destructive, snapshots never touch your file); restores every window that was open, each in its own instance
   - Theme support: light (default), dark, follow-system, and Solarized Light / Dark colour schemes (chosen in Preferences); changes apply to all open windows live
   - Opens at a large default sized to your display (remembered once you resize)
   - Find / Replace with direction, match case, whole word and wrap-around (Ctrl+F / Ctrl+H, F3 / Shift+F3)
@@ -70,6 +75,7 @@ Current features (Windows build):
   - Atomic saves - a failed save can never destroy the existing file
   - JSON settings storage; remembers window position, size and maximized state
   - Confirmation prompt before opening very large files
+  - Binary-file detection on open, offering Cancel / Open in npad / Open with the default app
 
 Planned (see the [Roadmap](#roadmap)):
 
@@ -324,8 +330,12 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] Config backup / export & import
   - [x] Optional Markdown list tools (Sort, Unique, Convert Delimiters, Indent/Unindent incl. custom prefix, Enter list continuation, cut line/paste above; off by default)
   - [x] Escape interpretation option in Find / Replace
+  - [x] Binary-file detection on open (Cancel / Open in npad / Open with the default app)
+  - [x] All dialogs open at a consistent notepad-style offset into the window
   - [ ] 'Highlight all' matches in Find / Find & Replace
   - [ ] Optional word / character / line count in the status bar (off by default)
+  - [ ] Large-file lag warning proportional to the system's capabilities (currently a fixed MB threshold)
+  - [ ] Self-updating: on-demand check-for-updates (never automatic)
 - [ ] **Advanced Features**
   - [ ] Tabbed interface (optional)
   - [ ] Multi-language support

@@ -5,6 +5,32 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-07-20
+
+### ✨ Features
+- **Binary-file detection**: opening a file that doesn't look like text
+  (NUL bytes outside UTF-16, or mostly control characters) now prompts
+  with **Cancel / Open in npad / Open with the default app** before
+  anything else happens.
+
+### 🔄 Changed
+- **Defaults now follow the notepad-first principle** (documented in the
+  README): out of the box npad behaves like Windows 10 notepad.exe, with
+  only non-destructive enhancements enabled.
+  - Auto-save is now **off** by default (it overwrites the file from a
+    timer, so it's opt-in).
+  - Session resume / crash recovery is now **on** by default (snapshots
+    never touch the user's file).
+  - New windows default to the **proportional** font.
+  - Explicit values in an existing settings.json are unaffected.
+- **All dialogs** (Go To Line, Convert Delimiters, Custom Indent) now open
+  at the same notepad-style offset into the window as Find/Replace,
+  instead of centred; the offset is a single define
+  (`NPAD_DIALOG_OFFSET_X/Y`).
+- Pre-open checks (binary and large-file warnings) run before the
+  save-changes prompt, so declining them never costs a pointless
+  "save changes?" round trip.
+
 ## [0.13.0] - 2026-07-19
 
 ### ✨ Features

@@ -4,6 +4,12 @@ Reference for npad's settings, keyboard shortcuts, status bar, command line
 and behaviour. For per-release notes see [CHANGELOG.md](CHANGELOG.md); the raw
 commit history lives in `git log`.
 
+**Defaults principle**: out of the box npad mimics Windows 10 notepad.exe.
+Non-destructive enhancements that don't change that core behaviour (crash
+recovery, status bar, recent files, atomic saves) are on by default;
+anything that alters or could destroy it (auto-save, system colour scheme,
+Markdown list tools) is opt-in. The name is always lowercase: **npad**.
+
 ## Installation (Windows)
 
 Three ways to run npad; all default to the current user and need no admin
@@ -90,11 +96,11 @@ All settings live in `settings.json` and are editable in Preferences
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `auto_save_enabled` | bool | `true` | Silently save named documents on a timer. Untitled documents are never auto-saved. |
+| `auto_save_enabled` | bool | `false` | Silently save named documents on a timer. Off by default: overwriting the file from a timer is destructive, so it is opt-in. Untitled documents are never auto-saved. |
 | `auto_save_interval` | int | `300` | Auto-save period in seconds (minimum 10). |
 | `large_file_warning_mb` | int | `100` | Confirm before opening files larger than this (MB). `0` disables the prompt. |
 | `recent_files_max` | int | `10` | Recent Files menu length (0-10). |
-| `session_resume_enabled` | bool | `false` | Crash recovery: snapshot unsaved work on a timer; offer to restore after an unclean exit. All windows are restored, extras in their own cascaded windows. |
+| `session_resume_enabled` | bool | `true` | Crash recovery: snapshot unsaved work on a timer; offer to restore after an unclean exit. On by default: snapshots never touch the user's file. All windows are restored, extras in their own cascaded windows. |
 | `session_interval` | int | `30` | Snapshot period in seconds (minimum 5). |
 | `ctrl_n_new_window` | bool | `false` | Swap Ctrl+N / Ctrl+Shift+N between "New" (clear this window) and "New Window" (open another instance). |
 
@@ -117,7 +123,7 @@ All settings live in `settings.json` and are editable in Preferences
 |-----|------|---------|-------------|
 | `default_encoding` | int | `0` (UTF-8) | Encoding for new files: 0 UTF-8, 1 UTF-8 BOM, 2 UTF-16 LE, 3 UTF-16 BE, 4 ANSI. |
 | `default_line_ending` | int | `0` (CRLF) | Line endings for new files: 0 CRLF, 1 LF, 2 CR. |
-| `default_font_mono` | bool | `true` | New windows start in monospace (`true`) or proportional (`false`) mode. |
+| `default_font_mono` | bool | `false` | New windows start in monospace (`true`) or proportional (`false`) mode. Proportional by default, mirroring classic Notepad. |
 | `default_zoom` | int | `100` | New windows' zoom percent (10-500). |
 | `auto_update_defaults` | bool | `false` | View changes (font type, zoom) immediately become the new defaults. |
 
@@ -281,6 +287,14 @@ position). Not intended for direct use.
   at the caret instead.
 - **Large files**: opening a file over the configured threshold asks for
   confirmation first.
+- **Binary files**: a file whose first bytes look binary (NUL bytes outside
+  UTF-16, or mostly control characters) prompts with **Cancel / Open in
+  npad / Open with the default app** before anything else happens - the
+  current document is untouched unless "Open in npad" is chosen.
+- **Dialog placement**: every dialog (Find/Replace, Go To Line, Convert
+  Delimiters, Custom Indent) opens at the same notepad-style offset into
+  the npad window; Find/Replace additionally remembers where you moved it
+  for the rest of the session.
 
 ## Versioning & changelogs
 

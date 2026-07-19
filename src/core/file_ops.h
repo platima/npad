@@ -78,6 +78,9 @@ bool file_exists(const char *filename);
 bool file_is_readable(const char *filename);
 bool file_is_writable(const char *filename);
 size_t file_get_size(const char *filename);
+// Heuristic sniff of the first 8 KB: NUL bytes (outside BOM-marked UTF-16)
+// or a high share of control bytes mark the file as binary.
+bool file_looks_binary(const char *filename);
 bool file_delete(const char *filename);
 bool file_copy(const char *source, const char *destination);
 

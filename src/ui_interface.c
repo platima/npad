@@ -64,6 +64,8 @@ extern bool ui_platform_show_message_box(Window *parent, const char *title, cons
                                          bool is_question);
 extern SavePromptResult ui_platform_show_save_prompt(Window *parent, const char *filename);
 extern void ui_platform_show_about_dialog(Window *parent);
+extern UiOpenChoice ui_platform_prompt_binary_open(Window *parent, const char *filename);
+extern void ui_platform_open_with_default_app(const char *filename);
 
 // Platform find/replace functions
 extern void ui_platform_show_find_dialog(Window *parent);
@@ -234,6 +236,14 @@ SavePromptResult ui_show_save_prompt(Window *parent, const char *filename) {
 
 void ui_show_about_dialog(Window *parent) {
     ui_platform_show_about_dialog(parent);
+}
+
+UiOpenChoice ui_prompt_binary_open(Window *parent, const char *filename) {
+    return ui_platform_prompt_binary_open(parent, filename);
+}
+
+void ui_open_with_default_app(const char *filename) {
+    ui_platform_open_with_default_app(filename);
 }
 
 void ui_show_find_dialog(Window *parent) {

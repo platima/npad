@@ -82,9 +82,14 @@ Platform Implementation (Win32/X11/Cocoa/ncurses)
 - Zero external dependencies
 - Performance and minimal resource usage
 - Classic Notepad simplicity with quality-of-life improvements
-- Give the user maximum control over functionality, but default to behavior
-  extremely similar to Win10 notepad.exe (e.g. per-window view state is the
-  default; live sync and auto-updating defaults are opt-in preferences)
+- **Core principle**: out of the box npad mimics Windows 10 notepad.exe.
+  Non-destructive enhancements that don't change that core behavior (crash
+  recovery, status bar, atomic saves) are ON by default; anything that
+  alters or could destroy it (auto-save, system color scheme, Markdown
+  tools, live view sync) is OFF by default and opt-in. Apply this rule when
+  choosing any new setting's default.
+- The product name is always lowercase: **npad** (in UI strings, docs and
+  installer alike)
 
 **Settings & propagation model:**
 - Shared settings save to settings.json immediately when changed (menus or

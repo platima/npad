@@ -123,6 +123,49 @@ TEST_CASE(file_get_size_valid) {
     test_cleanup_temp_file(TEST_FILE);
 }
 
+TEST_CASE(file_looks_binary_text) {
+    test_create_temp_file(TEST_FILE, "plain text\r\nwith tabs\tand lines\n");
+    TEST_ASSERT(!file_looks_binary(TEST_FILE), "plain text should not look binary");
+    test_cleanup_temp_file(TEST_FILE);
+}
+
+TEST_CASE(file_looks_binary_nul_bytes) {
+    const char data[] = { 'M', 'Z', 0x00, 0x03, 'a', 'b' };
+    TEST_ASSERT(file_write_binary(TEST_FILE, data, sizeof(data)),
+                "writing the binary fixture should succeed");
+    TEST_ASSERT(file_looks_binary(TEST_FILE), "NUL bytes should look binary");
+    test_cleanup_temp_file(TEST_FILE);
+}
+
+TEST_CASE(file_looks_binary_utf16_bom_is_text) {
+    // UTF-16 LE BOM followed by "hi" - full of NULs but valid text
+    const char data[] = { (char) 0xFF, (char) 0xFE, 'h', 0x00, 'i', 0x00 };
+    TEST_ASSERT(file_write_binary(TEST_FILE, data, sizeof(data)),
+                "writing the UTF-16 fixture should succeed");
+    TEST_ASSERT(!file_looks_binary(TEST_FILE), "BOM-marked UTF-16 is text, not binary");
+    test_cleanup_temp_file(TEST_FILE);
+}
+
+TEST_CASE(file_looks_binary_control_soup) {
+    // No NULs, but mostly control bytes (e.g. a compressed stream)
+    char data[64];
+    for (int i = 0; i < 64; i++)
+        data[i] = (char) ((i % 2) ? 0x01 : 0x02);
+    TEST_ASSERT(file_write_binary(TEST_FILE, data, sizeof(data)),
+                "writing the control fixture should succeed");
+    TEST_ASSERT(file_looks_binary(TEST_FILE), "control-byte soup should look binary");
+    test_cleanup_temp_file(TEST_FILE);
+}
+
+TEST_CASE(file_looks_binary_empty_and_missing) {
+    test_create_temp_file(TEST_FILE, "");
+    TEST_ASSERT(!file_looks_binary(TEST_FILE), "empty file is not binary");
+    test_cleanup_temp_file(TEST_FILE);
+    TEST_ASSERT(!file_looks_binary("nonexistent_file_xyz123.bin"),
+                "missing file is not binary");
+    TEST_ASSERT(!file_looks_binary(NULL), "NULL path is not binary");
+}
+
 TEST_CASE(path_traversal_protection) {
     // Test path traversal attempts
     char *content1 = file_read_text("../../../etc/passwd");
@@ -151,6 +194,11 @@ int main(void) {
     RUN_TEST(file_exists_valid);
     RUN_TEST(file_exists_nonexistent);
     RUN_TEST(file_get_size_valid);
+    RUN_TEST(file_looks_binary_text);
+    RUN_TEST(file_looks_binary_nul_bytes);
+    RUN_TEST(file_looks_binary_utf16_bom_is_text);
+    RUN_TEST(file_looks_binary_control_soup);
+    RUN_TEST(file_looks_binary_empty_and_missing);
     RUN_TEST(path_traversal_protection);
     
     // Cleanup error system

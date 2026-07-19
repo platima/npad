@@ -23,6 +23,7 @@
 #include "../main.h"
 #include "../core/editor.h"
 #include "../core/error.h"
+#include "../core/file_ops.h"
 #include "../core/list_ops.h"
 #include "../core/session.h"
 #include "../core/settings.h"
@@ -362,9 +363,15 @@ static bool resolve_theme_dark_mode(void) {
     return theme_colors(NULL, NULL);
 }
 
-// Center a modal dialog on its owner window, clamped to the owner's monitor
-// work area. Rects are physical pixels, so this is DPI-agnostic.
-static void center_dialog_on_owner(HWND dlg) {
+// Every dialog opens at this notepad-style offset into its owner window
+// (96-DPI units, scaled per monitor) rather than centred or at the screen's
+// top-left. Matches where classic Notepad drops its Find dialog.
+#define NPAD_DIALOG_OFFSET_X 84
+#define NPAD_DIALOG_OFFSET_Y 185
+
+// Place a dialog at the standard offset into its owner window, clamped to
+// the owner's monitor work area.
+static void position_dialog_on_owner(HWND dlg) {
     HWND owner = GetWindow(dlg, GW_OWNER);
     if (!owner)
         owner = GetParent(dlg);
@@ -375,8 +382,9 @@ static void center_dialog_on_owner(HWND dlg) {
         return;
     int w = rd.right - rd.left;
     int h = rd.bottom - rd.top;
-    int x = ro.left + ((ro.right - ro.left) - w) / 2;
-    int y = ro.top + ((ro.bottom - ro.top) - h) / 2;
+    int dpi = (int) get_window_dpi(owner);
+    int x = ro.left + MulDiv(NPAD_DIALOG_OFFSET_X, dpi, 96);
+    int y = ro.top + MulDiv(NPAD_DIALOG_OFFSET_Y, dpi, 96);
 
     MONITORINFO mi;
     mi.cbSize = sizeof(mi);
@@ -765,9 +773,10 @@ Window *ui_platform_create_main_window(void) {
     window->status_bar_visible = settings_get_bool("status_bar_visible", true);
 
     // Font type is per-window view state, seeded from the Defaults setting
-    // (falling back to the pre-0.7 "monospace_enabled" key for migration)
+    // (falling back to the pre-0.7 "monospace_enabled" key for migration).
+    // Proportional by default, mirroring classic Notepad out of the box.
     window->monospace_current =
-        settings_get_bool("default_font_mono", settings_get_bool("monospace_enabled", true));
+        settings_get_bool("default_font_mono", settings_get_bool("monospace_enabled", false));
 
     window->hwnd = CreateWindowExW(WS_EX_ACCEPTFILES, NPAD_WINDOW_CLASS, L"npad",
                                    WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT,
@@ -1469,6 +1478,86 @@ bool ui_platform_show_message_box(Window *parent, const char *title, const char 
     return is_question ? (result == IDYES) : true;
 }
 
+// TaskDialogIndirect loaded dynamically: it only exists in comctl32 v6, and
+// resolving it at runtime keeps the import table friendly to older setups
+typedef HRESULT(WINAPI *TaskDialogIndirectFunc)(const TASKDIALOGCONFIG *, int *, int *, BOOL *);
+
+UiOpenChoice ui_platform_prompt_binary_open(Window *parent, const char *filename) {
+    HWND hwnd = parent ? parent->hwnd : NULL;
+
+    char message[600];
+    char *name = file_get_filename(filename);
+    snprintf(message, sizeof(message),
+             "\"%.260s\" does not look like a text file.\n\n"
+             "Opening it in npad may show unreadable characters, and saving "
+             "it from npad could corrupt it.",
+             name ? name : (filename ? filename : ""));
+    free(name);
+    wchar_t *wmessage = utf8_to_wide(message);
+
+    UiOpenChoice choice = UI_OPEN_CANCEL;
+    HMODULE comctl = GetModuleHandleW(L"comctl32.dll");
+    union {
+        FARPROC proc;
+        TaskDialogIndirectFunc func;
+    } td;
+    td.proc = comctl ? GetProcAddress(comctl, "TaskDialogIndirect") : NULL;
+
+    if (td.proc) {
+        const TASKDIALOG_BUTTON buttons[] = {
+            { 101, L"Open in npad" },
+            { 102, L"Open with the default app" },
+        };
+        TASKDIALOGCONFIG cfg;
+        ZeroMemory(&cfg, sizeof(cfg));
+        cfg.cbSize = sizeof(cfg);
+        cfg.hwndParent = hwnd;
+        cfg.dwCommonButtons = TDCBF_CANCEL_BUTTON;
+        cfg.pszWindowTitle = L"npad";
+        cfg.pszMainIcon = TD_WARNING_ICON;
+        cfg.pszMainInstruction = L"This file looks like a binary file";
+        cfg.pszContent = wmessage ? wmessage : L"This file does not look like a text file.";
+        cfg.cButtons = 2;
+        cfg.pButtons = buttons;
+        cfg.nDefaultButton = IDCANCEL;
+
+        int pressed = 0;
+        if (SUCCEEDED(td.func(&cfg, &pressed, NULL, NULL))) {
+            if (pressed == 101)
+                choice = UI_OPEN_IN_NPAD;
+            else if (pressed == 102)
+                choice = UI_OPEN_WITH_DEFAULT;
+        }
+    } else {
+        // Fallback: Yes = open here, No = system default, Cancel = abort
+        wchar_t fallback[700];
+        _snwprintf(fallback, 699,
+                   L"%s\n\nYes: open in npad anyway\nNo: open with the default "
+                   L"app\nCancel: do nothing",
+                   wmessage ? wmessage : L"This file does not look like a text file.");
+        fallback[699] = L'\0';
+        int result = MessageBoxW(hwnd, fallback, L"npad", MB_YESNOCANCEL | MB_ICONWARNING);
+        if (result == IDYES)
+            choice = UI_OPEN_IN_NPAD;
+        else if (result == IDNO)
+            choice = UI_OPEN_WITH_DEFAULT;
+    }
+
+    free(wmessage);
+    return choice;
+}
+
+void ui_platform_open_with_default_app(const char *filename) {
+    if (!filename)
+        return;
+    wchar_t *wpath = utf8_to_wide(filename);
+    if (!wpath)
+        return;
+    ShellExecuteW(g_main_window ? g_main_window->hwnd : NULL, L"open", wpath, NULL, NULL,
+                  SW_SHOWNORMAL);
+    free(wpath);
+}
+
 SavePromptResult ui_platform_show_save_prompt(Window *parent, const char *filename) {
     HWND hwnd = parent ? parent->hwnd : NULL;
 
@@ -1887,8 +1976,9 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
                 RECT parent_rect;
                 if (GetWindowRect(parent->hwnd, &parent_rect)) {
                     int dpi = (int) get_window_dpi(parent->hwnd);
-                    SetWindowPos(dialog, NULL, parent_rect.left + MulDiv(84, dpi, 96),
-                                 parent_rect.top + MulDiv(185, dpi, 96), 0, 0,
+                    SetWindowPos(dialog, NULL,
+                                 parent_rect.left + MulDiv(NPAD_DIALOG_OFFSET_X, dpi, 96),
+                                 parent_rect.top + MulDiv(NPAD_DIALOG_OFFSET_Y, dpi, 96), 0, 0,
                                  SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
                 }
             }
@@ -3000,7 +3090,7 @@ static INT_PTR CALLBACK prefs_defaults_proc(HWND page, UINT msg, WPARAM wparam, 
             SendMessageW(font_combo, CB_ADDSTRING, 0, (LPARAM) L"Monospace");
             SendMessageW(font_combo, CB_ADDSTRING, 0, (LPARAM) L"Proportional");
             SendMessageW(font_combo, CB_SETCURSEL,
-                         settings_get_bool("default_font_mono", true) ? 0 : 1, 0);
+                         settings_get_bool("default_font_mono", false) ? 0 : 1, 0);
 
             SetDlgItemInt(page, ID_PREF_DEFAULT_ZOOM, (UINT) settings_get_int("default_zoom", 100),
                           FALSE);
@@ -3272,7 +3362,7 @@ static INT_PTR CALLBACK goto_proc(HWND dialog, UINT msg, WPARAM wparam, LPARAM l
     (void) lparam;
     switch (msg) {
         case WM_INITDIALOG:
-            center_dialog_on_owner(dialog);
+            position_dialog_on_owner(dialog);
             SetDlgItemInt(dialog, ID_GOTO_EDIT, 1, FALSE);
             SendDlgItemMessageW(dialog, ID_GOTO_EDIT, EM_SETSEL, 0, -1);
             SetFocus(GetDlgItem(dialog, ID_GOTO_EDIT));
@@ -3327,7 +3417,7 @@ static INT_PTR CALLBACK custom_indent_proc(HWND dialog, UINT msg, WPARAM wparam,
     (void) lparam;
     switch (msg) {
         case WM_INITDIALOG: {
-            center_dialog_on_owner(dialog);
+            position_dialog_on_owner(dialog);
             char *raw = settings_get_string("list_custom_indent", "");
             if (raw) {
                 wchar_t *wide = utf8_to_wide(raw);
@@ -3868,7 +3958,7 @@ static INT_PTR CALLBACK convert_delim_proc(HWND dlg, UINT msg, WPARAM wparam, LP
     switch (msg) {
         case WM_INITDIALOG: {
             win = (Window *) lparam;
-            center_dialog_on_owner(dlg);
+            position_dialog_on_owner(dlg);
             static const wchar_t *const presets[] = { L",",   L";",      L"|", L"\\t",
                                                       L"\\n", L"\\r\\n", L" " };
             HWND from = GetDlgItem(dlg, ID_DELIM_FROM);

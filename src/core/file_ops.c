@@ -857,6 +857,38 @@ size_t file_get_size(const char *filename) {
     return (size >= 0) ? (size_t) size : 0;
 }
 
+bool file_looks_binary(const char *filename) {
+    if (!is_valid_path(filename))
+        return false;
+
+    FILE *file = open_file_utf8(filename, "rb");
+    if (!file)
+        return false;
+
+    unsigned char buf[8192];
+    size_t n = fread(buf, 1, sizeof(buf), file);
+    fclose(file);
+    if (n == 0)
+        return false;
+
+    // BOM-marked files are text: UTF-16 in particular is full of NUL bytes
+    if (n >= 3 && buf[0] == 0xEF && buf[1] == 0xBB && buf[2] == 0xBF)
+        return false; // UTF-8 BOM
+    if (n >= 2 && ((buf[0] == 0xFF && buf[1] == 0xFE) || (buf[0] == 0xFE && buf[1] == 0xFF)))
+        return false; // UTF-16 LE/BE BOM
+
+    size_t control = 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = buf[i];
+        if (c == 0)
+            return true; // A NUL byte outside UTF-16 never appears in text
+        if (c < 0x20 && c != '\t' && c != '\n' && c != '\r' && c != '\f' && c != 0x1B)
+            control++;
+    }
+    // More than 10% unusual control bytes: treat as binary
+    return control * 10 > n;
+}
+
 bool file_delete(const char *filename) {
     if (!is_valid_path(filename)) {
         set_error("Invalid filename");
