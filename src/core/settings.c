@@ -248,6 +248,40 @@ bool settings_clear_all(void) {
     return true;
 }
 
+int settings_reset_except_prefixes(const char *const *keep_prefixes, int prefix_count) {
+    int removed = 0;
+    npad_mutex_lock(&g_settings_mutex);
+
+    SettingEntry *prev = NULL;
+    SettingEntry *current = g_settings_head;
+    while (current) {
+        bool keep = false;
+        for (int i = 0; i < prefix_count && !keep; i++) {
+            const char *p = keep_prefixes[i];
+            if (p && strncmp(current->key, p, strlen(p)) == 0)
+                keep = true;
+        }
+        if (keep) {
+            prev = current;
+            current = current->next;
+        } else {
+            SettingEntry *doomed = current;
+            if (prev)
+                prev->next = current->next;
+            else
+                g_settings_head = current->next;
+            current = current->next;
+            free(doomed->key);
+            free(doomed->value);
+            free(doomed);
+            removed++;
+        }
+    }
+
+    npad_mutex_unlock(&g_settings_mutex);
+    return removed;
+}
+
 // Create a directory and any missing parent directories
 static void create_directory_recursive(const char *path) {
     if (!path || !path[0])

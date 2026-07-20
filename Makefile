@@ -235,7 +235,7 @@ format-check:
 	find src/ -name "*.c" -o -name "*.h" | xargs $(CLANG_FORMAT) --dry-run --Werror
 
 # Testing targets
-test: test-file-ops test-error test-encoding test-session test-list-ops test-update-check
+test: test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings
 	@echo "All tests completed"
 
 test-file-ops: tests/test_file_ops
@@ -262,6 +262,10 @@ test-update-check: tests/test_update_check
 	@echo "Running update-check tests..."
 	./tests/test_update_check
 
+test-settings: tests/test_settings
+	@echo "Running settings tests..."
+	./tests/test_settings
+
 tests/test_file_ops: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_file_ops.c
 	@mkdir -p tests
 	$(CC) $(CFLAGS) -o $@ $^ -lpthread
@@ -285,14 +289,17 @@ tests/test_list_ops: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_l
 tests/test_update_check: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_update_check.c
 	$(CC) $(CFLAGS) -o tests/test_update_check $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_update_check.c
 
+tests/test_settings: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_settings.c
+	$(CC) $(CFLAGS) -o tests/test_settings $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_settings.c
+
 # Cleanup
 clean:
 	rm -f $(WINDOWS_GUI_TARGET) $(WINDOWS_TERMINAL_TARGET) $(MACOS_TARGET) $(LINUX_X11_TARGET) $(LINUX_WAYLAND_TARGET) $(LINUX_TERMINAL_TARGET)
 	rm -f npad-*.exe npad-*linux* npad-*win32*
 	find src tests -name '*.o' -delete 2>/dev/null || true
 	rm -f src/platform/npad.res
-	rm -f tests/test_file_ops tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check
-	rm -f tests/test_file_ops.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe
+	rm -f tests/test_file_ops tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings
+	rm -f tests/test_file_ops.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe
 
 # Installation
 install:
@@ -350,4 +357,4 @@ help:
 	@echo "  DEBUG=1          - Enable debug build"
 	@echo "  VERSION          - Version string (auto-detected from git)"
 
-.PHONY: all windows windows-gui windows-terminal linux linux-x11 linux-wayland linux-terminal terminal macos debug debug-windows debug-linux clean install uninstall lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check help detect-platform
+.PHONY: all windows windows-gui windows-terminal linux linux-x11 linux-wayland linux-terminal terminal macos debug debug-windows debug-linux clean install uninstall lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings help detect-platform

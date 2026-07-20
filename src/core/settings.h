@@ -34,6 +34,14 @@ bool settings_remove_key(const char *key);
 bool settings_clear_all(void);
 int settings_count(void); // Number of stored entries (Debug page diagnostics)
 
+// Remove every setting whose key does NOT begin with one of keep_prefixes;
+// returns the count removed. This is the "reset to defaults except the
+// preserved categories" primitive: new preference keys are reset by DEFAULT,
+// so callers only maintain the small, stable list of things to KEEP (recent
+// files, window geometry, find/replace state) rather than an allowlist of
+// everything to remove (which silently drifts as new preferences are added).
+int settings_reset_except_prefixes(const char *const *keep_prefixes, int prefix_count);
+
 // File operations
 bool settings_save(void);
 bool settings_load(void);

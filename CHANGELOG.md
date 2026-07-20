@@ -29,6 +29,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check still reports errors. The dot/decision logic is a unit-tested core
   helper (`update_is_newer_unskipped`).
 
+### 🐛 Bug Fixes (from an adversarial code review)
+- **Reset All Preferences** now resets *every* preference, including the
+  Markdown, status-bar counts, and Updates settings that a hardcoded allowlist
+  had silently missed. Reworked to reset everything except a small preserved
+  set (recent files, window geometry, find/replace state), so future
+  preferences are reset by default; guarded by a new `test_settings` suite.
+- A literal **Tab** could be silently swallowed after the Custom Indent prompt
+  (the swallow flag is now armed before the modal dialog can run).
+- The optional word/char/line **counts** no longer go stale when the status
+  bar is hidden during edits and then re-shown.
+- A pending counts refresh no longer overwrites a newer transient status
+  message (e.g. "Match 3 of 7").
+- Preferences > Defaults now shows the correct font type for users migrated
+  from a pre-0.7 build (honours the legacy `monospace_enabled` key), so
+  Applying without changing it no longer flips their default.
+
 ## [0.16.0] - 2026-07-20
 
 ### ✨ Features

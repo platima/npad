@@ -469,16 +469,22 @@ static bool handle_markdown_tab(HWND hwnd) {
     if (GetKeyState(VK_CONTROL) < 0)
         return false; // Ctrl+Tab is not ours
     bool shift = GetKeyState(VK_SHIFT) < 0;
+    // Arm the swallow flag BEFORE acting: list_indent_default can open the
+    // modal Custom Indent dialog, whose message loop would otherwise dispatch
+    // the already-queued WM_CHAR '\t' to this control (inserting a stray tab)
+    // and leave the flag armed for a later, unrelated Tab. Set first so the
+    // pending WM_CHAR is swallowed whether it arrives during the modal loop or
+    // back in the outer loop.
     if (shift) {
         // Shift+Tab always unindents: the selected lines, or the caret line
         // when nothing is selected (a literal tab is never what it means)
-        list_indent_default(g_main_window, true);
         g_swallow_tab_char = true;
+        list_indent_default(g_main_window, true);
         return true;
     }
     if (ui_platform_has_selection(g_main_window)) {
-        list_indent_default(g_main_window, false);
         g_swallow_tab_char = true;
+        list_indent_default(g_main_window, false);
         return true;
     }
     return false; // Plain Tab types a tab, classic Notepad behavior
@@ -1718,6 +1724,11 @@ void ui_platform_show_about_dialog(Window *parent) {
 static void set_status_message(Window *window, const char *message) {
     if (!window || !window->status_hwnd)
         return;
+    // Cancel any pending counts refresh: a debounce armed by an earlier edit
+    // must not fire later and overwrite this (newer) message. The next edit
+    // re-arms it.
+    if (window->hwnd)
+        KillTimer(window->hwnd, NPAD_COUNTS_TIMER_ID);
     wchar_t *wide = utf8_to_wide(message ? message : "");
     if (wide) {
         wcsncpy(window->status_cache[0], wide, 63);
@@ -3657,23 +3668,19 @@ static void import_settings(HWND owner) {
                 L"npad", MB_OK | MB_ICONINFORMATION);
 }
 
-// Reset every preference to its default (Backup page). Recent files, window
-// geometry and Find/Replace history are deliberately kept - only the keys
-// exposed in the Preferences tabs (plus word wrap) are removed; the getters
-// fall back to their defaults for missing keys.
+// Reset every preference to its default (Backup page). Rather than an
+// allowlist of keys to remove (which silently drifts every time a new
+// Preferences tab/setting is added - and did), this resets EVERYTHING except
+// the small, stable set of preserved categories: recent files, window
+// geometry, and Find/Replace state (options + history). Any new preference
+// key is therefore reset by default; getters fall back to their defaults for
+// the now-missing keys. To keep something across a reset, add its prefix here.
 static void reset_all_preferences(HWND owner) {
-    static const char *pref_keys[] = {
-        // General
-        "auto_save_enabled", "auto_save_interval", "large_file_warning_mb", "recent_files_max",
-        "session_resume_enabled", "session_interval", "ctrl_n_new_window",
-        // Appearance
-        "theme", "monospace_font", "proportional_font", "font_size", "font_weight", "font_italic",
-        "opendyslexic_enabled", "opendyslexic_font", "status_bar_visible", "sync_view_state",
-        // Defaults
-        "default_encoding", "default_line_ending", "default_font_mono", "default_zoom",
-        "auto_update_defaults",
-        // Other shared options
-        "word_wrap"
+    static const char *const keep_prefixes[] = {
+        "recent_file_", // recent files list (recent_files_max is a pref -> reset)
+        "window_",      // window geometry
+        "find_",        // find options + find history
+        "replace_",     // replace history
     };
 
     if (MessageBoxW(owner,
@@ -3684,9 +3691,8 @@ static void reset_all_preferences(HWND owner) {
         return;
     }
 
-    for (size_t i = 0; i < sizeof(pref_keys) / sizeof(pref_keys[0]); i++) {
-        settings_remove_key(pref_keys[i]);
-    }
+    settings_reset_except_prefixes(keep_prefixes,
+                                   (int) (sizeof(keep_prefixes) / sizeof(keep_prefixes[0])));
     settings_save();
 
     // Re-apply everything that can change live (same path as a cross-instance
@@ -3866,8 +3872,15 @@ static INT_PTR CALLBACK prefs_defaults_proc(HWND page, UINT msg, WPARAM wparam, 
             HWND font_combo = GetDlgItem(page, ID_PREF_DEFAULT_FONT_TYPE);
             SendMessageW(font_combo, CB_ADDSTRING, 0, (LPARAM) L"Monospace");
             SendMessageW(font_combo, CB_ADDSTRING, 0, (LPARAM) L"Proportional");
+            // Match the new-window seeding fallback (pre-0.7 monospace_enabled),
+            // so the shown default equals the effective default and Apply does
+            // not silently flip a migrated user's mono default to proportional
             SendMessageW(font_combo, CB_SETCURSEL,
-                         settings_get_bool("default_font_mono", false) ? 0 : 1, 0);
+                         settings_get_bool("default_font_mono",
+                                           settings_get_bool("monospace_enabled", false))
+                             ? 0
+                             : 1,
+                         0);
 
             SetDlgItemInt(page, ID_PREF_DEFAULT_ZOOM, (UINT) settings_get_int("default_zoom", 100),
                           FALSE);
@@ -5275,6 +5288,10 @@ static void set_status_bar_visible(Window *window, bool visible) {
     settings_set_bool("status_bar_visible", visible);
     ShowWindow(window->status_hwnd, visible ? SW_SHOW : SW_HIDE);
     resize_controls(window);
+    // update_status_bar (via resize_controls) refreshes parts 1-5 only; part 0
+    // holds the optional counts, which the debounce skips while hidden, so
+    // repopulate/clear it explicitly on a visibility change
+    apply_counts_pref(window);
     if (window->hmenu) {
         CheckMenuItem(window->hmenu, ID_VIEW_STATUS_BAR, visible ? MF_CHECKED : MF_UNCHECKED);
     }
