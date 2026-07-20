@@ -70,3 +70,4 @@ dist/
 # Local editor/agent config (never commit)
 .claude/
 npad.code-workspace
+tests/test_update_check

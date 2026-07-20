@@ -5,6 +5,19 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-07-20
+
+### ✨ Features
+- **Check for Updates** (Help menu): strictly on-demand - npad never checks
+  in the background and never updates automatically. Queries the GitHub
+  releases API on a worker thread (the UI never blocks), compares versions
+  numerically, and offers **Download and install / View the release notes /
+  Cancel** when a newer release exists. The installer and its published
+  `.sha256` are downloaded to the temp directory, the SHA-256 checksum is
+  verified (a mismatch deletes the file and aborts), and only then does a
+  final confirmation launch the installer and close npad through the normal
+  save prompt. Zero new dependencies (WinHTTP + Windows CNG).
+
 ## [0.15.0] - 2026-07-20
 
 ### ✨ Features

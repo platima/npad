@@ -16,6 +16,8 @@
 #include <prsht.h>
 #include <richedit.h>
 #include <shellapi.h>
+#include <winhttp.h>
+#include <bcrypt.h>
 #include <objbase.h>
 #include <shlobj.h>
 
@@ -28,6 +30,7 @@
 #include "../core/session.h"
 #include "../core/settings.h"
 #include "../core/startup_prof.h"
+#include "../core/update_check.h"
 #include "resource.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -136,6 +139,7 @@ static double qpc_ms(void) {
 #define ID_LIST_UNINDENT 2120    // Ctrl+[
 #define ID_LIST_INDENT_BASE 2121 // 2121..2127, one per ListIndentFormat (2127 = Custom, prompts)
 #define ID_HELP_ABOUT 2401
+#define ID_HELP_CHECK_UPDATES 2402
 
 #define MAX_RECENT_MENU_FILES 10
 
@@ -1719,6 +1723,384 @@ static void set_status_message(Window *window, const char *message) {
         SendMessageW(window->status_hwnd, SB_SETTEXTW, 0, (LPARAM) wide);
         free(wide);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Check for Updates (Help menu). Strictly on-demand per the core principle:
+// npad never checks in the background and never updates automatically.
+// ---------------------------------------------------------------------------
+
+#define NPAD_WM_UPDATE_CHECKED (WM_APP + 1)
+#define NPAD_WM_UPDATE_PROGRESS (WM_APP + 2)
+#define NPAD_WM_UPDATE_DOWNLOADED (WM_APP + 3)
+
+typedef struct {
+    bool ok;
+    char tag[32];
+    char error[160];
+} UpdateCheckResult;
+
+typedef struct {
+    HWND hwnd;
+    char tag[32];
+} UpdateDownloadJob;
+
+typedef struct {
+    bool ok;
+    wchar_t path[MAX_PATH];
+    char tag[32];
+    char error[160];
+} UpdateDownloadResult;
+
+// One update operation (check or download) at a time
+static volatile LONG g_update_busy = 0;
+
+// Bounded HTTPS GET on the calling (worker) thread. Returns a malloc'd,
+// NUL-terminated buffer and its length; NULL on any failure. Posts percent
+// progress to progress_hwnd when given and the size is known.
+static char *http_get_alloc(const wchar_t *host, const wchar_t *path, size_t max_bytes,
+                            size_t *out_len, HWND progress_hwnd) {
+    char *data = NULL;
+    size_t len = 0, cap = 0;
+    bool ok = false;
+
+    HINTERNET ses = WinHttpOpen(L"npad-updater", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET con = NULL, req = NULL;
+    if (!ses)
+        goto done;
+    con = WinHttpConnect(ses, host, INTERNET_DEFAULT_HTTPS_PORT, 0);
+    if (!con)
+        goto done;
+    req = WinHttpOpenRequest(con, L"GET", path, NULL, WINHTTP_NO_REFERER,
+                             WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    if (!req)
+        goto done;
+    // GitHub's API requires a User-Agent
+    if (!WinHttpSendRequest(req, L"User-Agent: npad\r\nAccept: application/vnd.github+json\r\n",
+                            (DWORD) -1, WINHTTP_NO_REQUEST_DATA, 0, 0, 0))
+        goto done;
+    if (!WinHttpReceiveResponse(req, NULL))
+        goto done;
+
+    DWORD status = 0, sz = sizeof(status);
+    WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                        WINHTTP_HEADER_NAME_BY_INDEX, &status, &sz, WINHTTP_NO_HEADER_INDEX);
+    if (status != 200)
+        goto done;
+
+    DWORD total = 0;
+    sz = sizeof(total);
+    WinHttpQueryHeaders(req, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER,
+                        WINHTTP_HEADER_NAME_BY_INDEX, &total, &sz, WINHTTP_NO_HEADER_INDEX);
+
+    for (;;) {
+        DWORD avail = 0;
+        if (!WinHttpQueryDataAvailable(req, &avail))
+            goto done;
+        if (avail == 0)
+            break;
+        if (len + avail > max_bytes)
+            goto done;
+        if (len + avail + 1 > cap) {
+            size_t ncap = cap ? cap * 2 : 65536;
+            while (ncap < len + avail + 1)
+                ncap *= 2;
+            char *grown = realloc(data, ncap);
+            if (!grown)
+                goto done;
+            data = grown;
+            cap = ncap;
+        }
+        DWORD got = 0;
+        if (!WinHttpReadData(req, data + len, avail, &got))
+            goto done;
+        len += got;
+        if (progress_hwnd && total > 0)
+            PostMessageW(progress_hwnd, NPAD_WM_UPDATE_PROGRESS, (WPARAM) ((len * 100) / total), 0);
+    }
+    if (data) {
+        data[len] = '\0';
+        ok = true;
+    }
+
+done:
+    if (req)
+        WinHttpCloseHandle(req);
+    if (con)
+        WinHttpCloseHandle(con);
+    if (ses)
+        WinHttpCloseHandle(ses);
+    if (!ok) {
+        free(data);
+        data = NULL;
+        len = 0;
+    }
+    if (out_len)
+        *out_len = len;
+    return data;
+}
+
+// SHA-256 of a file as lowercase hex via Windows CNG
+static bool sha256_file_hex(const wchar_t *path, char out[65]) {
+    bool ok = false;
+    BCRYPT_ALG_HANDLE alg = NULL;
+    BCRYPT_HASH_HANDLE hash = NULL;
+    FILE *f = NULL;
+    unsigned char digest[32];
+
+    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, NULL, 0) != 0)
+        return false;
+    if (BCryptCreateHash(alg, &hash, NULL, 0, NULL, 0, 0) != 0)
+        goto done;
+    f = _wfopen(path, L"rb");
+    if (!f)
+        goto done;
+    unsigned char buf[65536];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        if (BCryptHashData(hash, buf, (ULONG) n, 0) != 0)
+            goto done;
+    }
+    if (BCryptFinishHash(hash, digest, sizeof(digest), 0) != 0)
+        goto done;
+    for (int i = 0; i < 32; i++)
+        snprintf(out + i * 2, 3, "%02x", digest[i]);
+    ok = true;
+
+done:
+    if (f)
+        fclose(f);
+    if (hash)
+        BCryptDestroyHash(hash);
+    if (alg)
+        BCryptCloseAlgorithmProvider(alg, 0);
+    return ok;
+}
+
+static DWORD WINAPI update_check_thread(LPVOID param) {
+    HWND hwnd = (HWND) param;
+    UpdateCheckResult *r = calloc(1, sizeof(*r));
+    if (!r) {
+        InterlockedExchange(&g_update_busy, 0);
+        return 0;
+    }
+    size_t len = 0;
+    char *json = http_get_alloc(L"api.github.com", L"/repos/platima/npad/releases/latest",
+                                1024 * 1024, &len, NULL);
+    if (!json) {
+        snprintf(r->error, sizeof(r->error), "Could not reach github.com to check for updates.");
+    } else if (!update_extract_tag(json, r->tag, sizeof(r->tag))) {
+        snprintf(r->error, sizeof(r->error), "Unexpected response from the update server.");
+    } else {
+        r->ok = true;
+    }
+    free(json);
+    PostMessageW(hwnd, NPAD_WM_UPDATE_CHECKED, 0, (LPARAM) r);
+    return 0;
+}
+
+static DWORD WINAPI update_download_thread(LPVOID param) {
+    UpdateDownloadJob *job = (UpdateDownloadJob *) param;
+    UpdateDownloadResult *r = calloc(1, sizeof(*r));
+    if (!r) {
+        free(job);
+        InterlockedExchange(&g_update_busy, 0);
+        return 0;
+    }
+    snprintf(r->tag, sizeof(r->tag), "%s", job->tag);
+    const char *ver = (job->tag[0] == 'v' || job->tag[0] == 'V') ? job->tag + 1 : job->tag;
+
+    wchar_t wver[32], wtag[32];
+    _snwprintf(wver, 31, L"%hs", ver);
+    wver[31] = L'\0';
+    _snwprintf(wtag, 31, L"%hs", job->tag);
+    wtag[31] = L'\0';
+
+    wchar_t path[256];
+    size_t exe_len = 0, sum_len = 0;
+    char *exe = NULL, *sum = NULL;
+
+    // The installer (progress reported) and its published digest
+    _snwprintf(path, 255, L"/platima/npad/releases/download/%s/npad-setup-%s.exe", wtag, wver);
+    path[255] = L'\0';
+    exe = http_get_alloc(L"github.com", path, (size_t) 200 * 1024 * 1024, &exe_len, job->hwnd);
+    if (exe) {
+        _snwprintf(path, 255, L"/platima/npad/releases/download/%s/npad-setup-%s.exe.sha256", wtag,
+                   wver);
+        path[255] = L'\0';
+        sum = http_get_alloc(L"github.com", path, 4096, &sum_len, NULL);
+    }
+
+    char expected[65], actual[65];
+    if (!exe || exe_len == 0) {
+        snprintf(r->error, sizeof(r->error), "Could not download the installer for npad %s.",
+                 job->tag);
+    } else if (!sum || !update_parse_sha256(sum, expected)) {
+        snprintf(r->error, sizeof(r->error),
+                 "Could not download the checksum to verify the installer.");
+    } else {
+        wchar_t temp_dir[MAX_PATH];
+        if (GetTempPathW(MAX_PATH, temp_dir) == 0) {
+            snprintf(r->error, sizeof(r->error), "Could not resolve the temporary directory.");
+        } else {
+            _snwprintf(r->path, MAX_PATH - 1, L"%snpad-setup-%s.exe", temp_dir, wver);
+            r->path[MAX_PATH - 1] = L'\0';
+            FILE *f = _wfopen(r->path, L"wb");
+            bool written = f && fwrite(exe, 1, exe_len, f) == exe_len;
+            if (f)
+                fclose(f);
+            if (!written) {
+                snprintf(r->error, sizeof(r->error), "Could not save the downloaded installer.");
+            } else if (!sha256_file_hex(r->path, actual) || strcmp(actual, expected) != 0) {
+                DeleteFileW(r->path); // Corrupt or tampered: never leave it around
+                snprintf(r->error, sizeof(r->error),
+                         "The downloaded installer failed SHA-256 verification and was "
+                         "deleted.");
+            } else {
+                r->ok = true;
+            }
+        }
+    }
+
+    free(exe);
+    free(sum);
+    HWND hwnd = job->hwnd;
+    free(job);
+    PostMessageW(hwnd, NPAD_WM_UPDATE_DOWNLOADED, 0, (LPARAM) r);
+    return 0;
+}
+
+// UI-thread handler for the check result: report, or offer the update
+static void handle_update_checked(Window *window, UpdateCheckResult *r) {
+    HWND hwnd = window ? window->hwnd : NULL;
+    char cur[32];
+    snprintf(cur, sizeof(cur), "v%d.%d.%d", NPAD_VERSION_MAJOR, NPAD_VERSION_MINOR,
+             NPAD_VERSION_PATCH);
+
+    if (!r->ok) {
+        wchar_t *w = utf8_to_wide(r->error);
+        MessageBoxW(hwnd, w ? w : L"Update check failed.", L"npad", MB_OK | MB_ICONWARNING);
+        free(w);
+        set_status_message(window, "Update check failed");
+        InterlockedExchange(&g_update_busy, 0);
+        free(r);
+        return;
+    }
+
+    if (update_version_compare(r->tag, cur) <= 0) {
+        char msg[160];
+        snprintf(msg, sizeof(msg), "npad is up to date.\n\nYou have %s; the latest release is %s.",
+                 cur, r->tag);
+        wchar_t *w = utf8_to_wide(msg);
+        MessageBoxW(hwnd, w ? w : L"npad is up to date.", L"npad", MB_OK | MB_ICONINFORMATION);
+        free(w);
+        set_status_message(window, "npad is up to date");
+        InterlockedExchange(&g_update_busy, 0);
+        free(r);
+        return;
+    }
+
+    char msg[200];
+    snprintf(msg, sizeof(msg), "npad %s is available (you have %s).", r->tag, cur);
+    wchar_t *wmsg = utf8_to_wide(msg);
+
+    int choice = 0; // 0 = not now, 101 = download and install, 102 = release notes
+    HMODULE comctl = GetModuleHandleW(L"comctl32.dll");
+    union {
+        FARPROC proc;
+        TaskDialogIndirectFunc func;
+    } td;
+    td.proc = comctl ? GetProcAddress(comctl, "TaskDialogIndirect") : NULL;
+    if (td.proc) {
+        const TASKDIALOG_BUTTON buttons[] = {
+            { 101, L"Download and install" },
+            { 102, L"View the release notes" },
+        };
+        TASKDIALOGCONFIG cfg;
+        ZeroMemory(&cfg, sizeof(cfg));
+        cfg.cbSize = sizeof(cfg);
+        cfg.hwndParent = hwnd;
+        cfg.dwCommonButtons = TDCBF_CANCEL_BUTTON;
+        cfg.pszWindowTitle = L"npad";
+        cfg.pszMainIcon = TD_INFORMATION_ICON;
+        cfg.pszMainInstruction = L"A newer version of npad is available";
+        cfg.pszContent = wmsg ? wmsg : L"A newer release is available.";
+        cfg.cButtons = 2;
+        cfg.pButtons = buttons;
+        cfg.nDefaultButton = 101;
+        int pressed = 0;
+        if (SUCCEEDED(td.func(&cfg, &pressed, NULL, NULL)))
+            choice = pressed;
+    } else {
+        wchar_t fb[300];
+        _snwprintf(fb, 299,
+                   L"%s\n\nYes: download and install\nNo: view the release notes\n"
+                   L"Cancel: not now",
+                   wmsg ? wmsg : L"A newer release is available.");
+        fb[299] = L'\0';
+        int res = MessageBoxW(hwnd, fb, L"npad", MB_YESNOCANCEL | MB_ICONINFORMATION);
+        choice = (res == IDYES) ? 101 : (res == IDNO) ? 102 : 0;
+    }
+    free(wmsg);
+
+    if (choice == 101) {
+        char status[96];
+        snprintf(status, sizeof(status), "Downloading npad %s...", r->tag);
+        set_status_message(window, status);
+        UpdateDownloadJob *job = calloc(1, sizeof(*job));
+        HANDLE thread = NULL;
+        if (job) {
+            job->hwnd = hwnd;
+            snprintf(job->tag, sizeof(job->tag), "%s", r->tag);
+            thread = CreateThread(NULL, 0, update_download_thread, job, 0, NULL);
+        }
+        if (thread) {
+            CloseHandle(thread); // Busy flag stays set until the result arrives
+        } else {
+            free(job);
+            set_status_message(window, "Update download failed to start");
+            InterlockedExchange(&g_update_busy, 0);
+        }
+    } else {
+        if (choice == 102) {
+            ShellExecuteW(hwnd, L"open", L"https://github.com/platima/npad/releases/latest", NULL,
+                          NULL, SW_SHOWNORMAL);
+        }
+        InterlockedExchange(&g_update_busy, 0);
+    }
+    free(r);
+}
+
+// UI-thread handler for the verified download: confirm, launch, quit
+static void handle_update_downloaded(Window *window, UpdateDownloadResult *r) {
+    HWND hwnd = window ? window->hwnd : NULL;
+    if (!r->ok) {
+        wchar_t *w = utf8_to_wide(r->error);
+        MessageBoxW(hwnd, w ? w : L"Update download failed.", L"npad", MB_OK | MB_ICONWARNING);
+        free(w);
+        set_status_message(window, "Update download failed");
+    } else {
+        set_status_message(window, "Update downloaded and verified");
+        wchar_t msg[MAX_PATH + 160];
+        _snwprintf(msg, MAX_PATH + 159,
+                   L"npad %hs was downloaded and its SHA-256 checksum verified.\n\n"
+                   L"Install now? The installer will start and npad will close (you'll be "
+                   L"prompted to save any unsaved changes).",
+                   r->tag);
+        msg[MAX_PATH + 159] = L'\0';
+        if (MessageBoxW(hwnd, msg, L"npad", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+            ShellExecuteW(hwnd, L"open", r->path, NULL, NULL, SW_SHOWNORMAL);
+            ui_post_event(UI_EVENT_QUIT, window, NULL);
+        } else {
+            wchar_t note[MAX_PATH + 96];
+            _snwprintf(note, MAX_PATH + 95, L"The verified installer was saved to:\n%s", r->path);
+            note[MAX_PATH + 95] = L'\0';
+            MessageBoxW(hwnd, note, L"npad", MB_OK | MB_ICONINFORMATION);
+        }
+    }
+    InterlockedExchange(&g_update_busy, 0);
+    free(r);
 }
 
 // --- Highlight all matches -------------------------------------------------
@@ -4389,6 +4771,8 @@ static void create_menu(Window *window) {
     // View > Dark Mode toggle would clobber a selected Solarized scheme.
 
     // Help menu
+    AppendMenuW(hhelp, MF_STRING, ID_HELP_CHECK_UPDATES, L"Check for &Updates...");
+    AppendMenuW(hhelp, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hhelp, MF_STRING, ID_HELP_ABOUT, L"&About npad");
 
     AppendMenuW(hmenu, MF_STRING | MF_POPUP, (UINT_PTR) hfile, L"&File");
@@ -4807,6 +5191,20 @@ static void handle_command(Window *window, WORD command) {
         case ID_HELP_ABOUT:
             ui_platform_show_about_dialog(window);
             break;
+        case ID_HELP_CHECK_UPDATES:
+            // One operation at a time; the busy flag clears when the worker
+            // thread's result has been handled
+            if (InterlockedCompareExchange(&g_update_busy, 1, 0) == 0) {
+                set_status_message(window, "Checking for updates...");
+                HANDLE thread = CreateThread(NULL, 0, update_check_thread, window->hwnd, 0, NULL);
+                if (thread) {
+                    CloseHandle(thread);
+                } else {
+                    set_status_message(window, "Update check failed to start");
+                    InterlockedExchange(&g_update_busy, 0);
+                }
+            }
+            break;
     }
 }
 
@@ -5165,6 +5563,27 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                 KillTimer(hwnd, NPAD_HIGHLIGHT_TIMER_ID); // One-shot (debounced)
                 refresh_highlights(window, g_highlight_all && g_find_dialog != NULL);
             }
+            return 0;
+        }
+
+        case NPAD_WM_UPDATE_CHECKED: {
+            if (lparam)
+                handle_update_checked(window, (UpdateCheckResult *) lparam);
+            return 0;
+        }
+
+        case NPAD_WM_UPDATE_PROGRESS: {
+            if (window) {
+                char progress[64];
+                snprintf(progress, sizeof(progress), "Downloading update... %d%%", (int) wparam);
+                set_status_message(window, progress);
+            }
+            return 0;
+        }
+
+        case NPAD_WM_UPDATE_DOWNLOADED: {
+            if (lparam)
+                handle_update_downloaded(window, (UpdateDownloadResult *) lparam);
             return 0;
         }
 

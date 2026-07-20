@@ -77,6 +77,7 @@ Current features (Windows build):
   - Confirmation prompt before opening very large files (threshold scales with the system's RAM by default)
   - Binary-file detection on open, offering Cancel / Open in npad / Open with the default app
   - Optional word / character / line counts in the status bar (off by default, debounced so large edits stay smooth)
+  - Check for Updates in the Help menu - strictly on-demand (never automatic), with SHA-256-verified installer download
 
 Planned (see the [Roadmap](#roadmap)):
 
@@ -336,7 +337,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] 'Highlight all' matches in Find / Find & Replace
   - [x] Optional word / character / line count in the status bar (off by default)
   - [x] Large-file lag warning proportional to the system's capabilities (default threshold scales with RAM)
-  - [ ] Self-updating: on-demand check-for-updates (never automatic)
+  - [x] Self-updating: on-demand check-for-updates (never automatic; SHA-256-verified download)
 - [ ] **Advanced Features**
   - [ ] Tabbed interface (optional)
   - [ ] Multi-language support

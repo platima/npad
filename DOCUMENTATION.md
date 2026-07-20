@@ -276,6 +276,15 @@ position). Not intended for direct use.
   Replace dialogs makes both fields interpret `\n \r \t \\ \uXXXX`, so line
   breaks can be searched for and inserted. Search history records the text
   exactly as typed.
+- **Check for Updates** (Help menu): strictly on-demand - npad never
+  checks in the background, never phones home on its own, and never
+  updates automatically. The check queries the GitHub releases API on a
+  worker thread; when a newer release exists you can download and install
+  it (the installer and its published `.sha256` are fetched to the temp
+  directory and the SHA-256 checksum verified before anything runs - a
+  mismatch deletes the download and aborts), open the release notes in
+  the browser, or do nothing. Installing closes npad through the normal
+  save-changes prompt. Portable-exe users get the same installer download.
 - **Highlight all matches**: a checkbox in the Find and Replace dialogs
   washes every match of the search text with a translucent amber overlay
   (live as you retype, debounced; capped at 10,000 matches). It is drawn
