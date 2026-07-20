@@ -236,6 +236,10 @@ void ui_platform_open_with_default_app(const char *filename) {
     (void) filename;
 }
 
+size_t ui_platform_system_memory_mb(void) {
+    return 0; // Unknown: caller falls back to a fixed default
+}
+
 void ui_platform_show_find_dialog(Window *parent) {
     (void) parent;
 }

@@ -98,7 +98,7 @@ All settings live in `settings.json` and are editable in Preferences
 |-----|------|---------|-------------|
 | `auto_save_enabled` | bool | `false` | Silently save named documents on a timer. Off by default: overwriting the file from a timer is destructive, so it is opt-in. Untitled documents are never auto-saved. |
 | `auto_save_interval` | int | `300` | Auto-save period in seconds (minimum 10). |
-| `large_file_warning_mb` | int | `100` | Confirm before opening files larger than this (MB). `0` disables the prompt. |
+| `large_file_warning_mb` | int | adaptive | Confirm before opening files larger than this (MB). `0` disables the prompt. When never set, the default scales with installed RAM (1/64th, clamped 50-1024 MB; 100 MB when memory size is unknown). |
 | `recent_files_max` | int | `10` | Recent Files menu length (0-10). |
 | `session_resume_enabled` | bool | `true` | Crash recovery: snapshot unsaved work on a timer; offer to restore after an unclean exit. On by default: snapshots never touch the user's file. All windows are restored, extras in their own cascaded windows. |
 | `session_interval` | int | `30` | Snapshot period in seconds (minimum 5). |
@@ -116,6 +116,7 @@ All settings live in `settings.json` and are editable in Preferences
 | `opendyslexic_font` | string | `OpenDyslexic` | Face used when OpenDyslexic mode is on. |
 | `status_bar_visible` | bool | `true` | Show the status bar (also View > Status Bar). |
 | `sync_view_state` | bool | `false` | Mirror per-window view changes (font type, zoom) live to every open npad window. |
+| `status_show_counts` | bool | `false` | Show word / character / line counts in the leftmost status bar segment, recomputed on a short debounce after edits (shared with transient messages, which win until the next change). |
 
 ### Defaults (Preferences > Defaults) - initial state for new windows/files
 
@@ -147,7 +148,7 @@ the fields.
 | `word_wrap` | Word wrap on/off (Format > Word Wrap, Alt+Z). |
 | `window_x/y/width/height/maximized` | Window geometry, saved on exit. First run uses ~48% x ~72% of the monitor work area, centred. |
 | `recent_file_0..9` | Recent files list. |
-| `find_match_case`, `find_whole_word`, `find_search_down`, `find_wrap_around`, `find_interpret_escapes` | Find/Replace options (checkboxes in the dialogs). |
+| `find_match_case`, `find_whole_word`, `find_search_down`, `find_wrap_around`, `find_interpret_escapes`, `find_highlight_all` | Find/Replace options (checkboxes in the dialogs). |
 | `find_hist_0..9`, `replace_hist_0..9` | Recent search/replace terms. |
 
 ## View state vs settings
@@ -195,7 +196,7 @@ Segments left to right; several are clickable:
 
 | Segment | Shows | Click action |
 |---------|-------|--------------|
-| Message | Transient messages (e.g. "Match 3 of 7", "Replaced N occurrences") | - |
+| Message | Transient messages (e.g. "Match 3 of 7"), and the optional word / character / line counts (`status_show_counts`; messages win until the next text change) | - |
 | Ln, Col | Caret position | Open Go To Line |
 | Zoom % | This window's zoom | Reset to 100% |
 | Mono/Prop | This window's font type | Toggle monospace |
@@ -275,6 +276,13 @@ position). Not intended for direct use.
   Replace dialogs makes both fields interpret `\n \r \t \\ \uXXXX`, so line
   breaks can be searched for and inserted. Search history records the text
   exactly as typed.
+- **Highlight all matches**: a checkbox in the Find and Replace dialogs
+  washes every match of the search text with a translucent amber overlay
+  (live as you retype, debounced; capped at 10,000 matches). It is drawn
+  over the text rather than stored in it - it never marks the document
+  modified, never enters the undo history, and clears when the dialog
+  closes or the box is unticked. Matches are re-painted shortly after each
+  edit while the dialog is open.
 - **Debug diagnostics**: a hidden Preferences page (Ctrl+Shift+. or
   Shift+click the Preferences menu item) shows the startup phase profile,
   settings/recovery paths and counts, and live paint/selection counters,

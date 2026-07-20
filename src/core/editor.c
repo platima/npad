@@ -29,7 +29,9 @@
 #endif
 
 // Files larger than this (in MB, configurable via "large_file_warning_mb")
-// prompt for confirmation before opening. 0 disables the prompt.
+// prompt for confirmation before opening. 0 disables the prompt. Used only
+// when the platform cannot report installed memory (see
+// editor_default_large_file_mb).
 #define DEFAULT_LARGE_FILE_WARNING_MB 100
 
 // How often to snapshot unsaved work when session recovery is enabled
@@ -329,6 +331,18 @@ bool editor_new_file(void) {
     return true;
 }
 
+int editor_default_large_file_mb(void) {
+    size_t mem_mb = ui_system_memory_mb();
+    if (mem_mb == 0)
+        return DEFAULT_LARGE_FILE_WARNING_MB;
+    int mb = (int) (mem_mb / 64);
+    if (mb < 50)
+        mb = 50;
+    if (mb > 1024)
+        mb = 1024;
+    return mb;
+}
+
 bool editor_open_file(const char *filename) {
     if (!filename)
         return false;
@@ -349,7 +363,7 @@ bool editor_open_file(const char *filename) {
     }
 
     // Warn before opening very large files
-    int warn_mb = settings_get_int("large_file_warning_mb", DEFAULT_LARGE_FILE_WARNING_MB);
+    int warn_mb = settings_get_int("large_file_warning_mb", editor_default_large_file_mb());
     if (warn_mb > 0) {
         size_t size = file_get_size(filename);
         if (size > (size_t) warn_mb * 1024 * 1024) {

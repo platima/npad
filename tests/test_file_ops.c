@@ -166,6 +166,41 @@ TEST_CASE(file_looks_binary_empty_and_missing) {
     TEST_ASSERT(!file_looks_binary(NULL), "NULL path is not binary");
 }
 
+TEST_CASE(count_stats_basic) {
+    size_t w, c, l;
+    file_count_text_stats("hello world\r\nsecond line", &w, &c, &l);
+    TEST_ASSERT_EQ((size_t) 4, w, "four words");
+    TEST_ASSERT_EQ((size_t) 22, c, "22 characters excluding the break");
+    TEST_ASSERT_EQ((size_t) 2, l, "two lines");
+}
+
+TEST_CASE(count_stats_empty_and_null) {
+    size_t w, c, l;
+    file_count_text_stats("", &w, &c, &l);
+    TEST_ASSERT_EQ((size_t) 0, w, "empty text has no words");
+    TEST_ASSERT_EQ((size_t) 0, c, "empty text has no characters");
+    TEST_ASSERT_EQ((size_t) 1, l, "empty text is one line");
+    file_count_text_stats(NULL, &w, &c, &l);
+    TEST_ASSERT_EQ((size_t) 1, l, "NULL treated as empty");
+}
+
+TEST_CASE(count_stats_unicode_and_eols) {
+    size_t w, c, l;
+    // "café" (é = 2 UTF-8 bytes, 1 code point) + LF + CR + CRLF endings
+    file_count_text_stats("caf\xC3\xA9 x\ny\rz\r\n", &w, &c, &l);
+    TEST_ASSERT_EQ((size_t) 4, w, "four words across mixed line endings");
+    TEST_ASSERT_EQ((size_t) 8, c, "code points counted once, breaks excluded");
+    TEST_ASSERT_EQ((size_t) 4, l, "LF, CR and CRLF each end a line");
+}
+
+TEST_CASE(count_stats_whitespace_runs) {
+    size_t w, c, l;
+    file_count_text_stats("  one\t\ttwo   three  ", &w, &c, &l);
+    TEST_ASSERT_EQ((size_t) 3, w, "whitespace runs separate words");
+    TEST_ASSERT_EQ((size_t) 1, l, "single line");
+    (void) c;
+}
+
 TEST_CASE(path_traversal_protection) {
     // Test path traversal attempts
     char *content1 = file_read_text("../../../etc/passwd");
@@ -199,6 +234,10 @@ int main(void) {
     RUN_TEST(file_looks_binary_utf16_bom_is_text);
     RUN_TEST(file_looks_binary_control_soup);
     RUN_TEST(file_looks_binary_empty_and_missing);
+    RUN_TEST(count_stats_basic);
+    RUN_TEST(count_stats_empty_and_null);
+    RUN_TEST(count_stats_unicode_and_eols);
+    RUN_TEST(count_stats_whitespace_runs);
     RUN_TEST(path_traversal_protection);
     
     // Cleanup error system

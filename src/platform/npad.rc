@@ -14,8 +14,8 @@
 
 // Version Information (keep in sync with src/main.h)
 1 VERSIONINFO
-FILEVERSION 0,14,0,0
-PRODUCTVERSION 0,14,0,0
+FILEVERSION 0,15,0,0
+PRODUCTVERSION 0,15,0,0
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0x0L
 FILEOS VOS__WINDOWS32
@@ -28,12 +28,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Platima"
             VALUE "FileDescription", "npad - Lightweight Text Editor"
-            VALUE "FileVersion", "0.14.0.0"
+            VALUE "FileVersion", "0.15.0.0"
             VALUE "InternalName", "npad"
             VALUE "LegalCopyright", "Copyright © 2025 Platima"
             VALUE "OriginalFilename", "npad.exe"
             VALUE "ProductName", "npad"
-            VALUE "ProductVersion", "0.14.0.0"
+            VALUE "ProductVersion", "0.15.0.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -47,7 +47,7 @@ IDI_NPAD ICON "npad.ico"
 
 // Find Dialog (compact layout matching classic notepad.exe:
 // checkboxes bottom-left, Direction group to their right, buttons top-right)
-IDD_FIND DIALOGEX 0, 0, 262, 91
+IDD_FIND DIALOGEX 0, 0, 262, 104
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Find"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
@@ -60,13 +60,14 @@ BEGIN
     CONTROL         "Match &whole word only", ID_FIND_WHOLE_WORD, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 45, 92, 10
     CONTROL         "Wrap ar&ound", ID_FIND_WRAP, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 58, 92, 10
     CONTROL         "Interpret &escapes (\\n \\t \\\\ \\uXXXX)", ID_FIND_ESCAPES, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 71, 150, 10
+    CONTROL         "&Highlight all matches", ID_FIND_HIGHLIGHT, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 84, 150, 10
     GROUPBOX        "Direction", IDC_STATIC, 108, 30, 90, 38
     CONTROL         "&Up", IDC_RADIO_UP, "Button", BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 116, 45, 28, 10
     CONTROL         "&Down", IDC_RADIO_DOWN, "Button", BS_AUTORADIOBUTTON, 152, 45, 36, 10
 END
 
 // Replace Dialog (no Direction group, like classic notepad.exe)
-IDD_REPLACE DIALOGEX 0, 0, 262, 103
+IDD_REPLACE DIALOGEX 0, 0, 262, 116
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Replace"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
@@ -83,6 +84,7 @@ BEGIN
     CONTROL         "Match &whole word only", ID_FIND_WHOLE_WORD, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 58, 92, 10
     CONTROL         "Wrap ar&ound", ID_FIND_WRAP, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 71, 92, 10
     CONTROL         "Interpret &escapes (\\n \\t \\\\ \\uXXXX)", ID_FIND_ESCAPES, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 84, 150, 10
+    CONTROL         "&Highlight all matches", ID_FIND_HIGHLIGHT, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 97, 150, 10
 END
 // Go To Line Dialog
 IDD_GOTO DIALOGEX 0, 0, 180, 62
@@ -160,6 +162,7 @@ BEGIN
     LTEXT           "Toggle monospace with Ctrl+M or the status bar.", IDC_STATIC, 18, 80, 206, 8
     CONTROL         "Show s&tatus bar", ID_PREF_STATUSBAR, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 10, 102, 150, 10
     CONTROL         "S&ync view (font type and zoom) across all instances", ID_PREF_SYNC_VIEW, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 120, 220, 18
+    CONTROL         "Show &word / character / line counts in the status bar", ID_PREF_STATUS_COUNTS, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 142, 220, 18
 END
 
 // Preferences: Markdown page (optional Markdown list tools)

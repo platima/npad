@@ -54,7 +54,7 @@ Current features (Windows build):
   - Session resume / crash recovery (enabled by default - non-destructive, snapshots never touch your file); restores every window that was open, each in its own instance
   - Theme support: light (default), dark, follow-system, and Solarized Light / Dark colour schemes (chosen in Preferences); changes apply to all open windows live
   - Opens at a large default sized to your display (remembered once you resize)
-  - Find / Replace with direction, match case, whole word and wrap-around (Ctrl+F / Ctrl+H, F3 / Shift+F3)
+  - Find / Replace with direction, match case, whole word, wrap-around and an optional highlight-all-matches overlay (Ctrl+F / Ctrl+H, F3 / Shift+F3)
   - Find remembers recent search / replace terms, and shows a live match count
   - Undo / Redo (Ctrl+Z / Ctrl+Y) with a deep undo history
   - Zoom (Ctrl+Plus / Ctrl+Minus / Ctrl+0, Ctrl+Scroll)
@@ -74,8 +74,9 @@ Current features (Windows build):
   - Export / Import settings (Preferences > Backup) for backup or moving between machines
   - Atomic saves - a failed save can never destroy the existing file
   - JSON settings storage; remembers window position, size and maximized state
-  - Confirmation prompt before opening very large files
+  - Confirmation prompt before opening very large files (threshold scales with the system's RAM by default)
   - Binary-file detection on open, offering Cancel / Open in npad / Open with the default app
+  - Optional word / character / line counts in the status bar (off by default, debounced so large edits stay smooth)
 
 Planned (see the [Roadmap](#roadmap)):
 
@@ -332,9 +333,9 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] Escape interpretation option in Find / Replace
   - [x] Binary-file detection on open (Cancel / Open in npad / Open with the default app)
   - [x] All dialogs open at a consistent notepad-style offset into the window
-  - [ ] 'Highlight all' matches in Find / Find & Replace
-  - [ ] Optional word / character / line count in the status bar (off by default)
-  - [ ] Large-file lag warning proportional to the system's capabilities (currently a fixed MB threshold)
+  - [x] 'Highlight all' matches in Find / Find & Replace
+  - [x] Optional word / character / line count in the status bar (off by default)
+  - [x] Large-file lag warning proportional to the system's capabilities (default threshold scales with RAM)
   - [ ] Self-updating: on-demand check-for-updates (never automatic)
 - [ ] **Advanced Features**
   - [ ] Tabbed interface (optional)

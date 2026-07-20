@@ -889,6 +889,43 @@ bool file_looks_binary(const char *filename) {
     return control * 10 > n;
 }
 
+void file_count_text_stats(const char *utf8, size_t *words, size_t *chars, size_t *lines) {
+    size_t w = 0, c = 0, l = 1;
+    bool in_word = false;
+
+    for (const char *p = utf8 ? utf8 : ""; *p; p++) {
+        unsigned char b = (unsigned char) *p;
+        if (b == '\n') {
+            l++;
+            in_word = false;
+            continue;
+        }
+        if (b == '\r') {
+            // CR or the CR of a CRLF pair: count the pair once
+            if (p[1] != '\n')
+                l++;
+            in_word = false;
+            continue;
+        }
+        // Count code points: every byte that is not a UTF-8 continuation
+        if ((b & 0xC0) != 0x80)
+            c++;
+        if (b == ' ' || b == '\t' || b == '\f' || b == '\v') {
+            in_word = false;
+        } else if (!in_word) {
+            in_word = true;
+            w++;
+        }
+    }
+
+    if (words)
+        *words = w;
+    if (chars)
+        *chars = c;
+    if (lines)
+        *lines = l;
+}
+
 bool file_delete(const char *filename) {
     if (!is_valid_path(filename)) {
         set_error("Invalid filename");

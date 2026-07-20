@@ -32,7 +32,8 @@
 #define ID_FIND_CASE 3004
 #define ID_FIND_WHOLE_WORD 3005
 #define ID_FIND_WRAP 3007
-#define ID_FIND_ESCAPES 3139 // Shared by Find and Replace, like the options above
+#define ID_FIND_ESCAPES 3139   // Shared by Find and Replace, like the options above
+#define ID_FIND_HIGHLIGHT 3143 // Highlight all matches (shared)
 
 // Control IDs for Replace Dialog
 #define ID_REPLACE_WITH 3006
@@ -58,6 +59,7 @@
 
 // Preferences: Appearance page
 #define ID_PREF_STATUSBAR 3113
+#define ID_PREF_STATUS_COUNTS 3142
 #define ID_PREF_FONT 3114
 #define ID_PREF_SCHEME 3115
 #define ID_PREF_FONT_MONO 3116

@@ -66,6 +66,7 @@ extern SavePromptResult ui_platform_show_save_prompt(Window *parent, const char 
 extern void ui_platform_show_about_dialog(Window *parent);
 extern UiOpenChoice ui_platform_prompt_binary_open(Window *parent, const char *filename);
 extern void ui_platform_open_with_default_app(const char *filename);
+extern size_t ui_platform_system_memory_mb(void);
 
 // Platform find/replace functions
 extern void ui_platform_show_find_dialog(Window *parent);
@@ -244,6 +245,10 @@ UiOpenChoice ui_prompt_binary_open(Window *parent, const char *filename) {
 
 void ui_open_with_default_app(const char *filename) {
     ui_platform_open_with_default_app(filename);
+}
+
+size_t ui_system_memory_mb(void) {
+    return ui_platform_system_memory_mb();
 }
 
 void ui_show_find_dialog(Window *parent) {

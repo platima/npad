@@ -87,6 +87,10 @@ bool editor_handle_event(const UIEvent *event);
 
 // Utility functions
 bool editor_prompt_save_changes(void);
+// Effective default for large_file_warning_mb when the preference was never
+// set: scales with installed RAM (1/64th, clamped 50..1024 MB), falling
+// back to a fixed 100 MB when memory size is unavailable.
+int editor_default_large_file_mb(void);
 void editor_update_title(void);
 
 #endif // EDITOR_H

@@ -52,6 +52,8 @@
 #define NPAD_SESSION_TIMER_ID 2
 #define NPAD_STARTUP_TIMER_ID 3
 #define NPAD_STATUS_TIMER_ID 4
+#define NPAD_COUNTS_TIMER_ID 5
+#define NPAD_HIGHLIGHT_TIMER_ID 6
 
 // Live edit-control counters surfaced on the hidden Debug preferences page
 // (scroll/paint performance diagnostics)
@@ -193,7 +195,16 @@ static bool g_match_case = false;
 static bool g_whole_word = false;
 static bool g_search_down = true;
 static bool g_wrap_around = true;
-static bool g_interpret_escapes = false; // Interpret \n \t \\ \uXXXX in find/replace
+static bool g_interpret_escapes = false;  // Interpret \n \t \\ \uXXXX in find/replace
+static bool g_highlight_all = false;      // Highlight every match while the dialog is open
+static bool g_highlights_applied = false; // Highlight overlay currently has matches
+
+// Highlight-all overlay match list, sorted ascending (drawn over the text in
+// the WM_PAINT hook; the control's plain-text mode rejects per-range
+// character formatting, so highlighting cannot use EM_SETCHARFORMAT)
+static CHARRANGE *g_hl_matches = NULL;
+static int g_hl_count = 0;
+static int g_hl_capacity = 0;
 
 // A consumed WM_KEYDOWN (Tab indent, Enter list continuation) must also eat
 // the WM_CHAR that TranslateMessage already posted for the same keystroke.
@@ -226,6 +237,9 @@ static void launch_new_window(void);
 static void handle_command(Window *window, WORD command);
 static void update_status_bar(Window *window);
 static void schedule_status_update(Window *window);
+static void schedule_counts_update(Window *window);
+static void apply_counts_pref(Window *window);
+static void draw_highlight_overlay(HWND e, HRGN clip);
 static void resize_controls(Window *window);
 static bool register_window_class(void);
 static void apply_theme(Window *window);
@@ -646,6 +660,16 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, L
 
     LRESULT result;
     if (msg == WM_PAINT) {
+        // Capture the update region before RichEdit validates it, so the
+        // highlight overlay can be drawn clipped to exactly what repainted
+        HRGN update_rgn = NULL;
+        if (g_hl_count > 0) {
+            update_rgn = CreateRectRgn(0, 0, 0, 0);
+            if (update_rgn && GetUpdateRgn(hwnd, update_rgn, FALSE) == NULLREGION) {
+                DeleteObject(update_rgn);
+                update_rgn = NULL;
+            }
+        }
         // Time the paint for the Debug page's counters, and mark the first
         // one as the end of the perceived startup time
         double t0 = qpc_ms();
@@ -655,6 +679,10 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, L
         g_paint_count++;
         if (g_paint_count == 1) {
             startup_prof_mark("first paint");
+        }
+        if (update_rgn) {
+            draw_highlight_overlay(hwnd, update_rgn);
+            DeleteObject(update_rgn);
         }
     } else {
         result = DefSubclassProc(hwnd, msg, wparam, lparam);
@@ -750,6 +778,7 @@ bool ui_platform_init(void) {
     g_search_down = settings_get_bool("find_search_down", true);
     g_wrap_around = settings_get_bool("find_wrap_around", true);
     g_interpret_escapes = settings_get_bool("find_interpret_escapes", false);
+    g_highlight_all = settings_get_bool("find_highlight_all", false);
 
     return true;
 }
@@ -950,6 +979,7 @@ void ui_platform_show_window(Window *window) {
         // wins and the window appears instantly regardless of how much the
         // deferred work has to chew through.
         SetTimer(window->hwnd, NPAD_STARTUP_TIMER_ID, 50, NULL);
+        schedule_counts_update(window); // Initial counts (when enabled)
     }
 }
 
@@ -1615,6 +1645,14 @@ void ui_platform_open_with_default_app(const char *filename) {
     free(wpath);
 }
 
+size_t ui_platform_system_memory_mb(void) {
+    MEMORYSTATUSEX ms;
+    ms.dwLength = sizeof(ms);
+    if (!GlobalMemoryStatusEx(&ms))
+        return 0;
+    return (size_t) (ms.ullTotalPhys / (1024 * 1024));
+}
+
 SavePromptResult ui_platform_show_save_prompt(Window *parent, const char *filename) {
     HWND hwnd = parent ? parent->hwnd : NULL;
 
@@ -1668,15 +1706,155 @@ void ui_platform_show_about_dialog(Window *parent) {
 // Find / Replace
 // ---------------------------------------------------------------------------
 
-// Show a transient message in the leftmost status bar part
+// Show a transient message in the leftmost status bar part (shared with the
+// optional counts display, whose cache must stay in sync so the next counts
+// refresh is not skipped as a duplicate)
 static void set_status_message(Window *window, const char *message) {
     if (!window || !window->status_hwnd)
         return;
     wchar_t *wide = utf8_to_wide(message ? message : "");
     if (wide) {
+        wcsncpy(window->status_cache[0], wide, 63);
+        window->status_cache[0][63] = L'\0';
         SendMessageW(window->status_hwnd, SB_SETTEXTW, 0, (LPARAM) wide);
         free(wide);
     }
+}
+
+// --- Highlight all matches -------------------------------------------------
+//
+// The edit control runs in plain-text mode (one character format for the
+// whole document), so per-range background formatting is rejected by
+// RichEdit. Highlights are therefore drawn as a painted overlay in the
+// WM_PAINT subclass hook: pure painting, inherently invisible to the undo
+// history and the modified flag.
+
+// Recompute the match list for the highlight-all overlay (want), or clear
+// it (!want), then repaint the control
+static void refresh_highlights(const Window *window, bool want) {
+    if (!window || !window->edit_hwnd)
+        return;
+    HWND e = window->edit_hwnd;
+    int had = g_hl_count;
+    g_hl_count = 0;
+
+    if (want && g_search_eff[0] != L'\0') {
+        WPARAM flags = FR_DOWN;
+        if (g_match_case)
+            flags |= FR_MATCHCASE;
+        if (g_whole_word)
+            flags |= FR_WHOLEWORD;
+        LONG from = 0;
+        for (int n = 0; n < 10000; n++) {
+            FINDTEXTEXW ft;
+            memset(&ft, 0, sizeof(ft));
+            ft.lpstrText = g_search_eff;
+            ft.chrg.cpMin = from;
+            ft.chrg.cpMax = -1;
+            if (SendMessageW(e, EM_FINDTEXTEXW, flags, (LPARAM) &ft) == -1)
+                break;
+            if (g_hl_count == g_hl_capacity) {
+                int cap = g_hl_capacity ? g_hl_capacity * 2 : 64;
+                CHARRANGE *grown = realloc(g_hl_matches, (size_t) cap * sizeof(CHARRANGE));
+                if (!grown)
+                    break;
+                g_hl_matches = grown;
+                g_hl_capacity = cap;
+            }
+            g_hl_matches[g_hl_count++] = ft.chrgText;
+            from = ft.chrgText.cpMax;
+            if (from <= ft.chrgText.cpMin)
+                from = ft.chrgText.cpMin + 1; // Guard against zero-width matches
+        }
+    }
+
+    g_highlights_applied = g_hl_count > 0;
+    if (had || g_hl_count)
+        InvalidateRect(e, NULL, TRUE);
+}
+
+// Alpha-blend one highlight rectangle
+static void blend_highlight_rect(HDC dc, HDC mem, int x, int y, int w, int h) {
+    if (w <= 0 || h <= 0)
+        return;
+    BLENDFUNCTION bf;
+    bf.BlendOp = AC_SRC_OVER;
+    bf.BlendFlags = 0;
+    bf.SourceConstantAlpha = 96; // ~38% wash over the text
+    bf.AlphaFormat = 0;
+    AlphaBlend(dc, x, y, w, h, mem, 0, 0, 1, 1, bf);
+}
+
+// Draw the highlight overlay for the matches visible in the given update
+// region. Clipping to the region keeps the alpha wash single-layered: each
+// repainted pixel is blended exactly once per repaint.
+static void draw_highlight_overlay(HWND e, HRGN clip) {
+    HDC dc = GetDC(e);
+    if (!dc)
+        return;
+    SelectClipRgn(dc, clip);
+
+    RECT rc;
+    GetClientRect(e, &rc);
+    POINTL tl = { rc.left, rc.top };
+    POINTL br = { rc.right, rc.bottom };
+    LONG first = (LONG) SendMessageW(e, EM_CHARFROMPOS, 0, (LPARAM) &tl);
+    LONG last = (LONG) SendMessageW(e, EM_CHARFROMPOS, 0, (LPARAM) &br);
+    if (last < first)
+        last = first;
+
+    HDC mem = CreateCompatibleDC(dc);
+    HBITMAP bmp = CreateCompatibleBitmap(dc, 1, 1);
+    HGDIOBJ old = SelectObject(mem, bmp);
+    SetPixel(mem, 0, 0, RGB(255, 210, 40)); // Amber; the alpha wash adapts to any theme
+
+    for (int i = 0; i < g_hl_count; i++) {
+        CHARRANGE m = g_hl_matches[i];
+        if (m.cpMax < first)
+            continue;
+        if (m.cpMin > last)
+            break;
+        // Per display line: a match may span wrapped or real lines
+        LONG c = m.cpMin;
+        for (int guard = 0; c < m.cpMax && guard < 64; guard++) {
+            POINTL p1 = { 0, 0 };
+            SendMessageW(e, EM_POSFROMCHAR, (WPARAM) &p1, c);
+            LONG line = (LONG) SendMessageW(e, EM_EXLINEFROMCHAR, 0, c);
+            LONG lstart = (LONG) SendMessageW(e, EM_LINEINDEX, (WPARAM) line, 0);
+            LONG lend = lstart + (LONG) SendMessageW(e, EM_LINELENGTH, (WPARAM) lstart, 0);
+            LONG seg_end = (m.cpMax < lend) ? m.cpMax : lend;
+
+            // Line height from the next display line's y, else a sane floor
+            int height = 0;
+            LONG nstart = (LONG) SendMessageW(e, EM_LINEINDEX, (WPARAM) (line + 1), 0);
+            if (nstart >= 0) {
+                POINTL pn = { 0, 0 };
+                SendMessageW(e, EM_POSFROMCHAR, (WPARAM) &pn, nstart);
+                if (pn.y > p1.y)
+                    height = pn.y - p1.y;
+            }
+            if (height <= 0)
+                height = MulDiv(19, (int) get_window_dpi(e), 96);
+
+            // Segment end position; a segment that continues past this
+            // display line runs to the right edge instead
+            POINTL p2 = { 0, 0 };
+            SendMessageW(e, EM_POSFROMCHAR, (WPARAM) &p2, seg_end);
+            int x2 = (seg_end < m.cpMax && p2.x <= p1.x) ? rc.right : p2.x;
+            blend_highlight_rect(dc, mem, p1.x, p1.y, x2 - p1.x, height);
+
+            if (seg_end <= c)
+                break; // No forward progress: bail out
+            c = seg_end;
+            if (c < m.cpMax && c == lend)
+                c++; // Step over the line break of a real line
+        }
+    }
+
+    SelectObject(mem, old);
+    DeleteObject(bmp);
+    DeleteDC(mem);
+    ReleaseDC(e, dc);
 }
 
 // Count total matches of the current search term (capped) and the 1-based
@@ -1890,9 +2068,10 @@ static void unescape_search_buffer(wchar_t *buf, size_t cap) {
     *w = L'\0';
 }
 
-// Read search parameters out of the find/replace dialog controls and
-// persist them across sessions
-static void read_search_fields(HWND dialog, bool has_replace) {
+// Read the search/replace text and option checkboxes into the globals (no
+// history push, no settings write): shared by the action buttons and the
+// live highlight-all refresh
+static void read_search_text(HWND dialog, bool has_replace) {
     GetDlgItemTextW(dialog, ID_FIND_TEXT, g_search_text,
                     sizeof(g_search_text) / sizeof(g_search_text[0]));
     if (has_replace) {
@@ -1903,29 +2082,40 @@ static void read_search_fields(HWND dialog, bool has_replace) {
     g_whole_word = IsDlgButtonChecked(dialog, ID_FIND_WHOLE_WORD) == BST_CHECKED;
     g_wrap_around = IsDlgButtonChecked(dialog, ID_FIND_WRAP) == BST_CHECKED;
     g_interpret_escapes = IsDlgButtonChecked(dialog, ID_FIND_ESCAPES) == BST_CHECKED;
+    g_highlight_all = IsDlgButtonChecked(dialog, ID_FIND_HIGHLIGHT) == BST_CHECKED;
     if (GetDlgItem(dialog, IDC_RADIO_UP)) {
         g_search_down = IsDlgButtonChecked(dialog, IDC_RADIO_UP) != BST_CHECKED;
     }
 
-    settings_set_bool("find_match_case", g_match_case);
-    settings_set_bool("find_whole_word", g_whole_word);
-    settings_set_bool("find_wrap_around", g_wrap_around);
-    settings_set_bool("find_search_down", g_search_down);
-    settings_set_bool("find_interpret_escapes", g_interpret_escapes);
-
     // History and the dialog keep the RAW typed text; the search machinery
     // uses the effective copies (escape-interpreted when enabled)
-    history_push("find_hist", g_search_text);
-    if (has_replace) {
-        history_push("replace_hist", g_replace_text);
-    }
-
     wcscpy(g_search_eff, g_search_text);
     wcscpy(g_replace_eff, g_replace_text);
     if (g_interpret_escapes) {
         unescape_search_buffer(g_search_eff, sizeof(g_search_eff) / sizeof(g_search_eff[0]));
         unescape_search_buffer(g_replace_eff, sizeof(g_replace_eff) / sizeof(g_replace_eff[0]));
     }
+}
+
+// Read search parameters out of the find/replace dialog controls, persist
+// them across sessions, and refresh the highlight-all overlay
+static void read_search_fields(HWND dialog, bool has_replace) {
+    read_search_text(dialog, has_replace);
+
+    settings_set_bool("find_match_case", g_match_case);
+    settings_set_bool("find_whole_word", g_whole_word);
+    settings_set_bool("find_wrap_around", g_wrap_around);
+    settings_set_bool("find_search_down", g_search_down);
+    settings_set_bool("find_interpret_escapes", g_interpret_escapes);
+    settings_set_bool("find_highlight_all", g_highlight_all);
+
+    history_push("find_hist", g_search_text);
+    if (has_replace) {
+        history_push("replace_hist", g_replace_text);
+    }
+
+    const Window *window = (const Window *) GetWindowLongPtrW(dialog, GWLP_USERDATA);
+    refresh_highlights(window, g_highlight_all);
 }
 
 // Is the current selection exactly the current search text?
@@ -2018,6 +2208,8 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
             CheckDlgButton(dialog, ID_FIND_WRAP, g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
             CheckDlgButton(dialog, ID_FIND_ESCAPES,
                            g_interpret_escapes ? BST_CHECKED : BST_UNCHECKED);
+            CheckDlgButton(dialog, ID_FIND_HIGHLIGHT,
+                           g_highlight_all ? BST_CHECKED : BST_UNCHECKED);
             if (GetDlgItem(dialog, IDC_RADIO_UP)) {
                 CheckRadioButton(dialog, IDC_RADIO_UP, IDC_RADIO_DOWN,
                                  g_search_down ? IDC_RADIO_DOWN : IDC_RADIO_UP);
@@ -2046,6 +2238,21 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
         }
 
         case WM_COMMAND:
+            // Live highlight refresh: retyping the search text (debounced)
+            // and toggling any option that changes what matches
+            if (LOWORD(wparam) == ID_FIND_TEXT && HIWORD(wparam) == CBN_EDITCHANGE) {
+                if (IsDlgButtonChecked(dialog, ID_FIND_HIGHLIGHT) == BST_CHECKED)
+                    SetTimer(dialog, 1, 300, NULL);
+                break;
+            }
+            if (HIWORD(wparam) == BN_CLICKED &&
+                (LOWORD(wparam) == ID_FIND_HIGHLIGHT || LOWORD(wparam) == ID_FIND_CASE ||
+                 LOWORD(wparam) == ID_FIND_WHOLE_WORD || LOWORD(wparam) == ID_FIND_ESCAPES)) {
+                read_search_text(dialog, has_replace);
+                settings_set_bool("find_highlight_all", g_highlight_all);
+                refresh_highlights(window, g_highlight_all);
+                break;
+            }
             switch (LOWORD(wparam)) {
                 case ID_FIND_NEXT:
                     read_search_fields(dialog, has_replace);
@@ -2072,11 +2279,22 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
             }
             break;
 
+        case WM_TIMER:
+            if (wparam == 1) {
+                KillTimer(dialog, 1); // One-shot (debounced live highlight)
+                read_search_text(dialog, has_replace);
+                refresh_highlights(window, g_highlight_all);
+                return TRUE;
+            }
+            break;
+
         case WM_CLOSE:
             DestroyWindow(dialog);
             return TRUE;
 
         case WM_DESTROY: {
+            KillTimer(dialog, 1);
+            refresh_highlights(window, false); // Clear highlights with the dialog
             RECT rect;
             if (GetWindowRect(dialog, &rect)) {
                 g_find_dialog_pos.x = rect.left;
@@ -2640,8 +2858,10 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                            editor_is_auto_save_enabled() ? BST_CHECKED : BST_UNCHECKED);
             SetDlgItemInt(page, ID_PREF_AUTOSAVE_INTERVAL, (UINT) editor_get_auto_save_interval(),
                           FALSE);
-            SetDlgItemInt(page, ID_PREF_LARGE_FILE_MB,
-                          (UINT) settings_get_int("large_file_warning_mb", 100), FALSE);
+            SetDlgItemInt(
+                page, ID_PREF_LARGE_FILE_MB,
+                (UINT) settings_get_int("large_file_warning_mb", editor_default_large_file_mb()),
+                FALSE);
             SetDlgItemInt(page, ID_PREF_RECENT_MAX, (UINT) settings_get_int("recent_files_max", 10),
                           FALSE);
             CheckDlgButton(page, ID_PREF_SESSION_ENABLED,
@@ -2780,6 +3000,9 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
             CheckDlgButton(page, ID_PREF_SYNC_VIEW,
                            settings_get_bool("sync_view_state", false) ? BST_CHECKED
                                                                        : BST_UNCHECKED);
+            CheckDlgButton(page, ID_PREF_STATUS_COUNTS,
+                           settings_get_bool("status_show_counts", false) ? BST_CHECKED
+                                                                          : BST_UNCHECKED);
             return TRUE;
         }
 
@@ -2787,7 +3010,7 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
             WORD code = HIWORD(wparam);
             WORD id = LOWORD(wparam);
             if ((code == BN_CLICKED && (id == ID_PREF_OPENDYSLEXIC || id == ID_PREF_STATUSBAR ||
-                                        id == ID_PREF_SYNC_VIEW)) ||
+                                        id == ID_PREF_SYNC_VIEW || id == ID_PREF_STATUS_COUNTS)) ||
                 (code == CBN_SELCHANGE && id == ID_PREF_SCHEME)) {
                 mark_prefs_dirty(page);
             }
@@ -2839,6 +3062,12 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
 
                 bool sync_view = IsDlgButtonChecked(page, ID_PREF_SYNC_VIEW) == BST_CHECKED;
                 settings_set_bool("sync_view_state", sync_view);
+
+                settings_set_bool("status_show_counts",
+                                  IsDlgButtonChecked(page, ID_PREF_STATUS_COUNTS) == BST_CHECKED);
+                if (g_main_window) {
+                    apply_counts_pref(g_main_window);
+                }
 
                 settings_save(); // Apply button: persist + propagate immediately
                 ui_platform_notify_settings_changed();
@@ -4636,6 +4865,49 @@ static void schedule_status_update(Window *window) {
     SetTimer(window->hwnd, NPAD_STATUS_TIMER_ID, 33, NULL);
 }
 
+// Recompute the optional word/char/line counts and show them in the
+// leftmost status part. That part is shared with transient messages
+// ("Match 3 of 7"), which win until the next text change refreshes counts.
+static void update_text_counts(Window *window) {
+    if (!window || !window->status_hwnd || !window->status_bar_visible)
+        return;
+    if (!settings_get_bool("status_show_counts", false))
+        return;
+
+    char *text = ui_platform_get_text(window);
+    size_t words = 0, chars = 0, lines = 0;
+    file_count_text_stats(text, &words, &chars, &lines);
+    free(text);
+
+    wchar_t msg[96];
+    _snwprintf(msg, 95, L"%lu words, %lu chars, %lu lines", (unsigned long) words,
+               (unsigned long) chars, (unsigned long) lines);
+    msg[95] = L'\0';
+    set_status_part(window, 0, msg);
+}
+
+// Debounced: re-armed on every change, so the full-document scan runs once
+// after typing, a paste or a large open settles rather than per keystroke
+static void schedule_counts_update(Window *window) {
+    if (!window || !window->hwnd)
+        return;
+    if (!settings_get_bool("status_show_counts", false))
+        return;
+    KillTimer(window->hwnd, NPAD_COUNTS_TIMER_ID);
+    SetTimer(window->hwnd, NPAD_COUNTS_TIMER_ID, 350, NULL);
+}
+
+// Apply the counts preference right away: populate the part, or clear it
+static void apply_counts_pref(Window *window) {
+    if (!window)
+        return;
+    if (settings_get_bool("status_show_counts", false)) {
+        update_text_counts(window);
+    } else if (window->status_hwnd) {
+        set_status_part(window, 0, L"");
+    }
+}
+
 static void resize_controls(Window *window) {
     if (!window || !window->hwnd || !window->edit_hwnd || !window->status_hwnd)
         return;
@@ -4698,6 +4970,7 @@ static void reload_and_apply_settings(Window *window) {
     if (status != window->status_bar_visible) {
         set_status_bar_visible(window, status);
     }
+    apply_counts_pref(window); // Show or clear the optional counts display
 
     update_menu_states(window);
     update_status_bar(window);
@@ -4777,9 +5050,20 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                 WORD control_id = LOWORD(wparam);
 
                 if (control_id == ID_EDIT_CONTROL) {
-                    if (notification == EN_CHANGE && !window->setting_text_programmatically) {
-                        window->is_modified = true;
-                        ui_post_event(UI_EVENT_TEXT_CHANGED, window, NULL);
+                    if (notification == EN_CHANGE) {
+                        // Counts refresh on programmatic changes too (open,
+                        // transforms), not only user edits
+                        schedule_counts_update(window);
+                        // Text changed under active highlights: re-apply
+                        // after the edit settles
+                        if (g_highlights_applied && g_find_dialog) {
+                            KillTimer(hwnd, NPAD_HIGHLIGHT_TIMER_ID);
+                            SetTimer(hwnd, NPAD_HIGHLIGHT_TIMER_ID, 300, NULL);
+                        }
+                        if (!window->setting_text_programmatically) {
+                            window->is_modified = true;
+                            ui_post_event(UI_EVENT_TEXT_CHANGED, window, NULL);
+                        }
                     }
                 } else {
                     handle_command(window, control_id);
@@ -4874,6 +5158,12 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                 KillTimer(hwnd, NPAD_STATUS_TIMER_ID); // One-shot (coalescing)
                 window->status_update_pending = false;
                 update_status_bar(window);
+            } else if (window && wparam == NPAD_COUNTS_TIMER_ID) {
+                KillTimer(hwnd, NPAD_COUNTS_TIMER_ID); // One-shot (debounced)
+                update_text_counts(window);
+            } else if (window && wparam == NPAD_HIGHLIGHT_TIMER_ID) {
+                KillTimer(hwnd, NPAD_HIGHLIGHT_TIMER_ID); // One-shot (debounced)
+                refresh_highlights(window, g_highlight_all && g_find_dialog != NULL);
             }
             return 0;
         }

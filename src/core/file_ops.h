@@ -81,6 +81,12 @@ size_t file_get_size(const char *filename);
 // Heuristic sniff of the first 8 KB: NUL bytes (outside BOM-marked UTF-16)
 // or a high share of control bytes mark the file as binary.
 bool file_looks_binary(const char *filename);
+
+// Count document statistics over UTF-8 text in one pass: words (runs of
+// non-whitespace), characters (code points, line breaks excluded), and
+// lines (breaks + 1; empty text counts as 1 line). NULL out-params are
+// skipped; NULL text yields zeros/1.
+void file_count_text_stats(const char *utf8, size_t *words, size_t *chars, size_t *lines);
 bool file_delete(const char *filename);
 bool file_copy(const char *source, const char *destination);
 

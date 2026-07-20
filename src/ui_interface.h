@@ -140,6 +140,10 @@ UiOpenChoice ui_prompt_binary_open(Window *parent, const char *filename);
 // Hand the file to the platform's default application for its type
 void ui_open_with_default_app(const char *filename);
 
+// Installed physical memory in MB (0 when unknown); used to scale the
+// default large-file warning threshold to the machine
+size_t ui_system_memory_mb(void);
+
 // Find/Replace (modeless dialogs owned and closed by the platform layer)
 void ui_show_find_dialog(Window *parent);
 void ui_show_replace_dialog(Window *parent);

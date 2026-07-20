@@ -5,6 +5,25 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-07-20
+
+### ✨ Features
+- **Highlight all matches**: a new checkbox in the Find and Replace dialogs
+  washes every match of the search text with a translucent amber overlay,
+  live as you retype (debounced) and re-painted after edits. The overlay is
+  drawn over the text rather than stored in it, so it never marks the
+  document modified or enters the undo history, and clears when the dialog
+  closes. Capped at 10,000 matches.
+- **Word / character / line counts** in the status bar (off by default;
+  Preferences > Appearance). Shown in the leftmost segment and recomputed
+  on a short debounce after edits, so typing, pasting and large opens stay
+  smooth.
+
+### 🔄 Changed
+- The large-file warning threshold now **scales with installed RAM** when
+  the preference was never set (1/64th of physical memory, clamped
+  50-1024 MB); an explicit `large_file_warning_mb` value still wins.
+
 ## [0.14.0] - 2026-07-20
 
 ### ✨ Features
