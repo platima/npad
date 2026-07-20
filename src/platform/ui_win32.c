@@ -449,18 +449,57 @@ static bool handle_markdown_tab(HWND hwnd) {
     if (GetKeyState(VK_CONTROL) < 0)
         return false; // Ctrl+Tab is not ours
     bool shift = GetKeyState(VK_SHIFT) < 0;
-    if (ui_platform_has_selection(g_main_window)) {
-        list_indent_default(g_main_window, shift);
+    if (shift) {
+        // Shift+Tab always unindents: the selected lines, or the caret line
+        // when nothing is selected (a literal tab is never what it means)
+        list_indent_default(g_main_window, true);
         g_swallow_tab_char = true;
         return true;
     }
-    if (shift) {
-        // Shift+Tab with no selection: consume as a no-op (RichEdit would
-        // otherwise insert a literal tab, which Shift+Tab never means)
+    if (ui_platform_has_selection(g_main_window)) {
+        list_indent_default(g_main_window, false);
         g_swallow_tab_char = true;
         return true;
     }
     return false; // Plain Tab types a tab, classic Notepad behavior
+}
+
+// Length of the bullet marker at s: the custom marker body first, then the
+// built-in "* " / "- ". allow_bare also accepts the space-less marker when
+// the text ends right after it (empty bullets, pre-0.13 documents).
+static LONG wide_marker_at(const wchar_t *s, LONG len, const wchar_t *custom_body,
+                           bool allow_bare) {
+    if (custom_body && custom_body[0]) {
+        LONG bl = (LONG) wcslen(custom_body);
+        if (len >= bl && wcsncmp(s, custom_body, bl) == 0)
+            return bl;
+        if (allow_bare) {
+            LONG tl = bl;
+            while (tl > 0 && (custom_body[tl - 1] == L' ' || custom_body[tl - 1] == L'\t'))
+                tl--;
+            if (tl > 0 && len == tl && wcsncmp(s, custom_body, tl) == 0)
+                return tl;
+        }
+    }
+    if (len >= 2 && (s[0] == L'*' || s[0] == L'-') && s[1] == L' ')
+        return 2;
+    if (allow_bare && len == 1 && (s[0] == L'*' || s[0] == L'-'))
+        return 1;
+    return 0;
+}
+
+// The custom indent prefix's marker body as a wide string (leading
+// whitespace stripped), or NULL when unset/whitespace-only. Caller frees.
+static wchar_t *get_custom_marker_body(void) {
+    char *custom = get_custom_indent();
+    if (!custom)
+        return NULL;
+    const char *body8 = custom;
+    while (*body8 == ' ' || *body8 == '\t')
+        body8++;
+    wchar_t *wbody = (*body8) ? utf8_to_wide(body8) : NULL;
+    free(custom);
+    return wbody;
 }
 
 // Enter on a list line continues the marker on the new line; Enter on an
@@ -496,39 +535,26 @@ static bool handle_markdown_return(HWND hwnd) {
         return false;
     buf[got] = L'\0';
 
-    // Parse leading whitespace, then a marker: the custom prefix (if any,
-    // whitespace-stripped) first, then the built-in "* " / "- "
+    // Parse leading whitespace, then a full marker (its trailing space
+    // included, so a lone "-" the user just typed is left alone)
     LONG ws = 0;
     while (ws < got && (buf[ws] == L' ' || buf[ws] == L'\t'))
         ws++;
-    LONG marker_len = 0;
-    char *custom = get_custom_indent();
-    if (custom && custom[0]) {
-        const char *body8 = custom;
-        while (*body8 == ' ' || *body8 == '\t')
-            body8++;
-        if (*body8) {
-            wchar_t *wbody = utf8_to_wide(body8);
-            if (wbody) {
-                size_t bl = wcslen(wbody);
-                if (bl > 0 && (size_t) (got - ws) >= bl && wcsncmp(buf + ws, wbody, bl) == 0)
-                    marker_len = (LONG) bl;
-                free(wbody);
-            }
-        }
-    }
-    free(custom);
-    if (marker_len == 0 && ws + 1 < got && (buf[ws] == L'*' || buf[ws] == L'-') &&
-        buf[ws + 1] == L' ')
-        marker_len = 2;
-    if (marker_len == 0)
+    wchar_t *wbody = get_custom_marker_body();
+    LONG marker_len = wide_marker_at(buf + ws, got - ws, wbody, false);
+    if (marker_len == 0) {
+        free(wbody);
         return false;
+    }
 
     LONG prefix_len = ws + marker_len;
     LONG caret = sel.cpMin;
-    if (caret < start + prefix_len)
+    if (caret < start + prefix_len) {
+        free(wbody);
         return false; // Caret inside the prefix: plain Enter
+    }
 
+    bool handled = true;
     if (end - start == prefix_len) {
         // Empty bullet: end the list - drop the marker, keep the newline
         // (single EM_REPLACESEL, one undo unit)
@@ -536,14 +562,45 @@ static bool handle_markdown_return(HWND hwnd) {
         SendMessageW(hwnd, EM_EXSETSEL, 0, (LPARAM) &r);
         SendMessageW(hwnd, EM_REPLACESEL, TRUE, (LPARAM) L"\r");
     } else {
-        // Continue the list: newline + the same whitespace/marker prefix
-        // (splits the line when the caret is mid-content)
-        wchar_t ins[260];
-        ins[0] = L'\r';
-        memcpy(ins + 1, buf, (size_t) prefix_len * sizeof(wchar_t));
-        ins[1 + prefix_len] = L'\0';
-        SendMessageW(hwnd, EM_REPLACESEL, TRUE, (LPARAM) ins);
+        // Splitting right before an existing bullet must not mint another
+        // marker ("- item |- second" would become "- - second"): the text
+        // after the caret already starts its own bullet, so let the plain
+        // newline through instead
+        bool rem_bullet = false;
+        LONG rem_end = (end - caret > 64) ? caret + 64 : end;
+        if (rem_end > caret) {
+            wchar_t rbuf[65];
+            TEXTRANGEW rtr;
+            rtr.chrg.cpMin = caret;
+            rtr.chrg.cpMax = rem_end;
+            rtr.lpstrText = rbuf;
+            LONG rgot = (LONG) SendMessageW(hwnd, EM_GETTEXTRANGE, 0, (LPARAM) &rtr);
+            if (rgot > 0) {
+                rbuf[rgot] = L'\0';
+                LONG rws = 0;
+                while (rws < rgot && (rbuf[rws] == L' ' || rbuf[rws] == L'\t'))
+                    rws++;
+                LONG m = wide_marker_at(rbuf + rws, rgot - rws, wbody, rem_end == end);
+                // A match that exactly fills a truncated fetch window is
+                // inconclusive; trust it only when we saw the real line end
+                rem_bullet = m > 0 && (rws + m < rgot || rem_end == end);
+            }
+        }
+        if (rem_bullet) {
+            handled = false;
+        } else {
+            // Continue the list: newline + the same whitespace/marker prefix
+            // (splits the line when the caret is mid-content)
+            wchar_t ins[260];
+            ins[0] = L'\r';
+            memcpy(ins + 1, buf, (size_t) prefix_len * sizeof(wchar_t));
+            ins[1 + prefix_len] = L'\0';
+            SendMessageW(hwnd, EM_REPLACESEL, TRUE, (LPARAM) ins);
+        }
     }
+    free(wbody);
+    if (!handled)
+        return false;
     SendMessageW(hwnd, EM_SCROLLCARET, 0, 0);
     g_swallow_return_char = true;
     return true;
@@ -3859,7 +3916,9 @@ static void list_do(const Window *window, int op, int arg) {
             break;
         case 2:
         case 3: {
-            char *custom = (arg == LIST_INDENT_CUSTOM) ? get_custom_indent() : NULL;
+            // The custom prefix is passed for every format, so lines carrying
+            // a custom bullet still deepen/unindent under a built-in format
+            char *custom = get_custom_indent();
             out = (op == 2) ? list_indent_lines(text, (ListIndentFormat) arg, custom)
                             : list_unindent_lines(text, (ListIndentFormat) arg, custom);
             free(custom);

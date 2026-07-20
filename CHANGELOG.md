@@ -31,6 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   save-changes prompt, so declining them never costs a pointless
   "save changes?" round trip.
 
+### 🐛 Bug Fixes
+- Enter no longer doubles the marker when splitting a line right before an
+  existing bullet ("- item |- second" used to become "- - second"); it
+  falls back to a plain newline.
+- Shift+Tab now always unindents - the selected lines, or the current line
+  when nothing is selected (it previously required a selection).
+- Unindent and markdown deepening now recognise whatever bullet a line
+  actually carries (`* `, `- `, or the custom prefix) instead of only the
+  configured format's marker, so e.g. "- " bullets unindent while the
+  default format is " - ".
+
 ## [0.13.0] - 2026-07-19
 
 ### ✨ Features

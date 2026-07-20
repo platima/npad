@@ -185,7 +185,7 @@ propagates live to all open npad windows.
 | Ctrl+Plus / Ctrl+Minus / Ctrl+0 | Zoom in / out / reset (this window; Ctrl+Scroll also zooms) |
 | Ctrl+, | Preferences |
 | Ctrl+Shift+. | Preferences opened on the hidden Debug page (also: Shift+click the Preferences menu item) |
-| Tab / Shift+Tab | Indent / Unindent the selected lines (Markdown tools; any selection - without one, Tab types a tab). A preference switches this binding to Ctrl+] / Ctrl+[. |
+| Tab / Shift+Tab | Indent / Unindent (Markdown tools). Tab indents any selection; without one it types a tab. Shift+Tab always unindents - the selected lines, or the current line. A preference switches this binding to Ctrl+] / Ctrl+[. |
 | Ctrl+X (no selection) | Cut the whole current line (Markdown tools); Ctrl+V then pastes that line above the current line, keeping the caret in place, until the clipboard changes |
 | Enter (on a list line) | Continue the list: the new line starts with the same indent + marker (Markdown tools). On an empty bullet, removes the marker and inserts a plain newline (ends the list). |
 
@@ -259,7 +259,14 @@ position). Not intended for direct use.
   - *Enter continues lists*: pressing Enter on a line starting with a marker
     (`* `, `- `, or the custom prefix, at any nesting depth) starts the next
     line with the same indent and marker; pressing Enter on an empty bullet
-    removes the marker and inserts a plain newline, ending the list.
+    removes the marker and inserts a plain newline, ending the list. When
+    the text after the caret already starts with a marker (two items typed
+    on one line), Enter splits with a plain newline instead of doubling the
+    marker.
+  - *Marker detection is style-agnostic*: deepening and unindent act on
+    whatever bullet a line actually carries (`* `, `- `, or the custom
+    prefix), regardless of the configured default format, so mixed lists
+    never gain a stacked `- -` marker and always unindent.
   - *Cut line / paste above*: with nothing selected, Ctrl+X cuts the whole
     current line (including its line break). Ctrl+V then pastes that line
     above the current line while the caret stays put; this holds for repeat

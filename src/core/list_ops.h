@@ -48,11 +48,14 @@ char *list_replace_all(const char *text, const char *from, const char *to);
 
 // Indent / unindent each line per the format. See list_ops.c for the exact
 // model (whitespace formats prepend the prefix; marker formats add the marker
-// once then deepen with two spaces, markdown-style; unindent removes one unit).
-// custom_prefix is the already-unescaped prefix used only by LIST_INDENT_CUSTOM
-// (NULL otherwise is fine); a non-whitespace custom prefix behaves like the
-// built-in markers, a whitespace-only one stacks/strips literally, and an
-// empty/NULL one makes the call a no-op copy.
+// once then deepen with two spaces, markdown-style; unindent removes one
+// unit). Marker detection is style-agnostic: a line carrying ANY bullet
+// ("* ", "- ", or the custom body) deepens on indent and strips on unindent,
+// whatever format is configured - mixed lists never stack a second marker.
+// custom_prefix is the already-unescaped custom prefix (NULL is fine); it is
+// the inserted prefix for LIST_INDENT_CUSTOM and joins marker detection for
+// every marker format. A whitespace-only custom prefix stacks/strips
+// literally; CUSTOM with an empty/NULL prefix is a no-op copy.
 char *list_indent_lines(const char *text, ListIndentFormat fmt, const char *custom_prefix);
 char *list_unindent_lines(const char *text, ListIndentFormat fmt, const char *custom_prefix);
 

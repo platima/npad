@@ -376,35 +376,43 @@ static bool is_marker_format(ListIndentFormat fmt, const char *custom) {
     return true;
 }
 
-// The marker body: the effective prefix with its leading whitespace stripped
-// (e.g. "* " for both asterisk formats). Sets *body_len.
-static const char *marker_body(ListIndentFormat fmt, const char *custom, size_t *body_len) {
-    const char *p = effective_prefix(fmt, custom);
-    while (*p == ' ' || *p == '\t')
-        p++;
-    *body_len = strlen(p);
-    return p;
-}
-
 #define NEST "  " // Two spaces: markdown nesting step for an already-marked line
 
-// Does the line already carry this marker (optionally behind nesting spaces)?
-// Matches the full marker body ("* " incl. its trailing space) or, so empty
-// bullets and pre-0.13 space-less bullets still count, the body minus trailing
-// whitespace when the line ends right after it. "*emphasis*" is NOT a bullet.
-static bool line_has_marker(const char *line, size_t len, ListIndentFormat fmt,
-                            const char *custom) {
-    size_t bl;
-    const char *body = marker_body(fmt, custom, &bl);
-    size_t tl = bl;
-    while (tl > 0 && (body[tl - 1] == ' ' || body[tl - 1] == '\t'))
-        tl--;
+// Length of the bullet marker at s (leading whitespace already skipped):
+// the custom marker body if it matches, else the built-in "* " / "- " -- or
+// their space-less forms when the line ends right after them (empty bullets,
+// pre-0.13 documents). ANY marker style counts regardless of the configured
+// format, so mixed lists still deepen/unindent instead of stacking a second
+// marker. "*emphasis*" is NOT a bullet. 0 when s does not start a bullet.
+static size_t marker_at(const char *s, size_t len, const char *custom) {
+    if (custom) {
+        const char *body = custom;
+        while (*body == ' ' || *body == '\t')
+            body++;
+        size_t bl = strlen(body);
+        if (bl > 0) {
+            if (len >= bl && memcmp(s, body, bl) == 0)
+                return bl;
+            size_t tl = bl;
+            while (tl > 0 && (body[tl - 1] == ' ' || body[tl - 1] == '\t'))
+                tl--;
+            if (tl > 0 && len == tl && memcmp(s, body, tl) == 0)
+                return tl;
+        }
+    }
+    if (len >= 2 && (s[0] == '*' || s[0] == '-') && s[1] == ' ')
+        return 2;
+    if (len == 1 && (s[0] == '*' || s[0] == '-'))
+        return 1;
+    return 0;
+}
+
+// Does the line already carry a bullet (optionally behind nesting spaces)?
+static bool line_has_bullet(const char *line, size_t len, const char *custom) {
     size_t i = 0;
     while (i < len && line[i] == ' ')
         i++;
-    if (len - i >= bl && memcmp(line + i, body, bl) == 0)
-        return true;
-    return tl > 0 && len - i == tl && memcmp(line + i, body, tl) == 0;
+    return marker_at(line + i, len - i, custom) > 0;
 }
 
 // Build a transformed document by applying fn(line,len,out,fmt,custom) per line.
@@ -443,8 +451,9 @@ static char *apply_per_line(const char *text, ListIndentFormat fmt, const char *
 
 static size_t indent_line(const char *line, size_t len, char *out, ListIndentFormat fmt,
                           const char *custom) {
-    if (is_marker_format(fmt, custom) && line_has_marker(line, len, fmt, custom)) {
-        // Already a bullet: deepen with nesting spaces, keep one marker
+    if (is_marker_format(fmt, custom) && line_has_bullet(line, len, custom)) {
+        // Already a bullet (of any marker style): deepen with nesting
+        // spaces, keep the single marker it has
         memcpy(out, NEST, strlen(NEST));
         memcpy(out + strlen(NEST), line, len);
         return strlen(NEST) + len;
@@ -459,28 +468,24 @@ static size_t indent_line(const char *line, size_t len, char *out, ListIndentFor
 static size_t unindent_line(const char *line, size_t len, char *out, ListIndentFormat fmt,
                             const char *custom) {
     if (is_marker_format(fmt, custom)) {
-        // Deepened bullet: strip one nesting step (two leading spaces) when it
-        // sits in front of the marker
-        if (len >= 2 && line[0] == ' ' && line[1] == ' ' &&
-            line_has_marker(line, len, fmt, custom)) {
-            memcpy(out, line + 2, len - 2);
-            return len - 2;
+        // Marker-aware: act on whatever bullet the line actually carries,
+        // not just the configured format's marker
+        size_t ws = 0;
+        while (ws < len && line[ws] == ' ')
+            ws++;
+        size_t m = marker_at(line + ws, len - ws, custom);
+        if (m > 0) {
+            if (ws >= 2) {
+                // Deepened bullet: strip one nesting step (two spaces)
+                memcpy(out, line + 2, len - 2);
+                return len - 2;
+            }
+            // Base bullet: strip its lead-in space(s) and the marker
+            size_t strip = ws + m;
+            memcpy(out, line + strip, len - strip);
+            return len - strip;
         }
-        // Base bullet: strip the whole marker prefix (e.g. " - " -> all three)
-        const char *p = effective_prefix(fmt, custom);
-        size_t pl = strlen(p);
-        if (len >= pl && memcmp(line, p, pl) == 0) {
-            memcpy(out, line + pl, len - pl);
-            return len - pl;
-        }
-        // Empty bullet: the prefix minus its trailing whitespace with nothing
-        // after it (also covers pre-0.13 space-less bullets like " -")
-        size_t tl = pl;
-        while (tl > 0 && (p[tl - 1] == ' ' || p[tl - 1] == '\t'))
-            tl--;
-        if (tl > 0 && len == tl && memcmp(line, p, tl) == 0)
-            return 0;
-        memcpy(out, line, len); // No-op
+        memcpy(out, line, len); // No bullet: no-op
         return len;
     }
     if (fmt == LIST_INDENT_CUSTOM) {

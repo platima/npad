@@ -191,6 +191,31 @@ TEST_CASE(unindent_noop) {
                  "unindent with no marker is a no-op");
 }
 
+TEST_CASE(unindent_cross_format) {
+    // Bullets of one style must unindent under any marker format: with the
+    // default set to " - ", lines bulleted "- " (e.g. by Enter-continuation)
+    // still strip
+    ASSERT_XFORM(list_unindent_lines("- one\n- two", LIST_INDENT_HYPHEN_LSP, NULL), "one\ntwo",
+                 "'- ' bullets unindent under the ' - ' format");
+    ASSERT_XFORM(list_unindent_lines("* one", LIST_INDENT_HYPHEN, NULL), "one",
+                 "'* ' bullets unindent under the '- ' format");
+}
+
+TEST_CASE(indent_deepen_cross_format) {
+    // Indenting an existing bullet of a different style deepens it rather
+    // than stacking a second marker
+    ASSERT_XFORM(list_indent_lines("- one", LIST_INDENT_ASTERISK, NULL), "  - one",
+                 "indent with '* ' format deepens an existing '- ' bullet");
+}
+
+TEST_CASE(custom_bullets_under_builtin_format) {
+    // A saved custom prefix joins marker detection for the built-in formats
+    ASSERT_XFORM(list_unindent_lines("> one", LIST_INDENT_HYPHEN, "> "), "one",
+                 "custom '> ' bullet unindents under the '- ' format");
+    ASSERT_XFORM(list_indent_lines("> one", LIST_INDENT_ASTERISK, "> "), "  > one",
+                 "custom '> ' bullet deepens under the '* ' format");
+}
+
 TEST_CASE(custom_marker_base) {
     ASSERT_XFORM(list_indent_lines("one\ntwo", LIST_INDENT_CUSTOM, "> "), "> one\n> two",
                  "custom marker prefix added once per line");
@@ -280,6 +305,9 @@ int main(void) {
     RUN_TEST(unindent_spaces);
     RUN_TEST(unindent_tab);
     RUN_TEST(unindent_noop);
+    RUN_TEST(unindent_cross_format);
+    RUN_TEST(indent_deepen_cross_format);
+    RUN_TEST(custom_bullets_under_builtin_format);
     RUN_TEST(custom_marker_base);
     RUN_TEST(custom_marker_deepen);
     RUN_TEST(custom_marker_unindent);
