@@ -140,6 +140,7 @@ static double qpc_ms(void) {
 #define ID_LIST_INDENT_BASE 2121 // 2121..2127, one per ListIndentFormat (2127 = Custom, prompts)
 #define ID_HELP_ABOUT 2401
 #define ID_HELP_CHECK_UPDATES 2402
+#define ID_HELP_UPDATE_AVAILABLE 2403
 
 #define MAX_RECENT_MENU_FILES 10
 
@@ -163,6 +164,7 @@ typedef struct Window {
     bool list_menu_present;      // The optional top-level Markdown menu is inserted
     bool line_cut_pending;       // Last Ctrl+X was a whole-line cut (paste-above mode)
     DWORD line_cut_clip_seq;     // Clipboard sequence number right after that cut
+    bool update_item_present;    // The dynamic "Update Available" Help item is inserted
 } Window;
 
 // Global variables
@@ -255,7 +257,7 @@ static void update_menu_states(Window *window);
 static void rebuild_recent_menu(Window *window);
 static void show_font_dialog(Window *window, const char *font_key, const char *default_face);
 static void show_goto_dialog(Window *window);
-static void show_preferences_dialog(const Window *window, bool show_debug);
+static void show_preferences_dialog(const Window *window, int start_page, bool show_debug);
 static void reload_and_apply_settings(Window *window);
 static int count_npad_windows(void);
 static void show_context_menu(Window *window, int x, int y);
@@ -1755,6 +1757,29 @@ typedef struct {
 // One update operation (check or download) at a time
 static volatile LONG g_update_busy = 0;
 
+// True while the in-flight check was user-initiated (Help menu / Check Now):
+// drives loud-vs-silent surfacing of the result. Set before spawning a check.
+static bool g_update_check_manual = false;
+
+// Refreshes the Help-menu update indicator for a window (defined with the
+// menu code); forward-declared for the update result handlers
+static void apply_update_indicator(Window *window);
+
+// Current version as "vMAJOR.MINOR.PATCH"
+static void current_version_string(char *out, size_t cap) {
+    snprintf(out, cap, "v%d.%d.%d", NPAD_VERSION_MAJOR, NPAD_VERSION_MINOR, NPAD_VERSION_PATCH);
+}
+
+// Stamp the last-checked time (local "YYYY-MM-DD HH:MM") into settings
+static void stamp_update_checked(void) {
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d", st.wYear, st.wMonth, st.wDay, st.wHour,
+             st.wMinute);
+    settings_set_string("update_last_checked", buf);
+}
+
 // Bounded HTTPS GET on the calling (worker) thread. Returns a malloc'd,
 // NUL-terminated buffer and its length; NULL on any failure. Posts percent
 // progress to progress_hwnd when given and the size is known.
@@ -1900,6 +1925,26 @@ static DWORD WINAPI update_check_thread(LPVOID param) {
     return 0;
 }
 
+// Start a check if none is running. manual=true surfaces the result loudly
+// (Help menu / Check Now button); manual=false is the silent launch/auto path.
+// Returns false when a check is already in flight or the thread failed.
+static bool start_update_check(Window *window, bool manual) {
+    if (!window)
+        return false;
+    if (InterlockedCompareExchange(&g_update_busy, 1, 0) != 0)
+        return false;
+    g_update_check_manual = manual;
+    set_status_message(window, "Checking for updates...");
+    HANDLE thread = CreateThread(NULL, 0, update_check_thread, window->hwnd, 0, NULL);
+    if (!thread) {
+        InterlockedExchange(&g_update_busy, 0);
+        set_status_message(window, "Update check failed to start");
+        return false;
+    }
+    CloseHandle(thread);
+    return true;
+}
+
 static DWORD WINAPI update_download_thread(LPVOID param) {
     UpdateDownloadJob *job = (UpdateDownloadJob *) param;
     UpdateDownloadResult *r = calloc(1, sizeof(*r));
@@ -1972,40 +2017,33 @@ static DWORD WINAPI update_download_thread(LPVOID param) {
 }
 
 // UI-thread handler for the check result: report, or offer the update
-static void handle_update_checked(Window *window, UpdateCheckResult *r) {
+// Spawn the verified-download worker for tag. Returns true when the thread
+// started (the busy flag then stays set until the download result arrives).
+static bool spawn_update_download(Window *window, const char *tag) {
+    UpdateDownloadJob *job = calloc(1, sizeof(*job));
+    if (!job)
+        return false;
+    job->hwnd = window ? window->hwnd : NULL;
+    snprintf(job->tag, sizeof(job->tag), "%s", tag);
+    HANDLE thread = CreateThread(NULL, 0, update_download_thread, job, 0, NULL);
+    if (!thread) {
+        free(job);
+        return false;
+    }
+    CloseHandle(thread);
+    return true;
+}
+
+// Present the "newer version available" TaskDialog (with a Skip option) and
+// act on the choice. Called for a manual check that found a newer release, or
+// an automatic check in "prompt" mode.
+static void prompt_update_available(Window *window, const char *tag, const char *cur) {
     HWND hwnd = window ? window->hwnd : NULL;
-    char cur[32];
-    snprintf(cur, sizeof(cur), "v%d.%d.%d", NPAD_VERSION_MAJOR, NPAD_VERSION_MINOR,
-             NPAD_VERSION_PATCH);
-
-    if (!r->ok) {
-        wchar_t *w = utf8_to_wide(r->error);
-        MessageBoxW(hwnd, w ? w : L"Update check failed.", L"npad", MB_OK | MB_ICONWARNING);
-        free(w);
-        set_status_message(window, "Update check failed");
-        InterlockedExchange(&g_update_busy, 0);
-        free(r);
-        return;
-    }
-
-    if (update_version_compare(r->tag, cur) <= 0) {
-        char msg[160];
-        snprintf(msg, sizeof(msg), "npad is up to date.\n\nYou have %s; the latest release is %s.",
-                 cur, r->tag);
-        wchar_t *w = utf8_to_wide(msg);
-        MessageBoxW(hwnd, w ? w : L"npad is up to date.", L"npad", MB_OK | MB_ICONINFORMATION);
-        free(w);
-        set_status_message(window, "npad is up to date");
-        InterlockedExchange(&g_update_busy, 0);
-        free(r);
-        return;
-    }
-
     char msg[200];
-    snprintf(msg, sizeof(msg), "npad %s is available (you have %s).", r->tag, cur);
+    snprintf(msg, sizeof(msg), "npad %s is available (you have %s).", tag, cur);
     wchar_t *wmsg = utf8_to_wide(msg);
 
-    int choice = 0; // 0 = not now, 101 = download and install, 102 = release notes
+    int choice = 0; // 0 = not now, 101 = install, 102 = notes, 103 = skip
     HMODULE comctl = GetModuleHandleW(L"comctl32.dll");
     union {
         FARPROC proc;
@@ -2016,6 +2054,7 @@ static void handle_update_checked(Window *window, UpdateCheckResult *r) {
         const TASKDIALOG_BUTTON buttons[] = {
             { 101, L"Download and install" },
             { 102, L"View the release notes" },
+            { 103, L"Skip this version" },
         };
         TASKDIALOGCONFIG cfg;
         ZeroMemory(&cfg, sizeof(cfg));
@@ -2026,7 +2065,7 @@ static void handle_update_checked(Window *window, UpdateCheckResult *r) {
         cfg.pszMainIcon = TD_INFORMATION_ICON;
         cfg.pszMainInstruction = L"A newer version of npad is available";
         cfg.pszContent = wmsg ? wmsg : L"A newer release is available.";
-        cfg.cButtons = 2;
+        cfg.cButtons = 3;
         cfg.pButtons = buttons;
         cfg.nDefaultButton = 101;
         int pressed = 0;
@@ -2046,29 +2085,98 @@ static void handle_update_checked(Window *window, UpdateCheckResult *r) {
 
     if (choice == 101) {
         char status[96];
-        snprintf(status, sizeof(status), "Downloading npad %s...", r->tag);
+        snprintf(status, sizeof(status), "Downloading npad %s...", tag);
         set_status_message(window, status);
-        UpdateDownloadJob *job = calloc(1, sizeof(*job));
-        HANDLE thread = NULL;
-        if (job) {
-            job->hwnd = hwnd;
-            snprintf(job->tag, sizeof(job->tag), "%s", r->tag);
-            thread = CreateThread(NULL, 0, update_download_thread, job, 0, NULL);
-        }
-        if (thread) {
-            CloseHandle(thread); // Busy flag stays set until the result arrives
-        } else {
-            free(job);
+        if (!spawn_update_download(window, tag)) {
             set_status_message(window, "Update download failed to start");
             InterlockedExchange(&g_update_busy, 0);
         }
-    } else {
-        if (choice == 102) {
-            ShellExecuteW(hwnd, L"open", L"https://github.com/platima/npad/releases/latest", NULL,
-                          NULL, SW_SHOWNORMAL);
-        }
-        InterlockedExchange(&g_update_busy, 0);
+        return; // Busy flag stays set for the download (or was cleared above)
     }
+    if (choice == 102) {
+        ShellExecuteW(hwnd, L"open", L"https://github.com/platima/npad/releases/latest", NULL, NULL,
+                      SW_SHOWNORMAL);
+    } else if (choice == 103) {
+        settings_set_string("update_skipped_version", tag);
+        settings_save();
+        ui_platform_notify_settings_changed();
+    }
+    InterlockedExchange(&g_update_busy, 0);
+    apply_update_indicator(window);
+}
+
+static void handle_update_checked(Window *window, UpdateCheckResult *r) {
+    HWND hwnd = window ? window->hwnd : NULL;
+    bool manual = g_update_check_manual;
+    char cur[32];
+    current_version_string(cur, sizeof(cur));
+
+    if (!r->ok) {
+        // Silent for automatic/launch checks; loud only when the user asked
+        if (manual) {
+            wchar_t *w = utf8_to_wide(r->error);
+            MessageBoxW(hwnd, w ? w : L"Update check failed.", L"npad", MB_OK | MB_ICONWARNING);
+            free(w);
+        }
+        set_status_message(window, "Update check failed");
+        InterlockedExchange(&g_update_busy, 0);
+        free(r);
+        return;
+    }
+
+    // Record the result for the prefs display and the Help indicator, and let
+    // other instances pick it up (they refresh their own indicator on reload)
+    stamp_update_checked();
+    settings_set_string("update_latest_version", r->tag);
+    settings_save();
+    ui_platform_notify_settings_changed();
+
+    bool newer = update_version_compare(r->tag, cur) > 0;
+    char *skipped = settings_get_string("update_skipped_version", "");
+    char *mode = settings_get_string("update_mode", "off");
+    bool surface_auto = update_is_newer_unskipped(cur, r->tag, skipped);
+    free(skipped);
+
+    // A manual check re-surfaces even a skipped version (the user asked); an
+    // automatic check obeys the mode and the skip
+    bool show_prompt = manual ? newer : (surface_auto && strcmp(mode, "prompt") == 0);
+    bool do_download = !manual && surface_auto && strcmp(mode, "auto") == 0;
+    free(mode);
+
+    if (do_download) {
+        char status[96];
+        snprintf(status, sizeof(status), "Downloading npad %s...", r->tag);
+        set_status_message(window, status);
+        if (!spawn_update_download(window, r->tag))
+            InterlockedExchange(&g_update_busy, 0);
+        apply_update_indicator(window);
+        free(r);
+        return;
+    }
+
+    if (show_prompt) {
+        // prompt_update_available owns the busy flag from here
+        char tag[32];
+        snprintf(tag, sizeof(tag), "%s", r->tag);
+        free(r);
+        prompt_update_available(window, tag, cur);
+        return;
+    }
+
+    // Silent outcomes: up to date (manual), notify-mode dot only, or skipped
+    if (manual) {
+        char msg[160];
+        snprintf(msg, sizeof(msg), "npad is up to date.\n\nYou have %s; the latest release is %s.",
+                 cur, r->tag);
+        wchar_t *w = utf8_to_wide(msg);
+        MessageBoxW(hwnd, w ? w : L"npad is up to date.", L"npad", MB_OK | MB_ICONINFORMATION);
+        free(w);
+        set_status_message(window, "npad is up to date");
+    } else if (surface_auto) {
+        set_status_message(window, "An update is available (see the Help menu)");
+    }
+    InterlockedExchange(&g_update_busy, 0);
+    apply_update_indicator(window);
     free(r);
 }
 
@@ -2100,6 +2208,7 @@ static void handle_update_downloaded(Window *window, UpdateDownloadResult *r) {
         }
     }
     InterlockedExchange(&g_update_busy, 0);
+    apply_update_indicator(window); // The update is still available if declined
     free(r);
 }
 
@@ -3868,6 +3977,124 @@ static INT_PTR CALLBACK prefs_backup_proc(HWND page, UINT msg, WPARAM wparam, LP
     return FALSE;
 }
 
+// Preferences: Updates page - modes and status (all opt-in, off by default)
+static const char *const UPDATE_MODE_KEYS[] = { "off", "notify", "prompt", "auto" };
+static const wchar_t *const UPDATE_MODE_LABELS[] = {
+    L"Do nothing (check manually from the Help menu)", L"Notify silently (a dot on the Help menu)",
+    L"Prompt me to download and install", L"Download and install automatically"
+};
+#define UPDATE_MODE_COUNT 4
+
+// Enable "Skip This Version" only when a newer, non-skipped release is known
+static void prefs_updates_sync_skip(HWND page) {
+    char cur[32];
+    current_version_string(cur, sizeof(cur));
+    char *latest = settings_get_string("update_latest_version", "");
+    char *skipped = settings_get_string("update_skipped_version", "");
+    EnableWindow(GetDlgItem(page, ID_PREF_UPD_SKIP),
+                 update_is_newer_unskipped(cur, latest, skipped));
+    free(latest);
+    free(skipped);
+}
+
+static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
+    switch (msg) {
+        case WM_INITDIALOG: {
+            char cur[32];
+            current_version_string(cur, sizeof(cur));
+            wchar_t wcur[32];
+            _snwprintf(wcur, 31, L"%hs", cur);
+            wcur[31] = L'\0';
+            SetDlgItemTextW(page, ID_PREF_UPD_CURRENT, wcur);
+
+            char *latest = settings_get_string("update_latest_version", "");
+            wchar_t *wlatest = utf8_to_wide((latest && latest[0]) ? latest : "unknown");
+            if (wlatest) {
+                SetDlgItemTextW(page, ID_PREF_UPD_LATEST, wlatest);
+                free(wlatest);
+            }
+            free(latest);
+
+            char *last = settings_get_string("update_last_checked", "");
+            wchar_t *wlast = utf8_to_wide((last && last[0]) ? last : "never");
+            if (wlast) {
+                SetDlgItemTextW(page, ID_PREF_UPD_LASTCHECK, wlast);
+                free(wlast);
+            }
+            free(last);
+
+            HWND combo = GetDlgItem(page, ID_PREF_UPD_MODE);
+            for (int i = 0; i < UPDATE_MODE_COUNT; i++)
+                SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM) UPDATE_MODE_LABELS[i]);
+            char *mode = settings_get_string("update_mode", "off");
+            int sel = 0;
+            for (int i = 0; i < UPDATE_MODE_COUNT; i++) {
+                if (strcmp(mode, UPDATE_MODE_KEYS[i]) == 0) {
+                    sel = i;
+                    break;
+                }
+            }
+            free(mode);
+            SendMessageW(combo, CB_SETCURSEL, (WPARAM) sel, 0);
+
+            CheckDlgButton(page, ID_PREF_UPD_ON_LAUNCH,
+                           settings_get_bool("update_check_on_launch", false) ? BST_CHECKED
+                                                                              : BST_UNCHECKED);
+            prefs_updates_sync_skip(page);
+            return TRUE;
+        }
+
+        case WM_COMMAND: {
+            WORD code = HIWORD(wparam);
+            WORD id = LOWORD(wparam);
+            if ((code == CBN_SELCHANGE && id == ID_PREF_UPD_MODE) ||
+                (code == BN_CLICKED && id == ID_PREF_UPD_ON_LAUNCH)) {
+                mark_prefs_dirty(page);
+                return TRUE;
+            }
+            if (id == ID_PREF_UPD_CHECK) {
+                // Manual check from the prefs page (result goes to the main window)
+                if (g_main_window)
+                    start_update_check(g_main_window, true);
+                return TRUE;
+            }
+            if (id == ID_PREF_UPD_SKIP) {
+                char *latest = settings_get_string("update_latest_version", "");
+                if (latest && latest[0]) {
+                    settings_set_string("update_skipped_version", latest);
+                    settings_save();
+                    ui_platform_notify_settings_changed();
+                    if (g_main_window)
+                        apply_update_indicator(g_main_window);
+                }
+                free(latest);
+                prefs_updates_sync_skip(page);
+                return TRUE;
+            }
+            break;
+        }
+
+        case WM_NOTIFY: {
+            const NMHDR *nmhdr = (const NMHDR *) lparam;
+            if (nmhdr->code == PSN_APPLY) {
+                LRESULT sel = SendMessageW(GetDlgItem(page, ID_PREF_UPD_MODE), CB_GETCURSEL, 0, 0);
+                if (sel >= 0 && sel < UPDATE_MODE_COUNT)
+                    settings_set_string("update_mode", UPDATE_MODE_KEYS[sel]);
+                settings_set_bool("update_check_on_launch",
+                                  IsDlgButtonChecked(page, ID_PREF_UPD_ON_LAUNCH) == BST_CHECKED);
+                settings_save();
+                ui_platform_notify_settings_changed();
+                if (g_main_window)
+                    apply_update_indicator(g_main_window);
+                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                return TRUE;
+            }
+            break;
+        }
+    }
+    return FALSE;
+}
+
 // Preferences: Lists page - optional list tools (off by default)
 static const wchar_t *const INDENT_FORMAT_LABELS[] = { L"Spaces",
                                                        L"Tab",
@@ -3964,11 +4191,16 @@ static INT_PTR CALLBACK prefs_lists_proc(HWND page, UINT msg, WPARAM wparam, LPA
     return FALSE;
 }
 
-static void show_preferences_dialog(const Window *window, bool show_debug) {
+// Preferences page indices (Updates before the hidden Debug page)
+#define PREFS_PAGE_UPDATES 5
+
+// start_page: a page index to open on, or -1 for the default (page 0, or the
+// Debug page when show_debug). show_debug appends the hidden diagnostics page.
+static void show_preferences_dialog(const Window *window, int start_page, bool show_debug) {
     if (!window)
         return;
 
-    PROPSHEETPAGEW pages[6];
+    PROPSHEETPAGEW pages[7];
     ZeroMemory(pages, sizeof(pages));
 
     pages[0].dwSize = sizeof(PROPSHEETPAGEW);
@@ -3996,12 +4228,17 @@ static void show_preferences_dialog(const Window *window, bool show_debug) {
     pages[4].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_BACKUP);
     pages[4].pfnDlgProc = prefs_backup_proc;
 
-    // Hidden diagnostics page: only present when opened via Ctrl+Shift+.
-    // or a Shift+click on the Preferences menu item
     pages[5].dwSize = sizeof(PROPSHEETPAGEW);
     pages[5].hInstance = g_hinstance;
-    pages[5].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_DEBUG);
-    pages[5].pfnDlgProc = prefs_debug_proc;
+    pages[5].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_UPDATES);
+    pages[5].pfnDlgProc = prefs_updates_proc;
+
+    // Hidden diagnostics page: only present when opened via Ctrl+Shift+.
+    // or a Shift+click on the Preferences menu item
+    pages[6].dwSize = sizeof(PROPSHEETPAGEW);
+    pages[6].hInstance = g_hinstance;
+    pages[6].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_DEBUG);
+    pages[6].pfnDlgProc = prefs_debug_proc;
 
     PROPSHEETHEADERW psh;
     ZeroMemory(&psh, sizeof(psh));
@@ -4011,8 +4248,8 @@ static void show_preferences_dialog(const Window *window, bool show_debug) {
     psh.hwndParent = window->hwnd;
     psh.hInstance = g_hinstance;
     psh.pszCaption = L"Preferences";
-    psh.nPages = show_debug ? 6 : 5;
-    psh.nStartPage = show_debug ? 5 : 0;
+    psh.nPages = show_debug ? 7 : 6;
+    psh.nStartPage = (start_page >= 0) ? (UINT) start_page : (show_debug ? 6 : 0);
     psh.ppsp = pages;
 
     PropertySheetW(&psh);
@@ -4696,6 +4933,54 @@ static void show_convert_delim_dialog(Window *window) {
                     convert_delim_proc, (LPARAM) window);
 }
 
+// Reflect update availability in the Help menu: a "●" after the Help title and
+// a dynamic "Update Available" item that opens Preferences on the Updates tab.
+// Shown only when the mode is not "off" and a newer, non-skipped release is
+// known. Safe to call repeatedly. Help is always the last top-level menu (the
+// optional Markdown menu inserts earlier), so locate it by count.
+static void apply_update_indicator(Window *window) {
+    if (!window || !window->hmenu)
+        return;
+    int help_pos = GetMenuItemCount(window->hmenu) - 1;
+    if (help_pos < 0)
+        return;
+
+    char cur[32];
+    current_version_string(cur, sizeof(cur));
+    char *mode = settings_get_string("update_mode", "off");
+    char *latest = settings_get_string("update_latest_version", "");
+    char *skipped = settings_get_string("update_skipped_version", "");
+    bool avail = strcmp(mode, "off") != 0 && update_is_newer_unskipped(cur, latest, skipped);
+    free(mode);
+    free(latest);
+    free(skipped);
+
+    // Top-level Help title
+    MENUITEMINFOW mii;
+    ZeroMemory(&mii, sizeof(mii));
+    mii.cbSize = sizeof(mii);
+    mii.fMask = MIIM_STRING;
+    mii.dwTypeData = avail ? L"&Help  \x25CF" : L"&Help";
+    SetMenuItemInfoW(window->hmenu, (UINT) help_pos, TRUE, &mii);
+
+    // The dynamic "Update Available" item at the top of the Help submenu
+    HMENU hhelp = GetSubMenu(window->hmenu, help_pos);
+    if (hhelp) {
+        if (avail && !window->update_item_present) {
+            InsertMenuW(hhelp, 0, MF_BYPOSITION | MF_STRING, ID_HELP_UPDATE_AVAILABLE,
+                        L"&Update Available...");
+            InsertMenuW(hhelp, 1, MF_BYPOSITION | MF_SEPARATOR, 0, NULL);
+            window->update_item_present = true;
+        } else if (!avail && window->update_item_present) {
+            RemoveMenu(hhelp, 1, MF_BYPOSITION); // separator
+            RemoveMenu(hhelp, 0, MF_BYPOSITION); // item
+            window->update_item_present = false;
+        }
+    }
+    if (window->hwnd)
+        DrawMenuBar(window->hwnd);
+}
+
 static void create_menu(Window *window) {
     HMENU hmenu = CreateMenu();
     HMENU hfile = CreatePopupMenu();
@@ -4791,13 +5076,15 @@ static void create_menu(Window *window) {
     window->hmenu = hmenu;
     window->recent_menu = hrecent;
     window->list_menu_present = false;
+    window->update_item_present = false;
 
     CheckMenuItem(hmenu, ID_FORMAT_WORD_WRAP,
                   window->word_wrap_enabled ? MF_CHECKED : MF_UNCHECKED);
     CheckMenuItem(hmenu, ID_VIEW_STATUS_BAR,
                   window->status_bar_visible ? MF_CHECKED : MF_UNCHECKED);
     rebuild_recent_menu(window);
-    apply_list_tools_menu(window); // Insert the Markdown menu when enabled
+    apply_list_tools_menu(window);  // Insert the Markdown menu when enabled
+    apply_update_indicator(window); // After Markdown, so Help is still last
 }
 
 // Rebuild the File > Recent Files submenu from settings
@@ -5075,10 +5362,10 @@ static void handle_command(Window *window, WORD command) {
             break;
         case ID_FILE_PREFERENCES:
             // Shift+click reveals the hidden Debug diagnostics page
-            show_preferences_dialog(window, (GetKeyState(VK_SHIFT) & 0x8000) != 0);
+            show_preferences_dialog(window, -1, (GetKeyState(VK_SHIFT) & 0x8000) != 0);
             break;
         case ID_FILE_PREFERENCES_DEBUG: // Ctrl+Shift+. accelerator
-            show_preferences_dialog(window, true);
+            show_preferences_dialog(window, -1, true);
             break;
         case ID_FILE_CLOSE:
             // One document per window, so "close" is the window's save-checked
@@ -5192,18 +5479,10 @@ static void handle_command(Window *window, WORD command) {
             ui_platform_show_about_dialog(window);
             break;
         case ID_HELP_CHECK_UPDATES:
-            // One operation at a time; the busy flag clears when the worker
-            // thread's result has been handled
-            if (InterlockedCompareExchange(&g_update_busy, 1, 0) == 0) {
-                set_status_message(window, "Checking for updates...");
-                HANDLE thread = CreateThread(NULL, 0, update_check_thread, window->hwnd, 0, NULL);
-                if (thread) {
-                    CloseHandle(thread);
-                } else {
-                    set_status_message(window, "Update check failed to start");
-                    InterlockedExchange(&g_update_busy, 0);
-                }
-            }
+            start_update_check(window, true); // Manual: surface the result loudly
+            break;
+        case ID_HELP_UPDATE_AVAILABLE:
+            show_preferences_dialog(window, PREFS_PAGE_UPDATES, false);
             break;
     }
 }
@@ -5355,7 +5634,8 @@ static void reload_and_apply_settings(Window *window) {
     apply_theme(window);
     apply_new_window_pref(window); // Also rebuilds accelerators (list Ctrl+]/[ gating)
     rebuild_recent_menu(window);
-    apply_list_tools_menu(window); // Insert/remove the Markdown menu per the pref
+    apply_list_tools_menu(window);  // Insert/remove the Markdown menu per the pref
+    apply_update_indicator(window); // Mode/skip/latest may have changed live
 
     // Sync shared window options; per-window view state (font type, zoom)
     // is deliberately left alone
@@ -5552,6 +5832,16 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                 KillTimer(hwnd, NPAD_STARTUP_TIMER_ID); // One-shot
                 startup_prof_mark("deferred tasks");
                 ui_post_event(UI_EVENT_STARTUP_DEFERRED, window, NULL);
+                // Optional launch-time update check (off by default): fires
+                // once, after first paint, only for the primary window, and
+                // only when a surfacing mode is set. Failures are silent.
+                if (window == g_main_window && settings_get_bool("update_check_on_launch", false)) {
+                    char *mode = settings_get_string("update_mode", "off");
+                    bool on = strcmp(mode, "off") != 0;
+                    free(mode);
+                    if (on)
+                        start_update_check(window, false);
+                }
             } else if (window && wparam == NPAD_STATUS_TIMER_ID) {
                 KillTimer(hwnd, NPAD_STATUS_TIMER_ID); // One-shot (coalescing)
                 window->status_update_pending = false;

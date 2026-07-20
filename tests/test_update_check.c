@@ -59,6 +59,26 @@ TEST_CASE(sha256_parse) {
     TEST_ASSERT(!update_parse_sha256(NULL, hex), "NULL fails");
 }
 
+TEST_CASE(newer_unskipped) {
+    // Newer and not skipped: surface it
+    TEST_ASSERT(update_is_newer_unskipped("v0.16.0", "v0.17.0", ""),
+                "a newer release surfaces");
+    TEST_ASSERT(update_is_newer_unskipped("v0.16.0", "v0.17.0", NULL),
+                "NULL skip surfaces");
+    // Equal or older: never
+    TEST_ASSERT(!update_is_newer_unskipped("v0.17.0", "v0.17.0", ""), "equal does not surface");
+    TEST_ASSERT(!update_is_newer_unskipped("v0.17.0", "v0.16.0", ""), "older does not surface");
+    // No successful check yet
+    TEST_ASSERT(!update_is_newer_unskipped("v0.16.0", "", ""), "empty latest does not surface");
+    TEST_ASSERT(!update_is_newer_unskipped("v0.16.0", NULL, ""), "NULL latest does not surface");
+    // Skipped exactly: suppressed
+    TEST_ASSERT(!update_is_newer_unskipped("v0.16.0", "v0.17.0", "v0.17.0"),
+                "skipping the available version suppresses it");
+    // A version newer than the skipped one resurfaces
+    TEST_ASSERT(update_is_newer_unskipped("v0.16.0", "v0.18.0", "v0.17.0"),
+                "a newer release than the skipped one resurfaces");
+}
+
 int main(void) {
     TEST_INIT();
 
@@ -67,6 +87,7 @@ int main(void) {
     RUN_TEST(extract_tag_missing_or_bad);
     RUN_TEST(version_compare_numeric);
     RUN_TEST(sha256_parse);
+    RUN_TEST(newer_unskipped);
 
     TEST_SUMMARY();
     return 0;

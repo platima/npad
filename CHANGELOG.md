@@ -5,6 +5,30 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-07-20
+
+### ✨ Features
+- **Updates preferences tab** and a full update-policy model, all opt-in
+  (default **Off** - most notepad-like; a manual Help > Check for Updates
+  always works). One mode picker chooses how a found update surfaces:
+  - **Off** - manual checks only.
+  - **Notify silently** - a **●** appears after the Help menu title plus an
+    "Update Available" item that opens this tab; no dialog.
+  - **Prompt me** - the update dialog appears.
+  - **Download and install automatically** - the installer is downloaded and
+    SHA-256-verified silently, then a single confirmation appears before it
+    runs (a fully seamless no-close update is not possible: Inno/MSI replace
+    the locked npad.exe, so npad closes through its normal save prompt first).
+- **Check for updates on launch** (separate toggle, off by default): a single
+  check fires once after the window first paints, for the primary window only.
+- **Skip this version**: from the update dialog or the prefs tab; suppresses
+  the dot/prompt for that version until a newer one appears.
+- The Updates tab shows the current and latest-known versions and when the
+  last check ran, with a **Check Now** button.
+- Launch/automatic checks fail **silently** (status-bar note only); a manual
+  check still reports errors. The dot/decision logic is a unit-tested core
+  helper (`update_is_newer_unskipped`).
+
 ## [0.16.0] - 2026-07-20
 
 ### ✨ Features

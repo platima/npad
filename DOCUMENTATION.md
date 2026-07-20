@@ -141,6 +141,24 @@ the fields.
 | `list_indent_shortcut_brackets` | bool | `false` | Use Ctrl+] / Ctrl+[ for indent/unindent instead of the default Tab / Shift+Tab. |
 | `list_sort_case_sensitive` | bool | `false` | Sort compares case-sensitively (toggle from the Sort submenu). |
 
+### Updates (Preferences > Updates) - all opt-in, off by default
+
+npad never checks for updates in the background. A manual **Help > Check for
+Updates** always works; these settings govern any *automatic* surfacing.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `update_mode` | string | `"off"` | How a found update surfaces: `off` (manual only), `notify` (a **●** on the Help menu title + an "Update Available" item, no dialog), `prompt` (show the update dialog), `auto` (download + SHA-256-verify silently, then one confirmation before installing). |
+| `update_check_on_launch` | bool | `false` | Run a single check once after the window first paints (primary window only). Automatic/launch checks fail silently. |
+| `update_skipped_version` | string | (unset) | A version the user chose to **Skip**; suppresses the dot/prompt for exactly that version until a newer release appears. |
+| `update_latest_version` | string | (unset) | Read-only state: the latest release tag seen by the last successful check (shown on the Updates tab). |
+| `update_last_checked` | string | (unset) | Read-only state: local `YYYY-MM-DD HH:MM` of the last check (shown on the Updates tab). |
+
+Installing an update runs the downloaded, checksum-verified installer and
+closes npad through the normal save-changes prompt; a fully seamless
+no-close update is not possible because Inno/MSI must replace the running
+`npad.exe`. Portable-exe users get the same verified installer download.
+
 ### Other persisted state (no dedicated UI)
 
 | Key | Description |

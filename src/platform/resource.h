@@ -24,6 +24,7 @@
 #define IDD_PREFS_LISTS 213
 #define IDD_PREFS_DEFAULTS 214
 #define IDD_PREFS_DEBUG 215
+#define IDD_PREFS_UPDATES 216
 
 // Control IDs for Find Dialog
 #define ID_FIND_TEXT 3001
@@ -99,6 +100,15 @@
 // Custom Indent dialog
 #define ID_CUSTOM_INDENT_EDIT 3140
 #define ID_CUSTOM_INDENT_HINT 3141
+
+// Preferences: Updates page
+#define ID_PREF_UPD_CURRENT 3144
+#define ID_PREF_UPD_LATEST 3145
+#define ID_PREF_UPD_LASTCHECK 3146
+#define ID_PREF_UPD_CHECK 3147
+#define ID_PREF_UPD_MODE 3148
+#define ID_PREF_UPD_ON_LAUNCH 3149
+#define ID_PREF_UPD_SKIP 3150
 
 // Static text controls
 #define IDC_STATIC -1

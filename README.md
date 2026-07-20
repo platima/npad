@@ -49,7 +49,7 @@ Current features (Windows build):
 - **🌍 Unicode throughout** - Detects and preserves UTF-8, UTF-8 BOM, UTF-16 LE/BE and ANSI encodings
 - **↩️ Line ending aware** - Detects and preserves Windows (CRLF), Unix (LF) and Mac (CR) line endings, shown in the status bar
 - **🔧 Quality-of-life enhancements:**
-  - Tabbed Preferences dialog (Edit menu, Ctrl+,) with an Apply button: General, Appearance, Defaults, Markdown and Backup pages (see [DOCUMENTATION.md](DOCUMENTATION.md) for every setting)
+  - Tabbed Preferences dialog (Edit menu, Ctrl+,) with an Apply button: General, Appearance, Defaults, Markdown, Backup and Updates pages (see [DOCUMENTATION.md](DOCUMENTATION.md) for every setting)
   - Optional auto-save (disabled by default - it overwrites your file, so it's opt-in; configurable)
   - Session resume / crash recovery (enabled by default - non-destructive, snapshots never touch your file); restores every window that was open, each in its own instance
   - Theme support: light (default), dark, follow-system, and Solarized Light / Dark colour schemes (chosen in Preferences); changes apply to all open windows live
@@ -77,7 +77,7 @@ Current features (Windows build):
   - Confirmation prompt before opening very large files (threshold scales with the system's RAM by default)
   - Binary-file detection on open, offering Cancel / Open in npad / Open with the default app
   - Optional word / character / line counts in the status bar (off by default, debounced so large edits stay smooth)
-  - Check for Updates in the Help menu - strictly on-demand (never automatic), with SHA-256-verified installer download
+  - Check for Updates (Help menu) with an opt-in Updates preferences tab: off by default, or notify silently (a Help-menu dot), prompt, or download-and-install-automatically; optional launch check, Skip this version, SHA-256-verified download
 
 Planned (see the [Roadmap](#roadmap)):
 
@@ -337,7 +337,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] 'Highlight all' matches in Find / Find & Replace
   - [x] Optional word / character / line count in the status bar (off by default)
   - [x] Large-file lag warning proportional to the system's capabilities (default threshold scales with RAM)
-  - [x] Self-updating: on-demand check-for-updates (never automatic; SHA-256-verified download)
+  - [x] Self-updating: opt-in update modes (off by default; notify / prompt / auto), launch check, Skip this version, SHA-256-verified download
 - [ ] **Advanced Features**
   - [ ] Tabbed interface (optional)
   - [ ] Multi-language support

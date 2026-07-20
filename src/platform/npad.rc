@@ -14,8 +14,8 @@
 
 // Version Information (keep in sync with src/main.h)
 1 VERSIONINFO
-FILEVERSION 0,16,0,0
-PRODUCTVERSION 0,16,0,0
+FILEVERSION 0,17,0,0
+PRODUCTVERSION 0,17,0,0
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0x0L
 FILEOS VOS__WINDOWS32
@@ -28,12 +28,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Platima"
             VALUE "FileDescription", "npad - Lightweight Text Editor"
-            VALUE "FileVersion", "0.16.0.0"
+            VALUE "FileVersion", "0.17.0.0"
             VALUE "InternalName", "npad"
             VALUE "LegalCopyright", "Copyright © 2025 Platima"
             VALUE "OriginalFilename", "npad.exe"
             VALUE "ProductName", "npad"
-            VALUE "ProductVersion", "0.16.0.0"
+            VALUE "ProductVersion", "0.17.0.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -223,4 +223,24 @@ FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
     EDITTEXT        ID_PREF_DEBUG_TEXT, 10, 12, 220, 156, ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | NOT WS_TABSTOP
     PUSHBUTTON      "&Copy Diagnostics", ID_PREF_COPY_DIAG, 10, 174, 90, 14
+END
+
+// Preferences: Updates page (all opt-in; off by default)
+IDD_PREFS_UPDATES DIALOGEX 0, 0, 240, 196
+STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+CAPTION "Updates"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "Current version:", IDC_STATIC, 10, 12, 70, 8
+    LTEXT           "", ID_PREF_UPD_CURRENT, 84, 12, 146, 8
+    LTEXT           "Latest version:", IDC_STATIC, 10, 26, 70, 8
+    LTEXT           "", ID_PREF_UPD_LATEST, 84, 26, 146, 8
+    LTEXT           "Last checked:", IDC_STATIC, 10, 40, 70, 8
+    LTEXT           "", ID_PREF_UPD_LASTCHECK, 84, 40, 146, 8
+    PUSHBUTTON      "Check &Now", ID_PREF_UPD_CHECK, 10, 56, 90, 14
+    PUSHBUTTON      "&Skip This Version", ID_PREF_UPD_SKIP, 106, 56, 90, 14
+    LTEXT           "When an &update is found:", IDC_STATIC, 10, 84, 130, 8
+    COMBOBOX        ID_PREF_UPD_MODE, 10, 96, 220, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    CONTROL         "Check for updates on &launch", ID_PREF_UPD_ON_LAUNCH, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 10, 116, 220, 10
+    LTEXT           "Off by default, mirroring classic Notepad. npad never checks in the background; a launch check (when enabled) runs once, after the window appears.", IDC_STATIC, 10, 134, 220, 24
 END

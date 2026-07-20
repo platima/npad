@@ -86,3 +86,14 @@ bool update_parse_sha256(const char *text, char *out) {
     out[64] = '\0';
     return true;
 }
+
+bool update_is_newer_unskipped(const char *current, const char *latest, const char *skipped) {
+    if (!latest || !latest[0])
+        return false;
+    if (update_version_compare(latest, current) <= 0)
+        return false;
+    // A skip only suppresses that exact version; a newer release resurfaces
+    if (skipped && skipped[0] && update_version_compare(latest, skipped) == 0)
+        return false;
+    return true;
+}

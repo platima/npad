@@ -1,9 +1,9 @@
 /*
  * npad - Update check helpers
- * Pure parsing/comparison logic for the on-demand "Check for Updates"
- * feature (Help menu). Networking lives in the platform layer; everything
- * here is testable without it. Updates are strictly user-initiated - npad
- * never checks in the background.
+ * Pure parsing/comparison logic for the "Check for Updates" feature.
+ * Networking lives in the platform layer; everything here is testable
+ * without it. Updates are opt-in and off by default - npad never checks
+ * automatically unless the user enables it in Preferences > Updates.
  *
  * Author: Platima
  * https://github.com/platima/npad
@@ -28,5 +28,11 @@ int update_version_compare(const char *a, const char *b);
 // (formats like "<hex>  <filename>") into out[65], lowercased. Returns
 // false when the text does not start with a valid digest.
 bool update_parse_sha256(const char *text, char *out);
+
+// Whether an available update should be surfaced: true when latest is
+// version-newer than current AND latest != skipped. An empty/NULL latest
+// (no successful check yet) yields false. Drives the Help-menu indicator
+// and the notify/prompt/auto decision.
+bool update_is_newer_unskipped(const char *current, const char *latest, const char *skipped);
 
 #endif // UPDATE_CHECK_H
