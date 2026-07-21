@@ -294,15 +294,21 @@ position). Not intended for direct use.
   Replace dialogs makes both fields interpret `\n \r \t \\ \uXXXX`, so line
   breaks can be searched for and inserted. Search history records the text
   exactly as typed.
-- **Check for Updates** (Help menu): strictly on-demand - npad never
-  checks in the background, never phones home on its own, and never
-  updates automatically. The check queries the GitHub releases API on a
-  worker thread; when a newer release exists you can download and install
-  it (the installer and its published `.sha256` are fetched to the temp
-  directory and the SHA-256 checksum verified before anything runs - a
-  mismatch deletes the download and aborts), open the release notes in
-  the browser, or do nothing. Installing closes npad through the normal
-  save-changes prompt. Portable-exe users get the same installer download.
+- **Check for Updates** (Help menu) and the **Updates** preferences tab:
+  off by default - npad makes no network calls unless you opt in. A manual
+  Help > Check for Updates always works; the Updates tab adds optional
+  automatic surfacing via a mode picker (Off / Notify silently with a Help-menu
+  dot + an "Update Available" item / Prompt / Download and install
+  automatically) plus an on-launch check toggle and a Skip this version action
+  (see the Updates settings table above). Every check queries the GitHub
+  releases API on a worker thread (the UI never blocks); when a newer release
+  exists you can download and install it - the installer and its published
+  `.sha256` are fetched to the temp directory and the SHA-256 checksum verified
+  before anything runs (a mismatch deletes the download and aborts) - open the
+  release notes, skip the version, or do nothing. Even the automatic mode asks
+  once before installing; installing closes npad through the normal
+  save-changes prompt. Portable-exe users get the same verified installer
+  download. Launch/automatic checks fail silently; a manual check reports errors.
 - **Highlight all matches**: a checkbox in the Find and Replace dialogs
   washes every match of the search text with a translucent amber overlay
   (live as you retype, debounced; capped at 10,000 matches). It is drawn
@@ -316,7 +322,9 @@ position). Not intended for direct use.
   with a Copy Diagnostics button - useful when reporting performance issues.
 - **Reset All Preferences** (Preferences > Backup): restores every
   preference to its default; recent files, window position and Find/Replace
-  history are kept. Applies live to all open windows.
+  options and history are kept. Works by removing every setting except those
+  preserved categories, so preferences added in future rounds reset too.
+  Applies live to all open windows.
 - **Startup**: the window appears before any deferred work (crash-recovery
   scanning) runs, so launch is not delayed by recovery-slot checks.
 - **Crash recovery**: with session resume enabled, each window snapshots

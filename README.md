@@ -109,8 +109,8 @@ The below 'features' are 99% locked-in as not going to happen. 100% for the firs
 - 🚫 No bloated frameworks, not even .Net (ideally, I may change my mind later)
 - 🚫 No rich text editing
 - 🚫 No forced features
-- 🚫 No automatic updates
-- 🚫 No background services
+- 🚫 No *forced* or silent updates — update checking is off by default; an opt-in auto-install mode exists but still asks once before running the installer
+- 🚫 No background services — the only optional network call is an on-launch update check you have to turn on
 
 ## What features will be considered 🤷
 

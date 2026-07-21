@@ -3685,7 +3685,8 @@ static void reset_all_preferences(HWND owner) {
 
     if (MessageBoxW(owner,
                     L"Reset all preferences to their defaults?\n\n"
-                    L"Recent files, window position and Find/Replace history are kept.\n"
+                    L"Recent files, window position and Find/Replace options and history "
+                    L"are kept.\n"
                     L"The Preferences window will close.",
                     L"npad", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) {
         return;
