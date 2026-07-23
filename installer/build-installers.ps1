@@ -1,6 +1,6 @@
 # Builds both npad Windows installers into dist/:
-#   npad-setup-<version>.exe  (Inno Setup, interactive)
-#   npad-<version>.msi        (WiX, silent-install oriented)
+#   npad-v<version>-setup-win-x64.exe  (Inno Setup, interactive)
+#   npad-v<version>-msi-win-x64.msi    (WiX, silent-install oriented)
 # plus .sha256 files for each.
 #
 # Requirements (Windows): Inno Setup 6 (ISCC.exe), WiX (dotnet tool: wix),
@@ -57,12 +57,12 @@ if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
 Write-Host "Compiling Inno Setup installer..."
 & $iscc /Q "/DAppVersion=$Version" (Join-Path $installerDir "npad.iss")
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
-$setupExe = Join-Path $dist "npad-setup-$Version.exe"
+$setupExe = Join-Path $dist "npad-v$Version-setup-win-x64.exe"
 if (-not (Test-Path $setupExe)) { throw "Expected output missing: $setupExe" }
 
 # --- MSI ---
 Write-Host "Building MSI..."
-$msi = Join-Path $dist "npad-$Version.msi"
+$msi = Join-Path $dist "npad-v$Version-msi-win-x64.msi"
 # wix resolves the .wxs's relative Source paths against the current directory
 Push-Location $installerDir
 try {

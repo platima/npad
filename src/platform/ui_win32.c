@@ -1965,11 +1965,11 @@ static DWORD WINAPI update_download_thread(LPVOID param) {
         return 0;
     }
     snprintf(r->tag, sizeof(r->tag), "%s", job->tag);
-    const char *ver = (job->tag[0] == 'v' || job->tag[0] == 'V') ? job->tag + 1 : job->tag;
 
-    wchar_t wver[32], wtag[32];
-    _snwprintf(wver, 31, L"%hs", ver);
-    wver[31] = L'\0';
+    // Release asset naming: npad-v<version>-<type>-<os>-<arch>.<ext>. The tag
+    // (e.g. "v0.17.1") is both the /download/<tag>/ path segment and the
+    // "v<version>" filename component, so wtag serves both.
+    wchar_t wtag[32];
     _snwprintf(wtag, 31, L"%hs", job->tag);
     wtag[31] = L'\0';
 
@@ -1978,12 +1978,14 @@ static DWORD WINAPI update_download_thread(LPVOID param) {
     char *exe = NULL, *sum = NULL;
 
     // The installer (progress reported) and its published digest
-    _snwprintf(path, 255, L"/platima/npad/releases/download/%s/npad-setup-%s.exe", wtag, wver);
+    _snwprintf(path, 255, L"/platima/npad/releases/download/%s/npad-%s-setup-win-x64.exe", wtag,
+               wtag);
     path[255] = L'\0';
     exe = http_get_alloc(L"github.com", path, (size_t) 200 * 1024 * 1024, &exe_len, job->hwnd);
     if (exe) {
-        _snwprintf(path, 255, L"/platima/npad/releases/download/%s/npad-setup-%s.exe.sha256", wtag,
-                   wver);
+        _snwprintf(path, 255,
+                   L"/platima/npad/releases/download/%s/npad-%s-setup-win-x64.exe.sha256", wtag,
+                   wtag);
         path[255] = L'\0';
         sum = http_get_alloc(L"github.com", path, 4096, &sum_len, NULL);
     }
@@ -2000,7 +2002,7 @@ static DWORD WINAPI update_download_thread(LPVOID param) {
         if (GetTempPathW(MAX_PATH, temp_dir) == 0) {
             snprintf(r->error, sizeof(r->error), "Could not resolve the temporary directory.");
         } else {
-            _snwprintf(r->path, MAX_PATH - 1, L"%snpad-setup-%s.exe", temp_dir, wver);
+            _snwprintf(r->path, MAX_PATH - 1, L"%snpad-%s-setup-win-x64.exe", temp_dir, wtag);
             r->path[MAX_PATH - 1] = L'\0';
             FILE *f = _wfopen(r->path, L"wb");
             bool written = f && fwrite(exe, 1, exe_len, f) == exe_len;

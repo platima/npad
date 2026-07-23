@@ -25,8 +25,8 @@ npad is a lightweight, cross-platform text editor inspired by classic Windows No
 - `make test` - Build and run the unit test suites (file ops, errors, encoding)
 
 **Installers (Windows-only build step):**
-- `pwsh installer/build-installers.ps1` - builds `dist/npad-setup-<v>.exe`
-  (Inno Setup, interactive) and `dist/npad-<v>.msi` (WiX, silent). Requires
+- `pwsh installer/build-installers.ps1` - builds `dist/npad-v<v>-setup-win-x64.exe`
+  (Inno Setup, interactive) and `dist/npad-v<v>-msi-win-x64.msi` (WiX, silent). Requires
   Inno Setup 6 + the WiX dotnet tool + a built npad.exe; bundled fonts are
   fetched from SHA256-pinned releases by `installer/fetch-fonts.ps1`.
 - CI equivalent: `.github/workflows/installers.yml` (workflow_dispatch, and

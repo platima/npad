@@ -17,9 +17,9 @@ rights:
 
 | Artifact | Use |
 |----------|-----|
-| `npad-setup-<v>.exe` | Interactive installer (Inno Setup) |
-| `npad-<v>.msi` | Silent/managed deployment (`msiexec`) |
-| `npad-<v>-windows-gui.exe` | Portable - run from anywhere, no install |
+| `npad-v<v>-setup-win-x64.exe` | Interactive installer (Inno Setup) |
+| `npad-v<v>-msi-win-x64.msi` | Silent/managed deployment (`msiexec`) |
+| `npad-v<v>-portable-win-x64.exe` | Portable - run from anywhere, no install |
 
 **SmartScreen / Defender**: releases are not code-signed yet, so Windows
 may block or warn about the downloaded installer or portable exe. Fix:
@@ -49,7 +49,7 @@ chosen: the setup EXE asks (or accepts `/ALLUSERS`); the MSI takes
 **MSI features** (silent-deployment oriented, no UI - use `/qn` or `/qb`):
 `Main`, `AssocTxt`, `NotepadAlias`, `Fonts` install by default;
 `AssocLog`/`AssocIni`/`AssocCfg`/`AssocConf` via `ADDLOCAL`, e.g.
-`msiexec /i npad-<v>.msi /qn ADDLOCAL=Main,AssocTxt,NotepadAlias,AssocLog`.
+`msiexec /i npad-v<v>-msi-win-x64.msi /qn ADDLOCAL=Main,AssocTxt,NotepadAlias,AssocLog`.
 Fonts install in machine-wide mode only (`ALLUSERS=1`): Windows MSI resolves
 the fonts folder to `C:\Windows\Fonts` regardless of scope, so the feature
 is skipped on per-user installs (use the setup EXE for per-user fonts).

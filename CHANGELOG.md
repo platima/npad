@@ -5,6 +5,29 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.1] - 2026-07-23
+
+### 🔄 Changed
+- **Consistent release asset naming.** All Windows downloads now follow one
+  scheme, `npad-v<version>-<type>-win-x64.<ext>`:
+  - `npad-v<version>-setup-win-x64.exe` (was `npad-setup-<version>.exe`)
+  - `npad-v<version>-msi-win-x64.msi` (was `npad-<version>.msi`)
+  - `npad-v<version>-portable-win-x64.exe` (was `npad-<version>-windows-gui.exe`)
+  Previously the three used three different conventions (only the portable
+  build carried a `v`, the variant word floated between positions, and the
+  MSI had none).
+
+### 🐛 Bug Fixes
+- The **in-app updater** downloads the installer under its new name; a
+  release's notes now list the actual asset filenames (they previously
+  showed `v`-prefixed setup/MSI names that were never produced).
+
+> **Note for anyone already on v0.17.0 or earlier:** the built-in
+> "Check for Updates" in those versions looks for the *old* installer name,
+> so updating to v0.17.1+ via the in-app updater will not find the download
+> - grab `npad-v0.17.1-setup-win-x64.exe` from the Releases page once by
+> hand, and the updater works normally from then on.
+
 ## [0.17.0] - 2026-07-21
 
 ### ✨ Features

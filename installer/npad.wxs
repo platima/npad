@@ -2,7 +2,7 @@
 <!--
   npad MSI (silent-install oriented; no UI suite - use msiexec /qn or /qb).
 
-  Build: wix build npad.wxs -arch x64 -d Version=x.y.z -o ../dist/npad-x.y.z.msi
+  Build: wix build npad.wxs -arch x64 -d Version=x.y.z -o ../dist/npad-vx.y.z-msi-win-x64.msi
 
   Scope: per-user by default; machine-wide with ALLUSERS=1:
     msiexec /i npad.msi /qn                  (current user)

@@ -161,14 +161,14 @@ Your support makes a real difference in keeping this project alive and thriving!
 
 Download from the [**Releases page**](https://github.com/platima/npad/releases):
 
-- 🛠️ **`npad-setup-<version>.exe`** - Windows installer. Per-user by default
-  (no admin needed); system-wide when run elevated or chosen in the dialog.
-  Optional bundled fonts (Intel One Mono, Roboto, OpenDyslexic), file
+- 🛠️ **`npad-v<version>-setup-win-x64.exe`** - Windows installer. Per-user by
+  default (no admin needed); system-wide when run elevated or chosen in the
+  dialog. Optional bundled fonts (Intel One Mono, Roboto, OpenDyslexic), file
   associations, and a 'notepad' alias. Silent: `/VERYSILENT [/ALLUSERS]`.
-- 📋 **`npad-<version>.msi`** - For silent/enterprise deployment:
-  `msiexec /i npad-<version>.msi /qn` (add `ALLUSERS=1` for machine-wide;
-  features selectable via `ADDLOCAL`).
-- 📦 **`npad-<version>-windows-gui.exe`** - Portable: download and run, no
+- 📋 **`npad-v<version>-msi-win-x64.msi`** - For silent/enterprise deployment:
+  `msiexec /i npad-v<version>-msi-win-x64.msi /qn` (add `ALLUSERS=1` for
+  machine-wide; features selectable via `ADDLOCAL`).
+- 📦 **`npad-v<version>-portable-win-x64.exe`** - Portable: download and run, no
   installation required.
 
 See [DOCUMENTATION.md](DOCUMENTATION.md#installation-windows) for the full
@@ -346,7 +346,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [ ] Custom keyboard shortcuts
   - [x] Solarized color schemes
 - [ ] **Distribution & Installation**
-  - [x] Portable EXE build (every release's `-windows-gui.exe` runs standalone)
+  - [x] Portable EXE build (every release's `-portable-win-x64.exe` runs standalone)
   - [x] Windows installer (EXE)
     - [x] Bundle & offer open-source fonts (Intel One Mono, Roboto, OpenDyslexic), pre-setting them in the config
     - [x] Default to associating the `notepad` app execution alias on Windows 11

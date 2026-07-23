@@ -44,9 +44,9 @@ jobs:
           ### Downloads
           
           **Windows Builds:**
-          - `npad-setup-${{ steps.get_version.outputs.version }}.exe` - Windows installer (per-user by default; system-wide available)
-          - `npad-${{ steps.get_version.outputs.version }}.msi` - Windows MSI for silent/managed deployment (`msiexec /i ... /qn`)
-          - `npad-${{ steps.get_version.outputs.version }}-windows-gui.exe` - Portable GUI version for Windows (no install needed)
+          - `npad-${{ steps.get_version.outputs.version }}-setup-win-x64.exe` - Windows installer (per-user by default; system-wide available)
+          - `npad-${{ steps.get_version.outputs.version }}-msi-win-x64.msi` - Windows MSI for silent/managed deployment (`msiexec /i ... /qn`)
+          - `npad-${{ steps.get_version.outputs.version }}-portable-win-x64.exe` - Portable GUI version for Windows (no install needed)
 
           **Verification:**
           - `CHECKSUMS.txt` - SHA256 checksums for all files
@@ -54,7 +54,7 @@ jobs:
           
           ### Installation
           1. Download the appropriate file for your system from the Assets below
-          2. **Windows**: Run `npad-setup-*.exe` to install (or `msiexec /i npad-*.msi /qn` for silent), or run the portable exe directly
+          2. **Windows**: Run `npad-v*-setup-win-x64.exe` to install (or `msiexec /i npad-v*-msi-win-x64.msi /qn` for silent), or run the portable exe directly
           3. **Verification**: Check the file integrity using the provided checksums
 
           > **SmartScreen / Defender blocking the download?** Releases are not code-signed yet. Right-click the file → **Properties** → tick **Unblock** → **Apply**, or choose "More info" → "Run anyway". Verify the SHA256 against `CHECKSUMS.txt` first if unsure.
@@ -87,7 +87,7 @@ jobs:
             cc: x86_64-w64-mingw32-gcc
             make_target: windows
             output: npad.exe
-            asset_name: npad-${{ needs.create-release.outputs.version }}-windows-gui.exe
+            asset_name: npad-${{ needs.create-release.outputs.version }}-portable-win-x64.exe
 
     steps:
     - uses: actions/checkout@v7
@@ -156,13 +156,12 @@ jobs:
         assets=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
           "https://api.github.com/repos/${{ github.repository }}/releases/$release_id/assets")
 
-        # version without the leading 'v' for the installer asset names
-        ver_num="${VERSION#v}"
+        # All assets share one scheme: npad-v<version>-<type>-win-x64.<ext>
         failed=0
         for asset in \
-          "npad-setup-$ver_num.exe:1000000" \
-          "npad-$ver_num.msi:500000" \
-          "npad-$VERSION-windows-gui.exe:100000"
+          "npad-$VERSION-setup-win-x64.exe:1000000" \
+          "npad-$VERSION-msi-win-x64.msi:500000" \
+          "npad-$VERSION-portable-win-x64.exe:100000"
         do
           name="${asset%%:*}"
           min_size="${asset##*:}"
@@ -184,8 +183,8 @@ jobs:
         done
 
         # Spot-check one download against its published checksum
-        url=$(echo "$assets" | jq -r --arg n "npad-$VERSION-windows-gui.exe" '.[] | select(.name == $n) | .browser_download_url')
-        sha_url=$(echo "$assets" | jq -r --arg n "npad-$VERSION-windows-gui.exe.sha256" '.[] | select(.name == $n) | .browser_download_url')
+        url=$(echo "$assets" | jq -r --arg n "npad-$VERSION-portable-win-x64.exe" '.[] | select(.name == $n) | .browser_download_url')
+        sha_url=$(echo "$assets" | jq -r --arg n "npad-$VERSION-portable-win-x64.exe.sha256" '.[] | select(.name == $n) | .browser_download_url')
         if [ -n "$url" ] && [ -n "$sha_url" ]; then
           curl -L -s "$url" -o portable.exe
           expected=$(curl -L -s "$sha_url" | awk '{print $1}')
@@ -270,9 +269,9 @@ jobs:
           ### Downloads
           
           **Windows Builds:**
-          - `npad-setup-${{ needs.create-release.outputs.version }}.exe` - Windows installer (per-user by default; system-wide available)
-          - `npad-${{ needs.create-release.outputs.version }}.msi` - Windows MSI for silent/managed deployment (`msiexec /i ... /qn`)
-          - `npad-${{ needs.create-release.outputs.version }}-windows-gui.exe` - Portable GUI version for Windows (no install needed)
+          - `npad-${{ needs.create-release.outputs.version }}-setup-win-x64.exe` - Windows installer (per-user by default; system-wide available)
+          - `npad-${{ needs.create-release.outputs.version }}-msi-win-x64.msi` - Windows MSI for silent/managed deployment (`msiexec /i ... /qn`)
+          - `npad-${{ needs.create-release.outputs.version }}-portable-win-x64.exe` - Portable GUI version for Windows (no install needed)
 
           **Verification:**
           - `CHECKSUMS.txt` - SHA256 checksums for all files
@@ -281,7 +280,7 @@ jobs:
           
           ### Installation
           1. Download the appropriate file from the Assets below
-          2. **Windows**: Run `npad-setup-*.exe` to install (or `msiexec /i npad-*.msi /qn` for silent), or run the portable exe directly
+          2. **Windows**: Run `npad-v*-setup-win-x64.exe` to install (or `msiexec /i npad-v*-msi-win-x64.msi /qn` for silent), or run the portable exe directly
           3. **Verification**: Check the file integrity using the provided checksums
 
           > **SmartScreen / Defender blocking the download?** Releases are not code-signed yet. Right-click the file → **Properties** → tick **Unblock** → **Apply**, or choose "More info" → "Run anyway". Verify the SHA256 against `CHECKSUMS.txt` first if unsure.
