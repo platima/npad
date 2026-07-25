@@ -14,8 +14,8 @@
 
 // Version Information (keep in sync with src/main.h)
 1 VERSIONINFO
-FILEVERSION 0,17,1,0
-PRODUCTVERSION 0,17,1,0
+FILEVERSION 0,18,0,0
+PRODUCTVERSION 0,18,0,0
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0x0L
 FILEOS VOS__WINDOWS32
@@ -28,12 +28,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Platima"
             VALUE "FileDescription", "npad - Lightweight Text Editor"
-            VALUE "FileVersion", "0.17.1.0"
+            VALUE "FileVersion", "0.18.0.0"
             VALUE "InternalName", "npad"
             VALUE "LegalCopyright", "Copyright © 2025 Platima"
             VALUE "OriginalFilename", "npad.exe"
             VALUE "ProductName", "npad"
-            VALUE "ProductVersion", "0.17.1.0"
+            VALUE "ProductVersion", "0.18.0.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -59,8 +59,8 @@ BEGIN
     CONTROL         "Match &case", ID_FIND_CASE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 32, 92, 10
     CONTROL         "Match &whole word only", ID_FIND_WHOLE_WORD, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 45, 92, 10
     CONTROL         "Wrap ar&ound", ID_FIND_WRAP, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 58, 92, 10
-    CONTROL         "Interpret &escapes (\\n \\t \\\\ \\uXXXX)", ID_FIND_ESCAPES, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 71, 150, 10
-    CONTROL         "&Highlight all matches", ID_FIND_HIGHLIGHT, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 84, 150, 10
+    CONTROL         "&Highlight all matches", ID_FIND_HIGHLIGHT, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 71, 150, 10
+    CONTROL         "Interpret &escapes (\\n \\t \\\\ \\uXXXX)", ID_FIND_ESCAPES, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 84, 150, 10
     GROUPBOX        "Direction", IDC_STATIC, 108, 30, 90, 38
     CONTROL         "&Up", IDC_RADIO_UP, "Button", BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 116, 45, 28, 10
     CONTROL         "&Down", IDC_RADIO_DOWN, "Button", BS_AUTORADIOBUTTON, 152, 45, 36, 10
@@ -83,8 +83,8 @@ BEGIN
     CONTROL         "Match &case", ID_FIND_CASE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 45, 92, 10
     CONTROL         "Match &whole word only", ID_FIND_WHOLE_WORD, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 58, 92, 10
     CONTROL         "Wrap ar&ound", ID_FIND_WRAP, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 71, 92, 10
-    CONTROL         "Interpret &escapes (\\n \\t \\\\ \\uXXXX)", ID_FIND_ESCAPES, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 84, 150, 10
-    CONTROL         "&Highlight all matches", ID_FIND_HIGHLIGHT, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 97, 150, 10
+    CONTROL         "&Highlight all matches", ID_FIND_HIGHLIGHT, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 84, 150, 10
+    CONTROL         "Interpret &escapes (\\n \\t \\\\ \\uXXXX)", ID_FIND_ESCAPES, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 97, 150, 10
 END
 // Go To Line Dialog
 IDD_GOTO DIALOGEX 0, 0, 180, 62
@@ -171,15 +171,18 @@ STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "Markdown"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
-    CONTROL         "&Enable Markdown list tools (Sort, Unique, Convert Delimiters, Indent)", ID_PREF_LIST_ENABLED, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 12, 220, 18
-    LTEXT           "Adds a Markdown menu and right-click items. Off by default for classic Notepad compatibility.", IDC_STATIC, 10, 34, 220, 16
-    LTEXT           "Default &indent format:", IDC_STATIC, 10, 58, 130, 8
-    COMBOBOX        ID_PREF_LIST_INDENT_FORMAT, 140, 56, 88, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Custom &prefix:", IDC_STATIC, 10, 76, 120, 8
-    EDITTEXT        ID_PREF_LIST_CUSTOM_TEXT, 140, 74, 88, 13, ES_AUTOHSCROLL
-    LTEXT           "Escapes: \\t tab  \\\\ backslash  \\uXXXX", IDC_STATIC, 10, 90, 220, 8
-    LTEXT           "Markers include a trailing space (e.g. ""- ""). Indenting an already-marked line adds two spaces (markdown-style nesting); unindent removes one level.", IDC_STATIC, 10, 104, 220, 24
-    CONTROL         "Use Ctrl+] / Ctrl+[ for indent instead of &Tab / Shift+Tab", ID_PREF_LIST_TAB_BRACKETS, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 132, 220, 18
+    CONTROL         "Basic &Markdown support", ID_PREF_LIST_ENABLED, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 10, 10, 220, 10
+    LTEXT           "Adds a Markdown menu and right-click tools (off by default for classic Notepad compatibility):", IDC_STATIC, 10, 23, 220, 16
+    LTEXT           "-  Lists: formatting, continuation, sorting, indentation, unique filtering", IDC_STATIC, 14, 42, 216, 8
+    LTEXT           "-  Escape interpretation (\\n \\t \\uXXXX) in Find / Replace and list tools", IDC_STATIC, 14, 51, 216, 8
+    LTEXT           "-  Delimiter replacement (Convert Delimiters)", IDC_STATIC, 14, 60, 216, 8
+    LTEXT           "Default &indent format:", IDC_STATIC, 10, 76, 130, 8
+    COMBOBOX        ID_PREF_LIST_INDENT_FORMAT, 140, 74, 88, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Custom &prefix:", IDC_STATIC, 10, 94, 120, 8
+    EDITTEXT        ID_PREF_LIST_CUSTOM_TEXT, 140, 92, 88, 13, ES_AUTOHSCROLL
+    LTEXT           "Escapes: \\t tab  \\\\ backslash  \\uXXXX", IDC_STATIC, 10, 108, 220, 8
+    LTEXT           "Markers include a trailing space (e.g. ""- ""). Indenting an already-marked line adds two spaces (markdown-style nesting); unindent removes one level.", IDC_STATIC, 10, 120, 220, 24
+    CONTROL         "Use Ctrl+] / Ctrl+[ for indent instead of &Tab / Shift+Tab", ID_PREF_LIST_TAB_BRACKETS, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 148, 220, 18
 END
 
 // Preferences: Defaults page (initial state for new windows)

@@ -76,7 +76,7 @@ Current features (Windows build):
   - JSON settings storage; remembers window position, size and maximized state
   - Confirmation prompt before opening very large files (threshold scales with the system's RAM by default)
   - Binary-file detection on open, offering Cancel / Open in npad / Open with the default app
-  - Optional word / character / line counts in the status bar (off by default, debounced so large edits stay smooth)
+  - Optional word / character / line counts in the status bar (off by default; refreshed live while typing, with a debounced fallback so very large files stay smooth)
   - Check for Updates (Help menu) with an opt-in Updates preferences tab: off by default, or notify silently (a Help-menu dot), prompt, or download-and-install-automatically; optional launch check, Skip this version, SHA-256-verified download
 
 Planned (see the [Roadmap](#roadmap)):
@@ -163,8 +163,10 @@ Download from the [**Releases page**](https://github.com/platima/npad/releases):
 
 - 🛠️ **`npad-v<version>-setup-win-x64.exe`** - Windows installer. Per-user by
   default (no admin needed); system-wide when run elevated or chosen in the
-  dialog. Optional bundled fonts (Intel One Mono, Roboto, OpenDyslexic), file
-  associations, and a 'notepad' alias. Silent: `/VERYSILENT [/ALLUSERS]`.
+  dialog. Adds `npad` to PATH (so it runs from a terminal), optional bundled
+  fonts (Intel One Mono, Roboto, OpenDyslexic), grouped file associations
+  (Text / Markdown / Data / Config / Logs), and a 'notepad' alias. Silent:
+  `/VERYSILENT [/ALLUSERS]`.
 - 📋 **`npad-v<version>-msi-win-x64.msi`** - For silent/enterprise deployment:
   `msiexec /i npad-v<version>-msi-win-x64.msi /qn` (add `ALLUSERS=1` for
   machine-wide; features selectable via `ADDLOCAL`).
@@ -355,6 +357,8 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [ ] Winget integration
   - [ ] Code-sign the release binaries and installers (removes the SmartScreen/Defender unblock step)
   - [x] Optional 'notepad' command replacement (App Paths alias task in both installers)
+  - [x] Add npad to PATH so it runs from Command Prompt / PowerShell (both installers)
+  - [x] Grouped file associations (Text / Markdown / Data / Config / Logs)
 - [ ] **Cross-Platform Expansion**
   - [ ] macOS Cocoa implementation
   - [ ] Linux X11/Wayland implementation

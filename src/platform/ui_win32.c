@@ -58,6 +58,14 @@
 #define NPAD_COUNTS_TIMER_ID 5
 #define NPAD_HIGHLIGHT_TIMER_ID 6
 
+// Coalescing period for the live word/char/line counts and the highlight-all
+// overlay (both refresh ~8x/second while typing). Above this document length
+// (UTF-16 units, ~1 MB) counts fall back to a re-armed debounce so a full
+// re-scan does not thrash on huge files.
+#define NPAD_COALESCE_MS 120
+#define NPAD_COUNTS_DEBOUNCE_MS 350
+#define NPAD_COUNTS_LIVE_LIMIT 1000000
+
 // Live edit-control counters surfaced on the hidden Debug preferences page
 // (scroll/paint performance diagnostics)
 static unsigned g_paint_count = 0;
@@ -160,11 +168,13 @@ typedef struct Window {
     char status_encoding[32];    // e.g. "UTF-8" (set by the editor core)
     char status_line_ending[32]; // e.g. "Windows (CRLF)"
     bool status_update_pending;  // Coalescing timer armed (see schedule_status_update)
+    bool counts_pending;         // Counts coalescing timer armed (schedule_counts_update)
+    bool highlight_pending;      // Highlight-all coalescing timer armed (EN_CHANGE)
     wchar_t status_cache[6][64]; // Last text sent per status part; skip identical sends
     bool list_menu_present;      // The optional top-level Markdown menu is inserted
     bool line_cut_pending;       // Last Ctrl+X was a whole-line cut (paste-above mode)
     DWORD line_cut_clip_seq;     // Clipboard sequence number right after that cut
-    bool update_item_present;    // The dynamic "Update Available" Help item is inserted
+    bool update_item_available;  // Help update item currently shows "Update Available"
 } Window;
 
 // Global variables
@@ -189,6 +199,9 @@ static UINT g_view_sync_msg = 0;
 
 // Modeless find/replace dialog (only one can be open at a time, like Notepad)
 static HWND g_find_dialog = NULL;
+// Highlight-all coalescing timer armed while retyping the search text (so the
+// overlay tracks live instead of only after typing pauses / focus leaves)
+static bool g_find_hl_pending = false;
 
 // Last search parameters shared by Find, Replace and F3 (persisted)
 static wchar_t g_search_text[256] = L"";
@@ -2585,7 +2598,11 @@ static void read_search_text(HWND dialog, bool has_replace) {
     g_match_case = IsDlgButtonChecked(dialog, ID_FIND_CASE) == BST_CHECKED;
     g_whole_word = IsDlgButtonChecked(dialog, ID_FIND_WHOLE_WORD) == BST_CHECKED;
     g_wrap_around = IsDlgButtonChecked(dialog, ID_FIND_WRAP) == BST_CHECKED;
-    g_interpret_escapes = IsDlgButtonChecked(dialog, ID_FIND_ESCAPES) == BST_CHECKED;
+    // Escape interpretation is a Markdown-only feature: stays off (not just
+    // hidden) when Markdown support is disabled, even if a stale checked state
+    // persisted from when it was enabled
+    g_interpret_escapes = settings_get_bool("list_tools_enabled", false) &&
+                          IsDlgButtonChecked(dialog, ID_FIND_ESCAPES) == BST_CHECKED;
     g_highlight_all = IsDlgButtonChecked(dialog, ID_FIND_HIGHLIGHT) == BST_CHECKED;
     if (GetDlgItem(dialog, IDC_RADIO_UP)) {
         g_search_down = IsDlgButtonChecked(dialog, IDC_RADIO_UP) != BST_CHECKED;
@@ -2714,6 +2731,11 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
                            g_interpret_escapes ? BST_CHECKED : BST_UNCHECKED);
             CheckDlgButton(dialog, ID_FIND_HIGHLIGHT,
                            g_highlight_all ? BST_CHECKED : BST_UNCHECKED);
+            // Escape interpretation is part of the optional Markdown feature
+            // set, so the checkbox (now last) only appears when Markdown
+            // support is enabled; read_search_text keeps it inert otherwise.
+            ShowWindow(GetDlgItem(dialog, ID_FIND_ESCAPES),
+                       settings_get_bool("list_tools_enabled", false) ? SW_SHOW : SW_HIDE);
             if (GetDlgItem(dialog, IDC_RADIO_UP)) {
                 CheckRadioButton(dialog, IDC_RADIO_UP, IDC_RADIO_DOWN,
                                  g_search_down ? IDC_RADIO_DOWN : IDC_RADIO_UP);
@@ -2745,8 +2767,13 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
             // Live highlight refresh: retyping the search text (debounced)
             // and toggling any option that changes what matches
             if (LOWORD(wparam) == ID_FIND_TEXT && HIWORD(wparam) == CBN_EDITCHANGE) {
-                if (IsDlgButtonChecked(dialog, ID_FIND_HIGHLIGHT) == BST_CHECKED)
-                    SetTimer(dialog, 1, 300, NULL);
+                // Coalesce (not re-arm) so highlights refresh while you keep
+                // typing in the search box, not just after you stop
+                if (IsDlgButtonChecked(dialog, ID_FIND_HIGHLIGHT) == BST_CHECKED &&
+                    !g_find_hl_pending) {
+                    g_find_hl_pending = true;
+                    SetTimer(dialog, 1, NPAD_COALESCE_MS, NULL);
+                }
                 break;
             }
             if (HIWORD(wparam) == BN_CLICKED &&
@@ -2785,7 +2812,8 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
 
         case WM_TIMER:
             if (wparam == 1) {
-                KillTimer(dialog, 1); // One-shot (debounced live highlight)
+                KillTimer(dialog, 1); // One-shot (coalesced live highlight)
+                g_find_hl_pending = false;
                 read_search_text(dialog, has_replace);
                 refresh_highlights(window, g_highlight_all);
                 return TRUE;
@@ -2798,6 +2826,7 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
 
         case WM_DESTROY: {
             KillTimer(dialog, 1);
+            g_find_hl_pending = false;
             refresh_highlights(window, false); // Clear highlights with the dialog
             RECT rect;
             if (GetWindowRect(dialog, &rect)) {
@@ -4967,11 +4996,8 @@ static void apply_update_indicator(Window *window) {
     char *latest = settings_get_string("update_latest_version", "");
     char *skipped = settings_get_string("update_skipped_version", "");
     bool avail = strcmp(mode, "off") != 0 && update_is_newer_unskipped(cur, latest, skipped);
-    free(mode);
-    free(latest);
-    free(skipped);
 
-    // Top-level Help title
+    // Top-level Help title gains a dot while an update is waiting
     MENUITEMINFOW mii;
     ZeroMemory(&mii, sizeof(mii));
     mii.cbSize = sizeof(mii);
@@ -4979,20 +5005,31 @@ static void apply_update_indicator(Window *window) {
     mii.dwTypeData = avail ? L"&Help  \x25CF" : L"&Help";
     SetMenuItemInfoW(window->hmenu, (UINT) help_pos, TRUE, &mii);
 
-    // The dynamic "Update Available" item at the top of the Help submenu
-    HMENU hhelp = GetSubMenu(window->hmenu, help_pos);
-    if (hhelp) {
-        if (avail && !window->update_item_present) {
-            InsertMenuW(hhelp, 0, MF_BYPOSITION | MF_STRING, ID_HELP_UPDATE_AVAILABLE,
-                        L"&Update Available...");
-            InsertMenuW(hhelp, 1, MF_BYPOSITION | MF_SEPARATOR, 0, NULL);
-            window->update_item_present = true;
-        } else if (!avail && window->update_item_present) {
-            RemoveMenu(hhelp, 1, MF_BYPOSITION); // separator
-            RemoveMenu(hhelp, 0, MF_BYPOSITION); // item
-            window->update_item_present = false;
-        }
+    // One Help item that transforms in place: normally a "Check for Updates..."
+    // manual check; when a newer version is waiting it becomes an "Update
+    // Available (vX.Y.Z)..." shortcut to the Updates page. The two states use
+    // different command ids so their existing handlers stay separate; locate
+    // the item by whichever id it currently carries (MF_BYCOMMAND searches the
+    // whole menu tree, so the Help submenu handle is not needed here).
+    UINT old_cmd = window->update_item_available ? ID_HELP_UPDATE_AVAILABLE : ID_HELP_CHECK_UPDATES;
+    if (avail) {
+        wchar_t *wlatest = utf8_to_wide((latest && latest[0]) ? latest : "new version");
+        wchar_t label[96];
+        _snwprintf(label, 95, L"&Update Available (%s)...", wlatest ? wlatest : L"new version");
+        label[95] = L'\0';
+        free(wlatest);
+        ModifyMenuW(window->hmenu, old_cmd, MF_BYCOMMAND | MF_STRING, ID_HELP_UPDATE_AVAILABLE,
+                    label);
+    } else {
+        ModifyMenuW(window->hmenu, old_cmd, MF_BYCOMMAND | MF_STRING, ID_HELP_CHECK_UPDATES,
+                    L"Check for &Updates...");
     }
+    window->update_item_available = avail;
+
+    free(mode);
+    free(latest);
+    free(skipped);
+
     if (window->hwnd)
         DrawMenuBar(window->hwnd);
 }
@@ -5092,7 +5129,7 @@ static void create_menu(Window *window) {
     window->hmenu = hmenu;
     window->recent_menu = hrecent;
     window->list_menu_present = false;
-    window->update_item_present = false;
+    window->update_item_available = false;
 
     CheckMenuItem(hmenu, ID_FORMAT_WORD_WRAP,
                   window->word_wrap_enabled ? MF_CHECKED : MF_UNCHECKED);
@@ -5583,15 +5620,26 @@ static void update_text_counts(Window *window) {
     set_status_part(window, 0, msg);
 }
 
-// Debounced: re-armed on every change, so the full-document scan runs once
-// after typing, a paste or a large open settles rather than per keystroke
+// Refresh the counts while typing. Normal documents coalesce (one recompute
+// per NPAD_COALESCE_MS, so ~8x/second live) instead of the old re-armed
+// debounce that only fired once typing paused. Very large documents keep the
+// debounce: a full-document rescan is too costly to run several times a
+// second, so it runs once the edits settle.
 static void schedule_counts_update(Window *window) {
     if (!window || !window->hwnd)
         return;
     if (!settings_get_bool("status_show_counts", false))
         return;
-    KillTimer(window->hwnd, NPAD_COUNTS_TIMER_ID);
-    SetTimer(window->hwnd, NPAD_COUNTS_TIMER_ID, 350, NULL);
+    if (window->edit_hwnd && GetWindowTextLengthW(window->edit_hwnd) > NPAD_COUNTS_LIVE_LIMIT) {
+        window->counts_pending = false; // hand the timer to the debounce
+        KillTimer(window->hwnd, NPAD_COUNTS_TIMER_ID);
+        SetTimer(window->hwnd, NPAD_COUNTS_TIMER_ID, NPAD_COUNTS_DEBOUNCE_MS, NULL);
+        return;
+    }
+    if (window->counts_pending)
+        return;
+    window->counts_pending = true;
+    SetTimer(window->hwnd, NPAD_COUNTS_TIMER_ID, NPAD_COALESCE_MS, NULL);
 }
 
 // Apply the counts preference right away: populate the part, or clear it
@@ -5752,11 +5800,14 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                         // Counts refresh on programmatic changes too (open,
                         // transforms), not only user edits
                         schedule_counts_update(window);
-                        // Text changed under active highlights: re-apply
-                        // after the edit settles
-                        if (g_highlights_applied && g_find_dialog) {
-                            KillTimer(hwnd, NPAD_HIGHLIGHT_TIMER_ID);
-                            SetTimer(hwnd, NPAD_HIGHLIGHT_TIMER_ID, 300, NULL);
+                        // Text changed with Highlight All active: coalesce a
+                        // repaint (~8x/second) so the overlay tracks live as
+                        // you type. Gated on g_highlight_all (not on whether
+                        // matches currently exist) so it also re-appears after
+                        // the match count has dropped to zero and back.
+                        if (g_highlight_all && g_find_dialog && !window->highlight_pending) {
+                            window->highlight_pending = true;
+                            SetTimer(hwnd, NPAD_HIGHLIGHT_TIMER_ID, NPAD_COALESCE_MS, NULL);
                         }
                         if (!window->setting_text_programmatically) {
                             window->is_modified = true;
@@ -5867,10 +5918,12 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                 window->status_update_pending = false;
                 update_status_bar(window);
             } else if (window && wparam == NPAD_COUNTS_TIMER_ID) {
-                KillTimer(hwnd, NPAD_COUNTS_TIMER_ID); // One-shot (debounced)
+                KillTimer(hwnd, NPAD_COUNTS_TIMER_ID); // One-shot (coalesced / debounced)
+                window->counts_pending = false;
                 update_text_counts(window);
             } else if (window && wparam == NPAD_HIGHLIGHT_TIMER_ID) {
-                KillTimer(hwnd, NPAD_HIGHLIGHT_TIMER_ID); // One-shot (debounced)
+                KillTimer(hwnd, NPAD_HIGHLIGHT_TIMER_ID); // One-shot (coalesced)
+                window->highlight_pending = false;
                 refresh_highlights(window, g_highlight_all && g_find_dialog != NULL);
             }
             return 0;

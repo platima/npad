@@ -39,29 +39,41 @@ chosen: the setup EXE asks (or accepts `/ALLUSERS`); the MSI takes
   (proportional), OpenDyslexic (reading assistance); all SIL OFL licensed,
   installed on by default. Per-user installs use the Windows 10 1809+
   per-user font store.
-- *Tasks*: file associations (.txt on by default; .log/.ini/.cfg/.conf
-  opt-in), 'notepad' alias (on by default - see below), "set the bundled
-  fonts as npad's default editor fonts" (on by default, offered when the
-  fonts are being installed or already present; updates settings.json in
-  place, preserving all other settings - deselect or use
-  `/MERGETASKS="!fontdefaults"` to skip), desktop icon (off).
+- *Tasks*: **Add npad to PATH** (on by default - see below), file
+  associations grouped into **Text** (`.txt`, on by default), **Markdown &
+  documents** (`.md`, `.markdown`), **Data** (`.csv`, `.tsv`, `.json`, `.xml`,
+  `.yaml`, `.yml`, `.toml`), **Config** (`.ini`, `.cfg`, `.conf`) and **Logs**
+  (`.log`) - all opt-in except Text; 'notepad' alias (on by default - see
+  below), "set the bundled fonts as npad's default editor fonts" (on by
+  default, offered when the fonts are being installed or already present;
+  updates settings.json in place, preserving all other settings - deselect or
+  use `/MERGETASKS="!fontdefaults"` to skip), desktop icon (off).
 
 **MSI features** (silent-deployment oriented, no UI - use `/qn` or `/qb`):
-`Main`, `AssocTxt`, `NotepadAlias`, `Fonts` install by default;
-`AssocLog`/`AssocIni`/`AssocCfg`/`AssocConf` via `ADDLOCAL`, e.g.
-`msiexec /i npad-v<v>-msi-win-x64.msi /qn ADDLOCAL=Main,AssocTxt,NotepadAlias,AssocLog`.
+`Main`, `PathEnv`, `AssocText`, `NotepadAlias`, `Fonts` install by default;
+`AssocMarkdown`/`AssocData`/`AssocConfig`/`AssocLog` via `ADDLOCAL`, e.g.
+`msiexec /i npad-v<v>-msi-win-x64.msi /qn ADDLOCAL=Main,AssocText,NotepadAlias,AssocData`.
 Fonts install in machine-wide mode only (`ALLUSERS=1`): Windows MSI resolves
 the fonts folder to `C:\Windows\Fonts` regardless of scope, so the feature
 is skipped on per-user installs (use the setup EXE for per-user fonts).
 
+**npad on PATH**: App Paths (below) only serves Win+R and ShellExecute;
+cmd.exe and PowerShell resolve a bare `npad` from PATH alone. The `addtopath`
+task / `PathEnv` feature adds the install folder to PATH so `npad` and
+`npad file.txt` work from a terminal - the user PATH for a per-user install,
+the machine PATH for an all-users install. A new terminal session picks it
+up; uninstall removes the entry.
+
 **The 'notepad' alias**: the task points `notepad` (Win+R, ShellExecute) at
 npad via the App Paths registry key - this mechanism is invisible on the
 App execution aliases page, which is normal. Windows 11's Store Notepad
-additionally owns a `notepad.exe` *app execution alias* that can still win
-in some contexts (e.g. typing `notepad` in cmd) and that installers cannot
-disable; when that alias stub is detected, the setup offers the Settings
-page after install - turn off **Notepad** under Apps > Advanced app
-settings > App execution aliases for a full takeover.
+additionally owns a `notepad.exe` *app execution alias*, and the System32
+`notepad.exe` also precedes npad on PATH, so typing bare `notepad` in a
+terminal keeps launching classic Notepad; installers cannot change that.
+When the Store alias stub is detected, the setup offers the Settings page
+after install - turn off **Notepad** under Apps > Advanced app settings >
+App execution aliases for as full a takeover as Windows allows. (Running
+`npad` from a terminal is the reliable path - see **npad on PATH** above.)
 
 **Default editor**: Windows does not let installers set the default app for
 a file type. The installers register npad for the chosen extensions (it
@@ -116,7 +128,7 @@ All settings live in `settings.json` and are editable in Preferences
 | `opendyslexic_font` | string | `OpenDyslexic` | Face used when OpenDyslexic mode is on. |
 | `status_bar_visible` | bool | `true` | Show the status bar (also View > Status Bar). |
 | `sync_view_state` | bool | `false` | Mirror per-window view changes (font type, zoom) live to every open npad window. |
-| `status_show_counts` | bool | `false` | Show word / character / line counts in the leftmost status bar segment, recomputed on a short debounce after edits (shared with transient messages, which win until the next change). |
+| `status_show_counts` | bool | `false` | Show word / character / line counts in the leftmost status bar segment. Refreshed live while typing (coalesced ~8x/second); documents over ~1 MB fall back to a settle-then-count debounce. Shared with transient messages, which win until the next change. |
 
 ### Defaults (Preferences > Defaults) - initial state for new windows/files
 
@@ -135,7 +147,7 @@ the fields.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `list_tools_enabled` | bool | `false` | Show the **Markdown** menu and matching right-click items (Sort, Unique, Convert Delimiters, Indent/Unindent), the indent shortcuts, cut-line Ctrl+X, and Enter list continuation. Off by default for classic-Notepad compatibility. |
+| `list_tools_enabled` | bool | `false` | **Basic Markdown support** (the Preferences checkbox): show the **Markdown** menu and matching right-click items (Sort, Unique, Convert Delimiters, Indent/Unindent), the indent shortcuts, cut-line Ctrl+X, and Enter list continuation; also enables the Find/Replace "Interpret escapes" option. Off by default for classic-Notepad compatibility. |
 | `list_default_indent_format` | int | `0` (Spaces) | Format used by the default indent shortcut: 0 spaces, 1 tab, 2 `* `, 3 `- `, 4 ` * `, 5 ` - `, 6 custom. Markers include a trailing space. |
 | `list_custom_indent` | string | (unset) | The custom indent prefix (format 6), stored as typed; escapes (`\t` `\\` `\uXXXX`) are interpreted when used. Prompted for on first use if empty. |
 | `list_indent_shortcut_brackets` | bool | `false` | Use Ctrl+] / Ctrl+[ for indent/unindent instead of the default Tab / Shift+Tab. |
@@ -293,13 +305,18 @@ position). Not intended for direct use.
 - **Find/Replace escapes**: an "Interpret escapes" checkbox in the Find and
   Replace dialogs makes both fields interpret `\n \r \t \\ \uXXXX`, so line
   breaks can be searched for and inserted. Search history records the text
-  exactly as typed.
+  exactly as typed. This is part of the Basic Markdown support feature set, so
+  the checkbox (the last option in each dialog) appears only when Markdown
+  support is enabled and stays inert when it is off.
 - **Check for Updates** (Help menu) and the **Updates** preferences tab:
   off by default - npad makes no network calls unless you opt in. A manual
-  Help > Check for Updates always works; the Updates tab adds optional
-  automatic surfacing via a mode picker (Off / Notify silently with a Help-menu
-  dot + an "Update Available" item / Prompt / Download and install
-  automatically) plus an on-launch check toggle and a Skip this version action
+  Help > Check for Updates always works. When a newer, non-skipped version is
+  known, that single Help item transforms in place into **Update Available
+  (v…)...** (which opens the Updates tab) and reverts to **Check for
+  Updates...** afterwards. The Updates tab adds optional automatic surfacing
+  via a mode picker (Off / Notify silently with a Help-menu dot + the
+  transformed item / Prompt / Download and install automatically) plus an
+  on-launch check toggle and a Skip this version action
   (see the Updates settings table above). Every check queries the GitHub
   releases API on a worker thread (the UI never blocks); when a newer release
   exists you can download and install it - the installer and its published
@@ -311,11 +328,12 @@ position). Not intended for direct use.
   download. Launch/automatic checks fail silently; a manual check reports errors.
 - **Highlight all matches**: a checkbox in the Find and Replace dialogs
   washes every match of the search text with a translucent amber overlay
-  (live as you retype, debounced; capped at 10,000 matches). It is drawn
-  over the text rather than stored in it - it never marks the document
-  modified, never enters the undo history, and clears when the dialog
-  closes or the box is unticked. Matches are re-painted shortly after each
-  edit while the dialog is open.
+  (capped at 10,000 matches). It is drawn over the text rather than stored in
+  it - it never marks the document modified, never enters the undo history,
+  and clears when the dialog closes or the box is unticked. The overlay tracks
+  live (coalesced ~8x/second) as you type in either the search box or the
+  document, and re-appears correctly after the match count drops to zero and
+  back.
 - **Debug diagnostics**: a hidden Preferences page (Ctrl+Shift+. or
   Shift+click the Preferences menu item) shows the startup phase profile,
   settings/recovery paths and counts, and live paint/selection counters,

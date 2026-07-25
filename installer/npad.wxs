@@ -9,9 +9,12 @@
     msiexec /i npad.msi /qn ALLUSERS=1       (system-wide; needs elevation)
 
   Feature selection for deployments (defaults mirror the Inno installer):
-    Main (required), AssocTxt + NotepadAlias + Fonts (on by default),
-    AssocLog / AssocIni / AssocCfg / AssocConf (off; enable via
-    e.g. ADDLOCAL=AssocLog,AssocIni)
+    Main (required), PathEnv + AssocText + NotepadAlias + Fonts (on by
+    default), AssocMarkdown / AssocData / AssocConfig / AssocLog (off;
+    enable via e.g. ADDLOCAL=AssocData,AssocConfig).
+    PathEnv adds the install dir to PATH so 'npad' resolves from a terminal
+    (per-user PATH, or the machine PATH under ALLUSERS=1); suppress with
+    ADDLOCAL negation or a transform if unwanted.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package Name="npad"
@@ -117,6 +120,24 @@
                      Type="string" Value="[INSTALLFOLDER]npad.exe" KeyPath="yes" />
     </Component>
 
+    <!-- PATH entry: cmd.exe / PowerShell resolve bare 'npad' from PATH only
+         (App Paths above serves Win+R / ShellExecute). <Environment> has a
+         static System attribute, so a per-user install writes the user PATH
+         and an all-users install (MSIINSTALLPERUSER unset) writes the machine
+         PATH; exactly one component is active per scope. -->
+    <Component Id="PathEnvUser" Directory="INSTALLFOLDER" Condition="MSIINSTALLPERUSER = 1">
+      <RegistryValue Root="HKCU" Key="Software\Platima\npad" Name="pathenv"
+                     Type="integer" Value="1" KeyPath="yes" />
+      <Environment Id="NpadPathUser" Name="PATH" Value="[INSTALLFOLDER]"
+                   Part="last" Action="set" Permanent="no" System="no" />
+    </Component>
+    <Component Id="PathEnvMachine" Directory="INSTALLFOLDER" Condition="NOT MSIINSTALLPERUSER = 1">
+      <RegistryValue Root="HKLM" Key="Software\Platima\npad" Name="pathenv"
+                     Type="integer" Value="1" KeyPath="yes" />
+      <Environment Id="NpadPathMachine" Name="PATH" Value="[INSTALLFOLDER]"
+                   Part="last" Action="set" Permanent="no" System="yes" />
+    </Component>
+
     <!-- ================= Registry: per-extension associations ================= -->
     <Component Id="AssocTxtReg" Directory="INSTALLFOLDER">
       <RegistryValue Root="HKMU" Key="Software\Classes\npad.txt" Type="string" Value="Text File" KeyPath="yes" />
@@ -158,6 +179,80 @@
       <RegistryValue Root="HKMU" Key="Software\Classes\.conf\OpenWithProgids" Name="npad.conf" Type="string" Value="" />
       <RegistryValue Root="HKMU" Key="Software\Platima\npad\Capabilities\FileAssociations" Name=".conf" Type="string" Value="npad.conf" />
     </Component>
+    <!-- Markdown group -->
+    <Component Id="AssocMdReg" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.md" Type="string" Value="Markdown Document" KeyPath="yes" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.md\DefaultIcon" Type="string" Value="[INSTALLFOLDER]npad.exe,0" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.md\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]npad.exe&quot; &quot;%1&quot;" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.md" Type="string" Value="npad.md" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.md\OpenWithProgids" Name="npad.md" Type="string" Value="" />
+      <RegistryValue Root="HKMU" Key="Software\Platima\npad\Capabilities\FileAssociations" Name=".md" Type="string" Value="npad.md" />
+    </Component>
+    <Component Id="AssocMarkdownReg" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.markdown" Type="string" Value="Markdown Document" KeyPath="yes" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.markdown\DefaultIcon" Type="string" Value="[INSTALLFOLDER]npad.exe,0" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.markdown\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]npad.exe&quot; &quot;%1&quot;" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.markdown" Type="string" Value="npad.markdown" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.markdown\OpenWithProgids" Name="npad.markdown" Type="string" Value="" />
+      <RegistryValue Root="HKMU" Key="Software\Platima\npad\Capabilities\FileAssociations" Name=".markdown" Type="string" Value="npad.markdown" />
+    </Component>
+    <!-- Data group -->
+    <Component Id="AssocCsvReg" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.csv" Type="string" Value="CSV File" KeyPath="yes" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.csv\DefaultIcon" Type="string" Value="[INSTALLFOLDER]npad.exe,0" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.csv\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]npad.exe&quot; &quot;%1&quot;" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.csv" Type="string" Value="npad.csv" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.csv\OpenWithProgids" Name="npad.csv" Type="string" Value="" />
+      <RegistryValue Root="HKMU" Key="Software\Platima\npad\Capabilities\FileAssociations" Name=".csv" Type="string" Value="npad.csv" />
+    </Component>
+    <Component Id="AssocTsvReg" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.tsv" Type="string" Value="TSV File" KeyPath="yes" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.tsv\DefaultIcon" Type="string" Value="[INSTALLFOLDER]npad.exe,0" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.tsv\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]npad.exe&quot; &quot;%1&quot;" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.tsv" Type="string" Value="npad.tsv" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.tsv\OpenWithProgids" Name="npad.tsv" Type="string" Value="" />
+      <RegistryValue Root="HKMU" Key="Software\Platima\npad\Capabilities\FileAssociations" Name=".tsv" Type="string" Value="npad.tsv" />
+    </Component>
+    <Component Id="AssocJsonReg" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.json" Type="string" Value="JSON File" KeyPath="yes" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.json\DefaultIcon" Type="string" Value="[INSTALLFOLDER]npad.exe,0" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.json\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]npad.exe&quot; &quot;%1&quot;" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.json" Type="string" Value="npad.json" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.json\OpenWithProgids" Name="npad.json" Type="string" Value="" />
+      <RegistryValue Root="HKMU" Key="Software\Platima\npad\Capabilities\FileAssociations" Name=".json" Type="string" Value="npad.json" />
+    </Component>
+    <Component Id="AssocXmlReg" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.xml" Type="string" Value="XML File" KeyPath="yes" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.xml\DefaultIcon" Type="string" Value="[INSTALLFOLDER]npad.exe,0" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.xml\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]npad.exe&quot; &quot;%1&quot;" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.xml" Type="string" Value="npad.xml" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.xml\OpenWithProgids" Name="npad.xml" Type="string" Value="" />
+      <RegistryValue Root="HKMU" Key="Software\Platima\npad\Capabilities\FileAssociations" Name=".xml" Type="string" Value="npad.xml" />
+    </Component>
+    <Component Id="AssocYamlReg" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.yaml" Type="string" Value="YAML File" KeyPath="yes" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.yaml\DefaultIcon" Type="string" Value="[INSTALLFOLDER]npad.exe,0" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.yaml\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]npad.exe&quot; &quot;%1&quot;" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.yaml" Type="string" Value="npad.yaml" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.yaml\OpenWithProgids" Name="npad.yaml" Type="string" Value="" />
+      <RegistryValue Root="HKMU" Key="Software\Platima\npad\Capabilities\FileAssociations" Name=".yaml" Type="string" Value="npad.yaml" />
+    </Component>
+    <Component Id="AssocYmlReg" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.yml" Type="string" Value="YAML File" KeyPath="yes" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.yml\DefaultIcon" Type="string" Value="[INSTALLFOLDER]npad.exe,0" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.yml\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]npad.exe&quot; &quot;%1&quot;" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.yml" Type="string" Value="npad.yml" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.yml\OpenWithProgids" Name="npad.yml" Type="string" Value="" />
+      <RegistryValue Root="HKMU" Key="Software\Platima\npad\Capabilities\FileAssociations" Name=".yml" Type="string" Value="npad.yml" />
+    </Component>
+    <Component Id="AssocTomlReg" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.toml" Type="string" Value="TOML File" KeyPath="yes" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.toml\DefaultIcon" Type="string" Value="[INSTALLFOLDER]npad.exe,0" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\npad.toml\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]npad.exe&quot; &quot;%1&quot;" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.toml" Type="string" Value="npad.toml" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\.toml\OpenWithProgids" Name="npad.toml" Type="string" Value="" />
+      <RegistryValue Root="HKMU" Key="Software\Platima\npad\Capabilities\FileAssociations" Name=".toml" Type="string" Value="npad.toml" />
+    </Component>
 
     <!-- ============================ Features ============================ -->
     <Feature Id="Main" Title="npad text editor" Level="1" AllowAbsent="no">
@@ -167,20 +262,35 @@
       <ComponentRef Id="AppPathsNpad" />
       <ComponentRef Id="Capabilities" />
     </Feature>
-    <Feature Id="AssocTxt" Title="Associate .txt files" Level="1">
+    <!-- PATH is on by default (level 1); exactly one scope component installs -->
+    <Feature Id="PathEnv" Title="Add npad to PATH" Level="1">
+      <ComponentRef Id="PathEnvUser" />
+      <ComponentRef Id="PathEnvMachine" />
+    </Feature>
+    <!-- File associations grouped like the Inno installer's tasks -->
+    <Feature Id="AssocText" Title="Associate text files (.txt)" Level="1">
       <ComponentRef Id="AssocTxtReg" />
     </Feature>
-    <Feature Id="AssocLog" Title="Associate .log files" Level="2">
-      <ComponentRef Id="AssocLogReg" />
+    <Feature Id="AssocMarkdown" Title="Associate Markdown &amp; documents (.md, .markdown)" Level="2">
+      <ComponentRef Id="AssocMdReg" />
+      <ComponentRef Id="AssocMarkdownReg" />
     </Feature>
-    <Feature Id="AssocIni" Title="Associate .ini files" Level="2">
+    <Feature Id="AssocData" Title="Associate data files (.csv, .tsv, .json, .xml, .yaml, .yml, .toml)" Level="2">
+      <ComponentRef Id="AssocCsvReg" />
+      <ComponentRef Id="AssocTsvReg" />
+      <ComponentRef Id="AssocJsonReg" />
+      <ComponentRef Id="AssocXmlReg" />
+      <ComponentRef Id="AssocYamlReg" />
+      <ComponentRef Id="AssocYmlReg" />
+      <ComponentRef Id="AssocTomlReg" />
+    </Feature>
+    <Feature Id="AssocConfig" Title="Associate config files (.ini, .cfg, .conf)" Level="2">
       <ComponentRef Id="AssocIniReg" />
-    </Feature>
-    <Feature Id="AssocCfg" Title="Associate .cfg files" Level="2">
       <ComponentRef Id="AssocCfgReg" />
-    </Feature>
-    <Feature Id="AssocConf" Title="Associate .conf files" Level="2">
       <ComponentRef Id="AssocConfReg" />
+    </Feature>
+    <Feature Id="AssocLog" Title="Associate log files (.log)" Level="2">
+      <ComponentRef Id="AssocLogReg" />
     </Feature>
     <Feature Id="NotepadAlias" Title="Open 'notepad' with npad" Level="1">
       <ComponentRef Id="NotepadAliasReg" />

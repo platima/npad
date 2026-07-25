@@ -5,6 +5,41 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2026-07-25
+
+### ✨ Features
+- **`npad` on PATH.** The installers now add the install folder to PATH (a
+  default-on task in the setup EXE; the `PathEnv` feature in the MSI), so
+  `npad` and `npad file.txt` work from Command Prompt and PowerShell. A
+  per-user install edits the user PATH; an all-users install edits the machine
+  PATH. (Taking over bare `notepad` in a terminal is *not* possible - the
+  System32 copy and the Windows 11 Store alias precede us on PATH; the existing
+  Settings shortcut to disable that alias is unchanged.)
+- **Grouped file associations.** The per-extension checkboxes are now five
+  groups so the list stays short: **Text** (`.txt`, default on), **Markdown &
+  documents** (`.md`, `.markdown`), **Data** (`.csv`, `.tsv`, `.json`, `.xml`,
+  `.yaml`, `.yml`, `.toml`), **Config** (`.ini`, `.cfg`, `.conf`) and **Logs**
+  (`.log`). MSI feature ids: `AssocText` (default), `AssocMarkdown`,
+  `AssocData`, `AssocConfig`, `AssocLog`.
+
+### 🔄 Changed
+- **The Help update item now reflects an available update.** It transforms in
+  place from **Check for Updates...** to **Update Available (v…)...** (which
+  opens the Updates page) when a newer, non-skipped version is known, and back
+  again otherwise - alongside the existing **●** on the Help title.
+- **Word / character / line counts update live while typing** instead of only
+  after you pause. Very large documents (over ~1 MB) keep the settle-then-count
+  behaviour so a full rescan does not thrash.
+- **Highlight all matches tracks live** as you type in either the document or
+  the search box, and re-appears correctly after the match count drops to zero
+  and back.
+- **Interpret escapes** moved to the bottom of the Find and Replace option
+  lists and is now shown only when Basic Markdown support is enabled (it is
+  part of that feature set); it stays inert when Markdown support is off.
+- **Markdown preferences** now lead with a **Basic Markdown support** checkbox
+  and a short list of what it enables (list tools, escape interpretation,
+  delimiter replacement).
+
 ## [0.17.1] - 2026-07-23
 
 ### 🔄 Changed

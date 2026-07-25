@@ -36,6 +36,8 @@ PrivilegesRequiredOverridesAllowed=dialog commandline
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ChangesAssociations=yes
+; The 'addtopath' task edits PATH via [Code]; broadcast the change at the end
+ChangesEnvironment=yes
 MinVersion=10.0
 LicenseFile=..\LICENSE
 
@@ -55,12 +57,13 @@ Name: "fonts\roboto"; Description: "Roboto (proportional)"; Types: full
 Name: "fonts\opendyslexic"; Description: "OpenDyslexic (reading assistance)"; Types: full
 
 [Tasks]
+Name: "addtopath"; Description: "Add npad to the PATH (run 'npad' from Command Prompt / PowerShell)"
 Name: "assoc"; Description: "Register npad as an editor for:"
-Name: "assoc\txt"; Description: "Text files (.txt)"
+Name: "assoc\text"; Description: "Text files (.txt)"
+Name: "assoc\markdown"; Description: "Markdown & documents (.md, .markdown)"; Flags: unchecked
+Name: "assoc\data"; Description: "Data files (.csv, .tsv, .json, .xml, .yaml, .yml, .toml)"; Flags: unchecked
+Name: "assoc\config"; Description: "Config files (.ini, .cfg, .conf)"; Flags: unchecked
 Name: "assoc\log"; Description: "Log files (.log)"; Flags: unchecked
-Name: "assoc\ini"; Description: "INI configuration files (.ini)"; Flags: unchecked
-Name: "assoc\cfg"; Description: "Config files (.cfg)"; Flags: unchecked
-Name: "assoc\conf"; Description: "Config files (.conf)"; Flags: unchecked
 Name: "notepadalias"; Description: "Open 'notepad' with npad (Win+R and app launches; see docs for the Windows 11 Store alias)"
 Name: "fontdefaults"; Description: "Set the bundled fonts as npad's default editor fonts (updates settings.json)"; Check: FontDefaultsOfferable
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
@@ -108,14 +111,105 @@ Root: HKA; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueNa
 Root: HKA; Subkey: "Software\Platima\npad\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "npad"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Platima\npad\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "Lightweight cross-platform text editor"; Flags: uninsdeletekey
 
-; Per-extension ProgIDs + associations (one task per extension)
+; Per-extension ProgIDs + associations, grouped into tasks (Text / Markdown /
+; Data / Config / Logs). One ProgID per extension keeps Explorer's type names
+; specific; the group task decides which set is written.
+; --- Text (assoc\text) ---
 ; .txt
-Root: HKA; Subkey: "Software\Classes\npad.txt"; ValueType: string; ValueData: "Text File"; Tasks: assoc\txt; Flags: uninsdeletekey
-Root: HKA; Subkey: "Software\Classes\npad.txt\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\txt
-Root: HKA; Subkey: "Software\Classes\npad.txt\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\txt
-Root: HKA; Subkey: "Software\Classes\.txt"; ValueType: string; ValueData: "npad.txt"; Tasks: assoc\txt; Flags: uninsdeletevalue
-Root: HKA; Subkey: "Software\Classes\.txt\OpenWithProgids"; ValueType: string; ValueName: "npad.txt"; ValueData: ""; Tasks: assoc\txt; Flags: uninsdeletevalue
-Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".txt"; ValueData: "npad.txt"; Tasks: assoc\txt; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\npad.txt"; ValueType: string; ValueData: "Text File"; Tasks: assoc\text; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.txt\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\text
+Root: HKA; Subkey: "Software\Classes\npad.txt\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\text
+Root: HKA; Subkey: "Software\Classes\.txt"; ValueType: string; ValueData: "npad.txt"; Tasks: assoc\text; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.txt\OpenWithProgids"; ValueType: string; ValueName: "npad.txt"; ValueData: ""; Tasks: assoc\text; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".txt"; ValueData: "npad.txt"; Tasks: assoc\text; Flags: uninsdeletevalue
+; --- Markdown & documents (assoc\markdown) ---
+; .md
+Root: HKA; Subkey: "Software\Classes\npad.md"; ValueType: string; ValueData: "Markdown Document"; Tasks: assoc\markdown; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.md\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\markdown
+Root: HKA; Subkey: "Software\Classes\npad.md\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\markdown
+Root: HKA; Subkey: "Software\Classes\.md"; ValueType: string; ValueData: "npad.md"; Tasks: assoc\markdown; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.md\OpenWithProgids"; ValueType: string; ValueName: "npad.md"; ValueData: ""; Tasks: assoc\markdown; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".md"; ValueData: "npad.md"; Tasks: assoc\markdown; Flags: uninsdeletevalue
+; .markdown
+Root: HKA; Subkey: "Software\Classes\npad.markdown"; ValueType: string; ValueData: "Markdown Document"; Tasks: assoc\markdown; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.markdown\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\markdown
+Root: HKA; Subkey: "Software\Classes\npad.markdown\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\markdown
+Root: HKA; Subkey: "Software\Classes\.markdown"; ValueType: string; ValueData: "npad.markdown"; Tasks: assoc\markdown; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.markdown\OpenWithProgids"; ValueType: string; ValueName: "npad.markdown"; ValueData: ""; Tasks: assoc\markdown; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".markdown"; ValueData: "npad.markdown"; Tasks: assoc\markdown; Flags: uninsdeletevalue
+; --- Data (assoc\data) ---
+; .csv
+Root: HKA; Subkey: "Software\Classes\npad.csv"; ValueType: string; ValueData: "CSV File"; Tasks: assoc\data; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.csv\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\npad.csv\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\.csv"; ValueType: string; ValueData: "npad.csv"; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.csv\OpenWithProgids"; ValueType: string; ValueName: "npad.csv"; ValueData: ""; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".csv"; ValueData: "npad.csv"; Tasks: assoc\data; Flags: uninsdeletevalue
+; .tsv
+Root: HKA; Subkey: "Software\Classes\npad.tsv"; ValueType: string; ValueData: "TSV File"; Tasks: assoc\data; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.tsv\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\npad.tsv\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\.tsv"; ValueType: string; ValueData: "npad.tsv"; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.tsv\OpenWithProgids"; ValueType: string; ValueName: "npad.tsv"; ValueData: ""; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".tsv"; ValueData: "npad.tsv"; Tasks: assoc\data; Flags: uninsdeletevalue
+; .json
+Root: HKA; Subkey: "Software\Classes\npad.json"; ValueType: string; ValueData: "JSON File"; Tasks: assoc\data; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.json\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\npad.json\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\.json"; ValueType: string; ValueData: "npad.json"; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.json\OpenWithProgids"; ValueType: string; ValueName: "npad.json"; ValueData: ""; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".json"; ValueData: "npad.json"; Tasks: assoc\data; Flags: uninsdeletevalue
+; .xml
+Root: HKA; Subkey: "Software\Classes\npad.xml"; ValueType: string; ValueData: "XML File"; Tasks: assoc\data; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.xml\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\npad.xml\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\.xml"; ValueType: string; ValueData: "npad.xml"; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.xml\OpenWithProgids"; ValueType: string; ValueName: "npad.xml"; ValueData: ""; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".xml"; ValueData: "npad.xml"; Tasks: assoc\data; Flags: uninsdeletevalue
+; .yaml
+Root: HKA; Subkey: "Software\Classes\npad.yaml"; ValueType: string; ValueData: "YAML File"; Tasks: assoc\data; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.yaml\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\npad.yaml\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\.yaml"; ValueType: string; ValueData: "npad.yaml"; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.yaml\OpenWithProgids"; ValueType: string; ValueName: "npad.yaml"; ValueData: ""; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".yaml"; ValueData: "npad.yaml"; Tasks: assoc\data; Flags: uninsdeletevalue
+; .yml
+Root: HKA; Subkey: "Software\Classes\npad.yml"; ValueType: string; ValueData: "YAML File"; Tasks: assoc\data; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.yml\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\npad.yml\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\.yml"; ValueType: string; ValueData: "npad.yml"; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.yml\OpenWithProgids"; ValueType: string; ValueName: "npad.yml"; ValueData: ""; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".yml"; ValueData: "npad.yml"; Tasks: assoc\data; Flags: uninsdeletevalue
+; .toml
+Root: HKA; Subkey: "Software\Classes\npad.toml"; ValueType: string; ValueData: "TOML File"; Tasks: assoc\data; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.toml\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\npad.toml\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\.toml"; ValueType: string; ValueData: "npad.toml"; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.toml\OpenWithProgids"; ValueType: string; ValueName: "npad.toml"; ValueData: ""; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".toml"; ValueData: "npad.toml"; Tasks: assoc\data; Flags: uninsdeletevalue
+; --- Config (assoc\config) ---
+; .ini
+Root: HKA; Subkey: "Software\Classes\npad.ini"; ValueType: string; ValueData: "INI Configuration File"; Tasks: assoc\config; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.ini\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\config
+Root: HKA; Subkey: "Software\Classes\npad.ini\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\config
+Root: HKA; Subkey: "Software\Classes\.ini"; ValueType: string; ValueData: "npad.ini"; Tasks: assoc\config; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.ini\OpenWithProgids"; ValueType: string; ValueName: "npad.ini"; ValueData: ""; Tasks: assoc\config; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".ini"; ValueData: "npad.ini"; Tasks: assoc\config; Flags: uninsdeletevalue
+; .cfg
+Root: HKA; Subkey: "Software\Classes\npad.cfg"; ValueType: string; ValueData: "Config File"; Tasks: assoc\config; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.cfg\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\config
+Root: HKA; Subkey: "Software\Classes\npad.cfg\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\config
+Root: HKA; Subkey: "Software\Classes\.cfg"; ValueType: string; ValueData: "npad.cfg"; Tasks: assoc\config; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.cfg\OpenWithProgids"; ValueType: string; ValueName: "npad.cfg"; ValueData: ""; Tasks: assoc\config; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".cfg"; ValueData: "npad.cfg"; Tasks: assoc\config; Flags: uninsdeletevalue
+; .conf
+Root: HKA; Subkey: "Software\Classes\npad.conf"; ValueType: string; ValueData: "Config File"; Tasks: assoc\config; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.conf\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\config
+Root: HKA; Subkey: "Software\Classes\npad.conf\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\config
+Root: HKA; Subkey: "Software\Classes\.conf"; ValueType: string; ValueData: "npad.conf"; Tasks: assoc\config; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.conf\OpenWithProgids"; ValueType: string; ValueName: "npad.conf"; ValueData: ""; Tasks: assoc\config; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".conf"; ValueData: "npad.conf"; Tasks: assoc\config; Flags: uninsdeletevalue
+; --- Logs (assoc\log) ---
 ; .log
 Root: HKA; Subkey: "Software\Classes\npad.log"; ValueType: string; ValueData: "Log File"; Tasks: assoc\log; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\npad.log\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\log
@@ -123,27 +217,6 @@ Root: HKA; Subkey: "Software\Classes\npad.log\shell\open\command"; ValueType: st
 Root: HKA; Subkey: "Software\Classes\.log"; ValueType: string; ValueData: "npad.log"; Tasks: assoc\log; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Classes\.log\OpenWithProgids"; ValueType: string; ValueName: "npad.log"; ValueData: ""; Tasks: assoc\log; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".log"; ValueData: "npad.log"; Tasks: assoc\log; Flags: uninsdeletevalue
-; .ini
-Root: HKA; Subkey: "Software\Classes\npad.ini"; ValueType: string; ValueData: "INI Configuration File"; Tasks: assoc\ini; Flags: uninsdeletekey
-Root: HKA; Subkey: "Software\Classes\npad.ini\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\ini
-Root: HKA; Subkey: "Software\Classes\npad.ini\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\ini
-Root: HKA; Subkey: "Software\Classes\.ini"; ValueType: string; ValueData: "npad.ini"; Tasks: assoc\ini; Flags: uninsdeletevalue
-Root: HKA; Subkey: "Software\Classes\.ini\OpenWithProgids"; ValueType: string; ValueName: "npad.ini"; ValueData: ""; Tasks: assoc\ini; Flags: uninsdeletevalue
-Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".ini"; ValueData: "npad.ini"; Tasks: assoc\ini; Flags: uninsdeletevalue
-; .cfg
-Root: HKA; Subkey: "Software\Classes\npad.cfg"; ValueType: string; ValueData: "Config File"; Tasks: assoc\cfg; Flags: uninsdeletekey
-Root: HKA; Subkey: "Software\Classes\npad.cfg\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\cfg
-Root: HKA; Subkey: "Software\Classes\npad.cfg\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\cfg
-Root: HKA; Subkey: "Software\Classes\.cfg"; ValueType: string; ValueData: "npad.cfg"; Tasks: assoc\cfg; Flags: uninsdeletevalue
-Root: HKA; Subkey: "Software\Classes\.cfg\OpenWithProgids"; ValueType: string; ValueName: "npad.cfg"; ValueData: ""; Tasks: assoc\cfg; Flags: uninsdeletevalue
-Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".cfg"; ValueData: "npad.cfg"; Tasks: assoc\cfg; Flags: uninsdeletevalue
-; .conf
-Root: HKA; Subkey: "Software\Classes\npad.conf"; ValueType: string; ValueData: "Config File"; Tasks: assoc\conf; Flags: uninsdeletekey
-Root: HKA; Subkey: "Software\Classes\npad.conf\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\conf
-Root: HKA; Subkey: "Software\Classes\npad.conf\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\conf
-Root: HKA; Subkey: "Software\Classes\.conf"; ValueType: string; ValueData: "npad.conf"; Tasks: assoc\conf; Flags: uninsdeletevalue
-Root: HKA; Subkey: "Software\Classes\.conf\OpenWithProgids"; ValueType: string; ValueName: "npad.conf"; ValueData: ""; Tasks: assoc\conf; Flags: uninsdeletevalue
-Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".conf"; ValueData: "npad.conf"; Tasks: assoc\conf; Flags: uninsdeletevalue
 
 ; Per-user font registration (admin mode uses FontInstall above instead)
 Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Intel One Mono (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\IntelOneMono-Regular.ttf"; Check: not IsAdminInstallMode; Components: fonts\intelonemono
@@ -182,6 +255,62 @@ function ShouldOfferAliasSettings(): Boolean;
 begin
   Result := WizardIsTaskSelected('notepadalias') and
             FileExists(ExpandConstant('{localappdata}\Microsoft\WindowsApps\notepad.exe'));
+end;
+
+// --- PATH entry ('addtopath' task) ---------------------------------------
+// App Paths only serves Win+R / ShellExecute; cmd.exe and PowerShell resolve
+// bare 'npad' from PATH alone, so the install dir must be added there for the
+// user's real need ('npad' from a terminal). Per-user install edits HKCU\
+// Environment; an admin (all-users) install edits the machine PATH. Inno's
+// ChangesEnvironment=yes broadcasts WM_SETTINGCHANGE at the end so new shells
+// pick it up without a sign-out. (RegQueryStringValue returns REG_EXPAND_SZ
+// data unexpanded, so writing it straight back does not resolve %VARS%.)
+
+function EnvPathRootKey(): Integer;
+begin
+  if IsAdminInstallMode then
+    Result := HKEY_LOCAL_MACHINE
+  else
+    Result := HKEY_CURRENT_USER;
+end;
+
+function EnvPathSubKey(): String;
+begin
+  if IsAdminInstallMode then
+    Result := 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
+  else
+    Result := 'Environment';
+end;
+
+procedure EnvAddPath(const Dir: String);
+var
+  Paths: String;
+begin
+  if not RegQueryStringValue(EnvPathRootKey(), EnvPathSubKey(), 'Path', Paths) then
+    Paths := '';
+  // Already present (delimited, case-insensitive)? Nothing to do.
+  if Pos(';' + Uppercase(Dir) + ';', ';' + Uppercase(Paths) + ';') > 0 then
+    exit;
+  if (Paths <> '') and (Paths[Length(Paths)] <> ';') then
+    Paths := Paths + ';';
+  Paths := Paths + Dir + ';';
+  RegWriteExpandStringValue(EnvPathRootKey(), EnvPathSubKey(), 'Path', Paths);
+end;
+
+procedure EnvRemovePath(const Dir: String);
+var
+  Paths: String;
+  P: Integer;
+begin
+  if not RegQueryStringValue(EnvPathRootKey(), EnvPathSubKey(), 'Path', Paths) then
+    exit;
+  P := Pos(';' + Uppercase(Dir) + ';', ';' + Uppercase(Paths) + ';');
+  if P = 0 then
+    exit;
+  if P > 1 then
+    Dec(P); // account for the artificial leading ';'
+  Delete(Paths, P, Length(Dir) + 1);
+  RegWriteExpandStringValue(EnvPathRootKey(), EnvPathSubKey(), 'Path', Paths);
 end;
 
 // --- Default-font preset ('fontdefaults' task) ---------------------------
@@ -277,5 +406,15 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
+  begin
     ApplyFontDefaults();
+    if WizardIsTaskSelected('addtopath') then
+      EnvAddPath(ExpandConstant('{app}'));
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+    EnvRemovePath(ExpandConstant('{app}'));
 end;
