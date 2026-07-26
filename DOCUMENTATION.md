@@ -152,6 +152,8 @@ the fields.
 | `list_custom_indent` | string | (unset) | The custom indent prefix (format 6), stored as typed; escapes (`\t` `\\` `\uXXXX`) are interpreted when used. Prompted for on first use if empty. |
 | `list_indent_shortcut_brackets` | bool | `false` | Use Ctrl+] / Ctrl+[ for indent/unindent instead of the default Tab / Shift+Tab. |
 | `list_sort_case_sensitive` | bool | `false` | Sort compares case-sensitively (toggle from the Sort submenu). |
+| `markdown_paste_primary` | int | `1` | What **Ctrl+V** / Edit > Paste does with rich (HTML) clipboard content: `0` plain, `1` convert lists to the current bullet style, `2` full Markdown conversion. Only applies when Basic Markdown support is on; plain-text clipboards always paste plain. |
+| `markdown_paste_alt` | int | `0` | What **Ctrl+Shift+V** does with rich clipboard content: `0` plain, `1` lists, `2` full Markdown. Only applies when Basic Markdown support is on. |
 
 ### Updates (Preferences > Updates) - all opt-in, off by default
 
@@ -206,6 +208,7 @@ propagates live to all open npad windows.
 | Ctrl+W / Ctrl+Shift+W | Close this window / Close all windows (each save-checked) |
 | Ctrl+Z / Ctrl+Y | Undo / Redo (100,000-step history) |
 | Ctrl+X / Ctrl+C / Ctrl+V / Del | Cut / Copy / Paste / Delete |
+| Ctrl+Shift+V | Alternate paste (Markdown tools): the mode configured in Preferences > Markdown > Paste (default plain). Plain otherwise. |
 | Ctrl+A | Select All |
 | Ctrl+F / F3 / Shift+F3 / Ctrl+H | Find / Find Next / Find Previous / Replace |
 | Ctrl+G | Go To Line |
@@ -302,6 +305,19 @@ position). Not intended for direct use.
     current line (including its line break). Ctrl+V then pastes that line
     above the current line while the caret stays put; this holds for repeat
     pastes until something else is copied to the clipboard.
+  - *Rich-text paste*: when the clipboard carries HTML (copied from a browser,
+    word processor, etc.), paste can convert it. Two depths - **Lists** turns
+    `<ul>`/`<ol>` (with nesting) into list lines in your current bullet style
+    and flattens the rest to plain text; **Markdown** does a full conversion
+    (headings, bold, italic, inline code and fenced code blocks, links,
+    images, block quotes, rules, numbered ordered lists). Preferences >
+    Markdown > **Paste** sets what **Ctrl+V** (default *Lists*) and
+    **Ctrl+Shift+V** (default *Plain*) do; **Paste as Markdown** (Markdown
+    menu / right-click) always does the full conversion. A plain-text
+    clipboard (no HTML) always pastes plain, and with Basic Markdown support
+    off every paste stays plain. The conversion runs in a bounded, self-
+    contained core module (`html_md.c`), so hostile or huge clipboard input
+    cannot run away.
 - **Find/Replace escapes**: an "Interpret escapes" checkbox in the Find and
   Replace dialogs makes both fields interpret `\n \r \t \\ \uXXXX`, so line
   breaks can be searched for and inserted. Search history records the text

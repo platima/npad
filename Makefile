@@ -28,12 +28,12 @@ MINGW_STRIP ?= x86_64-w64-mingw32-strip
 endif
 
 # Source files
-CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/startup_prof.c src/core/list_ops.c src/core/update_check.c
+CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/startup_prof.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c
 SHARED_SOURCES = src/ui_interface.c
 
 # Test sources
 TEST_FRAMEWORK_SOURCES = tests/test_framework.c
-TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/list_ops.c src/core/update_check.c  # Core sources without UI dependencies
+TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c  # Core sources without UI dependencies
 
 # Windows GUI specific
 WINDOWS_GUI_SOURCES = src/platform/ui_win32.c
@@ -235,7 +235,7 @@ format-check:
 	find src/ -name "*.c" -o -name "*.h" | xargs $(CLANG_FORMAT) --dry-run --Werror
 
 # Testing targets
-test: test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings
+test: test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md
 	@echo "All tests completed"
 
 test-file-ops: tests/test_file_ops
@@ -266,6 +266,10 @@ test-settings: tests/test_settings
 	@echo "Running settings tests..."
 	./tests/test_settings
 
+test-html-md: tests/test_html_md
+	@echo "Running HTML/Markdown tests..."
+	./tests/test_html_md
+
 tests/test_file_ops: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_file_ops.c
 	@mkdir -p tests
 	$(CC) $(CFLAGS) -o $@ $^ -lpthread
@@ -292,14 +296,18 @@ tests/test_update_check: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/te
 tests/test_settings: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_settings.c
 	$(CC) $(CFLAGS) -o tests/test_settings $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_settings.c
 
+tests/test_html_md: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_html_md.c
+	@mkdir -p tests
+	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+
 # Cleanup
 clean:
 	rm -f $(WINDOWS_GUI_TARGET) $(WINDOWS_TERMINAL_TARGET) $(MACOS_TARGET) $(LINUX_X11_TARGET) $(LINUX_WAYLAND_TARGET) $(LINUX_TERMINAL_TARGET)
 	rm -f npad-*.exe npad-*linux* npad-*win32*
 	find src tests -name '*.o' -delete 2>/dev/null || true
 	rm -f src/platform/npad.res
-	rm -f tests/test_file_ops tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings
-	rm -f tests/test_file_ops.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe
+	rm -f tests/test_file_ops tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md
+	rm -f tests/test_file_ops.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe tests/test_html_md.exe
 
 # Installation
 install:
@@ -357,4 +365,4 @@ help:
 	@echo "  DEBUG=1          - Enable debug build"
 	@echo "  VERSION          - Version string (auto-detected from git)"
 
-.PHONY: all windows windows-gui windows-terminal linux linux-x11 linux-wayland linux-terminal terminal macos debug debug-windows debug-linux clean install uninstall lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings help detect-platform
+.PHONY: all windows windows-gui windows-terminal linux linux-x11 linux-wayland linux-terminal terminal macos debug debug-windows debug-linux clean install uninstall lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md help detect-platform

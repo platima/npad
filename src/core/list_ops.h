@@ -59,4 +59,10 @@ char *list_replace_all(const char *text, const char *from, const char *to);
 char *list_indent_lines(const char *text, ListIndentFormat fmt, const char *custom_prefix);
 char *list_unindent_lines(const char *text, ListIndentFormat fmt, const char *custom_prefix);
 
+// The list-bullet marker for a format as a fresh malloc'd string (caller
+// frees), e.g. "- ", "* ", or the custom prefix. Whitespace formats (spaces,
+// tab, or a whitespace-only custom prefix) are not bullets, so "- " is
+// returned. Used by rich-text paste to stamp list items in the user's style.
+char *list_bullet_marker(ListIndentFormat fmt, const char *custom_prefix);
+
 #endif // LIST_OPS_H

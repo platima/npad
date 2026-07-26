@@ -376,6 +376,22 @@ static bool is_marker_format(ListIndentFormat fmt, const char *custom) {
     return true;
 }
 
+// The list-bullet marker for a format, as a fresh malloc'd string (caller
+// frees). Whitespace formats (spaces/tab, or a whitespace-only custom prefix)
+// are not bullets, so a sensible "- " default is returned instead. Used by the
+// rich-text paste converter to stamp pasted list items in the user's style.
+// NULL on OOM.
+char *list_bullet_marker(ListIndentFormat fmt, const char *custom_prefix) {
+    const char *p =
+        is_marker_format(fmt, custom_prefix) ? effective_prefix(fmt, custom_prefix) : "- ";
+    size_t n = strlen(p);
+    char *out = malloc(n + 1);
+    if (!out)
+        return NULL;
+    memcpy(out, p, n + 1);
+    return out;
+}
+
 #define NEST "  " // Two spaces: markdown nesting step for an already-marked line
 
 // Length of the bullet marker at s (leading whitespace already skipped):

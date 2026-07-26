@@ -63,6 +63,7 @@ tests/test_encoding
 tests/test_session
 tests/test_list_ops
 tests/test_settings
+tests/test_html_md
 
 # Installer build outputs (fonts are fetched by installer/fetch-fonts.ps1)
 installer/fonts/

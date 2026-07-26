@@ -26,6 +26,7 @@
 #include "../core/editor.h"
 #include "../core/error.h"
 #include "../core/file_ops.h"
+#include "../core/html_md.h"
 #include "../core/list_ops.h"
 #include "../core/session.h"
 #include "../core/settings.h"
@@ -146,6 +147,10 @@ static double qpc_ms(void) {
 #define ID_LIST_INDENT 2119      // Ctrl+], default format
 #define ID_LIST_UNINDENT 2120    // Ctrl+[
 #define ID_LIST_INDENT_BASE 2121 // 2121..2127, one per ListIndentFormat (2127 = Custom, prompts)
+// Rich-text paste variants (Markdown only): Ctrl+Shift+V uses the configured
+// "alt" mode; "Paste as Markdown" always does a full conversion
+#define ID_EDIT_PASTE_ALT 2128
+#define ID_EDIT_PASTE_MARKDOWN 2129
 #define ID_HELP_ABOUT 2401
 #define ID_HELP_CHECK_UPDATES 2402
 #define ID_HELP_UPDATE_AVAILABLE 2403
@@ -1278,6 +1283,38 @@ static wchar_t *read_clipboard_text(HWND owner) {
     return copy;
 }
 
+// Read the "HTML Format" clipboard type (CF_HTML) and return its copied
+// fragment as a malloc'd UTF-8 string (NULL if unavailable). CF_HTML data is a
+// UTF-8 byte buffer with a header; html_cf_extract_fragment pulls out the
+// fragment the source actually copied.
+static char *read_clipboard_html(HWND owner) {
+    static UINT cf_html = 0;
+    if (!cf_html)
+        cf_html = RegisterClipboardFormatW(L"HTML Format");
+    if (!cf_html || !IsClipboardFormatAvailable(cf_html))
+        return NULL;
+    if (!OpenClipboard(owner))
+        return NULL;
+    char *frag = NULL;
+    HANDLE h = GetClipboardData(cf_html);
+    if (h) {
+        const char *src = GlobalLock(h);
+        if (src) {
+            SIZE_T sz = GlobalSize(h);
+            char *blob = malloc(sz + 1);
+            if (blob) {
+                memcpy(blob, src, sz);
+                blob[sz] = '\0'; // guard: CF_HTML is text, bound by GlobalSize
+                frag = html_cf_extract_fragment(blob);
+                free(blob);
+            }
+            GlobalUnlock(h);
+        }
+    }
+    CloseClipboard();
+    return frag;
+}
+
 void ui_platform_cut(Window *window) {
     if (!window || !window->edit_hwnd)
         return;
@@ -1314,7 +1351,60 @@ void ui_platform_copy(Window *window) {
     }
 }
 
-void ui_platform_paste(Window *window) {
+static void normalize_to_lf(char *s); // defined with the list tools below
+
+// Bullet marker for pasted list items, resolved from the current settings
+// (with a "- " fallback for whitespace indent formats). Caller frees.
+static char *paste_resolve_marker(void) {
+    int fmt = settings_get_int("list_default_indent_format", 0);
+    if (fmt < 0 || fmt > LIST_INDENT_CUSTOM)
+        fmt = 0;
+    char *custom = get_custom_indent();
+    char *marker = list_bullet_marker((ListIndentFormat) fmt, custom);
+    free(custom);
+    return marker;
+}
+
+// Insert converted markdown/text (UTF-8) at the caret, replacing any selection,
+// as one undo step. The converter emits '\n' breaks; expand to the CRLF the
+// control uses. Caret ends after the inserted text (like a normal paste).
+static void paste_insert_converted(Window *window, const char *utf8) {
+    HWND e = window->edit_hwnd;
+    char *norm = malloc(strlen(utf8) + 1);
+    if (!norm)
+        return;
+    strcpy(norm, utf8);
+    normalize_to_lf(norm); // guard against a stray CR (e.g. from &#13;)
+    size_t breaks = 0;
+    for (const char *p = norm; *p; p++)
+        if (*p == '\n')
+            breaks++;
+    char *crlf = malloc(strlen(norm) + breaks + 1);
+    if (!crlf) {
+        free(norm);
+        return;
+    }
+    char *w = crlf;
+    for (const char *p = norm; *p; p++) {
+        if (*p == '\n')
+            *w++ = '\r';
+        *w++ = *p;
+    }
+    *w = '\0';
+    free(norm);
+    wchar_t *wide = utf8_to_wide(crlf);
+    free(crlf);
+    if (!wide)
+        return;
+    SendMessageW(e, EM_REPLACESEL, TRUE, (LPARAM) wide);
+    SendMessageW(e, EM_SCROLLCARET, 0, 0);
+    free(wide);
+}
+
+// The paste worker. mode: 0 = plain (WM_PASTE), 1 = lists, 2 = full markdown.
+// Rich modes read the clipboard's HTML fragment and convert it; with no HTML
+// present (e.g. plain-text sources) they fall back to a normal plain paste.
+static void do_paste(Window *window, int mode) {
     if (!window || !window->edit_hwnd)
         return;
     HWND e = window->edit_hwnd;
@@ -1323,7 +1413,7 @@ void ui_platform_paste(Window *window) {
         !ui_platform_has_selection(window)) {
         // Paste the line cut by Ctrl+X back ABOVE the current line, keeping
         // the caret where it is within its own line. Stays in effect for
-        // repeat pastes until the clipboard changes hands.
+        // repeat pastes until the clipboard changes hands. Always plain.
         wchar_t *clip = read_clipboard_text(window->hwnd);
         if (clip && clip[0]) {
             // A last-line cut starts with the preceding break: strip it, then
@@ -1369,7 +1459,60 @@ void ui_platform_paste(Window *window) {
         free(clip); // Clipboard text unavailable: fall back to a normal paste
     }
     window->line_cut_pending = false;
+
+    // Rich paste: convert the clipboard's HTML fragment when present
+    if (mode != 0) {
+        char *html = read_clipboard_html(window->hwnd);
+        if (html) {
+            char *marker = paste_resolve_marker();
+            char *md = html_to_markdown(html, mode == 2 ? HTML_MD_FULL : HTML_MD_LISTS, marker);
+            free(html);
+            free(marker);
+            if (md && md[0]) {
+                paste_insert_converted(window, md);
+                free(md);
+                return;
+            }
+            free(md); // empty conversion: fall through to a plain paste
+        }
+    }
     SendMessageW(e, WM_PASTE, 0, 0);
+}
+
+// Ctrl+V / menu Paste / the core UI_EVENT_EDIT_PASTE: uses the configured
+// primary paste mode (default "lists") when Markdown support is on, else plain.
+void ui_platform_paste(Window *window) {
+    if (!window)
+        return;
+    int mode = 0;
+    if (settings_get_bool("list_tools_enabled", false)) {
+        mode = settings_get_int("markdown_paste_primary", 1);
+        if (mode < 0 || mode > 2)
+            mode = 1; // clamp a corrupt/imported value to the default (lists)
+    }
+    do_paste(window, mode);
+}
+
+// Ctrl+Shift+V: the configured "alt" paste mode (default plain) when Markdown
+// support is on, else plain.
+static void ui_platform_paste_alt(Window *window) {
+    if (!window)
+        return;
+    int mode = 0;
+    if (settings_get_bool("list_tools_enabled", false)) {
+        mode = settings_get_int("markdown_paste_alt", 0);
+        if (mode < 0 || mode > 2)
+            mode = 0; // clamp a corrupt/imported value to the default (plain)
+    }
+    do_paste(window, mode);
+}
+
+// "Paste as Markdown": always a full conversion (plain if Markdown support is
+// off, so the command is inert rather than surprising).
+static void ui_platform_paste_as_markdown(Window *window) {
+    if (!window)
+        return;
+    do_paste(window, settings_get_bool("list_tools_enabled", false) ? 2 : 0);
 }
 
 void ui_platform_undo(Window *window) {
@@ -4157,6 +4300,9 @@ static void prefs_lists_sync_enables(HWND page) {
     LRESULT sel = SendMessageW(GetDlgItem(page, ID_PREF_LIST_INDENT_FORMAT), CB_GETCURSEL, 0, 0);
     EnableWindow(GetDlgItem(page, ID_PREF_LIST_CUSTOM_TEXT), sel == LIST_INDENT_CUSTOM);
     EnableWindow(GetDlgItem(page, ID_PREF_LIST_TAB_BRACKETS), on);
+    // The paste-mode radios only take effect when Markdown support is on
+    for (int id = ID_PREF_PASTE_PRIMARY_PLAIN; id <= ID_PREF_PASTE_ALT_MD; id++)
+        EnableWindow(GetDlgItem(page, id), on);
 }
 
 static INT_PTR CALLBACK prefs_lists_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -4185,6 +4331,18 @@ static INT_PTR CALLBACK prefs_lists_proc(HWND page, UINT msg, WPARAM wparam, LPA
                            settings_get_bool("list_indent_shortcut_brackets", false)
                                ? BST_CHECKED
                                : BST_UNCHECKED);
+            // Paste-mode radios: primary (Ctrl+V, default lists) and alt
+            // (Ctrl+Shift+V, default plain). 0=plain, 1=lists, 2=markdown.
+            int prim = settings_get_int("markdown_paste_primary", 1);
+            if (prim < 0 || prim > 2)
+                prim = 1;
+            CheckRadioButton(page, ID_PREF_PASTE_PRIMARY_PLAIN, ID_PREF_PASTE_PRIMARY_MD,
+                             ID_PREF_PASTE_PRIMARY_PLAIN + prim);
+            int alt = settings_get_int("markdown_paste_alt", 0);
+            if (alt < 0 || alt > 2)
+                alt = 0;
+            CheckRadioButton(page, ID_PREF_PASTE_ALT_PLAIN, ID_PREF_PASTE_ALT_MD,
+                             ID_PREF_PASTE_ALT_PLAIN + alt);
             prefs_lists_sync_enables(page);
             return TRUE;
         }
@@ -4192,6 +4350,8 @@ static INT_PTR CALLBACK prefs_lists_proc(HWND page, UINT msg, WPARAM wparam, LPA
         case WM_COMMAND:
             if ((HIWORD(wparam) == BN_CLICKED && (LOWORD(wparam) == ID_PREF_LIST_ENABLED ||
                                                   LOWORD(wparam) == ID_PREF_LIST_TAB_BRACKETS)) ||
+                (HIWORD(wparam) == BN_CLICKED && LOWORD(wparam) >= ID_PREF_PASTE_PRIMARY_PLAIN &&
+                 LOWORD(wparam) <= ID_PREF_PASTE_ALT_MD) ||
                 (HIWORD(wparam) == CBN_SELCHANGE && LOWORD(wparam) == ID_PREF_LIST_INDENT_FORMAT) ||
                 (HIWORD(wparam) == EN_CHANGE && LOWORD(wparam) == ID_PREF_LIST_CUSTOM_TEXT)) {
                 mark_prefs_dirty(page);
@@ -4219,6 +4379,14 @@ static INT_PTR CALLBACK prefs_lists_proc(HWND page, UINT msg, WPARAM wparam, LPA
                 settings_set_bool("list_indent_shortcut_brackets",
                                   IsDlgButtonChecked(page, ID_PREF_LIST_TAB_BRACKETS) ==
                                       BST_CHECKED);
+                int prim = IsDlgButtonChecked(page, ID_PREF_PASTE_PRIMARY_LISTS) == BST_CHECKED ? 1
+                           : IsDlgButtonChecked(page, ID_PREF_PASTE_PRIMARY_MD) == BST_CHECKED  ? 2
+                                                                                                : 0;
+                settings_set_int("markdown_paste_primary", prim);
+                int alt = IsDlgButtonChecked(page, ID_PREF_PASTE_ALT_LISTS) == BST_CHECKED ? 1
+                          : IsDlgButtonChecked(page, ID_PREF_PASTE_ALT_MD) == BST_CHECKED  ? 2
+                                                                                           : 0;
+                settings_set_int("markdown_paste_alt", alt);
                 settings_save();
                 // Apply the enable toggle to this window right away (menu +
                 // indent accelerators), then propagate to other instances
@@ -4477,6 +4645,9 @@ static void build_accelerators(Window *window) {
                       { FCONTROL | FVIRTKEY, VK_SUBTRACT, ID_VIEW_ZOOM_OUT },
                       { FCONTROL | FVIRTKEY, '0', ID_VIEW_ZOOM_RESET },
                       { FCONTROL | FVIRTKEY, VK_NUMPAD0, ID_VIEW_ZOOM_RESET },
+                      // Ctrl+Shift+V: alternate rich-text paste (mode configured
+                      // in Preferences; inert plain paste when Markdown is off)
+                      { FCONTROL | FSHIFT | FVIRTKEY, 'V', ID_EDIT_PASTE_ALT },
                       // Markdown indent/unindent - kept LAST so they can be
                       // trimmed from the table when not in effect
                       { FCONTROL | FVIRTKEY, VK_OEM_6, ID_LIST_INDENT },     // ']'
@@ -4878,6 +5049,10 @@ static void populate_list_menu(HMENU menu) {
     AppendMenuW(menu, MF_STRING | MF_POPUP, (UINT_PTR) indent, L"Inden&t");
     AppendMenuW(menu, MF_STRING, ID_LIST_UNINDENT,
                 brackets ? L"&Unindent\tCtrl+[" : L"&Unindent\tShift+Tab");
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    // Rich-text paste, fully converted to markdown (Ctrl+V / Ctrl+Shift+V modes
+    // are configurable in Preferences; this item is always a full conversion)
+    AppendMenuW(menu, MF_STRING, ID_EDIT_PASTE_MARKDOWN, L"&Paste as Markdown");
 }
 
 // Insert or remove the top-level Markdown menu to match the preference (always
@@ -5455,6 +5630,12 @@ static void handle_command(Window *window, WORD command) {
             break;
         case ID_EDIT_PASTE:
             ui_post_event(UI_EVENT_EDIT_PASTE, window, NULL);
+            break;
+        case ID_EDIT_PASTE_ALT:
+            ui_platform_paste_alt(window);
+            break;
+        case ID_EDIT_PASTE_MARKDOWN:
+            ui_platform_paste_as_markdown(window);
             break;
         case ID_EDIT_DELETE:
             SendMessageW(window->edit_hwnd, WM_CLEAR, 0, 0);

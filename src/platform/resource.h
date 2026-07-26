@@ -90,6 +90,14 @@
 #define ID_PREF_LIST_INDENT_FORMAT 3132
 #define ID_PREF_LIST_CUSTOM_TEXT 3137
 #define ID_PREF_LIST_TAB_BRACKETS 3138
+// Paste-mode radios (Ctrl+V primary / Ctrl+Shift+V alt), each: plain/lists/md.
+// Kept contiguous so CheckRadioButton + (base + mode) indexing works.
+#define ID_PREF_PASTE_PRIMARY_PLAIN 3151
+#define ID_PREF_PASTE_PRIMARY_LISTS 3152
+#define ID_PREF_PASTE_PRIMARY_MD 3153
+#define ID_PREF_PASTE_ALT_PLAIN 3154
+#define ID_PREF_PASTE_ALT_LISTS 3155
+#define ID_PREF_PASTE_ALT_MD 3156
 
 // Convert Delimiters dialog
 #define ID_DELIM_FROM 3133

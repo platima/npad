@@ -14,8 +14,8 @@
 
 // Version Information (keep in sync with src/main.h)
 1 VERSIONINFO
-FILEVERSION 0,18,0,0
-PRODUCTVERSION 0,18,0,0
+FILEVERSION 0,19,0,0
+PRODUCTVERSION 0,19,0,0
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0x0L
 FILEOS VOS__WINDOWS32
@@ -28,12 +28,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Platima"
             VALUE "FileDescription", "npad - Lightweight Text Editor"
-            VALUE "FileVersion", "0.18.0.0"
+            VALUE "FileVersion", "0.19.0.0"
             VALUE "InternalName", "npad"
             VALUE "LegalCopyright", "Copyright © 2025 Platima"
             VALUE "OriginalFilename", "npad.exe"
             VALUE "ProductName", "npad"
-            VALUE "ProductVersion", "0.18.0.0"
+            VALUE "ProductVersion", "0.19.0.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -166,7 +166,7 @@ BEGIN
 END
 
 // Preferences: Markdown page (optional Markdown list tools)
-IDD_PREFS_LISTS DIALOGEX 0, 0, 240, 196
+IDD_PREFS_LISTS DIALOGEX 0, 0, 240, 236
 STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "Markdown"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
@@ -176,13 +176,23 @@ BEGIN
     LTEXT           "-  Lists: formatting, continuation, sorting, indentation, unique filtering", IDC_STATIC, 14, 42, 216, 8
     LTEXT           "-  Escape interpretation (\\n \\t \\uXXXX) in Find / Replace and list tools", IDC_STATIC, 14, 51, 216, 8
     LTEXT           "-  Delimiter replacement (Convert Delimiters)", IDC_STATIC, 14, 60, 216, 8
-    LTEXT           "Default &indent format:", IDC_STATIC, 10, 76, 130, 8
-    COMBOBOX        ID_PREF_LIST_INDENT_FORMAT, 140, 74, 88, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Custom &prefix:", IDC_STATIC, 10, 94, 120, 8
-    EDITTEXT        ID_PREF_LIST_CUSTOM_TEXT, 140, 92, 88, 13, ES_AUTOHSCROLL
-    LTEXT           "Escapes: \\t tab  \\\\ backslash  \\uXXXX", IDC_STATIC, 10, 108, 220, 8
-    LTEXT           "Markers include a trailing space (e.g. ""- ""). Indenting an already-marked line adds two spaces (markdown-style nesting); unindent removes one level.", IDC_STATIC, 10, 120, 220, 24
-    CONTROL         "Use Ctrl+] / Ctrl+[ for indent instead of &Tab / Shift+Tab", ID_PREF_LIST_TAB_BRACKETS, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 148, 220, 18
+    LTEXT           "-  Pasting: convert rich text to lists or markdown (see Paste below)", IDC_STATIC, 14, 69, 216, 8
+    LTEXT           "Default &indent format:", IDC_STATIC, 10, 84, 120, 8
+    COMBOBOX        ID_PREF_LIST_INDENT_FORMAT, 140, 82, 88, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Custom &prefix:", IDC_STATIC, 10, 100, 120, 8
+    EDITTEXT        ID_PREF_LIST_CUSTOM_TEXT, 140, 98, 88, 13, ES_AUTOHSCROLL
+    LTEXT           "Escapes: \\t tab  \\\\ backslash  \\uXXXX", IDC_STATIC, 10, 114, 220, 8
+    LTEXT           "Markers include a trailing space (e.g. ""- ""). Indenting an already-marked line adds two spaces (markdown-style nesting); unindent removes one level.", IDC_STATIC, 10, 124, 220, 24
+    CONTROL         "Use Ctrl+] / Ctrl+[ for indent instead of &Tab / Shift+Tab", ID_PREF_LIST_TAB_BRACKETS, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 150, 220, 18
+    GROUPBOX        "Paste (rich text, when enabled)", IDC_STATIC, 10, 172, 220, 58
+    LTEXT           "Ctrl+V pastes:", IDC_STATIC, 16, 185, 60, 8
+    CONTROL         "Plain", ID_PREF_PASTE_PRIMARY_PLAIN, "Button", BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 80, 184, 44, 10
+    CONTROL         "Lists", ID_PREF_PASTE_PRIMARY_LISTS, "Button", BS_AUTORADIOBUTTON, 126, 184, 44, 10
+    CONTROL         "Markdown", ID_PREF_PASTE_PRIMARY_MD, "Button", BS_AUTORADIOBUTTON, 172, 184, 54, 10
+    LTEXT           "Ctrl+Shift+V:", IDC_STATIC, 16, 203, 60, 8
+    CONTROL         "Plain", ID_PREF_PASTE_ALT_PLAIN, "Button", BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 80, 202, 44, 10
+    CONTROL         "Lists", ID_PREF_PASTE_ALT_LISTS, "Button", BS_AUTORADIOBUTTON, 126, 202, 44, 10
+    CONTROL         "Markdown", ID_PREF_PASTE_ALT_MD, "Button", BS_AUTORADIOBUTTON, 172, 202, 54, 10
 END
 
 // Preferences: Defaults page (initial state for new windows)

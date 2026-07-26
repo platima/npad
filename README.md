@@ -68,6 +68,7 @@ Current features (Windows build):
   - Separate monospace and proportional fonts, each with its own picker; font type and zoom are per-window (Ctrl+M / Ctrl+Scroll), with configurable defaults, a 'Use Current' capture, and optional live sync across windows or auto-updating defaults
   - OpenDyslexic font option for reading assistance (Preferences > Appearance; requires the font to be installed)
   - Optional **Markdown list tools** (Preferences > Markdown, off by default): Sort and Unique lines, Convert Delimiters (a find/replace for delimiters with `\n`/`\t`/`\uXXXX` escapes), Indent/Unindent (Tab / Shift+Tab on a selection, or Ctrl+] / Ctrl+[ by preference) with markdown-style markers incl. a custom prefix, Enter continuing list markers, and cut-line/paste-above on Ctrl+X/Ctrl+V - in a Markdown menu and the right-click menu
+  - Optional **rich-text paste** (with the Markdown tools on): convert HTML clipboard content on paste - lists to your bullet style, or a full Markdown conversion (headings, bold/italic, code, links, quotes). Configurable per Ctrl+V / Ctrl+Shift+V, plus a "Paste as Markdown" command; plain-text clipboards always paste plain
   - Optional escape interpretation (`\n`, `\t`, `\uXXXX`, ...) in Find / Replace via a checkbox in the dialogs
   - Recent files menu (size configurable)
   - Drag-and-drop to open files; Ctrl+Drop inserts the file at the caret
@@ -333,6 +334,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] OpenDyslexic font option (reading assistance)
   - [x] Config backup / export & import
   - [x] Optional Markdown list tools (Sort, Unique, Convert Delimiters, Indent/Unindent incl. custom prefix, Enter list continuation, cut line/paste above; off by default)
+  - [x] Optional rich-text paste: HTML clipboard -> lists or full Markdown, configurable per Ctrl+V / Ctrl+Shift+V + "Paste as Markdown"
   - [x] Escape interpretation option in Find / Replace
   - [x] Binary-file detection on open (Cancel / Open in npad / Open with the default app)
   - [x] All dialogs open at a consistent notepad-style offset into the window

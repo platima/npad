@@ -5,6 +5,32 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-07-26
+
+### ✨ Features
+- **Rich-text paste (Markdown).** When Basic Markdown support is enabled,
+  pasting content that carries HTML (from a browser, word processor, etc.)
+  can convert it as it lands. Two conversion depths:
+  - **Lists** - `<ul>`/`<ol>` (including nesting) become list lines in your
+    current bullet style, everything else flattened to plain text.
+  - **Markdown** - full conversion: headings (`#`), bold (`**`), italic
+    (`*`), inline code and fenced code blocks, links, images, block quotes,
+    horizontal rules, and numbered ordered lists.
+- **Configurable paste modes** (Preferences > Markdown > Paste): two radio
+  groups set what **Ctrl+V** (default *Lists*) and **Ctrl+Shift+V** (default
+  *Plain*) do - each can be Plain, Lists, or Markdown.
+- **Paste as Markdown** command (Markdown menu + right-click) always does a
+  full conversion, and **Ctrl+Shift+V** is a new paste accelerator.
+- All of this is gated on Basic Markdown support; with it off (the default),
+  every paste stays plain, exactly as before. Plain-text sources (no HTML on
+  the clipboard) always paste plain regardless of mode.
+
+### 🔧 Internal
+- New platform-independent, unit-tested core module `src/core/html_md.c`
+  (CF_HTML fragment extraction + a bounded HTML→Markdown converter) with
+  `tests/test_html_md.c`; the converter caps output size and nesting depth so
+  hostile or huge clipboard input can never run away.
+
 ## [0.18.0] - 2026-07-25
 
 ### ✨ Features

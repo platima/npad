@@ -268,6 +268,27 @@ TEST_CASE(custom_empty_noop) {
                  "NULL custom prefix is a no-op copy");
 }
 
+TEST_CASE(bullet_marker_builtin) {
+    ASSERT_XFORM(list_bullet_marker(LIST_INDENT_HYPHEN, NULL), "- ", "hyphen bullet");
+    ASSERT_XFORM(list_bullet_marker(LIST_INDENT_ASTERISK, NULL), "* ", "asterisk bullet");
+    ASSERT_XFORM(list_bullet_marker(LIST_INDENT_ASTERISK_LSP, NULL), " * ", "asterisk LSP bullet");
+    ASSERT_XFORM(list_bullet_marker(LIST_INDENT_HYPHEN_LSP, NULL), " - ", "hyphen LSP bullet");
+}
+
+TEST_CASE(bullet_marker_whitespace_fallback) {
+    // Whitespace formats are not bullets: fall back to "- ".
+    ASSERT_XFORM(list_bullet_marker(LIST_INDENT_SPACES, NULL), "- ", "spaces -> '- ' fallback");
+    ASSERT_XFORM(list_bullet_marker(LIST_INDENT_TAB, NULL), "- ", "tab -> '- ' fallback");
+    ASSERT_XFORM(list_bullet_marker(LIST_INDENT_CUSTOM, "   "), "- ",
+                 "whitespace custom -> '- ' fallback");
+    ASSERT_XFORM(list_bullet_marker(LIST_INDENT_CUSTOM, NULL), "- ",
+                 "empty custom -> '- ' fallback");
+}
+
+TEST_CASE(bullet_marker_custom) {
+    ASSERT_XFORM(list_bullet_marker(LIST_INDENT_CUSTOM, ">> "), ">> ", "custom bullet preserved");
+}
+
 int main(void) {
     TEST_INIT();
 
@@ -316,6 +337,9 @@ int main(void) {
     RUN_TEST(custom_whitespace_strip);
     RUN_TEST(custom_long_prefix_grow);
     RUN_TEST(custom_empty_noop);
+    RUN_TEST(bullet_marker_builtin);
+    RUN_TEST(bullet_marker_whitespace_fallback);
+    RUN_TEST(bullet_marker_custom);
 
     TEST_SUMMARY();
     return 0;
