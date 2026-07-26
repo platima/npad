@@ -1368,7 +1368,7 @@ static char *paste_resolve_marker(void) {
 // Insert converted markdown/text (UTF-8) at the caret, replacing any selection,
 // as one undo step. The converter emits '\n' breaks; expand to the CRLF the
 // control uses. Caret ends after the inserted text (like a normal paste).
-static void paste_insert_converted(Window *window, const char *utf8) {
+static void paste_insert_converted(const Window *window, const char *utf8) {
     HWND e = window->edit_hwnd;
     char *norm = malloc(strlen(utf8) + 1);
     if (!norm)
