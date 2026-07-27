@@ -263,6 +263,7 @@ static void update_status_bar(Window *window);
 static void schedule_status_update(Window *window);
 static void schedule_counts_update(Window *window);
 static void apply_counts_pref(Window *window);
+static void set_status_part0(Window *window, const wchar_t *text);
 static void draw_highlight_overlay(HWND e, HRGN clip);
 static void resize_controls(Window *window);
 static bool register_window_class(void);
@@ -657,6 +658,16 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, L
                                            UINT_PTR id, DWORD_PTR ref) {
     (void) ref;
 
+    // The activating click must reach the text. WM_MOUSEACTIVATE is delivered
+    // to the CHILD first and only reaches the frame if the control forwards it,
+    // so claim it here: take focus, then return MA_ACTIVATE (never *ANDEAT) so
+    // the click still arrives as WM_LBUTTONDOWN and places the caret / starts a
+    // drag-selection on the very first press, as notepad.exe does.
+    if (msg == WM_MOUSEACTIVATE) {
+        SetFocus(hwnd);
+        return MA_ACTIVATE;
+    }
+
     // Markdown keyboard handling runs BEFORE the default proc so consumed
     // keys never reach the control. A consumed key still has its WM_CHAR
     // already queued by TranslateMessage, so that gets eaten too.
@@ -753,7 +764,10 @@ bool ui_platform_init(void) {
 
     INITCOMMONCONTROLSEX icex;
     icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
-    icex.dwICC = ICC_WIN95_CLASSES;
+    // Win95 classes cover the status bar and property sheets; the standard and
+    // link classes are what TaskDialogIndirect builds on, and the save prompt
+    // now rides that path
+    icex.dwICC = ICC_WIN95_CLASSES | ICC_STANDARD_CLASSES | ICC_LINK_CLASS;
     if (!InitCommonControlsEx(&icex)) {
         NPAD_ERROR_ERROR(NPAD_ERROR_SYSTEM, GetLastError(), "UI initialization",
                          "Failed to initialize common controls");
@@ -911,8 +925,12 @@ Window *ui_platform_create_main_window(void) {
         SendMessageW(window->hwnd, WM_SETICON, ICON_SMALL, (LPARAM) icon);
     }
 
-    DWORD edit_style = WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL |
-                       ES_NOHIDESEL | ES_WANTRETURN;
+    // ES_DISABLENOSCROLL greys the scroll bars out instead of hiding them when
+    // the content fits, matching notepad.exe. It also keeps the client width
+    // constant, so crossing the "needs a scrollbar" threshold no longer reflows
+    // every wrapped line.
+    DWORD edit_style = WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_DISABLENOSCROLL | ES_MULTILINE |
+                       ES_AUTOVSCROLL | ES_NOHIDESEL | ES_WANTRETURN;
     if (!window->word_wrap_enabled) {
         edit_style |= WS_HSCROLL | ES_AUTOHSCROLL;
     }
@@ -1733,9 +1751,97 @@ bool ui_platform_show_message_box(Window *parent, const char *title, const char 
     return is_question ? (result == IDYES) : true;
 }
 
+// ---------------------------------------------------------------------------
+// Task dialogs
+// ---------------------------------------------------------------------------
+
 // TaskDialogIndirect loaded dynamically: it only exists in comctl32 v6, and
 // resolving it at runtime keeps the import table friendly to older setups
 typedef HRESULT(WINAPI *TaskDialogIndirectFunc)(const TASKDIALOGCONFIG *, int *, int *, BOOL *);
+
+// One task dialog, described declaratively. Custom button ids must be >= 100 so
+// they can never collide with the IDOK/IDCANCEL/IDYES/IDNO the fallback returns.
+// cancel_button also supplies Esc / the title-bar close box, so a spec without
+// it would produce an uncloseable dialog unless it sets its own escape route.
+typedef struct {
+    const wchar_t *instruction;       // pszMainInstruction (the large text)
+    const wchar_t *content;           // pszContent (body text), or NULL for none
+    const wchar_t *icon;              // A TD_*_ICON, or NULL for no icon at all
+    const TASKDIALOG_BUTTON *buttons; // Custom buttons, top to bottom
+    int button_count;
+    int default_button; // A custom id, or IDCANCEL
+    bool cancel_button; // Append the common Cancel button
+} TaskDialogSpec;
+
+// Show spec and return the id of the button pressed: one of the custom ids, or
+// IDCANCEL. IDCANCEL also covers Esc, the close box and every failure path, so
+// callers can treat it uniformly as "the user chose nothing".
+static int show_task_dialog(HWND owner, const TaskDialogSpec *spec) {
+    if (!spec || !spec->buttons || spec->button_count <= 0)
+        return IDCANCEL;
+
+    HMODULE comctl = GetModuleHandleW(L"comctl32.dll");
+    union {
+        FARPROC proc;
+        TaskDialogIndirectFunc func;
+    } td;
+    td.proc = comctl ? GetProcAddress(comctl, "TaskDialogIndirect") : NULL;
+
+    if (td.proc) {
+        TASKDIALOGCONFIG cfg;
+        ZeroMemory(&cfg, sizeof(cfg));
+        cfg.cbSize = sizeof(cfg);
+        cfg.hwndParent = owner;
+        cfg.dwFlags = TDF_POSITION_RELATIVE_TO_WINDOW; // Centre on npad, not the monitor
+        cfg.dwCommonButtons = spec->cancel_button ? TDCBF_CANCEL_BUTTON : 0;
+        cfg.pszWindowTitle = L"npad";
+        cfg.pszMainIcon = spec->icon; // NULL renders no icon
+        cfg.pszMainInstruction = spec->instruction;
+        cfg.pszContent = spec->content;
+        cfg.cButtons = (UINT) spec->button_count;
+        cfg.pButtons = spec->buttons;
+        cfg.nDefaultButton = spec->default_button;
+
+        int pressed = IDCANCEL;
+        if (SUCCEEDED(td.func(&cfg, &pressed, NULL, NULL)))
+            return pressed;
+        return IDCANCEL;
+    }
+
+    // Fallback for a machine without comctl32 v6. A message box cannot show
+    // more than two named choices, so the first two custom buttons become
+    // Yes / No with their labels spelled out in the body - which is exactly
+    // what the hand-written fallbacks this helper replaced already did.
+    wchar_t body[900];
+    int n = _snwprintf(body, 899, L"%s%s%s", spec->instruction ? spec->instruction : L"",
+                       spec->content ? L"\n\n" : L"", spec->content ? spec->content : L"");
+    if (n < 0)
+        n = 0;
+    for (int i = 0; i < spec->button_count && i < 2; i++) {
+        int m = _snwprintf(body + n, (size_t) (899 - n), L"\n\n%s: %s", i == 0 ? L"Yes" : L"No",
+                           spec->buttons[i].pszButtonText);
+        if (m < 0)
+            break;
+        n += m;
+    }
+    body[899] = L'\0';
+
+    UINT type = (spec->button_count >= 2) ? (spec->cancel_button ? MB_YESNOCANCEL : MB_YESNO)
+                                          : (spec->cancel_button ? MB_OKCANCEL : MB_OK);
+    if (spec->icon == TD_WARNING_ICON)
+        type |= MB_ICONWARNING;
+    else if (spec->icon == TD_INFORMATION_ICON)
+        type |= MB_ICONINFORMATION;
+    else if (spec->icon == TD_ERROR_ICON)
+        type |= MB_ICONERROR;
+
+    int res = MessageBoxW(owner, body, L"npad", type);
+    if ((res == IDYES || res == IDOK) && spec->button_count >= 1)
+        return spec->buttons[0].nButtonID;
+    if (res == IDNO && spec->button_count >= 2)
+        return spec->buttons[1].nButtonID;
+    return IDCANCEL;
+}
 
 UiOpenChoice ui_platform_prompt_binary_open(Window *parent, const char *filename) {
     HWND hwnd = parent ? parent->hwnd : NULL;
@@ -1750,56 +1856,28 @@ UiOpenChoice ui_platform_prompt_binary_open(Window *parent, const char *filename
     free(name);
     wchar_t *wmessage = utf8_to_wide(message);
 
-    UiOpenChoice choice = UI_OPEN_CANCEL;
-    HMODULE comctl = GetModuleHandleW(L"comctl32.dll");
-    union {
-        FARPROC proc;
-        TaskDialogIndirectFunc func;
-    } td;
-    td.proc = comctl ? GetProcAddress(comctl, "TaskDialogIndirect") : NULL;
+    static const TASKDIALOG_BUTTON buttons[] = {
+        { 101, L"Open in npad" },
+        { 102, L"Open with the default app" },
+    };
+    TaskDialogSpec spec;
+    ZeroMemory(&spec, sizeof(spec));
+    spec.instruction = L"This file looks like a binary file";
+    spec.content = wmessage ? wmessage : L"This file does not look like a text file.";
+    spec.icon = TD_WARNING_ICON;
+    spec.buttons = buttons;
+    spec.button_count = 2;
+    spec.default_button = IDCANCEL;
+    spec.cancel_button = true;
 
-    if (td.proc) {
-        const TASKDIALOG_BUTTON buttons[] = {
-            { 101, L"Open in npad" },
-            { 102, L"Open with the default app" },
-        };
-        TASKDIALOGCONFIG cfg;
-        ZeroMemory(&cfg, sizeof(cfg));
-        cfg.cbSize = sizeof(cfg);
-        cfg.hwndParent = hwnd;
-        cfg.dwCommonButtons = TDCBF_CANCEL_BUTTON;
-        cfg.pszWindowTitle = L"npad";
-        cfg.pszMainIcon = TD_WARNING_ICON;
-        cfg.pszMainInstruction = L"This file looks like a binary file";
-        cfg.pszContent = wmessage ? wmessage : L"This file does not look like a text file.";
-        cfg.cButtons = 2;
-        cfg.pButtons = buttons;
-        cfg.nDefaultButton = IDCANCEL;
-
-        int pressed = 0;
-        if (SUCCEEDED(td.func(&cfg, &pressed, NULL, NULL))) {
-            if (pressed == 101)
-                choice = UI_OPEN_IN_NPAD;
-            else if (pressed == 102)
-                choice = UI_OPEN_WITH_DEFAULT;
-        }
-    } else {
-        // Fallback: Yes = open here, No = system default, Cancel = abort
-        wchar_t fallback[700];
-        _snwprintf(fallback, 699,
-                   L"%s\n\nYes: open in npad anyway\nNo: open with the default "
-                   L"app\nCancel: do nothing",
-                   wmessage ? wmessage : L"This file does not look like a text file.");
-        fallback[699] = L'\0';
-        int result = MessageBoxW(hwnd, fallback, L"npad", MB_YESNOCANCEL | MB_ICONWARNING);
-        if (result == IDYES)
-            choice = UI_OPEN_IN_NPAD;
-        else if (result == IDNO)
-            choice = UI_OPEN_WITH_DEFAULT;
-    }
-
+    int pressed = show_task_dialog(hwnd, &spec);
     free(wmessage);
-    return choice;
+
+    if (pressed == 101)
+        return UI_OPEN_IN_NPAD;
+    if (pressed == 102)
+        return UI_OPEN_WITH_DEFAULT;
+    return UI_OPEN_CANCEL;
 }
 
 void ui_platform_open_with_default_app(const char *filename) {
@@ -1827,16 +1905,33 @@ SavePromptResult ui_platform_show_save_prompt(Window *parent, const char *filena
     char message[512];
     snprintf(message, sizeof(message), "Do you want to save changes to %.400s?",
              filename ? filename : "Untitled");
-
     wchar_t *wmessage = utf8_to_wide(message);
-    int result = MessageBoxW(hwnd, wmessage ? wmessage : L"Do you want to save changes?", L"npad",
-                             MB_YESNOCANCEL | MB_ICONQUESTION);
+
+    // Matches notepad.exe: no icon, the question as the main instruction, and
+    // Save / Don't Save / Cancel with Save as the default. Deliberately no '&'
+    // mnemonics - Notepad's buttons have none.
+    static const TASKDIALOG_BUTTON buttons[] = {
+        { 101, L"Save" },
+        { 102, L"Don't Save" },
+    };
+    TaskDialogSpec spec;
+    ZeroMemory(&spec, sizeof(spec));
+    spec.instruction = wmessage ? wmessage : L"Do you want to save changes?";
+    spec.buttons = buttons;
+    spec.button_count = 2;
+    spec.default_button = 101;
+    spec.cancel_button = true;
+
+    int pressed = show_task_dialog(hwnd, &spec);
     free(wmessage);
 
-    switch (result) {
-        case IDYES:
+    // Anything other than an explicit Save/Don't Save - Esc, the close box, or
+    // a dialog failure - cancels. That is the safe default: it aborts the close
+    // rather than silently discarding the buffer.
+    switch (pressed) {
+        case 101:
             return UI_SAVE_PROMPT_SAVE;
-        case IDNO:
+        case 102:
             return UI_SAVE_PROMPT_DISCARD;
         default:
             return UI_SAVE_PROMPT_CANCEL;
@@ -1881,15 +1976,18 @@ static void set_status_message(Window *window, const char *message) {
     if (!window || !window->status_hwnd)
         return;
     // Cancel any pending counts refresh: a debounce armed by an earlier edit
-    // must not fire later and overwrite this (newer) message. The next edit
-    // re-arms it.
-    if (window->hwnd)
+    // must not fire later and overwrite this (newer) message. Clearing the
+    // pending flag alongside the timer is essential - it is otherwise only
+    // cleared by the timer handler we just cancelled, so it would latch on and
+    // schedule_counts_update would skip every future refresh, freezing the
+    // counts for the life of the window.
+    if (window->hwnd) {
         KillTimer(window->hwnd, NPAD_COUNTS_TIMER_ID);
+        window->counts_pending = false;
+    }
     wchar_t *wide = utf8_to_wide(message ? message : "");
     if (wide) {
-        wcsncpy(window->status_cache[0], wide, 63);
-        window->status_cache[0][63] = L'\0';
-        SendMessageW(window->status_hwnd, SB_SETTEXTW, 0, (LPARAM) wide);
+        set_status_part0(window, wide);
         free(wide);
     }
 }
@@ -2212,45 +2310,25 @@ static void prompt_update_available(Window *window, const char *tag, const char 
     snprintf(msg, sizeof(msg), "npad %s is available (you have %s).", tag, cur);
     wchar_t *wmsg = utf8_to_wide(msg);
 
-    int choice = 0; // 0 = not now, 101 = install, 102 = notes, 103 = skip
-    HMODULE comctl = GetModuleHandleW(L"comctl32.dll");
-    union {
-        FARPROC proc;
-        TaskDialogIndirectFunc func;
-    } td;
-    td.proc = comctl ? GetProcAddress(comctl, "TaskDialogIndirect") : NULL;
-    if (td.proc) {
-        const TASKDIALOG_BUTTON buttons[] = {
-            { 101, L"Download and install" },
-            { 102, L"View the release notes" },
-            { 103, L"Skip this version" },
-        };
-        TASKDIALOGCONFIG cfg;
-        ZeroMemory(&cfg, sizeof(cfg));
-        cfg.cbSize = sizeof(cfg);
-        cfg.hwndParent = hwnd;
-        cfg.dwCommonButtons = TDCBF_CANCEL_BUTTON;
-        cfg.pszWindowTitle = L"npad";
-        cfg.pszMainIcon = TD_INFORMATION_ICON;
-        cfg.pszMainInstruction = L"A newer version of npad is available";
-        cfg.pszContent = wmsg ? wmsg : L"A newer release is available.";
-        cfg.cButtons = 3;
-        cfg.pButtons = buttons;
-        cfg.nDefaultButton = 101;
-        int pressed = 0;
-        if (SUCCEEDED(td.func(&cfg, &pressed, NULL, NULL)))
-            choice = pressed;
-    } else {
-        wchar_t fb[300];
-        _snwprintf(fb, 299,
-                   L"%s\n\nYes: download and install\nNo: view the release notes\n"
-                   L"Cancel: not now",
-                   wmsg ? wmsg : L"A newer release is available.");
-        fb[299] = L'\0';
-        int res = MessageBoxW(hwnd, fb, L"npad", MB_YESNOCANCEL | MB_ICONINFORMATION);
-        choice = (res == IDYES) ? 101 : (res == IDNO) ? 102 : 0;
-    }
+    static const TASKDIALOG_BUTTON buttons[] = {
+        { 101, L"Download and install" },
+        { 102, L"View the release notes" },
+        { 103, L"Skip this version" },
+    };
+    TaskDialogSpec spec;
+    ZeroMemory(&spec, sizeof(spec));
+    spec.instruction = L"A newer version of npad is available";
+    spec.content = wmsg ? wmsg : L"A newer release is available.";
+    spec.icon = TD_INFORMATION_ICON;
+    spec.buttons = buttons;
+    spec.button_count = 3;
+    spec.default_button = 101;
+    spec.cancel_button = true;
+
+    int pressed = show_task_dialog(hwnd, &spec);
     free(wmsg);
+    // 0 = not now, 101 = install, 102 = notes, 103 = skip
+    int choice = (pressed == IDCANCEL) ? 0 : pressed;
 
     if (choice == 101) {
         char status[96];
@@ -2847,11 +2925,10 @@ static void replace_all(Window *window) {
     } else {
         snprintf(message, sizeof(message), "Cannot find the search text");
     }
-    wchar_t *wmessage = utf8_to_wide(message);
-    if (wmessage) {
-        SendMessageW(window->status_hwnd, SB_SETTEXTW, 0, (LPARAM) wmessage);
-        free(wmessage);
-    }
+    // Via set_status_message so the part-0 cache stays in sync and the pending
+    // counts debounce is cancelled - the replacements themselves arm it, and it
+    // used to fire ~120ms later and wipe this message off the bar
+    set_status_message(window, message);
 }
 
 static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -3261,8 +3338,12 @@ static void apply_word_wrap(Window *window) {
     // EM_SETTARGETDEVICE with line width 0 wraps to the window; 1 disables wrap
     SendMessageW(window->edit_hwnd, EM_SETTARGETDEVICE, 0, window->word_wrap_enabled ? 0 : 1);
 
-    // Toggle the horizontal scrollbar to match
+    // Toggle the horizontal scrollbar to match. Re-assert the vertical bits
+    // rather than round-tripping whatever we happen to read back: RichEdit owns
+    // WS_VSCROLL and clears it while the content fits, so a blind
+    // read-modify-write can persist that transient state into the style word.
     LONG_PTR style = GetWindowLongPtrW(window->edit_hwnd, GWL_STYLE);
+    style |= (LONG_PTR) (WS_VSCROLL | ES_DISABLENOSCROLL);
     if (window->word_wrap_enabled) {
         style &= ~((LONG_PTR) (WS_HSCROLL | ES_AUTOHSCROLL));
     } else {
@@ -5738,6 +5819,25 @@ static void set_status_part(Window *window, int part, const wchar_t *text) {
     SendMessageW(window->status_hwnd, SB_SETTEXTW, (WPARAM) part, (LPARAM) text);
 }
 
+// SB_SETPARTS defines only the RIGHT edge of each part, so part 0 starts at the
+// client origin and its text renders hard against the window border, while
+// parts 1-5 sit a couple of pixels inside their left divider. Pad part 0 with a
+// space - which scales with the font and DPI, unlike a pixel constant. Every
+// writer of part 0 goes through here, which also keeps status_cache[0]
+// authoritative for the duplicate-send check in set_status_part.
+static void set_status_part0(Window *window, const wchar_t *text) {
+    if (!window || !window->status_hwnd)
+        return;
+    if (!text || text[0] == L'\0') {
+        set_status_part(window, 0, L""); // Clearing must leave a truly empty part
+        return;
+    }
+    wchar_t padded[80];
+    _snwprintf(padded, 79, L" %s", text);
+    padded[79] = L'\0';
+    set_status_part(window, 0, padded);
+}
+
 static void update_status_bar(Window *window) {
     if (!window || !window->status_hwnd || !window->edit_hwnd || !window->status_bar_visible)
         return;
@@ -5798,7 +5898,7 @@ static void update_text_counts(Window *window) {
     _snwprintf(msg, 95, L"%lu words, %lu chars, %lu lines", (unsigned long) words,
                (unsigned long) chars, (unsigned long) lines);
     msg[95] = L'\0';
-    set_status_part(window, 0, msg);
+    set_status_part0(window, msg);
 }
 
 // Refresh the counts while typing. Normal documents coalesce (one recompute
@@ -5830,7 +5930,7 @@ static void apply_counts_pref(Window *window) {
     if (settings_get_bool("status_show_counts", false)) {
         update_text_counts(window);
     } else if (window->status_hwnd) {
-        set_status_part(window, 0, L"");
+        set_status_part0(window, L"");
     }
 }
 
@@ -5961,6 +6061,19 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                 SetFocus(window->edit_hwnd);
             }
             return 0;
+        }
+
+        case WM_MOUSEACTIVATE: {
+            // Focus the editor as part of the activating click and let the
+            // click through (MA_ACTIVATE, never *ANDEAT), so clicking - or
+            // click-dragging to select - in an unfocused window lands on the
+            // text immediately instead of being spent on activation. Without
+            // this the WM_SETFOCUS redirect above runs re-entrantly inside
+            // DefWindowProcW's activation handling and eats the first click.
+            if (window && window->edit_hwnd) {
+                SetFocus(window->edit_hwnd);
+            }
+            return MA_ACTIVATE;
         }
 
         case WM_INITMENUPOPUP: {

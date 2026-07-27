@@ -66,6 +66,7 @@ Current features (Windows build):
   - Line ending conversion (Format menu, Ctrl+E to cycle, or click the status bar)
   - Encoding picker in the Save dialog (or click the status bar); warns before an ANSI save would lose characters
   - Right-click context menu (Undo/Redo/Cut/Copy/Paste/Delete/Select All)
+  - Notepad-style unsaved-changes prompt (Save / Don't Save / Cancel), always-visible scroll bars, and a first click into an unfocused window that acts immediately
   - Status bar click actions: Ln/Col opens Go To, zoom resets, font mode toggles monospace, line ending and encoding open pickers
   - New Window (Ctrl+Shift+N) opens a second independent instance; a Preferences option can make Ctrl+N do this instead
   - Close (Ctrl+W) closes the current window, Close All Windows (Ctrl+Shift+W) closes them all - each save-checked
@@ -168,9 +169,10 @@ Download from the [**Releases page**](https://github.com/platima/npad/releases):
 
 - 🛠️ **`npad-v<version>-setup-win-x64.exe`** - Windows installer. Per-user by
   default (no admin needed); system-wide when run elevated or chosen in the
-  dialog. Adds `npad` to PATH (so it runs from a terminal), optional bundled
-  fonts (Intel One Mono, Roboto, OpenDyslexic), grouped file associations
-  (Text / Markdown / Data / Config / Logs), and a 'notepad' alias. Silent:
+  dialog. Adds `npad` to PATH (so it runs from a terminal), lists npad in
+  Windows' "Open with" menu for any file, optional bundled fonts (Intel One
+  Mono, Roboto, OpenDyslexic), grouped file associations (Text / Markdown /
+  Data / Config / Logs), and a 'notepad' alias. Silent:
   `/VERYSILENT [/ALLUSERS]`.
 - 📋 **`npad-v<version>-msi-win-x64.msi`** - For silent/enterprise deployment:
   `msiexec /i npad-v<version>-msi-win-x64.msi /qn` (add `ALLUSERS=1` for
@@ -365,6 +367,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] Optional 'notepad' command replacement (App Paths alias task in both installers)
   - [x] Add npad to PATH so it runs from Command Prompt / PowerShell (both installers)
   - [x] Grouped file associations (Text / Markdown / Data / Config / Logs)
+  - [x] Appear in Windows' "Open with" list for any file type (like notepad.exe)
 - [ ] **Cross-Platform Expansion**
   - [ ] macOS Cocoa implementation
   - [ ] Linux X11/Wayland implementation

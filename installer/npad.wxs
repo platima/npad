@@ -9,9 +9,11 @@
     msiexec /i npad.msi /qn ALLUSERS=1       (system-wide; needs elevation)
 
   Feature selection for deployments (defaults mirror the Inno installer):
-    Main (required), PathEnv + AssocText + NotepadAlias + Fonts (on by
-    default), AssocMarkdown / AssocData / AssocConfig / AssocLog (off;
+    Main (required), PathEnv + OpenWith + AssocText + NotepadAlias + Fonts (on
+    by default), AssocMarkdown / AssocData / AssocConfig / AssocLog (off;
     enable via e.g. ADDLOCAL=AssocData,AssocConfig).
+    OpenWith only adds npad to the shell's "Open with" chooser for any file
+    type; it never changes a default handler.
     PathEnv adds the install dir to PATH so 'npad' resolves from a terminal
     (per-user PATH, or the machine PATH under ALLUSERS=1); suppress with
     ADDLOCAL negation or a transform if unwanted.
@@ -111,6 +113,29 @@
                      Value="Lightweight cross-platform text editor" />
       <RegistryValue Root="HKMU" Key="Software\RegisteredApplications"
                      Name="npad" Type="string" Value="Software\Platima\npad\Capabilities" />
+      <!-- Icon for the Settings > Default apps entry -->
+      <RegistryValue Root="HKMU" Key="Software\Platima\npad\Capabilities"
+                     Name="ApplicationIcon" Type="string" Value="[INSTALLFOLDER]npad.exe,0" />
+    </Component>
+
+    <!-- ============ "Open with" for any file type (always on) ============ -->
+    <!-- Purely additive: these keys add npad to the shell's chooser lists and
+         can never change a default handler. No SupportedTypes subkey - it would
+         FILTER npad out of "Open with" for every type not listed - and never a
+         NoOpenWith value, which would suppress npad entirely. -->
+    <Component Id="OpenWithAny" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKMU" Key="Software\Classes\Applications\npad.exe"
+                     Name="FriendlyAppName" Type="string" Value="npad" KeyPath="yes" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\Applications\npad.exe\DefaultIcon"
+                     Type="string" Value="[INSTALLFOLDER]npad.exe,0" />
+      <RegistryValue Root="HKMU" Key="Software\Classes\Applications\npad.exe\shell\open\command"
+                     Type="string" Value="&quot;[INSTALLFOLDER]npad.exe&quot; &quot;%1&quot;" />
+      <!-- Explorer reads OpenWithList entries as SUBKEYS named after the exe -->
+      <RegistryKey Root="HKMU" Key="Software\Classes\*\OpenWithList\npad.exe"
+                   ForceCreateOnInstall="yes" ForceDeleteOnUninstall="yes" />
+      <!-- Guarantee the whole app-registration subtree goes on uninstall -->
+      <RemoveRegistryKey Root="HKMU" Key="Software\Classes\Applications\npad.exe"
+                         Action="removeOnUninstall" />
     </Component>
 
     <!-- 'notepad' alias takeover (Run box / ShellExecute). The Windows 11
@@ -266,6 +291,11 @@
     <Feature Id="PathEnv" Title="Add npad to PATH" Level="1">
       <ComponentRef Id="PathEnvUser" />
       <ComponentRef Id="PathEnvMachine" />
+    </Feature>
+    <!-- Additive only (never changes a default handler), so on by default;
+         deployers can still drop it with REMOVE=OpenWith -->
+    <Feature Id="OpenWith" Title="Offer npad in the Windows &quot;Open with&quot; list" Level="1">
+      <ComponentRef Id="OpenWithAny" />
     </Feature>
     <!-- File associations grouped like the Inno installer's tasks -->
     <Feature Id="AssocText" Title="Associate text files (.txt)" Level="1">

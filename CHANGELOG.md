@@ -5,6 +5,58 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] - 2026-07-26
+
+### ✨ Features
+- **npad now appears in Windows' "Open with" list for any file type**, matching
+  notepad.exe, so you can open an unusual text-ish file in npad without having
+  associated that extension. This is purely additive: it adds npad to the
+  chooser and to Settings > Default apps (now with an icon), and **never**
+  changes which app owns a file type. Installed by default (MSI feature
+  `OpenWith`).
+  - Deliberately **not** written: a `SupportedTypes` list (declaring one would
+    *filter* npad out of "Open with" for every type not listed — the opposite
+    of the goal), and `PerceivedType` / `Content Type` values (they live on the
+    shared extension keys, do nothing for "Open with", and uninstall would
+    delete rather than restore values other apps may own).
+
+### 🔄 Changed
+- **The unsaved-changes prompt now matches notepad.exe**: a task dialog with
+  **Save / Don't Save / Cancel** (was Yes / No / Cancel), no icon, and the
+  question as the main instruction. This also fixes the cramped window-title
+  inset, which was a consequence of the old dialog type rather than any
+  setting.
+- **Task dialogs now centre on the npad window** instead of the monitor,
+  matching every other npad dialog. Affects the update-available and
+  binary-file prompts too.
+- **The vertical scroll bar is now always shown** (greyed when the content
+  fits), like classic Notepad, instead of appearing and disappearing. As a
+  bonus this keeps the text area a constant width, so crossing the
+  "needs a scroll bar" threshold no longer reflows every wrapped line. With
+  word wrap off, the horizontal bar behaves the same way.
+- **Clicking into an unfocused npad window now works on the first click.**
+  Clicking — or click-dragging to select — places the caret straight away
+  instead of the click being consumed by activating the window.
+- Status bar: the optional word/character/line counts are no longer jammed
+  against the left window border.
+
+### 🐛 Bug Fixes
+- **"Replaced N occurrences" no longer vanishes** a fraction of a second after
+  Replace All when the status-bar counts are enabled (the counts refresh armed
+  by the replacements themselves used to overwrite it).
+- Replace All's status message now keeps the status-bar cache in sync, so an
+  identical follow-up message is no longer suppressed.
+- Hardened the word-wrap toggle so it can no longer persist RichEdit's
+  transient "no scroll bar needed" state into the control's style.
+
+> **Note on the disappearing scroll bar:** a report of the vertical scroll bar
+> vanishing while the view stayed scrolled could **not** be reproduced across
+> six scenarios (text shrinking, window resize, zoom, word-wrap toggle, font
+> rebinding), and the suspected cause was disproved by measurement — RichEdit
+> restores that state correctly in every path tested. The always-visible bar and
+> the style hardening above are fidelity and robustness improvements, **not** a
+> confirmed fix. Please report the context if it recurs.
+
 ## [0.19.0] - 2026-07-26
 
 ### ✨ Features

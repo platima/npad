@@ -110,6 +110,26 @@ Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\notepad.
 Root: HKA; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "npad"; ValueData: "Software\Platima\npad\Capabilities"; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Platima\npad\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "npad"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Platima\npad\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "Lightweight cross-platform text editor"; Flags: uninsdeletekey
+; Icon for the Settings > Default apps entry
+Root: HKA; Subkey: "Software\Platima\npad\Capabilities"; ValueType: string; ValueName: "ApplicationIcon"; ValueData: "{app}\{#AppExe},0"; Flags: uninsdeletevalue
+
+; --- "Open with" for ANY file type (always installed; purely additive) -------
+; Applications\npad.exe is the shell's application registration - it makes npad
+; nameable and launchable from the Open With chooser. A SupportedTypes subkey is
+; deliberately NOT written: declaring it FILTERS the app out of "Open with" for
+; every type it does not list, and npad wants to be offered for anything, like
+; notepad.exe. NoOpenWith is likewise never written (it would suppress npad).
+; None of these keys can make npad the default handler for any extension - they
+; only add it to a chooser list - so they are not gated on the assoc tasks.
+Root: HKA; Subkey: "Software\Classes\Applications\{#AppExe}"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "npad"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Applications\{#AppExe}\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"
+Root: HKA; Subkey: "Software\Classes\Applications\{#AppExe}\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""
+; Offer npad for files of any type. Entries here are SUBKEYS named after the
+; executable (the a/b/c + MRUList value shape belongs under Explorer\FileExts,
+; not here). The parent is listed first so Inno's reverse-order uninstall
+; removes it AFTER our subkey, and only if no other app also registered there.
+Root: HKA; Subkey: "Software\Classes\*\OpenWithList"; ValueType: none; Flags: uninsdeletekeyifempty
+Root: HKA; Subkey: "Software\Classes\*\OpenWithList\{#AppExe}"; ValueType: none; Flags: uninsdeletekey
 
 ; Per-extension ProgIDs + associations, grouped into tasks (Text / Markdown /
 ; Data / Config / Logs). One ProgID per extension keeps Explorer's type names

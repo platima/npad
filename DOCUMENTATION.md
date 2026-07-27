@@ -50,8 +50,8 @@ chosen: the setup EXE asks (or accepts `/ALLUSERS`); the MSI takes
   use `/MERGETASKS="!fontdefaults"` to skip), desktop icon (off).
 
 **MSI features** (silent-deployment oriented, no UI - use `/qn` or `/qb`):
-`Main`, `PathEnv`, `AssocText`, `NotepadAlias`, `Fonts` install by default;
-`AssocMarkdown`/`AssocData`/`AssocConfig`/`AssocLog` via `ADDLOCAL`, e.g.
+`Main`, `PathEnv`, `OpenWith`, `AssocText`, `NotepadAlias`, `Fonts` install by
+default; `AssocMarkdown`/`AssocData`/`AssocConfig`/`AssocLog` via `ADDLOCAL`, e.g.
 `msiexec /i npad-v<v>-msi-win-x64.msi /qn ADDLOCAL=Main,AssocText,NotepadAlias,AssocData`.
 Fonts install in machine-wide mode only (`ALLUSERS=1`): Windows MSI resolves
 the fonts folder to `C:\Windows\Fonts` regardless of scope, so the feature
@@ -79,6 +79,20 @@ App execution aliases for as full a takeover as Windows allows. (Running
 a file type. The installers register npad for the chosen extensions (it
 appears in "Open with" and Default Apps); the setup EXE offers the Default
 Apps Settings page after install to make it the default for .txt.
+
+**"Open with" for any file type**: separately from the association groups, the
+installers always register npad as a shell application
+(`Software\Classes\Applications\npad.exe` plus an entry under
+`Software\Classes\*\OpenWithList`), so npad is offered in the right-click
+**Open with** list for *any* file - the same way notepad.exe is - even for
+extensions you did not associate. This only adds npad to a chooser list; it
+never changes which application owns a file type. Two things are deliberately
+omitted: a `SupportedTypes` list (declaring one *filters* an app out of
+"Open with" for every type it does not list) and `PerceivedType` /
+`Content Type` values (they sit on the shared extension keys, contribute
+nothing to "Open with", and uninstall would delete rather than restore values
+another app may have set). Suppress the whole thing with the MSI's
+`OpenWith` feature if you deploy silently.
 
 **Uninstall** removes the program, shortcuts and every registry entry the
 installer wrote, but keeps your settings (`%APPDATA%\Platima\npad`) and any
@@ -258,6 +272,19 @@ position). Not intended for direct use.
 
 - **Atomic saves**: files are written to a temp file, verified, then renamed
   over the original. A failed save never destroys the existing file.
+- **Unsaved-changes prompt**: closing or replacing a modified document asks
+  "Do you want to save changes to ...?" with **Save / Don't Save / Cancel**,
+  matching notepad.exe. Esc, the close box, and anything other than an explicit
+  Save or Don't Save all cancel - i.e. they abort the close and keep your
+  document, never discard it.
+- **Scroll bars are always shown** (greyed out when the content fits), as in
+  classic Notepad, rather than appearing and disappearing. This also keeps the
+  text area a constant width, so the wrapped layout does not jump when the
+  document grows past one screen. With word wrap on there is no horizontal bar
+  at all; with it off, the horizontal bar follows the same always-shown rule.
+- **Clicking an unfocused window acts immediately**: the click that activates
+  npad also places the caret, and a click-drag starts selecting - no need to
+  click once to focus and again to act.
 - **Encodings & line endings**: detected on open (BOM + heuristics) and
   preserved on save. Line endings are changeable via the status bar or
   Format > Line Endings; encoding via the status bar or the Save As dialog's
