@@ -1866,8 +1866,8 @@ UiOpenChoice ui_platform_prompt_binary_open(Window *parent, const char *filename
     wchar_t *wmessage = utf8_to_wide(message);
 
     static const TASKDIALOG_BUTTON buttons[] = {
-        { 101, L"Open in npad" },
-        { 102, L"Open with the default app" },
+        { 101, L"&Open in npad" },
+        { 102, L"Open with the &default app" },
     };
     TaskDialogSpec spec;
     ZeroMemory(&spec, sizeof(spec));
@@ -1917,11 +1917,11 @@ SavePromptResult ui_platform_show_save_prompt(Window *parent, const char *filena
     wchar_t *wmessage = utf8_to_wide(message);
 
     // Matches notepad.exe: no icon, the question as the main instruction, and
-    // Save / Don't Save / Cancel with Save as the default. Deliberately no '&'
-    // mnemonics - Notepad's buttons have none.
+    // Save / Don't Save / Cancel with Save as the default. Mnemonics match
+    // Notepad's too (Alt+S / Alt+N); Cancel's comes from the common button.
     static const TASKDIALOG_BUTTON buttons[] = {
-        { 101, L"Save" },
-        { 102, L"Don't Save" },
+        { 101, L"&Save" },
+        { 102, L"Do&n't Save" },
     };
     TaskDialogSpec spec;
     ZeroMemory(&spec, sizeof(spec));
@@ -2320,9 +2320,9 @@ static void prompt_update_available(Window *window, const char *tag, const char 
     wchar_t *wmsg = utf8_to_wide(msg);
 
     static const TASKDIALOG_BUTTON buttons[] = {
-        { 101, L"Download and install" },
-        { 102, L"View the release notes" },
-        { 103, L"Skip this version" },
+        { 101, L"&Download and install" },
+        { 102, L"&View the release notes" },
+        { 103, L"&Skip this version" },
     };
     TaskDialogSpec spec;
     ZeroMemory(&spec, sizeof(spec));

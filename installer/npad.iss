@@ -38,6 +38,11 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ChangesAssociations=yes
 ; The 'addtopath' task edits PATH via [Code]; broadcast the change at the end
 ChangesEnvironment=yes
+; Close a running npad so its exe can be replaced (npad's own save prompt still
+; runs), but do NOT let the Restart Manager silently bring it back: the [Run]
+; entry offers a relaunch instead, and only when there was something to relaunch.
+CloseApplications=yes
+RestartApplications=no
 MinVersion=10.0
 LicenseFile=..\LICENSE
 
@@ -257,7 +262,11 @@ Name: "{autoprograms}\npad"; Filename: "{app}\{#AppExe}"
 Name: "{autodesktop}\npad"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#AppExe}"; Description: "Launch npad"; Flags: postinstall nowait skipifsilent
+; Only offered when setup actually had to close a running npad - see
+; NpadWasRunning. RestartApplications=no above means the Restart Manager will
+; not silently relaunch it behind this checkbox, so exactly one instance starts
+; and only if the user leaves the box ticked.
+Filename: "{app}\{#AppExe}"; Description: "Relaunch npad"; Flags: postinstall nowait skipifsilent; Check: NpadWasRunning
 ; Windows will not let installers set the default handler programmatically
 Filename: "ms-settings:defaultapps"; Description: "Open Default Apps settings (make npad the default editor)"; Flags: postinstall shellexec skipifsilent unchecked
 ; The Windows 11 Store Notepad alias must be disabled by hand:
@@ -267,6 +276,25 @@ Filename: "ms-settings:defaultapps"; Description: "Open Default Apps settings (m
 Filename: "ms-settings:advanced-apps"; Description: "Open Settings to disable the Windows 11 Notepad alias (App execution aliases)"; Flags: postinstall shellexec skipifsilent; Check: ShouldOfferAliasSettings
 
 [Code]
+// --- Was npad already running when setup started? -------------------------
+// The "Launch npad" checkbox should only appear when setup actually
+// interrupted a running instance - offering to start an app the user was not
+// using is noise. Recorded in InitializeSetup, i.e. before the Preparing to
+// Install page closes anything, so it reflects the state we found.
+var
+  GNpadWasRunning: Boolean;
+
+function InitializeSetup(): Boolean;
+begin
+  GNpadWasRunning := FindWindowByClassName('NpadMainWindow') <> 0;
+  Result := True;
+end;
+
+function NpadWasRunning(): Boolean;
+begin
+  Result := GNpadWasRunning;
+end;
+
 // The App-execution-aliases Settings page is only useful when the Windows
 // 11 Store Notepad has planted its 'notepad.exe' alias stub, which can
 // still win over npad's App Paths entry in some contexts (e.g. cmd.exe

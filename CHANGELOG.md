@@ -5,6 +5,22 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.1] - 2026-07-28
+
+### 🐛 Bug Fixes
+- **The save prompt's keyboard mnemonics are back.** v0.20.0's new task dialog
+  dropped them, so Alt+S / Alt+N no longer worked and the letters were not
+  underlined. Restored to match notepad.exe (**S**ave, Do**n**'t Save), and
+  added to the binary-file and update prompts too, which never had them.
+
+### 🔄 Changed
+- **Setup only offers to relaunch npad if it had to close it.** Previously
+  every install ended with a "Launch npad" checkbox, even when npad had not
+  been running. Setup now checks up front and offers a **Relaunch npad** option
+  only in that case. The Restart Manager is also stopped from silently
+  restarting npad behind the checkbox, so exactly one instance starts, and only
+  if you leave the box ticked.
+
 ## [0.22.0] - 2026-07-28
 
 ### 🚀 Performance

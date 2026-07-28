@@ -94,6 +94,12 @@ nothing to "Open with", and uninstall would delete rather than restore values
 another app may have set). Suppress the whole thing with the MSI's
 `OpenWith` feature if you deploy silently.
 
+**Installing over a running npad**: setup closes it first so the executable can
+be replaced — npad's normal save prompt still appears if you have unsaved work.
+Only in that case does the last page offer **Relaunch npad**; if npad was not
+running, no launch option is shown. Windows' Restart Manager is prevented from
+restarting it automatically, so the checkbox is the single place that decides.
+
 **Uninstall** removes the program, shortcuts and every registry entry the
 installer wrote, but keeps your settings (`%APPDATA%\Platima\npad`) and any
 installed fonts.
