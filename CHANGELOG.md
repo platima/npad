@@ -5,6 +5,47 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] - 2026-07-28
+
+Performance round. Neither reported slowdown could be reproduced on the test
+machine, so rather than guess, this release makes npad able to *report* where
+the time goes, and removes work it should never have been doing.
+
+### 🔄 Changed
+- **The executable is 26% smaller** (425 KB → 314 KB). The application icon
+  accounted for over half the binary because its larger images were stored
+  uncompressed; they are now PNG-compressed. Every icon size is retained and
+  verified pixel-for-pixel identical. A smaller image is quicker to read the
+  first time it runs after a while, which is exactly when startup is slow.
+- **The startup profile (Debug page) now measures from process creation**, not
+  from npad's own entry point. Everything the system does first — loading the
+  image and its DLLs, C-runtime init, manifest processing, anti-malware
+  inspection — was previously invisible and reported as 0.0 ms. It is now the
+  first line of the profile.
+- The "deferred tasks" line is labelled as firing on a 50 ms timer, so it is
+  not mistaken for startup work — it is the last number in the profile and
+  reads much larger than the real cost.
+- **Paint timings now include the Highlight All overlay** and report a **max**
+  as well as an average. The overlay was previously excluded, so the Debug page
+  under-reported precisely the case most likely to be slow, and a peak is what
+  actually feels like a stutter.
+
+### 🚀 Performance
+- Removed a redundant DPI-awareness setup block that loaded and freed
+  `shcore.dll` on **every launch** for a code path that cannot run on any
+  supported Windows version — DPI awareness comes from the embedded manifest,
+  which the system applies before npad's code runs. (Verified: npad is still
+  per-monitor-v2 aware.)
+- `dwmapi.dll` is now resolved once instead of being loaded and freed on every
+  theme application, window creation and settings broadcast.
+
+### 📋 Measured, for reference
+On the test machine, a warm start is ~40 ms end to end (~12 ms of that before
+npad's own code runs), and scrolling a 5.6 MB document of very long lines with
+word wrap, live counts and Highlight All all enabled drains a 300-notch scroll
+burst in under 5 ms. If you see worse, the Debug page (Ctrl+Shift+.) will now
+say where it went — please send that profile.
+
 ## [0.20.0] - 2026-07-26
 
 ### ✨ Features

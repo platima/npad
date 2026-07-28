@@ -73,6 +73,7 @@ static unsigned g_paint_count = 0;
 static unsigned g_selchange_count = 0;
 static double g_last_paint_ms = 0.0;
 static double g_paint_total_ms = 0.0;
+static double g_paint_max_ms = 0.0; // Worst single repaint; peaks are what feel like lag
 
 static double qpc_ms(void) {
     static LARGE_INTEGER freq;
@@ -715,16 +716,24 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, L
         // one as the end of the perceived startup time
         double t0 = qpc_ms();
         result = DefSubclassProc(hwnd, msg, wparam, lparam);
-        g_last_paint_ms = qpc_ms() - t0;
-        g_paint_total_ms += g_last_paint_ms;
-        g_paint_count++;
-        if (g_paint_count == 1) {
+        if (g_paint_count == 0) {
             startup_prof_mark("first paint");
         }
         if (update_rgn) {
             draw_highlight_overlay(hwnd, update_rgn);
             DeleteObject(update_rgn);
         }
+        // Measured AFTER the overlay: it is part of what a repaint costs, and
+        // excluding it made the Debug page under-report exactly the case
+        // (Highlight All over a big document) most likely to be slow. The peak
+        // matters more than the mean for perceived lag, so track it too.
+        double paint_ms = qpc_ms() - t0;
+        g_last_paint_ms = paint_ms;
+        g_paint_total_ms += paint_ms;
+        if (paint_ms > g_paint_max_ms) {
+            g_paint_max_ms = paint_ms;
+        }
+        g_paint_count++;
     } else {
         result = DefSubclassProc(hwnd, msg, wparam, lparam);
     }
@@ -3099,24 +3108,32 @@ void ui_platform_show_replace_dialog(Window *parent) {
 typedef HRESULT(WINAPI *DwmSetWindowAttributeFunc)(HWND, DWORD, LPCVOID, DWORD);
 
 static void set_title_bar_dark(HWND hwnd, bool dark) {
-    HMODULE dwmapi = LoadLibraryW(L"dwmapi.dll");
-    if (!dwmapi)
-        return;
-
-    union {
-        FARPROC proc;
-        DwmSetWindowAttributeFunc func;
-    } fn;
-    fn.proc = GetProcAddress(dwmapi, "DwmSetWindowAttribute");
-
-    if (fn.func) {
-        BOOL value = dark ? TRUE : FALSE;
-        // Attribute 20 on current builds, 19 on early Windows 10 1809
-        if (FAILED(fn.func(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &value, sizeof(value)))) {
-            fn.func(hwnd, 19, &value, sizeof(value));
+    // Resolved once and kept: apply_theme runs on every window creation, theme
+    // change and settings broadcast, and loading + freeing dwmapi.dll each time
+    // was pure overhead. The module is deliberately never freed - it stays
+    // loaded for the process lifetime, which is what we want anyway.
+    static DwmSetWindowAttributeFunc set_attr = NULL;
+    static bool resolved = false;
+    if (!resolved) {
+        resolved = true;
+        HMODULE dwmapi = LoadLibraryW(L"dwmapi.dll");
+        if (dwmapi) {
+            union {
+                FARPROC proc;
+                DwmSetWindowAttributeFunc func;
+            } fn;
+            fn.proc = GetProcAddress(dwmapi, "DwmSetWindowAttribute");
+            set_attr = fn.func;
         }
     }
-    FreeLibrary(dwmapi);
+    if (!set_attr)
+        return;
+
+    BOOL value = dark ? TRUE : FALSE;
+    // Attribute 20 on current builds, 19 on early Windows 10 1809
+    if (FAILED(set_attr(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &value, sizeof(value)))) {
+        set_attr(hwnd, 19, &value, sizeof(value));
+    }
 }
 
 static void apply_theme(Window *window) {
@@ -4014,18 +4031,31 @@ static wchar_t *build_diagnostics_text(void) {
 
     DIAG_APPEND(L"Open npad windows: %d\r\n", count_npad_windows());
 
-    DIAG_APPEND(L"\r\nStartup profile:\r\n");
+    // Times are measured from process creation, so the first row's delta is
+    // everything the OS did before main(): image + dependent-DLL loading, CRT
+    // init, manifest activation, and any anti-malware inspection. That is
+    // where an otherwise unexplained slow start usually hides.
+    DIAG_APPEND(L"\r\nStartup profile (from process creation):\r\n");
+    DIAG_APPEND(L"       0.0 ms  (      )  process created\r\n");
     for (int i = 0; i < startup_prof_count(); i++) {
         double at = startup_prof_ms(i);
-        double delta = (i > 0) ? at - startup_prof_ms(i - 1) : 0.0;
+        double delta = (i > 0) ? at - startup_prof_ms(i - 1) : at;
         wchar_t *phase = utf8_to_wide(startup_prof_name(i));
-        DIAG_APPEND(L"  %8.1f ms  (+%6.1f)  %ls\r\n", at, delta, phase ? phase : L"?");
+        const wchar_t *note = L"";
+        if (i == 0)
+            note = L"   <- loader / CRT / manifest, before any npad code";
+        else if (wcscmp(phase ? phase : L"", L"deferred tasks") == 0)
+            note = L"   <- fires on a 50 ms timer; not startup work";
+        DIAG_APPEND(L"  %8.1f ms  (+%6.1f)  %ls%ls\r\n", at, delta, phase ? phase : L"?", note);
         free(phase);
     }
 
     DIAG_APPEND(L"\r\nEditor counters (since launch):\r\n");
-    DIAG_APPEND(L"  Paints: %u (last %.2f ms, avg %.2f ms)\r\n", g_paint_count, g_last_paint_ms,
-                g_paint_count ? g_paint_total_ms / g_paint_count : 0.0);
+    DIAG_APPEND(L"  Paints: %u (last %.2f ms, avg %.2f ms, max %.2f ms)\r\n", g_paint_count,
+                g_last_paint_ms, g_paint_count ? g_paint_total_ms / g_paint_count : 0.0,
+                g_paint_max_ms);
+    DIAG_APPEND(L"    (includes the Highlight All overlay; max is the number that\r\n");
+    DIAG_APPEND(L"     matters for perceived scroll lag)\r\n");
     DIAG_APPEND(L"  Selection changes: %u\r\n", g_selchange_count);
 
 #undef DIAG_APPEND

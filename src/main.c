@@ -15,15 +15,8 @@
 #ifdef NPAD_PLATFORM_WINDOWS
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <shellscalingapi.h>
-
-// DPI awareness function declarations for older SDK compatibility
-#ifndef DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
-#define DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 ((DPI_AWARENESS_CONTEXT) - 4)
-#endif
-
-// Function declarations to avoid warnings
-__declspec(dllimport) BOOL WINAPI SetProcessDPIAware(void);
+// DPI awareness comes from the embedded manifest, so none of the
+// shellscalingapi / SetProcessDpiAwareness* machinery is needed here
 #endif
 
 #include "core/editor.h"
@@ -50,46 +43,14 @@ int g_cascade_index = 0;
 int main(int argc, char *argv[]) {
     DEBUG_PRINT("npad starting...");
 
-#ifdef NPAD_PLATFORM_WINDOWS
-    // Enable high DPI awareness as early as possible (before any UI calls)
-    // Try different DPI awareness methods in order of preference
-    HMODULE user32 = GetModuleHandle("user32.dll");
-    HMODULE shcore = LoadLibrary("shcore.dll");
-
-    // Windows 10 1703+ - Per-Monitor V2 (best option)
-    if (user32) {
-        typedef BOOL(WINAPI * SetProcessDpiAwarenessContextFunc)(DPI_AWARENESS_CONTEXT);
-        SetProcessDpiAwarenessContextFunc pSetProcessDpiAwarenessContext;
-
-        // Use intermediate void* cast to suppress warning
-        FARPROC proc = GetProcAddress(user32, "SetProcessDpiAwarenessContext");
-        pSetProcessDpiAwarenessContext = (SetProcessDpiAwarenessContextFunc) (void *) proc;
-
-        if (pSetProcessDpiAwarenessContext) {
-            pSetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-        }
-        // Windows 8.1+ fallback - Per-Monitor V1
-        else if (shcore) {
-            typedef HRESULT(WINAPI * SetProcessDpiAwarenessFunc)(PROCESS_DPI_AWARENESS);
-            SetProcessDpiAwarenessFunc pSetProcessDpiAwareness;
-
-            proc = GetProcAddress(shcore, "SetProcessDpiAwareness");
-            pSetProcessDpiAwareness = (SetProcessDpiAwarenessFunc) (void *) proc;
-
-            if (pSetProcessDpiAwareness) {
-                pSetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
-            }
-        }
-        // Windows Vista+ fallback - System DPI aware
-        else {
-            SetProcessDPIAware();
-        }
-    }
-
-    if (shcore) {
-        FreeLibrary(shcore);
-    }
-#endif
+    // DPI awareness is declared in the embedded manifest (dpiAware true/PM +
+    // dpiAwareness PerMonitorV2, src/platform/npad.manifest), which the loader
+    // applies before main() is entered. Setting it again here would be a no-op
+    // - awareness cannot be changed once established - so the old
+    // SetProcessDpiAwarenessContext / SetProcessDpiAwareness / SetProcessDPIAware
+    // ladder has been removed, along with the LoadLibrary+FreeLibrary of
+    // shcore.dll it performed on every single launch for a branch that can
+    // never be reached on a supported (Windows 10+) system.
 
     startup_prof_mark("main enter");
 

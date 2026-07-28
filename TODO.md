@@ -72,7 +72,49 @@ of text.
 
 ## 📋 Parked
 
-### v0.21.0 — performance round (deferred; measure before optimising)
+### v0.21.0 — performance round — MEASURED (2026-07-28)
+
+**Neither slowdown reproduced on the test machine.** What was measured, and
+what shipped in v0.21.0, is below. The original analysis follows for reference.
+
+| Measurement | Result |
+|---|---|
+| Warm start (process creation → window responsive), 12 runs | **41–59 ms**, median 43 ms |
+| First run of a never-before-seen copy (Defender scan path) | **43 ms median** — no different |
+| Pre-`main` cost (loader, CRT, manifest), now instrumented | **~12 ms** |
+| 300-notch scroll burst, 1.6 MB / 20k lines | drains in **~0 ms**, 26 coalesced paints @ 0.6 ms |
+| 300-notch burst, 5.6 MB of very long lines, wrap ON | **≤5 ms** |
+| Same, plus live counts and Highlight All | **≤5 ms** |
+
+Conclusions:
+- The **"~150 ms" reading was almost certainly the "deferred tasks" line**,
+  which is dominated by a deliberate 50 ms timer and is not startup work. It is
+  now labelled as such.
+- Startup could not be made meaningfully faster because it is already ~40 ms
+  warm; the win available was for the **cold** case, so the binary was made
+  **26% smaller** and two pieces of per-launch dead work were removed.
+- Scrolling could not be made faster because nothing measured slow. **No
+  speculative rewrites were done** — the counts full-document fetch, the
+  overlay's linear match walk and `IMF_AUTOFONT` were all left alone, since
+  changing code that measures fast is churn, not optimisation.
+
+**Still open — needs a profile from a machine that shows it.** When a slow
+launch happens, open the Debug page (**Ctrl+Shift+.**) and copy the startup
+profile. The first line now shows pre-`main` time, which distinguishes:
+- large first number → the OS (disk, DLL paging, anti-malware), not npad's code
+- large `window created` / `ui + editor init` → npad's own work
+
+Not yet done, and only worth doing if a profile points at DLL loading: npad
+statically imports 11 DLLs, several unused on a plain launch (`winhttp` +
+`bcrypt` are update-check only, and update checking is off by default;
+`comdlg32` for file dialogs; `msimg32` only for the highlight blend).
+MinGW's linker does **not** support `--delay-load`, so this would mean manual
+`LoadLibrary`/`GetProcAddress` resolution, as npad already does for
+`msftedit`, `dwmapi` and `TaskDialogIndirect`. Roughly 20 functions of
+mechanical work — deferred until there is evidence it is the bottleneck.
+
+<details>
+<summary>Original pre-measurement analysis (kept for reference)</summary>
 
 **Startup latency** — occasionally ~0.5s to appear, while the Debug page's
 profile only accounts for ~150ms.
@@ -111,6 +153,9 @@ document.
     large documents.
 - *Note:* the Debug page's paint timer measures only the default paint and
   **excludes** the highlight overlay, so it currently under-reports.
+  *(Fixed in v0.21.0 — timings now include the overlay and report a max.)*
+
+</details>
 
 ### Tab inserts spaces
 

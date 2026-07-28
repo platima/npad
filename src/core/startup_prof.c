@@ -20,11 +20,19 @@
 
 typedef struct {
     const char *phase;
-    double ms; // Monotonic milliseconds (absolute; deltas taken vs mark 0)
+    double ms; // Monotonic milliseconds (absolute; deltas taken vs process start)
 } ProfMark;
 
 static ProfMark g_marks[STARTUP_PROF_MAX];
 static int g_mark_count = 0;
+
+// Monotonic-clock value corresponding to when the OS created this process.
+// Timing from the first mark would hide everything the loader does before
+// main() runs - image and dependent-DLL loading, CRT init, side-by-side
+// manifest activation, and any anti-malware inspection of the image - which is
+// exactly where an unexplained slow start tends to live.
+static double g_process_start_ms = 0.0;
+static int g_base_ready = 0;
 
 static double now_ms(void) {
 #ifdef _WIN32
@@ -42,12 +50,41 @@ static double now_ms(void) {
 #endif
 }
 
+// Milliseconds this process has already been alive, or -1 when unavailable.
+// Wall-clock and the monotonic clock are different time bases, so this is
+// measured as an elapsed span and then projected onto the monotonic clock.
+static double age_ms(void) {
+#ifdef _WIN32
+    FILETIME created, exited, kernel, user, now;
+    if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) {
+        return -1.0;
+    }
+    GetSystemTimeAsFileTime(&now);
+    ULONGLONG c = ((ULONGLONG) created.dwHighDateTime << 32) | created.dwLowDateTime;
+    ULONGLONG n = ((ULONGLONG) now.dwHighDateTime << 32) | now.dwLowDateTime;
+    if (n <= c) {
+        return -1.0;
+    }
+    return (double) (n - c) / 10000.0; // 100ns units -> ms
+#else
+    return -1.0; // No portable equivalent; fall back to first-mark-relative
+#endif
+}
+
 void startup_prof_mark(const char *phase) {
     if (!phase || g_mark_count >= STARTUP_PROF_MAX) {
         return;
     }
+    double t = now_ms();
+    if (!g_base_ready) {
+        double age = age_ms();
+        // Project the process-creation instant onto the monotonic clock. If the
+        // OS cannot tell us, fall back to the old behaviour (first mark = zero).
+        g_process_start_ms = (age >= 0.0) ? (t - age) : t;
+        g_base_ready = 1;
+    }
     g_marks[g_mark_count].phase = phase;
-    g_marks[g_mark_count].ms = now_ms();
+    g_marks[g_mark_count].ms = t;
     g_mark_count++;
 }
 
@@ -66,5 +103,5 @@ double startup_prof_ms(int i) {
     if (i < 0 || i >= g_mark_count || g_mark_count == 0) {
         return 0.0;
     }
-    return g_marks[i].ms - g_marks[0].ms;
+    return g_marks[i].ms - g_process_start_ms;
 }
