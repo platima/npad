@@ -208,6 +208,39 @@ document.
 
 </details>
 
+### Unsaved work must survive an update or a Windows restart — NEXT UP
+
+Requested 2026-07-29. npad is used primarily as a scratchpad, so being asked to
+save and reopen every document on each update is the main day-to-day friction.
+
+**Decided behaviour:**
+- When something *else* closes npad — an in-app update, or Windows Update
+  restarting the machine — unsaved documents are snapshotted and reopened
+  automatically, still unsaved, with no prompt in either direction. This is what
+  Windows 11 Notepad does. It never writes to the user's actual files.
+- A **normal** quit (X, Ctrl+W, Exit) still asks Save / Don't Save / Cancel,
+  exactly as classic Notepad. Only closures npad did not initiate are silent.
+
+**Groundwork that already exists:** `src/core/session.c` already snapshots
+unsaved work to recovery slots on a timer and restores after an unclean exit
+(`session_resume_enabled`, on by default). The work is mostly about *when* to
+snapshot and *how* to restore without prompting, not new storage.
+
+**Sketch:**
+1. Snapshot-and-exit path used by the updater instead of
+   `editor_prompt_save_changes`, plus a marker so the next launch restores
+   silently rather than showing the crash-recovery prompt.
+2. `RegisterApplicationRestart()` so Windows Update relaunches npad after a
+   reboot, with the same marker in the restart command line.
+3. `WM_QUERYENDSESSION` / `WM_ENDSESSION`: snapshot and return TRUE promptly
+   rather than showing a save prompt, so npad never blocks a restart. Today an
+   unsaved document would make Windows report npad as preventing shutdown.
+4. Restore every window, not just the active one — the existing multi-window
+   session restore already does this.
+
+**Needs driven runtime testing** (multi-window snapshot/restore, and a real
+`WM_QUERYENDSESSION`), so it is queued for when the machine is free.
+
 ### Tab inserts spaces
 
 Requested 2026-07-26. An option on the Markdown preferences page to make Tab
