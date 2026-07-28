@@ -21,10 +21,12 @@ ifeq ($(OS),Windows_NT)
 MINGW_CC ?= gcc
 MINGW_WINDRES ?= windres
 MINGW_STRIP ?= strip
+MINGW_DLLTOOL ?= dlltool
 else
 MINGW_CC ?= x86_64-w64-mingw32-gcc
 MINGW_WINDRES ?= x86_64-w64-mingw32-windres
 MINGW_STRIP ?= x86_64-w64-mingw32-strip
+MINGW_DLLTOOL ?= x86_64-w64-mingw32-dlltool
 endif
 
 # Source files
@@ -37,7 +39,17 @@ TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/session.c s
 
 # Windows GUI specific
 WINDOWS_GUI_SOURCES = src/platform/ui_win32.c
-WINDOWS_GUI_LIBS = -mwindows -lcomctl32 -lcomdlg32 -lgdi32 -lmsimg32 -lkernel32 -lshell32 -luser32 -lole32 -luuid -lwinhttp -lbcrypt
+# Delay-loaded DLLs: none of these are needed to open a window, so binding them
+# statically made the loader page them in on every launch - which costs most on
+# a cold start, exactly when startup feels slow. winhttp/bcrypt serve only the
+# opt-in update check, comdlg32 only the file/font dialogs, msimg32 only the
+# Highlight All wash. dlltool builds a delay-import library from each .def in
+# src/platform/delay/, and libdelayimp supplies the resolver that loads the DLL
+# on the first real call. The matching -l flags must NOT also be passed, or the
+# normal import library wins and the DLL is bound statically again.
+DELAY_DLLS = winhttp bcrypt comdlg32 msimg32
+DELAY_LIBS = $(patsubst %,build/lib%_delay.a,$(DELAY_DLLS))
+WINDOWS_GUI_LIBS = -mwindows -lcomctl32 -lgdi32 -lkernel32 -lshell32 -luser32 -lole32 -luuid $(DELAY_LIBS) -ldelayimp
 WINDOWS_GUI_TARGET = npad.exe
 
 # Windows Terminal specific
@@ -136,7 +148,13 @@ windows: windows-gui windows-terminal
 
 windows-gui: $(WINDOWS_GUI_TARGET)
 
-$(WINDOWS_GUI_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(WINDOWS_GUI_SOURCES) src/main.c src/platform/npad.rc
+# Delay-import libraries, one per DLL, built from the .def files that document
+# exactly which entry points npad uses
+build/lib%_delay.a: src/platform/delay/%.def
+	@mkdir -p build
+	$(MINGW_DLLTOOL) -d $< -D $*.dll -y $@
+
+$(WINDOWS_GUI_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(WINDOWS_GUI_SOURCES) src/main.c src/platform/npad.rc $(DELAY_LIBS)
 	cd src/platform && $(MINGW_WINDRES) npad.rc -O coff -o npad.res
 	$(MINGW_CC) $(CFLAGS) -o $@ $(CORE_SOURCES) $(SHARED_SOURCES) $(WINDOWS_GUI_SOURCES) src/main.c src/platform/npad.res $(WINDOWS_GUI_LIBS) $(LDFLAGS)
 ifndef DEBUG
@@ -306,6 +324,7 @@ clean:
 	rm -f npad-*.exe npad-*linux* npad-*win32*
 	find src tests -name '*.o' -delete 2>/dev/null || true
 	rm -f src/platform/npad.res
+	rm -rf build
 	rm -f tests/test_file_ops tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md
 	rm -f tests/test_file_ops.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe tests/test_html_md.exe
 

@@ -1,0 +1,10 @@
+; Delay-load surface for bcrypt.dll - used ONLY to SHA-256 verify a downloaded
+; update, so a plain launch never touches it.
+LIBRARY bcrypt.dll
+EXPORTS
+BCryptCloseAlgorithmProvider
+BCryptCreateHash
+BCryptDestroyHash
+BCryptFinishHash
+BCryptHashData
+BCryptOpenAlgorithmProvider

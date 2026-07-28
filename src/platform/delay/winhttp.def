@@ -1,0 +1,15 @@
+; Delay-load surface for winhttp.dll - used ONLY by the opt-in update check,
+; which is off by default. Keeping it out of the static import table means the
+; loader does not page winhttp (and its dependencies) in on every launch.
+; dlltool builds a delay-import library from this; see the Makefile.
+LIBRARY winhttp.dll
+EXPORTS
+WinHttpCloseHandle
+WinHttpConnect
+WinHttpOpen
+WinHttpOpenRequest
+WinHttpQueryDataAvailable
+WinHttpQueryHeaders
+WinHttpReadData
+WinHttpReceiveResponse
+WinHttpSendRequest

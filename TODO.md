@@ -104,14 +104,15 @@ profile. The first line now shows pre-`main` time, which distinguishes:
 - large first number → the OS (disk, DLL paging, anti-malware), not npad's code
 - large `window created` / `ui + editor init` → npad's own work
 
-Not yet done, and only worth doing if a profile points at DLL loading: npad
-statically imports 11 DLLs, several unused on a plain launch (`winhttp` +
-`bcrypt` are update-check only, and update checking is off by default;
-`comdlg32` for file dialogs; `msimg32` only for the highlight blend).
-MinGW's linker does **not** support `--delay-load`, so this would mean manual
-`LoadLibrary`/`GetProcAddress` resolution, as npad already does for
-`msftedit`, `dwmapi` and `TaskDialogIndirect`. Roughly 20 functions of
-mechanical work — deferred until there is evidence it is the bottleneck.
+**Done in v0.22.0 — delay-loading.** `winhttp`, `bcrypt`, `comdlg32` and
+`msimg32` are no longer bound at load time: **12 → 8 statically imported DLLs**.
+GNU `ld` has no `--delay-load`, but `dlltool --output-delaylib` builds a proper
+delay-import library, and `libdelayimp` supplies the resolver — so this needed
+no source changes, just a `.def` per library in `src/platform/delay/` (which
+doubles as documentation of the API surface npad uses). Verified at runtime:
+each DLL is absent from the process at launch, appears on first use of its
+feature, and the feature works. `ole32` was left statically bound because
+`CoInitializeEx` runs during startup anyway.
 
 <details>
 <summary>Original pre-measurement analysis (kept for reference)</summary>

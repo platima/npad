@@ -5,6 +5,25 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] - 2026-07-28
+
+### 🚀 Performance
+- **npad now loads four Windows libraries only when it actually needs them,
+  instead of on every launch.** `winhttp` and `bcrypt` serve only the opt-in
+  update check (off by default), `comdlg32` only the Open / Save As / Font
+  dialogs, and `msimg32` only the Highlight All wash — yet all four were bound
+  into the executable, so the system had to locate and map them before npad's
+  code ran. That cost is largest on a cold start, which is exactly when startup
+  feels slow.
+  - **Statically imported DLLs: 12 → 8.**
+  - Verified at runtime: each library is absent from the process at launch,
+    appears the moment its feature is first used, and the feature works
+    normally.
+  - Built with `dlltool --output-delaylib` from a `.def` per library under
+    `src/platform/delay/`, which also documents exactly which entry points npad
+    uses. (GNU `ld` has no `--delay-load`; the delay-import library is how it is
+    done with the GNU toolchain.)
+
 ## [0.21.0] - 2026-07-28
 
 Performance round. Neither reported slowdown could be reproduced on the test

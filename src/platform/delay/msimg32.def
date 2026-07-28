@@ -1,0 +1,6 @@
+; Delay-load surface for msimg32.dll - AlphaBlend is used only to wash the
+; Highlight All overlay over matched text, so it is never touched unless the
+; user turns that on.
+LIBRARY msimg32.dll
+EXPORTS
+AlphaBlend
