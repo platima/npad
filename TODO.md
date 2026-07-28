@@ -98,11 +98,61 @@ Conclusions:
   overlay's linear match walk and `IMF_AUTOFONT` were all left alone, since
   changing code that measures fast is churn, not optimisation.
 
-**Still open — needs a profile from a machine that shows it.** When a slow
-launch happens, open the Debug page (**Ctrl+Shift+.**) and copy the startup
-profile. The first line now shows pre-`main` time, which distinguishes:
-- large first number → the OS (disk, DLL paging, anti-malware), not npad's code
-- large `window created` / `ui + editor init` → npad's own work
+### Slow launch — ROOT CAUSE FOUND (2026-07-28)
+
+**It happens before the process exists, so neither npad's profiler nor my first
+benchmark could see it.**
+
+A v0.21.0 profile from a slow (1–2 second) launch on a work machine accounted
+for only **116 ms** of it:
+
+```
+   0.0 ms  process created
+  36.1 ms  main enter        <- loader / CRT / manifest
+  51.4 ms  settings loaded
+ 107.2 ms  window created
+ 116.3 ms  message loop      <- npad is up; ~1 second of the wait is unexplained
+```
+
+npad's profile starts at the process-creation timestamp, so everything the
+system does *first* is invisible to it: the shell resolving the launch, a
+**SmartScreen reputation check** (which can make a network call for an unsigned
+binary), and **anti-malware scanning the image** as its section is created.
+
+`scripts/measure-startup.ps1` brackets the whole thing and splits it. It
+reproduces the problem immediately — first (cold) run on a developer machine:
+
+```
+ run    total ms    pre-create    in-process
+   1       493.4         439.8          53.6     <- cold
+   2        47.4           6.5          40.9
+   3        51.7           4.1          47.6
+```
+
+**89% of the slow launch is before the process object exists.** On a corporate
+machine with enterprise AV, SmartScreen and a possibly network-redirected
+profile, the same effect stretching to 1–2 seconds is entirely plausible.
+
+*Correction to the earlier analysis below:* the first benchmark timed from
+`Process.StartTime`, which excludes the pre-creation window — the same blind
+spot as npad's own profiler. That is why it reported a flat ~43 ms and
+concluded, wrongly, that the slowdown was not reproducible.
+
+**What actually helps**
+1. **Code signing** — the real fix, and the only one that removes the
+   SmartScreen reputation check. Already on the README roadmap.
+2. Smaller image → less to scan. Done in v0.21.0 (**26% smaller**).
+3. Fewer DLLs to map and scan. Done in v0.22.0 (**12 → 8** static imports).
+
+Items 2 and 3 were shipped as speculative hardening; this measurement shows
+they target the right thing after all. Neither eliminates it — signing does.
+
+**Left in npad's own startup**, if it ever becomes worth chasing: `settings
+loaded` took 15.4 ms for 35 entries on the work machine versus 1.0 ms locally.
+(Not folder redirection — that is disabled on that machine. More likely
+on-access scanning of the read, or simply a slower disk; the whole machine
+profiled ~3× slower than the dev box across every phase.) Small in absolute
+terms either way.
 
 **Done in v0.22.0 — delay-loading.** `winhttp`, `bcrypt`, `comdlg32` and
 `msimg32` are no longer bound at load time: **12 → 8 statically imported DLLs**.
