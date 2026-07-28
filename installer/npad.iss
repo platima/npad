@@ -277,16 +277,22 @@ Filename: "ms-settings:advanced-apps"; Description: "Open Settings to disable th
 
 [Code]
 // --- Was npad already running when setup started? -------------------------
-// The "Launch npad" checkbox should only appear when setup actually
-// interrupted a running instance - offering to start an app the user was not
-// using is noise. Recorded in InitializeSetup, i.e. before the Preparing to
-// Install page closes anything, so it reflects the state we found.
+// The relaunch checkbox should only appear when setup actually interrupted a
+// running instance - offering to start an app the user was not using is noise.
+// Recorded in InitializeSetup, i.e. before the Preparing to Install page
+// closes anything, so it reflects the state we found.
+//
+// Two ways in, because window detection alone misses the important case:
+//   * a window exists  -> the user launched setup while npad was open
+//   * /RELAUNCH=1      -> npad launched setup ITSELF for an in-app update and
+//                         then closed, so by now there is no window to find
 var
   GNpadWasRunning: Boolean;
 
 function InitializeSetup(): Boolean;
 begin
-  GNpadWasRunning := FindWindowByClassName('NpadMainWindow') <> 0;
+  GNpadWasRunning := (FindWindowByClassName('NpadMainWindow') <> 0) or
+                     (ExpandConstant('{param:RELAUNCH|0}') = '1');
   Result := True;
 end;
 

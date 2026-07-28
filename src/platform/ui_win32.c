@@ -2454,7 +2454,11 @@ static void handle_update_downloaded(Window *window, UpdateDownloadResult *r) {
                    r->tag);
         msg[MAX_PATH + 159] = L'\0';
         if (MessageBoxW(hwnd, msg, L"npad", MB_YESNO | MB_ICONQUESTION) == IDYES) {
-            ShellExecuteW(hwnd, L"open", r->path, NULL, NULL, SW_SHOWNORMAL);
+            // Tell setup we were running so it offers to relaunch afterwards.
+            // It cannot detect that itself: npad closes below, before setup
+            // starts, so there is no window left for it to find. Inno ignores
+            // parameters it does not recognise, so older installers are safe.
+            ShellExecuteW(hwnd, L"open", r->path, L"/RELAUNCH=1", NULL, SW_SHOWNORMAL);
             ui_post_event(UI_EVENT_QUIT, window, NULL);
         } else {
             wchar_t note[MAX_PATH + 96];
@@ -4285,13 +4289,19 @@ static const wchar_t *const UPDATE_MODE_LABELS[] = {
 #define UPDATE_MODE_COUNT 4
 
 // Enable "Skip This Version" only when a newer, non-skipped release is known
+// Skip and Install Now only make sense when a newer, non-skipped version is
+// already known. Install Now deliberately ignores update_mode: if the page is
+// telling the user an update exists, the button that acts on it must work -
+// previously the only way through was to run another check just to get the
+// prompt back.
 static void prefs_updates_sync_skip(HWND page) {
     char cur[32];
     current_version_string(cur, sizeof(cur));
     char *latest = settings_get_string("update_latest_version", "");
     char *skipped = settings_get_string("update_skipped_version", "");
-    EnableWindow(GetDlgItem(page, ID_PREF_UPD_SKIP),
-                 update_is_newer_unskipped(cur, latest, skipped));
+    bool available = update_is_newer_unskipped(cur, latest, skipped);
+    EnableWindow(GetDlgItem(page, ID_PREF_UPD_SKIP), available);
+    EnableWindow(GetDlgItem(page, ID_PREF_UPD_INSTALL), available);
     free(latest);
     free(skipped);
 }
@@ -4355,6 +4365,26 @@ static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, L
                 // Manual check from the prefs page (result goes to the main window)
                 if (g_main_window)
                     start_update_check(g_main_window, true);
+                return TRUE;
+            }
+            if (id == ID_PREF_UPD_INSTALL) {
+                // Download and install the version this page is already
+                // advertising, without making the user run a second check
+                char *latest = settings_get_string("update_latest_version", "");
+                if (latest && latest[0] && g_main_window) {
+                    if (InterlockedCompareExchange(&g_update_busy, 1, 0) == 0) {
+                        char status[96];
+                        snprintf(status, sizeof(status), "Downloading npad %s...", latest);
+                        set_status_message(g_main_window, status);
+                        if (!spawn_update_download(g_main_window, latest)) {
+                            set_status_message(g_main_window, "Update download failed to start");
+                            InterlockedExchange(&g_update_busy, 0);
+                        }
+                    } else {
+                        set_status_message(g_main_window, "An update check is already running");
+                    }
+                }
+                free(latest);
                 return TRUE;
             }
             if (id == ID_PREF_UPD_SKIP) {

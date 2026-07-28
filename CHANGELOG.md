@@ -5,6 +5,27 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.0] - 2026-07-28
+
+### ✨ Features
+- **An "Install Now" button on the Updates preferences page**, next to the
+  latest version. Previously, clicking the silent-notification indicator took
+  you to this page, which told you an update was available but gave you no way
+  to act on it — you had to press **Check Now** a second time just to get the
+  prompt back. The button appears whenever a newer, non-skipped version is
+  known, regardless of the notification mode: if the page says an update
+  exists, the button that installs it works.
+
+### 🐛 Bug Fixes
+- **Setup now offers to relaunch npad after an in-app update.** v0.22.1 taught
+  setup to offer a relaunch only when it had closed a running npad, but it
+  detected that by looking for an npad window — and during an in-app update
+  npad closes *itself* before setup starts, so there was nothing left to find.
+  npad now tells setup explicitly (`/RELAUNCH=1`).
+  - *This only takes effect from the next update onwards*: the flag is sent by
+    the npad you are updating **from**, so updating from 0.22.1 or earlier will
+    still not offer the relaunch.
+
 ## [0.22.1] - 2026-07-28
 
 ### 🐛 Bug Fixes

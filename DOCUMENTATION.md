@@ -99,6 +99,9 @@ be replaced — npad's normal save prompt still appears if you have unsaved work
 Only in that case does the last page offer **Relaunch npad**; if npad was not
 running, no launch option is shown. Windows' Restart Manager is prevented from
 restarting it automatically, so the checkbox is the single place that decides.
+Setup spots a running npad by its window, and additionally accepts
+`/RELAUNCH=1` — which npad passes when it launches the installer for an in-app
+update, since by then it has closed itself and there is no window left to find.
 
 **Uninstall** removes the program, shortcuts and every registry entry the
 installer wrote, but keeps your settings (`%APPDATA%\Platima\npad`) and any
@@ -365,8 +368,11 @@ position). Not intended for direct use.
   Updates...** afterwards. The Updates tab adds optional automatic surfacing
   via a mode picker (Off / Notify silently with a Help-menu dot + the
   transformed item / Prompt / Download and install automatically) plus an
-  on-launch check toggle and a Skip this version action
-  (see the Updates settings table above). Every check queries the GitHub
+  on-launch check toggle, a Skip this version action, and an **Install Now**
+  button beside the latest version - enabled whenever a newer, non-skipped
+  version is known, whatever the notification mode, so arriving here from the
+  silent notification gives you a way to act on the update without running a
+  second check (see the Updates settings table above). Every check queries the GitHub
   releases API on a worker thread (the UI never blocks); when a newer release
   exists you can download and install it - the installer and its published
   `.sha256` are fetched to the temp directory and the SHA-256 checksum verified
