@@ -47,8 +47,8 @@ npad aims to recreate the beloved simplicity of original Windows Notepad while a
 
 Current features (Windows build):
 
-- **⚡ Lightning fast** - Native API implementation with minimal overhead
-- **💨 Minimal resource usage** - Tiny memory footprint and fast startup
+- **⚡ Lightning fast** - Native API implementation with minimal overhead; a ~314 KB executable that imports only 8 system libraries, loading the rest (update check, file dialogs) on first use
+- **💨 Minimal resource usage** - Tiny memory footprint and fast startup (~40 ms from process start to a usable window)
 - **🎯 Classic interface** - Familiar Notepad-style UI and behavior
 - **🌍 Unicode throughout** - Detects and preserves UTF-8, UTF-8 BOM, UTF-16 LE/BE and ANSI encodings
 - **↩️ Line ending aware** - Detects and preserves Windows (CRLF), Unix (LF) and Mac (CR) line endings, shown in the status bar
@@ -83,7 +83,7 @@ Current features (Windows build):
   - Confirmation prompt before opening very large files (threshold scales with the system's RAM by default)
   - Binary-file detection on open, offering Cancel / Open in npad / Open with the default app
   - Optional word / character / line counts in the status bar (off by default; refreshed live while typing, with a debounced fallback so very large files stay smooth)
-  - Check for Updates (Help menu) with an opt-in Updates preferences tab: off by default, or notify silently (a Help-menu dot), prompt, or download-and-install-automatically; optional launch check, Skip this version, SHA-256-verified download
+  - Check for Updates (Help menu) with an opt-in Updates preferences tab: off by default, or notify silently (a Help-menu dot), prompt, or download-and-install-automatically; optional launch check, Skip this version, an **Install Now** button whenever an update is known, and a SHA-256-verified download that resolves its file from the release itself (so future changes to asset naming cannot strand it)
 
 Planned (see the [Roadmap](#roadmap)):
 

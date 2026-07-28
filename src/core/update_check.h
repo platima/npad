@@ -35,4 +35,15 @@ bool update_parse_sha256(const char *text, char *out);
 // and the notify/prompt/auto decision.
 bool update_is_newer_unskipped(const char *current, const char *latest, const char *skipped);
 
+// Find a release asset in a GitHub releases API JSON response by matching the
+// END of its "name", and copy that asset's "browser_download_url" into out.
+// Matching is case-insensitive, e.g. suffix "-setup-win-x64.exe" selects the
+// installer while "-setup-win-x64.exe.sha256" selects its digest.
+//
+// Resolving the download from the response - rather than rebuilding the file
+// name from the tag - means a future change to release asset naming does not
+// strand the in-app updater, which is exactly what happened once before.
+// Returns false when no asset matches, the URL is missing, or out is too small.
+bool update_find_asset_url(const char *json, const char *name_suffix, char *out, size_t out_cap);
+
 #endif // UPDATE_CHECK_H

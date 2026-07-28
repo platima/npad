@@ -144,6 +144,44 @@ jobs:
     runs-on: ubuntu-latest
     needs: [create-release, build-and-upload, build-installers]
     steps:
+    - uses: actions/checkout@v7
+
+    - name: Verify the in-app updater can still find its download
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        VERSION: ${{ needs.create-release.outputs.version }}
+      run: |
+        # npad resolves its download by matching the END of each release asset
+        # name (update_find_asset_url). Read those suffixes straight from the
+        # source so this guard cannot drift: renaming release assets without
+        # updating the updater - or the reverse - fails HERE, loudly, instead of
+        # silently stranding every npad already installed. That has happened
+        # once before, in v0.17.x.
+        suffixes=$(grep -oP 'update_find_asset_url\(rel, "\K[^"]+' src/platform/ui_win32.c | sort -u)
+        if [ -z "$suffixes" ]; then
+          echo "ERROR: could not read the updater's asset suffixes from src/platform/ui_win32.c"
+          echo "       (did update_find_asset_url move or change shape?)"
+          exit 1
+        fi
+        names=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+          "https://api.github.com/repos/${{ github.repository }}/releases/tags/$VERSION" \
+          | jq -r '.assets[].name')
+        echo "Release assets:"; echo "$names" | sed 's/^/  /'
+        echo "Suffixes the in-app updater matches:"; echo "$suffixes" | sed 's/^/  /'
+        failed=0
+        while IFS= read -r sfx; do
+          [ -n "$sfx" ] || continue
+          esc=$(printf '%s' "$sfx" | sed 's/[].[^$*\\]/\\&/g')
+          if echo "$names" | grep -qiE -- "${esc}\$"; then
+            echo "OK: an asset ends with '$sfx'"
+          else
+            echo "ERROR: no release asset ends with '$sfx'"
+            echo "       The in-app updater would not find its download."
+            failed=1
+          fi
+        done <<< "$suffixes"
+        exit $failed
+
     - name: Validate release assets
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

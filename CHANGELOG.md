@@ -5,6 +5,22 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.0] - 2026-07-29
+
+### 🔄 Changed
+- **The in-app updater now resolves its download from the release itself**
+  instead of rebuilding the file name from the version tag. It reads the
+  release's asset list — which it was already downloading — and matches on the
+  end of each name. A future change to release asset naming therefore cannot
+  strand npads already in the field, which is exactly what happened in v0.17.x.
+  The historic name is still used as a fallback, and the SHA-256 verification
+  is unchanged: only `https://github.com` URLs are accepted, and a digest
+  mismatch still deletes the download and aborts.
+- Releases now fail CI if an asset the updater looks for is missing. The guard
+  reads the suffixes **from the updater's own source**, so renaming assets
+  without updating the updater — or the reverse — is caught at release time
+  rather than silently in the field.
+
 ## [0.23.0] - 2026-07-28
 
 ### ✨ Features

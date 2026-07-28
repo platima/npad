@@ -2219,6 +2219,24 @@ static bool start_update_check(Window *window, bool manual) {
     return true;
 }
 
+// Convert an asset's browser_download_url to the request path, accepting ONLY
+// https://github.com/... - a URL from anywhere else is refused and the caller
+// falls back to the constructed name. (The SHA-256 check still gates whatever
+// actually runs; this just avoids being pointed at an unexpected host.)
+static bool github_url_to_path(const char *url, wchar_t *out, int out_cap) {
+    static const char prefix[] = "https://github.com";
+    size_t plen = sizeof(prefix) - 1;
+    if (!url || strncmp(url, prefix, plen) != 0 || url[plen] != '/')
+        return false;
+    return MultiByteToWideChar(CP_UTF8, 0, url + plen, -1, out, out_cap) > 0;
+}
+
+// The trailing path segment, i.e. the asset's file name.
+static const wchar_t *path_basename(const wchar_t *path) {
+    const wchar_t *slash = wcsrchr(path, L'/');
+    return slash ? slash + 1 : path;
+}
+
 static DWORD WINAPI update_download_thread(LPVOID param) {
     UpdateDownloadJob *job = (UpdateDownloadJob *) param;
     UpdateDownloadResult *r = calloc(1, sizeof(*r));
@@ -2236,21 +2254,43 @@ static DWORD WINAPI update_download_thread(LPVOID param) {
     _snwprintf(wtag, 31, L"%hs", job->tag);
     wtag[31] = L'\0';
 
-    wchar_t path[256];
+    wchar_t exe_path[512], sum_path[512];
     size_t exe_len = 0, sum_len = 0;
     char *exe = NULL, *sum = NULL;
 
-    // The installer (progress reported) and its published digest
-    _snwprintf(path, 255, L"/platima/npad/releases/download/%s/npad-%s-setup-win-x64.exe", wtag,
-               wtag);
-    path[255] = L'\0';
-    exe = http_get_alloc(L"github.com", path, (size_t) 200 * 1024 * 1024, &exe_len, job->hwnd);
-    if (exe) {
-        _snwprintf(path, 255,
+    // Prefer the download URLs the release itself advertises: rebuilding the
+    // file name from the tag means any future change to asset naming strands
+    // every npad already in the field, which is exactly what happened once
+    // before. Fall back to the historic name when the release cannot be read.
+    bool have_exe = false, have_sum = false;
+    wchar_t api_path[128];
+    _snwprintf(api_path, 127, L"/repos/platima/npad/releases/tags/%s", wtag);
+    api_path[127] = L'\0';
+    char *rel = http_get_alloc(L"api.github.com", api_path, (size_t) 1024 * 1024, NULL, NULL);
+    if (rel) {
+        char url[512];
+        if (update_find_asset_url(rel, "-setup-win-x64.exe", url, sizeof(url)))
+            have_exe = github_url_to_path(url, exe_path, 512);
+        if (update_find_asset_url(rel, "-setup-win-x64.exe.sha256", url, sizeof(url)))
+            have_sum = github_url_to_path(url, sum_path, 512);
+        free(rel);
+    }
+    if (!have_exe) {
+        _snwprintf(exe_path, 511, L"/platima/npad/releases/download/%s/npad-%s-setup-win-x64.exe",
+                   wtag, wtag);
+        exe_path[511] = L'\0';
+    }
+    if (!have_sum) {
+        _snwprintf(sum_path, 511,
                    L"/platima/npad/releases/download/%s/npad-%s-setup-win-x64.exe.sha256", wtag,
                    wtag);
-        path[255] = L'\0';
-        sum = http_get_alloc(L"github.com", path, 4096, &sum_len, NULL);
+        sum_path[511] = L'\0';
+    }
+
+    // The installer (progress reported) and its published digest
+    exe = http_get_alloc(L"github.com", exe_path, (size_t) 200 * 1024 * 1024, &exe_len, job->hwnd);
+    if (exe) {
+        sum = http_get_alloc(L"github.com", sum_path, 4096, &sum_len, NULL);
     }
 
     char expected[65], actual[65];
@@ -2265,7 +2305,8 @@ static DWORD WINAPI update_download_thread(LPVOID param) {
         if (GetTempPathW(MAX_PATH, temp_dir) == 0) {
             snprintf(r->error, sizeof(r->error), "Could not resolve the temporary directory.");
         } else {
-            _snwprintf(r->path, MAX_PATH - 1, L"%snpad-%s-setup-win-x64.exe", temp_dir, wtag);
+            // Save under whatever the release actually calls it
+            _snwprintf(r->path, MAX_PATH - 1, L"%s%s", temp_dir, path_basename(exe_path));
             r->path[MAX_PATH - 1] = L'\0';
             FILE *f = _wfopen(r->path, L"wb");
             bool written = f && fwrite(exe, 1, exe_len, f) == exe_len;

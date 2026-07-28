@@ -9,6 +9,7 @@
 
 #include "test_framework.h"
 #include "../src/core/update_check.h"
+#include <stdio.h>
 #include <string.h>
 
 TEST_CASE(extract_tag_basic) {
@@ -79,6 +80,81 @@ TEST_CASE(newer_unskipped) {
                 "a newer release than the skipped one resurfaces");
 }
 
+// A realistic (trimmed) releases API response: several assets, the release's
+// own "name" before the array, and an uploader sub-object between an asset's
+// name and its URL - all of which the resolver has to navigate.
+static const char *RELEASE_JSON =
+    "{\"url\":\"https://api.github.com/repos/platima/npad/releases/1\","
+    "\"tag_name\":\"v0.23.0\",\"name\":\"npad v0.23.0\",\"draft\":false,"
+    "\"assets\":[";
+static const char *RELEASE_ASSETS =
+    "{\"id\":1,\"name\":\"CHECKSUMS.txt\",\"uploader\":{\"login\":\"platima\"},"
+    "\"browser_download_url\":\"https://github.com/platima/npad/releases/download/v0.23.0/CHECKSUMS.txt\"},"
+    "{\"id\":2,\"name\":\"npad-v0.23.0-msi-win-x64.msi\",\"uploader\":{\"login\":\"platima\"},"
+    "\"browser_download_url\":\"https://github.com/platima/npad/releases/download/v0.23.0/npad-v0.23.0-msi-win-x64.msi\"},"
+    "{\"id\":3,\"name\":\"npad-v0.23.0-setup-win-x64.exe.sha256\",\"uploader\":{\"login\":\"platima\"},"
+    "\"browser_download_url\":\"https://github.com/platima/npad/releases/download/v0.23.0/npad-v0.23.0-setup-win-x64.exe.sha256\"},"
+    "{\"id\":4,\"name\":\"npad-v0.23.0-setup-win-x64.exe\",\"uploader\":{\"login\":\"platima\"},"
+    "\"browser_download_url\":\"https://github.com/platima/npad/releases/download/v0.23.0/npad-v0.23.0-setup-win-x64.exe\"}"
+    "]}";
+
+static void build_release(char *buf, size_t cap) {
+    snprintf(buf, cap, "%s%s", RELEASE_JSON, RELEASE_ASSETS);
+}
+
+TEST_CASE(find_asset_installer) {
+    char json[4096], url[512];
+    build_release(json, sizeof(json));
+    TEST_ASSERT(update_find_asset_url(json, "-setup-win-x64.exe", url, sizeof(url)),
+                "installer asset found");
+    TEST_ASSERT_STR_EQ("https://github.com/platima/npad/releases/download/v0.23.0/"
+                       "npad-v0.23.0-setup-win-x64.exe",
+                       url, "installer URL");
+}
+
+TEST_CASE(find_asset_checksum_not_confused_with_installer) {
+    // The installer's name is a strict prefix of the digest's, and the digest
+    // appears FIRST in the array - suffix matching must still pick correctly
+    char json[4096], url[512];
+    build_release(json, sizeof(json));
+    TEST_ASSERT(update_find_asset_url(json, "-setup-win-x64.exe.sha256", url, sizeof(url)),
+                "checksum asset found");
+    TEST_ASSERT_STR_EQ("https://github.com/platima/npad/releases/download/v0.23.0/"
+                       "npad-v0.23.0-setup-win-x64.exe.sha256",
+                       url, "checksum URL");
+}
+
+TEST_CASE(find_asset_survives_renaming) {
+    // The whole point: a future rename still resolves as long as the suffix
+    // is recognisable, without the updater knowing the version or prefix
+    const char *renamed =
+        "{\"tag_name\":\"v9.9.9\",\"assets\":[{\"name\":\"npad-Setup-Win-x64.EXE\","
+        "\"browser_download_url\":\"https://github.com/x/y/releases/download/v9.9.9/"
+        "npad-Setup-Win-x64.EXE\"}]}";
+    char url[512];
+    TEST_ASSERT(update_find_asset_url(renamed, "-setup-win-x64.exe", url, sizeof(url)),
+                "case-insensitive suffix match");
+}
+
+TEST_CASE(find_asset_missing) {
+    char json[4096], url[512];
+    build_release(json, sizeof(json));
+    TEST_ASSERT(!update_find_asset_url(json, "-portable-win-arm64.exe", url, sizeof(url)),
+                "absent asset reports failure");
+    TEST_ASSERT(!update_find_asset_url("{\"tag_name\":\"v1\"}", "-setup-win-x64.exe", url,
+                                       sizeof(url)),
+                "no assets array at all");
+    TEST_ASSERT(!update_find_asset_url(NULL, "-setup-win-x64.exe", url, sizeof(url)),
+                "NULL json");
+}
+
+TEST_CASE(find_asset_out_too_small) {
+    char json[4096], tiny[16];
+    build_release(json, sizeof(json));
+    TEST_ASSERT(!update_find_asset_url(json, "-setup-win-x64.exe", tiny, sizeof(tiny)),
+                "does not overflow a small buffer");
+}
+
 int main(void) {
     TEST_INIT();
 
@@ -88,6 +164,11 @@ int main(void) {
     RUN_TEST(version_compare_numeric);
     RUN_TEST(sha256_parse);
     RUN_TEST(newer_unskipped);
+    RUN_TEST(find_asset_installer);
+    RUN_TEST(find_asset_checksum_not_confused_with_installer);
+    RUN_TEST(find_asset_survives_renaming);
+    RUN_TEST(find_asset_missing);
+    RUN_TEST(find_asset_out_too_small);
 
     TEST_SUMMARY();
     return 0;
