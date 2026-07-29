@@ -230,9 +230,16 @@ windows-cross:
 	$(MAKE) windows CC=x86_64-w64-mingw32-gcc
 
 # Code quality
+#
+# Linting is canonical against cppcheck 2.13 (what ubuntu-latest CI runs).
+# Older versions are LESS strict and have twice passed changes that CI then
+# rejected, so if your distro ships an older one, build 2.13 and point
+# CPPCHECK at it rather than trusting a local pass.
+CPPCHECK ?= cppcheck
+
 lint:
-	@command -v cppcheck >/dev/null 2>&1 || { echo "cppcheck not found. Install with: sudo apt-get install cppcheck"; exit 1; }
-	cppcheck --enable=all --std=c99 --platform=win32A \
+	@command -v $(CPPCHECK) >/dev/null 2>&1 || { echo "$(CPPCHECK) not found. Install with: sudo apt-get install cppcheck"; exit 1; }
+	$(CPPCHECK) --enable=all --std=c99 --platform=win32A \
 		--suppress=missingIncludeSystem \
 		--suppress=unusedFunction \
 		--inline-suppr \
@@ -381,6 +388,8 @@ help:
 	@echo "Variables:"
 	@echo "  CC               - C compiler to use"
 	@echo "  MINGW_CC         - MinGW compiler for Windows builds"
+	@echo "  CPPCHECK         - cppcheck binary (CI uses 2.13; older is less strict)"
+	@echo "  CLANG_FORMAT     - clang-format binary (CI uses 18)"
 	@echo "  DEBUG=1          - Enable debug build"
 	@echo "  VERSION          - Version string (auto-detected from git)"
 

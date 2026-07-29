@@ -31,14 +31,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is never relied on: the parked documents restore on the next launch anyway.
 
 ### 🐛 Fixed
+- **Starting an update from a window with unsaved work no longer prompts you to
+  save.** That window closed itself through the ordinary quit path, so it asked
+  — despite the update dialog having just said npad would close. It now parks
+  the document and goes.
 - **Installing an update now closes every npad window, not just the one that
-  started it.** The other windows are separate processes; they were left
-  running, holding `npad.exe` open so setup could not replace it, and each
-  greeted you with a save prompt. They are now told to park their work and
+  started it.** The other windows are separate processes and nothing had ever
+  told them to close, so they were left running and holding `npad.exe` open
+  where setup needed to replace it. They are now asked to park their work and
   exit, and the update waits for them before starting the installer.
-- An externally-requested close — the installer's Restart Manager, or Windows
-  shutting down — no longer raises a save prompt. On the installer path that
-  prompt was often invisible, so setup appeared to hang until it timed out.
+- A close requested by the installer's Restart Manager, or by Windows shutting
+  down, no longer raises a save prompt either. On the installer path that
+  prompt could be invisible, leaving setup apparently hung until it timed out.
 
 ### 📝 Notes
 - The handoff snapshot ignores the "Restore unsaved work after a crash"

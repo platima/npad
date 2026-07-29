@@ -2553,23 +2553,31 @@ static void handle_update_checked(Window *window, UpdateCheckResult *r) {
     free(r);
 }
 
-// Count npad windows belonging to OTHER processes
+// Count npad windows belonging to OTHER processes. The tally rides in a struct
+// rather than a bare int for the same reason NpadBroadcast does - and because a
+// bare int lets static analysis conclude the count is always its initial 0,
+// EnumWindows' callback being invisible to it.
+typedef struct {
+    int count;
+} NpadWindowTally;
+
 static BOOL CALLBACK count_foreign_enum_proc(HWND hwnd, LPARAM lparam) {
+    NpadWindowTally *tally = (NpadWindowTally *) lparam;
     wchar_t cls[64];
     if (GetClassNameW(hwnd, cls, 64) && wcscmp(cls, NPAD_WINDOW_CLASS) == 0) {
         DWORD pid = 0;
         GetWindowThreadProcessId(hwnd, &pid);
         if (pid != GetCurrentProcessId()) {
-            (*(int *) lparam)++;
+            tally->count++;
         }
     }
     return TRUE;
 }
 
 static int count_other_npad_windows(void) {
-    int others = 0;
-    EnumWindows(count_foreign_enum_proc, (LPARAM) &others);
-    return others;
+    NpadWindowTally tally = { 0 };
+    EnumWindows(count_foreign_enum_proc, (LPARAM) &tally);
+    return tally.count;
 }
 
 // Wait, bounded, for the other instances to finish parking their work and exit.

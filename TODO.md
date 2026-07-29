@@ -214,12 +214,22 @@ Requested 2026-07-29, built the same day after the user hit it live updating
 0.24.0 → 0.24.1. npad is used primarily as a scratchpad, so being asked to save
 and reopen every document on each update was the main day-to-day friction.
 
-**Both reported symptoms turned out to be one root cause.** The user reported
-(a) the updater only closing its own instance and (b) every unsaved document
-prompting to save. `CloseApplications=yes` was already set, so Inno's Restart
-Manager *was* asking the other windows to close — they refused, because npad
-routed every close, whoever initiated it, through the save prompt. No silent
-close path existed.
+**What was actually reported**, after a correction from the user: starting an
+update from an instance with an unsaved document made *that* instance prompt to
+save as it closed, and the other npad windows stayed open. Inno was not running
+at that point, so this is entirely npad's own updater path — it posted
+`UI_EVENT_QUIT` to its own window, which runs the ordinary save-prompting close,
+and nothing ever told the other processes to close at all.
+
+*(An earlier version of this note claimed both symptoms shared one root cause in
+Inno's Restart Manager being refused. That was wrong — a tidy story invented
+around `CloseApplications=yes` being set, not something the report supported.
+The Restart Manager is a separate, later line of defence; the handoff path is
+what makes it work too, but it is not what the user hit.)*
+
+The underlying gap is still real and is what the fix addresses: npad had no
+close path that did not prompt, so no externally-driven close could succeed
+quietly.
 
 **What shipped:** a handoff concept. `<slot>.handoff` marks a recovery slot as
 parked-by-something-else, so the next launch restores it silently while genuine
