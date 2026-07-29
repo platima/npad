@@ -176,11 +176,14 @@ typedef struct Window {
     bool status_update_pending;  // Coalescing timer armed (see schedule_status_update)
     bool counts_pending;         // Counts coalescing timer armed (schedule_counts_update)
     bool highlight_pending;      // Highlight-all coalescing timer armed (EN_CHANGE)
-    wchar_t status_cache[6][64]; // Last text sent per status part; skip identical sends
-    bool list_menu_present;      // The optional top-level Markdown menu is inserted
-    bool line_cut_pending;       // Last Ctrl+X was a whole-line cut (paste-above mode)
-    DWORD line_cut_clip_seq;     // Clipboard sequence number right after that cut
-    bool update_item_available;  // Help update item currently shows "Update Available"
+    // Last text sent per status part; skip identical sends. Sized to hold the
+    // longest part-0 counts line in full - a short cache would compare equal on
+    // a shared prefix and silently skip the update.
+    wchar_t status_cache[6][128];
+    bool list_menu_present;     // The optional top-level Markdown menu is inserted
+    bool line_cut_pending;      // Last Ctrl+X was a whole-line cut (paste-above mode)
+    DWORD line_cut_clip_seq;    // Clipboard sequence number right after that cut
+    bool update_item_available; // Help update item currently shows "Update Available"
 } Window;
 
 // Global variables
@@ -321,6 +324,58 @@ static char *wide_to_utf8(const wchar_t *wide) {
         return NULL;
     WideCharToMultiByte(CP_UTF8, 0, wide, -1, utf8, len, NULL, NULL);
     return utf8;
+}
+
+// Format a count using the user's regional number settings, so npad's numbers
+// group the same way the rest of Windows does (1,234,567 in en-AU/en-US,
+// 1.234.567 in de-DE, 12,34,567 in hi-IN). Queries the user default locale
+// without LOCALE_NOUSEROVERRIDE, so a separator customised in Control Panel
+// wins over the locale's own default. Falls back to bare digits.
+static void format_count_w(unsigned long value, wchar_t *out, int out_cap) {
+    wchar_t raw[24];
+    wchar_t thousand_sep[8];
+    wchar_t grouping[16];
+    wchar_t decimal_sep[2] = L".";
+    NUMBERFMTW fmt;
+
+    _snwprintf(raw, 23, L"%lu", value);
+    raw[23] = L'\0';
+
+    if (GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_STHOUSAND, thousand_sep,
+                        (int) (sizeof(thousand_sep) / sizeof(thousand_sep[0]))) > 0 &&
+        GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_SGROUPING, grouping,
+                        (int) (sizeof(grouping) / sizeof(grouping[0]))) > 0) {
+        // LOCALE_SGROUPING reads "3;0" (1,234,567) or "3;2;0" (12,34,567), where
+        // the trailing 0 means "repeat the last group". NUMBERFMT wants the same
+        // digits run together instead - 3 and 32 respectively - and 0 for none.
+        UINT group = 0;
+        for (const wchar_t *p = grouping; *p; p++) {
+            if (*p < L'0' || *p > L'9')
+                continue;
+            if (*p == L'0')
+                break;
+            group = group * 10 + (UINT) (*p - L'0');
+        }
+        fmt.NumDigits = 0; // integer counts: never show a fractional part
+        fmt.LeadingZero = 0;
+        fmt.Grouping = group;
+        fmt.lpDecimalSep = decimal_sep; // unused with NumDigits 0, but must be valid
+        fmt.lpThousandSep = thousand_sep;
+        fmt.NegativeOrder = 1;
+        if (GetNumberFormatEx(LOCALE_NAME_USER_DEFAULT, 0, raw, &fmt, out, out_cap) > 0)
+            return;
+    }
+
+    wcsncpy(out, raw, (size_t) out_cap - 1);
+    out[out_cap - 1] = L'\0';
+}
+
+// As format_count_w, for the status messages that are built as UTF-8
+static void format_count_a(unsigned long value, char *out, int out_cap) {
+    wchar_t wide[32];
+    format_count_w(value, wide, (int) (sizeof(wide) / sizeof(wide[0])));
+    if (WideCharToMultiByte(CP_UTF8, 0, wide, -1, out, out_cap, NULL, NULL) <= 0)
+        snprintf(out, (size_t) out_cap, "%lu", value);
 }
 
 static UINT get_window_dpi(HWND hwnd) {
@@ -2756,11 +2811,14 @@ static bool find_next(Window *window, bool down) {
 
     int total = 0, ordinal = 0;
     count_matches(window, &found, &total, &ordinal);
+    char ord_text[40], total_text[40];
+    format_count_a((unsigned long) (ordinal < 0 ? 0 : ordinal), ord_text, sizeof(ord_text));
+    format_count_a((unsigned long) (total < 0 ? 0 : total), total_text, sizeof(total_text));
     char message[128];
     if (wrapped) {
-        snprintf(message, sizeof(message), "Wrapped around - Match %d of %d", ordinal, total);
+        snprintf(message, sizeof(message), "Wrapped around - Match %s of %s", ord_text, total_text);
     } else {
-        snprintf(message, sizeof(message), "Match %d of %d", ordinal, total);
+        snprintf(message, sizeof(message), "Match %s of %s", ord_text, total_text);
     }
     set_status_message(window, message);
     return true;
@@ -2974,7 +3032,9 @@ static void replace_all(Window *window) {
 
     char message[128];
     if (replaced > 0) {
-        snprintf(message, sizeof(message), "Replaced %d occurrence%s", replaced,
+        char count_text[40];
+        format_count_a((unsigned long) replaced, count_text, sizeof(count_text));
+        snprintf(message, sizeof(message), "Replaced %s occurrence%s", count_text,
                  replaced == 1 ? "" : "s");
     } else {
         snprintf(message, sizeof(message), "Cannot find the search text");
@@ -5913,10 +5973,11 @@ static void handle_command(Window *window, WORD command) {
 static void set_status_part(Window *window, int part, const wchar_t *text) {
     if (!text || part < 0 || part > 5)
         return;
-    if (wcsncmp(window->status_cache[part], text, 63) == 0)
+    const size_t cap = sizeof(window->status_cache[0]) / sizeof(window->status_cache[0][0]);
+    if (wcsncmp(window->status_cache[part], text, cap - 1) == 0)
         return;
-    wcsncpy(window->status_cache[part], text, 63);
-    window->status_cache[part][63] = L'\0';
+    wcsncpy(window->status_cache[part], text, cap - 1);
+    window->status_cache[part][cap - 1] = L'\0';
     SendMessageW(window->status_hwnd, SB_SETTEXTW, (WPARAM) part, (LPARAM) text);
 }
 
@@ -5933,9 +5994,9 @@ static void set_status_part0(Window *window, const wchar_t *text) {
         set_status_part(window, 0, L""); // Clearing must leave a truly empty part
         return;
     }
-    wchar_t padded[80];
-    _snwprintf(padded, 79, L" %s", text);
-    padded[79] = L'\0';
+    wchar_t padded[160];
+    _snwprintf(padded, 159, L" %ls", text);
+    padded[159] = L'\0';
     set_status_part(window, 0, padded);
 }
 
@@ -5995,10 +6056,14 @@ static void update_text_counts(Window *window) {
     file_count_text_stats(text, &words, &chars, &lines);
     free(text);
 
-    wchar_t msg[96];
-    _snwprintf(msg, 95, L"%lu words, %lu chars, %lu lines", (unsigned long) words,
-               (unsigned long) chars, (unsigned long) lines);
-    msg[95] = L'\0';
+    wchar_t w[32], c[32], l[32];
+    format_count_w((unsigned long) words, w, 32);
+    format_count_w((unsigned long) chars, c, 32);
+    format_count_w((unsigned long) lines, l, 32);
+
+    wchar_t msg[160];
+    _snwprintf(msg, 159, L"%ls words, %ls chars, %ls lines", w, c, l);
+    msg[159] = L'\0';
     set_status_part0(window, msg);
 }
 

@@ -5,6 +5,23 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.1] - 2026-07-29
+
+### 🐛 Fixed
+- **Status bar numbers now follow your regional settings.** Word, character and
+  line counts — and the "Match 3 of 7" / "Replaced N occurrences" messages —
+  are grouped using the thousands separator Windows is configured to use, so
+  they read `1,234,567` in en-AU/en-US, `1.234.567` in de-DE and `12,34,567`
+  in hi-IN instead of a bare run of digits. A separator customised in Control
+  Panel takes precedence over the locale default, matching every other app.
+  `Ln` / `Col` are deliberately left ungrouped: they are positions rather than
+  quantities, and grouping them would put a comma inside `Ln 1,234, Col 5`.
+- The status bar compared only the first 63 characters of a segment when
+  deciding whether its text had changed, so two different strings sharing that
+  prefix would leave the old text on screen. Only reachable with very large
+  counts, but grouping made the line longer, so the cache now holds a full
+  segment and the length is derived from the buffer rather than hardcoded.
+
 ## [0.24.0] - 2026-07-29
 
 ### 🔄 Changed

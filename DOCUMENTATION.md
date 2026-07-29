@@ -151,7 +151,7 @@ All settings live in `settings.json` and are editable in Preferences
 | `opendyslexic_font` | string | `OpenDyslexic` | Face used when OpenDyslexic mode is on. |
 | `status_bar_visible` | bool | `true` | Show the status bar (also View > Status Bar). |
 | `sync_view_state` | bool | `false` | Mirror per-window view changes (font type, zoom) live to every open npad window. |
-| `status_show_counts` | bool | `false` | Show word / character / line counts in the leftmost status bar segment. Refreshed live while typing (coalesced ~8x/second); documents over ~1 MB fall back to a settle-then-count debounce. Shared with transient messages, which win until the next change. |
+| `status_show_counts` | bool | `false` | Show word / character / line counts in the leftmost status bar segment. Refreshed live while typing (coalesced ~8x/second); documents over ~1 MB fall back to a settle-then-count debounce. Shared with transient messages, which win until the next change. Numbers are grouped using your Windows regional settings (e.g. `1,234,567`), including any separator customised in Control Panel. |
 
 ### Defaults (Preferences > Defaults) - initial state for new windows/files
 
