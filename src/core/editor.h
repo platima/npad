@@ -54,6 +54,10 @@ void editor_set_modified(bool modified);
 const char *editor_get_current_file(void);
 void editor_set_startup_file(const char *filename);
 
+// This instance's recovery slot id, for pointing a restart registration at the
+// document this particular process is holding
+const char *editor_session_slot_id(void);
+
 // Restore a specific recovery slot at startup (set from the --recover option
 // on windows spawned to reopen extra crashed sessions)
 void editor_set_recover_slot(const char *slot);

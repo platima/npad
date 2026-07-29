@@ -36,7 +36,14 @@ char *session_take(const char *dir, const char *slot_id, char **out_path, TextEn
 char **session_list_slots(const char *dir, int *count);
 void session_free_slots(char **slots, int count);
 
-// Remove a slot's files
+// Remove a slot's files (including any handoff marker)
 void session_clear_slot(const char *dir, const char *slot_id);
+
+// Handoff markers. A marked slot was written because something else was
+// closing npad - an in-app update, or Windows restarting - rather than because
+// npad crashed, so the next launch restores it silently instead of asking.
+bool session_mark_handoff(const char *dir, const char *slot_id);
+bool session_is_handoff(const char *dir, const char *slot_id);
+void session_clear_handoff(const char *dir, const char *slot_id);
 
 #endif // SESSION_H

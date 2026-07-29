@@ -129,6 +129,99 @@ TEST_CASE(session_take_missing_returns_null) {
     session_free_slots(slots, count);
 }
 
+// --- Handoff markers -------------------------------------------------------
+// A marked slot was parked because something else was closing npad, so it is
+// restored silently instead of under the "closed unexpectedly" prompt. Getting
+// this partition wrong either nags the user after every update or silently
+// reopens work that really did crash.
+
+TEST_CASE(session_handoff_unmarked_by_default) {
+    cleanup();
+    session_write(TEST_DIR, "slotA", "x", NULL, NPAD_ENC_UTF8, NPAD_EOL_CRLF);
+    TEST_ASSERT(!session_is_handoff(TEST_DIR, "slotA"),
+                "a plain crash snapshot is not a handoff");
+    cleanup();
+}
+
+TEST_CASE(session_handoff_mark_and_read_back) {
+    cleanup();
+    session_write(TEST_DIR, "slotA", "x", NULL, NPAD_ENC_UTF8, NPAD_EOL_CRLF);
+    TEST_ASSERT(session_mark_handoff(TEST_DIR, "slotA"), "marking succeeds");
+    TEST_ASSERT(session_is_handoff(TEST_DIR, "slotA"), "mark reads back");
+    cleanup();
+}
+
+TEST_CASE(session_handoff_is_per_slot) {
+    cleanup();
+    session_write(TEST_DIR, "slotA", "x", NULL, NPAD_ENC_UTF8, NPAD_EOL_CRLF);
+    session_write(TEST_DIR, "slotB", "y", NULL, NPAD_ENC_UTF8, NPAD_EOL_CRLF);
+    session_mark_handoff(TEST_DIR, "slotA");
+
+    TEST_ASSERT(session_is_handoff(TEST_DIR, "slotA"), "marked slot reports true");
+    TEST_ASSERT(!session_is_handoff(TEST_DIR, "slotB"), "unmarked sibling stays false");
+    cleanup();
+}
+
+TEST_CASE(session_handoff_clear_reverts_to_crash) {
+    cleanup();
+    session_write(TEST_DIR, "slotA", "x", NULL, NPAD_ENC_UTF8, NPAD_EOL_CRLF);
+    session_mark_handoff(TEST_DIR, "slotA");
+    session_clear_handoff(TEST_DIR, "slotA");
+
+    TEST_ASSERT(!session_is_handoff(TEST_DIR, "slotA"),
+                "a cancelled session end leaves a plain crash snapshot");
+
+    // Clearing the mark must NOT remove the snapshot itself
+    int count = 0;
+    char **slots = session_list_slots(TEST_DIR, &count);
+    TEST_ASSERT_EQ(1, count, "the snapshot survives clearing its mark");
+    session_free_slots(slots, count);
+    cleanup();
+}
+
+TEST_CASE(session_clear_slot_removes_handoff_marker) {
+    cleanup();
+    session_write(TEST_DIR, "slotA", "x", NULL, NPAD_ENC_UTF8, NPAD_EOL_CRLF);
+    session_mark_handoff(TEST_DIR, "slotA");
+    session_clear_slot(TEST_DIR, "slotA");
+
+    // A marker outliving its slot would make a later slot of the same id
+    // restore silently when it should have prompted
+    TEST_ASSERT(!session_is_handoff(TEST_DIR, "slotA"),
+                "clearing a slot removes its handoff marker too");
+    cleanup();
+}
+
+TEST_CASE(session_take_clears_handoff_marker) {
+    cleanup();
+    session_write(TEST_DIR, "slotA", "x", NULL, NPAD_ENC_UTF8, NPAD_EOL_CRLF);
+    session_mark_handoff(TEST_DIR, "slotA");
+
+    char *content = session_take(TEST_DIR, "slotA", NULL, NULL, NULL);
+    TEST_ASSERT_NOT_NULL(content, "slot is taken");
+    free(content);
+
+    // The --recover path restores a slot directly; an orphaned marker would
+    // accumulate in the recovery directory forever
+    TEST_ASSERT(!session_is_handoff(TEST_DIR, "slotA"),
+                "taking a slot clears its handoff marker");
+    cleanup();
+}
+
+TEST_CASE(session_handoff_marker_is_not_a_slot) {
+    cleanup();
+    session_write(TEST_DIR, "slotA", "x", NULL, NPAD_ENC_UTF8, NPAD_EOL_CRLF);
+    session_mark_handoff(TEST_DIR, "slotA");
+
+    // Slots are enumerated from .meta files; the marker must not be counted
+    // as a document of its own
+    int count = 0;
+    char **slots = session_list_slots(TEST_DIR, &count);
+    TEST_ASSERT_EQ(1, count, "the marker does not list as an extra slot");
+    session_free_slots(slots, count);
+    cleanup();
+}
+
 int main(void) {
     TEST_INIT();
 
@@ -138,6 +231,13 @@ int main(void) {
     RUN_TEST(session_take_untitled);
     RUN_TEST(session_clear_slot_removes_it);
     RUN_TEST(session_take_missing_returns_null);
+    RUN_TEST(session_handoff_unmarked_by_default);
+    RUN_TEST(session_handoff_mark_and_read_back);
+    RUN_TEST(session_handoff_is_per_slot);
+    RUN_TEST(session_handoff_clear_reverts_to_crash);
+    RUN_TEST(session_clear_slot_removes_handoff_marker);
+    RUN_TEST(session_take_clears_handoff_marker);
+    RUN_TEST(session_handoff_marker_is_not_a_slot);
 
     TEST_SUMMARY();
     return 0;

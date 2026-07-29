@@ -110,6 +110,61 @@ static void editor_snapshot_session(void) {
     free(dir);
 }
 
+const char *editor_session_slot_id(void) {
+    return g_session_slot;
+}
+
+// Snapshot for a handoff: something else is closing npad (an in-app update, or
+// Windows restarting the machine), so the document must come back afterwards
+// exactly as it is now, still unsaved.
+//
+// Deliberately ignores session_resume_enabled. That preference means "don't
+// nag me about crashes"; honouring it here would silently destroy the buffer
+// of anyone who turned it off, which is the one outcome npad's own rule
+// forbids. The handoff marker guarantees such a slot is never presented with
+// crash wording, so the preference keeps its user-visible meaning.
+// Returns false only when there WAS unsaved work and it could not be parked -
+// a full or read-only recovery volume, say. The caller must not then exit
+// silently: npad promised to bring the document back, and quitting on a
+// promise it could not keep would destroy the buffer outright.
+static bool editor_snapshot_handoff(void) {
+    if (!g_editor.is_modified || !g_editor.main_window)
+        return true; // Nothing unsaved to carry across
+
+    char *dir = editor_session_dir();
+    if (!dir)
+        return false;
+
+    char *content = ui_get_text(g_editor.main_window);
+    if (!content) {
+        free(dir);
+        return false;
+    }
+
+    bool parked = session_write(dir, g_session_slot, content, g_editor.current_file,
+                                g_editor.file_info.encoding, g_editor.file_info.line_ending);
+    if (parked) {
+        // A failed mark is survivable: the content is safe either way, it just
+        // comes back under the crash prompt instead of silently.
+        session_mark_handoff(dir, g_session_slot);
+    }
+
+    free(content);
+    free(dir);
+    return parked;
+}
+
+// A session end was cancelled: keep the snapshot (it costs nothing and a real
+// crash could still follow) but drop the handoff mark, so if npad does die
+// later it is reported honestly as a crash rather than restored silently.
+static void editor_cancel_handoff(void) {
+    char *dir = editor_session_dir();
+    if (dir) {
+        session_clear_handoff(dir, g_session_slot);
+        free(dir);
+    }
+}
+
 // Remove this instance's recovery snapshot (after a clean save or clean exit)
 static void editor_clear_session(void) {
     char *dir = editor_session_dir();
@@ -188,6 +243,42 @@ static void editor_check_session_recovery(void) {
         } else {
             slots[count++] = slots[i];
         }
+    }
+
+    // Partition: handoff slots were parked by an update or a Windows restart,
+    // so they come back with no prompt in either direction. Everything left is
+    // a genuine leftover and keeps the crash wording. Handoffs are moved to the
+    // front so the array below stays a single contiguous run.
+    int handoff = 0;
+    for (int i = 0; i < count; i++) {
+        if (session_is_handoff(dir, slots[i])) {
+            char *marked = slots[i];
+            for (int j = i; j > handoff; j--) {
+                slots[j] = slots[j - 1];
+            }
+            slots[handoff++] = marked;
+        }
+    }
+
+    if (handoff > 0) {
+        // Restore the first into this window and fan the rest out into new
+        // ones, exactly as the crash path does - but silently.
+        bool restored_here = false;
+        int cascade = 1;
+        for (int i = 0; i < handoff; i++) {
+            session_clear_handoff(dir, slots[i]); // One-shot: never restores twice
+            if (!restored_here) {
+                restored_here = editor_restore_slot(dir, slots[i]);
+            } else {
+                ui_launch_recovery_instance(slots[i], cascade++);
+            }
+        }
+        // Any remaining slots are real crashes, but this window is now occupied
+        // by restored work, so leave them for the next launch to offer rather
+        // than clobbering what we just restored.
+        session_free_slots(slots, count);
+        free(dir);
+        return;
     }
 
     if (count > 0) {
@@ -695,6 +786,23 @@ bool editor_handle_event(const UIEvent *event) {
             }
             editor_clear_session(); // Clean exit: nothing to recover
             ui_quit();
+            return true;
+
+        // npad is being closed by something else, so it must come back as it
+        // is. No prompt, and pointedly no editor_clear_session() - that call
+        // is what would destroy the snapshot we just took.
+        case UI_EVENT_QUIT_HANDOFF:
+            if (!editor_snapshot_handoff()) {
+                return false; // Could not park it - do not exit on a broken promise
+            }
+            ui_quit();
+            return true;
+
+        case UI_EVENT_HANDOFF_SNAPSHOT:
+            return editor_snapshot_handoff();
+
+        case UI_EVENT_HANDOFF_CANCELLED:
+            editor_cancel_handoff();
             return true;
 
         case UI_EVENT_FILE_NEW:

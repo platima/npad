@@ -38,7 +38,13 @@ typedef enum {
     UI_EVENT_AUTO_SAVE,        // Auto-save timer fired
     UI_EVENT_FILE_DROPPED,     // File dragged onto the window; data = UTF-8 path
     UI_EVENT_SESSION_SNAPSHOT, // Session-recovery timer fired
-    UI_EVENT_STARTUP_DEFERRED  // Fired once shortly after the window first paints
+    UI_EVENT_STARTUP_DEFERRED, // Fired once shortly after the window first paints
+    // Handoff: something other than the user is closing npad (an in-app update,
+    // or Windows restarting). Unsaved work is parked and reopened afterwards
+    // with no prompt in either direction - see editor_snapshot_handoff.
+    UI_EVENT_QUIT_HANDOFF,     // Park unsaved work and quit, no save prompt
+    UI_EVENT_HANDOFF_SNAPSHOT, // Park unsaved work but keep running
+    UI_EVENT_HANDOFF_CANCELLED // The pending session end was called off
 } UIEventType;
 
 // Event structure

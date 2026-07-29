@@ -5,6 +5,54 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.0] - 2026-07-29
+
+### ✨ Features
+- **Unsaved work now survives an update or a Windows restart.** When something
+  other than you closes npad — installing an in-app update, or Windows Update
+  restarting the machine — every unsaved document is parked as-is and reopened
+  automatically afterwards, still unsaved, with no prompt in either direction.
+  This is what npad is for as a scratchpad, and it is what Windows 11 Notepad
+  does. It never writes to your actual files.
+
+  A **normal** quit — the X, Ctrl+W, File ▸ Exit — still asks Save / Don't Save
+  / Cancel exactly as before. Only closures npad did not initiate are silent.
+- **npad no longer blocks a Windows restart.** It previously had no
+  `WM_QUERYENDSESSION` handler at all, so Windows terminated it outright: any
+  typing since the last 30-second snapshot was lost, along with the window
+  position, and what came back was the "npad may have closed unexpectedly"
+  prompt. npad now saves its state when Windows asks and consents immediately.
+- npad registers for **automatic relaunch after an update reboot**, pointing
+  Windows at its own document so several open windows come back as several
+  windows. Registered for reboots and patching only — deliberately *not* for
+  crashes or hangs, so a genuine crash still surfaces under the "npad may have
+  closed unexpectedly" prompt rather than quietly reappearing as though nothing
+  had happened. This depends on Windows' own "restart my apps" setting, so it
+  is never relied on: the parked documents restore on the next launch anyway.
+
+### 🐛 Fixed
+- **Installing an update now closes every npad window, not just the one that
+  started it.** The other windows are separate processes; they were left
+  running, holding `npad.exe` open so setup could not replace it, and each
+  greeted you with a save prompt. They are now told to park their work and
+  exit, and the update waits for them before starting the installer.
+- An externally-requested close — the installer's Restart Manager, or Windows
+  shutting down — no longer raises a save prompt. On the installer path that
+  prompt was often invisible, so setup appeared to hang until it timed out.
+
+### 📝 Notes
+- The handoff snapshot ignores the "Restore unsaved work after a crash"
+  preference. That setting means *don't nag me about crashes*; honouring it
+  here would mean silently destroying the buffer of anyone who turned it off.
+  Parked documents are never presented with crash wording, so the setting keeps
+  its meaning.
+- Only **modified** documents are parked. A saved file does not reopen itself,
+  because restored content always comes back flagged as unsaved and reopening a
+  clean file that way would wrongly mark it dirty.
+- npad windows running a **pre-0.25.0** build cannot receive the new close
+  request, so the first update after this one may still leave them open. From
+  0.25.0 onwards they close cleanly.
+
 ## [0.24.1] - 2026-07-29
 
 ### 🐛 Fixed

@@ -201,6 +201,21 @@ static UINT g_settings_changed_msg = 0;
 // (each runs its own save-prompt; a Cancel keeps that window open)
 static UINT g_close_all_msg = 0;
 
+// Registered broadcast message telling every OTHER npad window to park its
+// unsaved work and exit without prompting, because an update is about to
+// install. Deliberately separate from g_close_all_msg: Close All's contract is
+// that each window runs its own save prompt, and that must not change.
+// wParam = sender pid (receivers skip their own).
+static UINT g_close_handoff_msg = 0;
+
+// Set once Windows has told us the session is ending (shutdown, logoff, or a
+// Restart Manager shutdown driven by the installer). From that point every
+// close is a handoff and must never raise a save prompt - including the
+// WM_CLOSE the Restart Manager sends after WM_ENDSESSION, which would
+// otherwise put up an invisible modal dialog and stall setup until it times
+// out. That is the whole reason this latch exists.
+static bool g_session_ending = false;
+
 // Registered message carrying live view state (font type + zoom) between
 // instances when "Sync view across all instances" is enabled.
 // wParam = sender pid; lParam = MAKELPARAM(zoom_percent, monospace ? 1 : 0)
@@ -293,6 +308,8 @@ static bool find_next(Window *window, bool down);
 static bool font_is_installed(const wchar_t *face);
 static void on_view_state_changed(Window *window);
 static void broadcast_to_npad_windows(UINT msg, LPARAM lparam);
+static void update_restart_registration(void);
+static void persist_state_for_session_end(void);
 void ui_platform_notify_settings_changed(void);
 bool ui_platform_has_selection(Window *window);
 
@@ -872,6 +889,7 @@ bool ui_platform_init(void) {
     g_settings_changed_msg = RegisterWindowMessageW(L"npadSettingsChanged");
     g_view_sync_msg = RegisterWindowMessageW(L"npadViewStateChanged");
     g_close_all_msg = RegisterWindowMessageW(L"npadCloseAll");
+    g_close_handoff_msg = RegisterWindowMessageW(L"npadCloseForHandoff");
 
     // COM apartment for the shell Save dialog (IFileSaveDialog). Tolerate an
     // already-initialised apartment (RPC_E_CHANGED_MODE / S_FALSE).
@@ -1109,6 +1127,9 @@ void ui_platform_set_window_title(Window *window, const char *title) {
             free(wide);
         }
     }
+    // The title is refreshed on every modification and file change, which is
+    // exactly when whether npad has anything worth restoring can change
+    update_restart_registration();
 }
 
 // Size/position getters use the *restored* geometry (WINDOWPLACEMENT) so a
@@ -2532,6 +2553,46 @@ static void handle_update_checked(Window *window, UpdateCheckResult *r) {
     free(r);
 }
 
+// Count npad windows belonging to OTHER processes
+static BOOL CALLBACK count_foreign_enum_proc(HWND hwnd, LPARAM lparam) {
+    wchar_t cls[64];
+    if (GetClassNameW(hwnd, cls, 64) && wcscmp(cls, NPAD_WINDOW_CLASS) == 0) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hwnd, &pid);
+        if (pid != GetCurrentProcessId()) {
+            (*(int *) lparam)++;
+        }
+    }
+    return TRUE;
+}
+
+static int count_other_npad_windows(void) {
+    int others = 0;
+    EnumWindows(count_foreign_enum_proc, (LPARAM) &others);
+    return others;
+}
+
+// Wait, bounded, for the other instances to finish parking their work and exit.
+// Without this the installer races them: setup would reach the file-copy step
+// while npad.exe was still locked, and fall back to its "unable to close all
+// applications" page - the very thing the handoff broadcast exists to avoid.
+// Pumps messages so this window stays responsive while waiting.
+static void wait_for_other_npads(DWORD timeout_ms) {
+    DWORD start = GetTickCount();
+    for (;;) {
+        if (count_other_npad_windows() == 0)
+            return;
+        if (GetTickCount() - start >= timeout_ms)
+            return; // Straggler (a modal dialog, most likely); let setup handle it
+        MSG msg;
+        while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        Sleep(25);
+    }
+}
+
 // UI-thread handler for the verified download: confirm, launch, quit
 static void handle_update_downloaded(Window *window, UpdateDownloadResult *r) {
     HWND hwnd = window ? window->hwnd : NULL;
@@ -2542,20 +2603,43 @@ static void handle_update_downloaded(Window *window, UpdateDownloadResult *r) {
         set_status_message(window, "Update download failed");
     } else {
         set_status_message(window, "Update downloaded and verified");
-        wchar_t msg[MAX_PATH + 160];
-        _snwprintf(msg, MAX_PATH + 159,
+        wchar_t msg[MAX_PATH + 200];
+        _snwprintf(msg, MAX_PATH + 199,
                    L"npad %hs was downloaded and its SHA-256 checksum verified.\n\n"
-                   L"Install now? The installer will start and npad will close (you'll be "
-                   L"prompted to save any unsaved changes).",
+                   L"Install now? Every npad window will close and reopen once the update "
+                   L"finishes. Unsaved documents are kept and restored as they are - you "
+                   L"won't be asked to save them.",
                    r->tag);
-        msg[MAX_PATH + 159] = L'\0';
+        msg[MAX_PATH + 199] = L'\0';
         if (MessageBoxW(hwnd, msg, L"npad", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+            // Latch BEFORE the broadcast: the wait below pumps messages, so
+            // this window can be asked to close during it (the user clicking X,
+            // or another instance's Close All). Without the latch already set
+            // that close would run a save prompt, and a "Don't Save" there
+            // would be quietly undone by the handoff snapshot afterwards -
+            // resurrecting text the user had just discarded.
+            g_session_ending = true;
+
+            // Close the OTHER instances first and wait for them. Setup cannot
+            // replace a locked npad.exe, and until this existed only the window
+            // that started the update actually closed.
+            if (g_close_handoff_msg) {
+                broadcast_to_npad_windows(g_close_handoff_msg, 0);
+                wait_for_other_npads(4000);
+            }
             // Tell setup we were running so it offers to relaunch afterwards.
             // It cannot detect that itself: npad closes below, before setup
             // starts, so there is no window left for it to find. Inno ignores
             // parameters it does not recognise, so older installers are safe.
             ShellExecuteW(hwnd, L"open", r->path, L"/RELAUNCH=1", NULL, SW_SHOWNORMAL);
-            ui_post_event(UI_EVENT_QUIT, window, NULL);
+            // This instance parks its own work and goes last. If it cannot be
+            // parked (a full or read-only profile volume) fall back to asking:
+            // the dialog above promised the document would come back, and
+            // exiting silently would destroy it instead.
+            if (!ui_post_event(UI_EVENT_QUIT_HANDOFF, window, NULL)) {
+                g_session_ending = false;
+                ui_post_event(UI_EVENT_QUIT, window, NULL);
+            }
         } else {
             wchar_t note[MAX_PATH + 96];
             _snwprintf(note, MAX_PATH + 95, L"The verified installer was saved to:\n%s", r->path);
@@ -5015,6 +5099,66 @@ static void broadcast_to_npad_windows(UINT msg, LPARAM lparam) {
     EnumWindows(broadcast_enum_proc, (LPARAM) &bc);
 }
 
+// Write what main()'s post-message-loop teardown would have written. Needed on
+// the session-end path only, where that code never runs.
+static void persist_state_for_session_end(void) {
+    if (g_main_window) {
+        int x = 0, y = 0, width = 0, height = 0;
+        ui_platform_get_window_position(g_main_window, &x, &y);
+        ui_platform_get_window_size(g_main_window, &width, &height);
+        settings_save_window_state(x, y, width, height,
+                                   ui_platform_is_window_maximized(g_main_window));
+    }
+    settings_save();
+}
+
+// Ask Windows to relaunch this instance after an update reboot, pointing it at
+// this process's own recovery slot so it silently reopens its own document -
+// which is what keeps N windows separate instead of one window racing to
+// restore them all.
+//
+// Only registered when there is unsaved work to bring back, which is exactly
+// what a handoff parks. A saved document is deliberately not registered: a
+// restored slot always comes back modified (editor_restore_slot), so reopening
+// a clean file that way would falsely mark it dirty. An empty or already-saved
+// window therefore does not reappear unbidden after a reboot.
+//
+// Registration is advisory: it also depends on the user's "restart my apps"
+// Windows setting, so it is never treated as a guarantee. The handoff slots
+// survive on disk either way and restore on the next launch by hand.
+static void update_restart_registration(void) {
+    const char *slot = editor_session_slot_id();
+    bool wanted = editor_is_modified() && slot && slot[0];
+
+    // Called from every title refresh, i.e. on every keystroke that flips the
+    // modified flag - only touch the registration when the answer changes
+    static int registered = -1; // -1 = not yet determined
+    if (registered == (wanted ? 1 : 0))
+        return;
+    registered = wanted ? 1 : 0;
+
+    if (!wanted) {
+        UnregisterApplicationRestart();
+        return;
+    }
+
+    // The command line excludes argv[0] - Windows supplies the executable
+    wchar_t cmdline[128];
+    wchar_t *wslot = utf8_to_wide(slot);
+    if (!wslot)
+        return;
+    _snwprintf(cmdline, 127, L"--recover %ls", wslot);
+    cmdline[127] = L'\0';
+    free(wslot);
+
+    // Reboots and patching only. Without these flags Windows Error Reporting
+    // would also relaunch npad after a crash or a hang with "--recover", which
+    // restores the slot silently - so a genuine crash would quietly reappear as
+    // if nothing had happened instead of saying so. A crash must still surface
+    // under the "npad may have closed unexpectedly" prompt.
+    RegisterApplicationRestart(cmdline, RESTART_NO_CRASH | RESTART_NO_HANG);
+}
+
 void ui_platform_notify_settings_changed(void) {
     if (g_settings_changed_msg) {
         broadcast_to_npad_windows(g_settings_changed_msg, 0);
@@ -6188,6 +6332,21 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         return 0;
     }
 
+    // An update is installing: park unsaved work and go, no prompt. The sender
+    // skips itself here and closes last, so it stays alive to launch setup.
+    if (msg == g_close_handoff_msg && g_close_handoff_msg != 0) {
+        if (window && wparam != (WPARAM) GetCurrentProcessId()) {
+            g_session_ending = true; // Suppress any later save-prompting close
+            if (!ui_post_event(UI_EVENT_QUIT_HANDOFF, window, NULL)) {
+                // Could not park the work, so stay open and keep prompting
+                // rather than discard it. Setup's Restart Manager page will
+                // report this window, which is the honest outcome.
+                g_session_ending = false;
+            }
+        }
+        return 0;
+    }
+
     // Another instance changed its view state (font type / zoom) and view
     // sync is enabled: mirror it here without re-broadcasting.
     if (msg == g_view_sync_msg && g_view_sync_msg != 0) {
@@ -6430,8 +6589,56 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 
         case WM_CLOSE: {
             // Single close path: the editor decides (prompting to save if
-            // needed) and calls ui_quit() when the app may exit
-            ui_post_event(UI_EVENT_QUIT, window, NULL);
+            // needed) and calls ui_quit() when the app may exit.
+            //
+            // Unless a session end is under way, in which case this is not the
+            // user closing npad and must not prompt. The Restart Manager sends
+            // WM_CLOSE after WM_ENDSESSION, and a save prompt there would be an
+            // invisible modal dialog stalling the installer until it times out.
+            ui_post_event(g_session_ending ? UI_EVENT_QUIT_HANDOFF : UI_EVENT_QUIT, window, NULL);
+            return 0;
+        }
+
+        case WM_QUERYENDSESSION: {
+            // Windows (or an installer's Restart Manager) is closing npad.
+            // Never veto and never show UI here - MSDN forbids it, and the
+            // window may be invisible, so a prompt would simply hang until
+            // HungAppTimeout and get npad reported as blocking the restart.
+            // Park the work while there is still time, then consent.
+            //
+            // A failed park is ignored here, unlike the update path: there is
+            // nothing useful to do about it. Prompting is forbidden, and
+            // refusing to consent would only get npad killed anyway - before
+            // this handler existed that is exactly what happened, with no
+            // snapshot attempted at all.
+            g_session_ending = true;
+            ui_post_event(UI_EVENT_HANDOFF_SNAPSHOT, window, NULL);
+            return TRUE;
+        }
+
+        case WM_ENDSESSION: {
+            if (!wparam) {
+                // Called off: go back to prompting on close, and drop the mark
+                // so a genuine crash later is still reported as one
+                g_session_ending = false;
+                ui_post_event(UI_EVENT_HANDOFF_CANCELLED, window, NULL);
+                return 0;
+            }
+            // Committed. A forced end can skip WM_QUERYENDSESSION entirely, so
+            // snapshot here only if that never ran - a snapshot is a full text
+            // copy plus an atomic verified write, and doing it twice inside the
+            // shutdown budget risks npad being flagged as hung.
+            if (!g_session_ending) {
+                g_session_ending = true;
+                ui_post_event(UI_EVENT_HANDOFF_SNAPSHOT, window, NULL);
+            }
+            // Everything after ui_message_loop() in main() is unreachable once
+            // this returns - Windows may terminate us immediately - so the
+            // geometry and settings it would have written are written here.
+            persist_state_for_session_end();
+            // Restart Manager expects the process to actually exit; a real
+            // shutdown terminates us regardless.
+            PostQuitMessage(0);
             return 0;
         }
 

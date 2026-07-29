@@ -135,7 +135,7 @@ All settings live in `settings.json` and are editable in Preferences
 | `auto_save_interval` | int | `300` | Auto-save period in seconds (minimum 10). |
 | `large_file_warning_mb` | int | adaptive | Confirm before opening files larger than this (MB). `0` disables the prompt. When never set, the default scales with installed RAM (1/64th, clamped 50-1024 MB; 100 MB when memory size is unknown). |
 | `recent_files_max` | int | `10` | Recent Files menu length (0-10). |
-| `session_resume_enabled` | bool | `true` | Crash recovery: snapshot unsaved work on a timer; offer to restore after an unclean exit. On by default: snapshots never touch the user's file. All windows are restored, extras in their own cascaded windows. |
+| `session_resume_enabled` | bool | `true` | Crash recovery: snapshot unsaved work on a timer; offer to restore after an unclean exit. On by default: snapshots never touch the user's file. All windows are restored, extras in their own cascaded windows. Does **not** gate handoff snapshots taken when an update or a Windows restart closes npad - those would otherwise be silently discarded. |
 | `session_interval` | int | `30` | Snapshot period in seconds (minimum 5). |
 | `ctrl_n_new_window` | bool | `false` | Swap Ctrl+N / Ctrl+Shift+N between "New" (clear this window) and "New Window" (open another instance). |
 
@@ -406,6 +406,21 @@ position). Not intended for direct use.
   new, cascaded windows. Slots are cleared on clean save/exit. Snapshots
   belonging to a still-running npad instance are ignored, so opening a new
   window while others are open never offers to "restore" their live work.
+- **Handoff (update / Windows restart)**: when something other than the user
+  closes npad - installing an in-app update, or Windows restarting the machine
+  - every unsaved document is parked in a recovery slot flagged as a *handoff*
+  and reopened automatically on the next launch, still unsaved, with **no
+  prompt in either direction**. A normal quit (X, Ctrl+W, Exit) is unaffected
+  and still asks Save / Don't Save / Cancel. Installing an update closes every
+  npad window, not only the one that started it, and waits for them before
+  launching setup. npad answers `WM_QUERYENDSESSION` immediately so it never
+  blocks a restart, and registers for relaunch afterwards via
+  `RegisterApplicationRestart` (subject to Windows' own "restart my apps"
+  setting - the parked documents restore on the next launch either way).
+  Handoff snapshots deliberately ignore `session_resume_enabled`: that setting
+  suppresses *crash* nagging, and honouring it here would silently destroy the
+  buffer. Only modified documents are parked, since restored content always
+  returns flagged as unsaved.
 - **Drag & drop**: drop a file to open it; hold Ctrl to insert its contents
   at the caret instead.
 - **Large files**: opening a file over the configured threshold asks for

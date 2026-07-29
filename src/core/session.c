@@ -159,6 +159,10 @@ char *session_take(const char *dir, const char *slot_id, char **out_path, TextEn
 
     file_delete(content_claim);
     file_delete(meta_claim);
+    // The marker's lifetime is the slot's. Clearing it here also covers the
+    // --recover path, which restores a slot directly and would otherwise leave
+    // orphaned .handoff files accumulating in the recovery directory.
+    session_clear_handoff(dir, slot_id);
 
 done:
     free(content_path);
@@ -273,5 +277,50 @@ void session_clear_slot(const char *dir, const char *slot_id) {
     if (meta_path) {
         file_delete(meta_path);
         free(meta_path);
+    }
+    session_clear_handoff(dir, slot_id); // Never outlive its slot
+}
+
+// --- Handoff marker --------------------------------------------------------
+// A zero-length "<slot>.handoff" sibling marks a slot that npad wrote because
+// something else was closing it (an update, or Windows restarting), rather than
+// because it crashed. The distinction is what lets the next launch restore it
+// silently instead of asking "npad may have closed unexpectedly".
+
+bool session_mark_handoff(const char *dir, const char *slot_id) {
+    if (!dir || !slot_id)
+        return false;
+
+    ensure_dir(dir);
+
+    char *path = slot_path(dir, slot_id, ".handoff");
+    if (!path)
+        return false;
+    // Content is irrelevant - existence is the signal
+    bool ok = file_write_text(path, "");
+    free(path);
+    return ok;
+}
+
+bool session_is_handoff(const char *dir, const char *slot_id) {
+    if (!dir || !slot_id)
+        return false;
+
+    char *path = slot_path(dir, slot_id, ".handoff");
+    if (!path)
+        return false;
+    bool marked = file_exists(path);
+    free(path);
+    return marked;
+}
+
+void session_clear_handoff(const char *dir, const char *slot_id) {
+    if (!dir || !slot_id)
+        return;
+
+    char *path = slot_path(dir, slot_id, ".handoff");
+    if (path) {
+        file_delete(path);
+        free(path);
     }
 }

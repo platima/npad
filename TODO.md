@@ -208,10 +208,41 @@ document.
 
 </details>
 
-### Unsaved work must survive an update or a Windows restart — NEXT UP
+### Unsaved work must survive an update or a Windows restart — SHIPPED in v0.25.0
 
-Requested 2026-07-29. npad is used primarily as a scratchpad, so being asked to
-save and reopen every document on each update is the main day-to-day friction.
+Requested 2026-07-29, built the same day after the user hit it live updating
+0.24.0 → 0.24.1. npad is used primarily as a scratchpad, so being asked to save
+and reopen every document on each update was the main day-to-day friction.
+
+**Both reported symptoms turned out to be one root cause.** The user reported
+(a) the updater only closing its own instance and (b) every unsaved document
+prompting to save. `CloseApplications=yes` was already set, so Inno's Restart
+Manager *was* asking the other windows to close — they refused, because npad
+routed every close, whoever initiated it, through the save prompt. No silent
+close path existed.
+
+**What shipped:** a handoff concept. `<slot>.handoff` marks a recovery slot as
+parked-by-something-else, so the next launch restores it silently while genuine
+crashes keep the "closed unexpectedly" prompt. `WM_QUERYENDSESSION` /
+`WM_ENDSESSION`, a `g_session_ending` latch that suppresses the prompt on
+externally-driven closes, an `npadCloseForHandoff` broadcast plus a bounded
+wait in the updater, and `RegisterApplicationRestart` pointing each process at
+its own slot.
+
+**Correction to the note that stood here before:** it claimed an unsaved
+document "would make Windows report npad as preventing shutdown". That was
+wrong — with no `WM_QUERYENDSESSION` handler, `DefWindowProcW` returned TRUE,
+so npad never blocked a restart. It was simply terminated, losing up to 30
+seconds of typing and its window position, and came back under the crash
+prompt. The fix is still right; the stated symptom was not.
+
+**Still needs driven runtime testing** (see "Needs a real-world test" above):
+multi-window park/restore, a genuine Restart Manager close driven by the real
+installer, and whether `RegisterApplicationRestart` actually fires on this
+machine's Windows configuration.
+
+<details>
+<summary>Original design notes (kept for reference)</summary>
 
 **Decided behaviour:**
 - When something *else* closes npad — an in-app update, or Windows Update
@@ -240,6 +271,8 @@ snapshot and *how* to restore without prompting, not new storage.
 
 **Needs driven runtime testing** (multi-window snapshot/restore, and a real
 `WM_QUERYENDSESSION`), so it is queued for when the machine is free.
+
+</details>
 
 ### Tab inserts spaces
 
