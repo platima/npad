@@ -284,6 +284,91 @@ snapshot and *how* to restore without prompting, not new storage.
 
 </details>
 
+### Binary files load truncated at the first NUL byte — ROOT CAUSE CONFIRMED
+
+Reported 2026-07-31: opening a ~200 KB PNG warned it was binary (correct),
+opened it anyway (correct), then showed **2 words, 5 chars, 3 lines**.
+
+**Reproduced exactly**, with a 120,911-byte PNG through the real `file_ops`
+functions:
+
+```
+bytes on disk      : 120911
+string kept        : 9 bytes (stops at first NUL)
+detected encoding  : 4  (NPAD_ENC_ANSI)
+counts             : 2 words, 5 chars, 3 lines
+```
+
+**Cause:** npad's core passes text as **NUL-terminated `char *`**
+(`file_read_text_ex` returns one; `file_count_text_stats` walks `for (p = utf8;
+*p; p++)`). A PNG's first NUL is at offset 8, immediately after the 8-byte
+signature `89 50 4E 47 0D 0A 1A 0A`, so everything past it is discarded. The
+document really is 9 bytes — the counts are honest, the *load* is what is
+broken.
+
+The arithmetic confirms it precisely: the file is detected as ANSI (not valid
+UTF-8), so CP1252 `0x89` becomes U+2030 (3 bytes in UTF-8), CRLF normalises to
+LF, leaving 9 bytes; counting those gives 1 + P + N + G + 0x1A = 5 chars, two
+runs = 2 words, two newlines = 3 lines.
+
+**⚠ The dangerous part is not the counts — it is saving.** The buffer holds 9
+bytes but `current_file` still points at the PNG. Type one character and press
+Ctrl+S and npad writes ~10 bytes over the original 120 KB file. Atomic saves do
+not help: the atomic write faithfully commits the truncated buffer. This is
+reachable by anyone who opens a binary file to peek at it.
+
+**Options, in increasing cost:**
+1. **Sanitise on load** (cheapest, and closest to Notepad). When the binary path
+   is taken, replace NUL bytes with a visible placeholder (U+2400 SYMBOL FOR
+   NULL, or U+FFFD) so the whole file loads and round-trips visibly. Contained
+   to the read path. Note this makes the buffer lossy, so it does not remove
+   the save hazard by itself.
+2. **Mark binary-opened documents read-only** (or force Save As), so a peek can
+   never overwrite the original. Pairs well with 1 and directly addresses the
+   data-loss path.
+3. **Length-carrying buffers throughout** — the only way to genuinely support
+   embedded NULs, and a large change: editor, UI, session, search and the
+   RichEdit boundary all assume NUL-terminated strings. Windows Notepad does
+   this, which is why it can display binary intact.
+
+Recommendation when this is picked up: **2 first** (it removes the data-loss
+risk on its own), then 1. Defer 3 unless binary editing becomes a real goal.
+
+### Theme-matched app icon + bundled file-type icons
+
+Noted 2026-07-31: the user is producing light and dark app icons so the icon
+can match the active theme, plus per-association file-type icons meant to ship
+**with the installer** rather than inside the executable.
+
+**How icons are wired today, for whoever picks this up:**
+- One icon, embedded: `IDI_NPAD ICON "npad.ico"` (`npad.rc:46`). It is bound
+  in three places — `wc.hIcon` and `wc.hIconSm` at class registration
+  (`ui_win32.c:3490`, `:3495`) and `WM_SETICON` ICON_BIG/ICON_SMALL per window
+  (`ui_win32.c:1004-1007`).
+- Every association's `DefaultIcon` points at `{app}\npad.exe,0` — i.e. all 14
+  ProgIDs currently share the executable's icon index 0.
+
+**Consequences worth knowing before drawing them:**
+- **Windows will not swap an app icon by theme on its own.** Both variants have
+  to be available and npad must re-issue `WM_SETICON` when the theme changes.
+  The class-level `wc.hIcon` is fixed at registration, so the per-window
+  `WM_SETICON` path is the one that matters; npad already reacts to theme
+  changes (`apply_theme`), so the switch belongs there.
+- Embedding both variants keeps the exe self-contained but grows `.rsrc`, which
+  was already over half the image before `npad.ico` was repacked 215 KB → 104 KB
+  in v0.21.0. Two icons would undo part of that, and image size feeds directly
+  into cold-start scan time (see the slow-launch findings above). Loading the
+  alternate variant from `{app}` with `LoadImageW(..., LR_LOADFROMFILE)` avoids
+  that, at the cost of the portable single-exe build losing the theme switch.
+  **That trade-off needs a decision, not a default.**
+- File-type icons shipped as separate `.ico` files are straightforward: install
+  them to `{app}` and point each ProgID's `DefaultIcon` at
+  `{app}\<name>.ico,0` instead of `{app}\npad.exe,0`. They must be listed in
+  `[Files]` with `uninsdeleteonuninstall`, and Explorer's icon cache may need a
+  nudge before the change is visible.
+- This overlaps the associations preferences pane below — if that pane ever
+  writes ProgIDs, it must write the same `DefaultIcon` paths.
+
 ### Preferences pane for file-type associations
 
 Requested 2026-07-31. Today associations are **installer-only**: the five
