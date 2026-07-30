@@ -284,6 +284,44 @@ snapshot and *how* to restore without prompting, not new storage.
 
 </details>
 
+### Preferences pane for file-type associations
+
+Requested 2026-07-31. Today associations are **installer-only**: the five
+grouped tasks in `installer/npad.iss` (Text / Markdown / Data / Config / Logs)
+and the matching MSI features. Once npad is installed, changing which
+extensions it registers for means re-running setup, which is heavy-handed for
+something a user might want to adjust once they have lived with it.
+
+A Preferences page would let extensions be ticked and unticked at runtime.
+
+**Constraints to design around** (all established while building the installer
+side — worth not rediscovering):
+
+- **npad cannot make itself the default handler for anything.** Since Windows 8
+  the `FileExts\<ext>\UserChoice` key is hash-protected, and Windows rejects a
+  programmatic write. The pane can register a ProgID and add npad to the
+  Open-with list; making it the *default* still has to go through Settings ▸
+  Default apps. The installer already says as much (`npad.iss:127`, `:270`) and
+  offers to open that Settings page — the pane should do the same rather than
+  imply it can do more.
+- **Scope.** The installer writes 95 keys under `HKA` (which resolves to HKLM
+  for an all-users install, HKCU otherwise) and 12 explicitly under HKCU. A
+  prefs pane runs unelevated, so it can only safely write **HKCU\\Software\\
+  Classes** — meaning on an all-users install the pane's changes would shadow
+  rather than edit the installed ones. That needs deciding, not glossing over.
+- **Ownership and cleanup.** The uninstaller removes what *it* wrote. Anything
+  the pane adds later would leak unless it is either written where uninstall
+  already sweeps, or tracked in settings so uninstall can find it.
+- **Do not write `SupportedTypes`.** It *filters* npad out of Open-with for
+  unlisted types; its absence is exactly what makes npad appear for anything.
+- The existing ProgIDs are `npad.txt`, `npad.md`, `npad.markdown`, `npad.csv`,
+  `npad.tsv`, `npad.json`, `npad.xml`, `npad.yaml`, `npad.yml`, `npad.toml`,
+  `npad.ini`, `npad.cfg`, `npad.conf`, `npad.log`.
+
+Per the project's core principle the pane itself is non-destructive (it only
+adds npad to choosers), but anything that could displace an existing default
+must stay opt-in and explicit.
+
 ### Tab inserts spaces
 
 Requested 2026-07-26. An option on the Markdown preferences page to make Tab
