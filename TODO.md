@@ -6,7 +6,67 @@ open loops.
 
 ---
 
+## 🐛 Confirmed, not yet fixed
+
+### Find match info stays in the status bar after the dialog closes
+
+Reported 2026-08-01: "when the find dialog was closed, it still has the match
+info in the status bar until I alter the text."
+
+**Root cause confirmed by reading.** `find_next` puts "Match 3 of 7" in status
+part 0 via `set_status_message`. The Find/Replace dialog's `WM_DESTROY`
+(`ui_win32.c:3253`) kills its timer, calls `refresh_highlights(window, false)`
+to clear the highlights, and saves the dialog position — but never clears the
+status message. It therefore survives until the next text change re-runs the
+counts.
+
+Fix site is that same `WM_DESTROY`: restore part 0 to whatever it should show
+(the counts if `status_show_counts` is on, otherwise empty). Note the highlights
+*are* cleared correctly there, so this is the one straggler, not a pattern.
+
+Safe to fix independently of the scroll investigation below.
+
+---
+
 ## 🔍 Needs your input
+
+### Slow scrolling — new evidence 2026-08-01, mechanism NOT yet established
+
+Three observations from real use, the third being the one that matters:
+
+1. A 227-line document, searching for a term on line 131: "the first time it
+   took ages to scroll down, and then after closing the dialog it scrolled all
+   the way back up to where I was, but also slowly." **Not reproducible a
+   second time.**
+2. (Separate, confirmed, see above: the match text stays in the status bar.)
+3. "After 10 minutes I went back to the document — I had previously select-all,
+   copy, alt tab to another window — and it was just very slowly scrolling back
+   to the top. Even whilst I was clicking around in the editor, it was still
+   scrolling up."
+
+**Why (3) is the important one:** the view moved *continuously*, for minutes,
+with no user input, and kept going while the user clicked in the editor. That is
+not "slow scrolling" — something was actively scrolling.
+
+**Established so far by reading the source:**
+- Every `EM_SCROLLCARET` call site is reached only from a discrete user action
+  (`handle_markdown_return`, `ui_platform_set_cursor_position`,
+  `paste_insert_converted`, `do_paste`, `find_next`, `show_goto_dialog`,
+  `list_replace`). **None is in a timer or paint path**, so npad is not
+  scrolling on a schedule.
+- `refresh_font_binding` (`ui_win32.c:3681`) is the one path that deliberately
+  saves and restores the scroll position — around a **full document replacement**
+  via `EM_SETTEXTEX`. It early-returns unless the document contains astral
+  (non-BMP) characters, and is reached from `apply_theme` and `apply_font`.
+  Whether anything can reach it repeatedly is not yet established.
+- `IMF_AUTOFONT` is enabled (`ui_win32.c:1044`) — flagged in the v0.21.0 round
+  as costly on large documents, but 227 lines is not large.
+
+**Do not assume this is the same bug as the vanished scroll bar below.** It may
+be unrelated, and it may not be npad's bug at all — 227 lines is far too small
+for any of npad's known per-paint costs to be visible, which is itself a strong
+hint. Investigation in progress; conclusions go here only when they are tied to
+code or measurement, not narrative.
 
 ### Scroll bar vanished while the view stayed scrolled — NOT REPRODUCED
 
