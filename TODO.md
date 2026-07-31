@@ -26,6 +26,32 @@ Fix site is that same `WM_DESTROY`: restore part 0 to whatever it should show
 
 Safe to fix independently of the scroll investigation below.
 
+Sharper than the report: part 0 is otherwise written only by
+`update_text_counts`, which early-returns when `status_show_counts` is off (the
+default). So in the **default** configuration the message persists *forever*,
+not "until I alter the text" — that it clears on edit means live counts are on.
+
+### Two further defects found while investigating the above
+
+- **`IsDialogMessageW` is called for every message** in the loop while the
+  modeless Find dialog exists (`ui_win32.c:949`), with no check that the message
+  belongs to that dialog. MSDN explicitly warns against this; it can divert Tab
+  / Enter / Esc / arrow keys typed in the **editor**. Worth gating on
+  `msg.hwnd == g_find_dialog || IsChild(g_find_dialog, msg.hwnd)` — and worth
+  doing *before* any keyboard-driven attempt to reproduce the scrolling, since
+  it could confound the results.
+- **`g_hl_matches` is never freed.** Grown by `realloc` (`ui_win32.c:2697`),
+  with no `free` anywhere including `ui_platform_cleanup`. Retained for process
+  life — hygiene only, no performance impact.
+
+### Product question: wrap-around search defaults ON
+
+`find_wrap_around` defaults to **true** (`ui_win32.c:905`). Windows 10 Notepad
+ships that box **unchecked**. It alters search results rather than adding to
+them — a search that Notepad reports as "cannot find" silently succeeds here —
+so by the project's own default-setting rule it arguably belongs OFF. Not
+changed; flagging it as a call to make.
+
 ---
 
 ## 🔍 Needs your input
@@ -65,8 +91,85 @@ not "slow scrolling" — something was actively scrolling.
 **Do not assume this is the same bug as the vanished scroll bar below.** It may
 be unrelated, and it may not be npad's bug at all — 227 lines is far too small
 for any of npad's known per-paint costs to be visible, which is itself a strong
-hint. Investigation in progress; conclusions go here only when they are tied to
-code or measurement, not narrative.
+hint.
+
+#### Investigated 2026-08-01 — no mechanism exists in npad for (3)
+
+A four-angle investigation enumerated the complete set of view-moving
+primitives in `src/`: **7 × `EM_SCROLLCARET`** and **1 × `EM_SETSCROLLPOS`**
+(the latter inside `refresh_font_binding`, astral-gated, and it *restores*
+rather than moves). Zero hits for `WM_VSCROLL`, `EM_LINESCROLL`,
+`SetScrollPos`, `SetScrollInfo`, `ScrollWindow`, `SetCapture`, or
+`SetWindowsHookEx`. All eight `SetTimer` sites were checked; none is
+scroll-adjacent and none re-arms itself. There is no self-posting message loop.
+**npad cannot have produced that motion.**
+
+**Two attractive theories were raised and both were killed:**
+
+- *Stuck RichEdit OLE drag-scroll.* Dead on a false premise: npad calls
+  `CoInitializeEx` and **never `OleInitialize`** (verified — no occurrence in
+  `src/`). `RegisterDragDrop` and `DoDragDrop` require full OLE
+  initialisation, so RichEdit's drag-drop is almost certainly inert in this
+  build and `ES_NOOLEDRAGDROP` would be a no-op. **Do not add it as a
+  speculative fix.** (Falsifiable in 30 seconds: select text, press inside the
+  selection and drag. No drop caret ⇒ confirmed dead.)
+- *Any stuck-capture / modal-loop mechanism* (drag autoscroll, scrollbar
+  auto-repeat). The user's own most vivid detail rules these **out**, not in:
+  "still scrolling while I clicked around" is evidence *against* them, because
+  both `DoDragDrop` and USER32's scrollbar tracking terminate on button-up and
+  a fresh physical click delivers exactly that. `edit_subclass_proc` provably
+  does not eat the button-up (it forwards everything to `DefSubclassProc`,
+  fully consuming only `WM_MOUSEACTIVATE` and some Tab/Enter keys).
+
+**What survives is a category, not a diagnosis:** a continuously *generated*
+stream of scroll input originating outside npad. A finite queued backlog is
+ruled out on throughput grounds, but a live stream needs no backlog, is not
+cancelled by clicking (the clicks simply queue behind it), and is the only
+candidate consistent with surviving ten minutes and an alt-tab. Plausible
+sources — none proven, none tied to npad: a failing or stuck wheel encoder,
+a mouse-driver feature (free-spin flywheel, thumb-button autoscroll), Windows'
+**"Scroll inactive windows when I hover over them"** (default ON) with the
+pointer parked over npad, or an RDP/VDI client replaying buffered input on
+reconnect.
+
+**Caveat on the evidence:** the single most discriminating detail is one
+person's recollection of an unreproduced event, recalled ten minutes later. If
+"still scrolling while I clicked" is imprecise, the stuck-capture family comes
+straight back.
+
+**Next diagnostics, falsification first:**
+1. *Free.* Next occurrence: **does Explorer / notepad.exe / a browser scroll
+   too?** A yes ends this investigation — it is not npad.
+2. *Free.* Press **Esc** (cancels both a drag and scrollbar tracking), then
+   single-click in the text and see whether the caret actually moves.
+3. *Free.* Environment: RDP/Citrix/VDI? Which mouse and driver software? Is
+   "scroll inactive windows on hover" enabled?
+4. *Free.* Did the document contain **astral characters** (emoji)? If it is
+   pure ASCII, `refresh_font_binding` early-returns and the only
+   `EM_SETSCROLLPOS` in the codebase is provably inert.
+5. *Cheap, and the right answer for an intermittent bug.* Add passive scroll
+   telemetry to the existing Preferences ▸ Debug page (which already carries
+   paint counters): count `WM_MOUSEWHEEL` / `WM_VSCROLL` / button and
+   `WM_CAPTURECHANGED` in `edit_subclass_proc`, and sample `EM_GETSCROLLPOS`,
+   `GetCapture()` and `GetKeyState(VK_LBUTTON)` on a debug-only timer, plus a
+   counter of "scroll moved with zero input messages since last sample". That
+   one instrument discriminates every remaining candidate: wheel counts
+   climbing ⇒ injected input; non-null capture ⇒ stuck drag; movement with
+   neither ⇒ RichEdit-internal. It is passive, so it catches the event whenever
+   it next happens.
+
+**For (1) — partly explained, the "slowly" is not.** Wrap-around search
+(`g_wrap_around`, default **true** at `ui_win32.c:905`) silently wraps to the
+first match and `EM_SCROLLCARET`s there, which explains a *jump* to the top;
+combined with the stale status message above, the "Wrapped around — Match 1 of
+N" text was still on screen after the dialog closed, which is very likely why it
+felt like the jump happened at close time. That explains a jump, **not a slow
+crawl**. On 227 lines the worst paint configuration is roughly 12 GDI calls +
+21 `SendMessage` + 3 `AlphaBlend` — microseconds, against a measured baseline of
+26 coalesced paints at 0.6 ms on a 20,000-line document. Nothing is within 100×
+of the ~50 ms needed to be visible. The one non-size-invariant term is the
+`AlphaBlend` at `ui_win32.c:2724`, a **stretch blit from a 1×1 DIB**, which
+degrades badly over RDP/Citrix and applies only while Highlight All is on.
 
 ### Scroll bar vanished while the view stayed scrolled — NOT REPRODUCED
 
