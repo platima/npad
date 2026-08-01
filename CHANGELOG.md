@@ -5,6 +5,35 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.0] - 2026-08-01
+
+### 🔄 Changed
+- **Find and Replace no longer wrap around by default**, matching notepad.exe,
+  which ships that box unchecked. Wrapping changes what a search *finds* rather
+  than adding to it — a term Notepad reports as missing would silently be found
+  — so by the project's own rule it is now opt-in.
+
+  Your existing setting is untouched: this only changes the default for fresh
+  installs. There is now a **Preferences ▸ General ▸ "Find and Replace wrap
+  around by default"** checkbox, so it no longer has to be hunted down in the
+  Find dialog.
+- Find options now propagate between running npad instances like every other
+  shared setting. They were process-globals read once at startup, so changing
+  one in another window previously had no effect here until restart.
+
+### 🔍 Diagnostics
+- **Scroll telemetry on the hidden Debug preferences page**, added to chase a
+  reported fault where the view scrolls on its own. It counts the input the
+  editor actually receives (wheel, `WM_VSCROLL`, buttons, capture changes) and,
+  at each repaint, whether the view moved and whether anything could account for
+  it. That distinguishes the three possible causes: something feeding input, a
+  stuck drag or scrollbar track, or RichEdit moving the view itself.
+
+  It is passive, allocation-free and has no timer of its own — sampling
+  piggybacks on repaints, which is what scrolling causes, so it costs nothing
+  while the window is idle and adds about 2 KB to the binary. The whole thing
+  is behind `#define NPAD_SCROLL_TELEMETRY` and compiles out to nothing.
+
 ## [0.25.0] - 2026-07-29
 
 ### ✨ Features

@@ -203,7 +203,7 @@ no-close update is not possible because Inno/MSI must replace the running
 | `word_wrap` | Word wrap on/off (Format > Word Wrap, Alt+Z). |
 | `window_x/y/width/height/maximized` | Window geometry, saved on exit. First run uses ~48% x ~72% of the monitor work area, centred. |
 | `recent_file_0..9` | Recent files list. |
-| `find_match_case`, `find_whole_word`, `find_search_down`, `find_wrap_around`, `find_interpret_escapes`, `find_highlight_all` | Find/Replace options (checkboxes in the dialogs). |
+| `find_match_case`, `find_whole_word`, `find_search_down`, `find_wrap_around`, `find_interpret_escapes`, `find_highlight_all` | Find/Replace options (checkboxes in the dialogs). `find_wrap_around` defaults **off**, matching notepad.exe, and also has a Preferences > General checkbox. All propagate live to other instances. |
 | `find_hist_0..9`, `replace_hist_0..9` | Recent search/replace terms. |
 
 ## View state vs settings

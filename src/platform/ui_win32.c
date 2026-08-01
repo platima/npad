@@ -67,6 +67,65 @@
 #define NPAD_COUNTS_DEBOUNCE_MS 350
 #define NPAD_COUNTS_LIVE_LIMIT 1000000
 
+// Scroll telemetry for the reported intermittent fault where the view scrolls
+// on its own (see TODO.md). Set to 0 to compile it out entirely once the cause
+// is found - every use below is inside this guard.
+//
+// Cost when enabled is deliberately near-nil: no allocation, no timer, one
+// integer increment on messages that are already being dispatched, and a single
+// EM_GETSCROLLPOS per repaint (a repaint is what scrolling causes, so this
+// samples exactly when it matters and never on idle).
+#define NPAD_SCROLL_TELEMETRY 1
+
+#if NPAD_SCROLL_TELEMETRY
+static struct {
+    unsigned wheel;          // WM_MOUSEWHEEL reaching the edit control
+    unsigned vscroll;        // WM_VSCROLL - npad sends none itself
+    unsigned buttons;        // Left button transitions
+    unsigned capture_ch;     // WM_CAPTURECHANGED
+    unsigned moves;          // Repaints at which the view had moved at all
+    long move_px;            // Total distance moved, absolute
+    unsigned ghosts;         // Subset where nothing could have caused it
+    long ghost_dy;           // Net drift attributable to those
+    long last_y;             // Previously observed scroll position
+    bool active_since_paint; // A non-inert message arrived since the last paint
+    bool capture_at_ghost;   // Was the mouse captured when a ghost was seen?
+    bool button_at_ghost;    // Was the left button physically down?
+} g_tel;
+
+// Messages that provably CANNOT move the view.
+//
+// The test is deliberately inverted. Enumerating everything that *can* move the
+// view was tried first and is a trap: menu-driven Cut / Paste / Undo / Redo
+// arrive as WM_CUT / WM_PASTE / EM_UNDO / EM_REDO, and every zoom change as
+// EM_SETZOOM - all of which reflow and scroll. Missing any one of them invents
+// a "ghost" that never happened, and a false ghost would send this
+// investigation the wrong way, which is worse than missing an occurrence. So
+// anything not provably inert counts as a legitimate cause, trading false
+// positives for false negatives. The wheel and WM_VSCROLL counters do not
+// depend on this judgement and answer "is something feeding input" on their own.
+static bool tel_message_is_inert(UINT msg) {
+    switch (msg) {
+        case WM_PAINT:
+        case WM_ERASEBKGND:
+        case WM_NCPAINT:
+        case WM_PRINTCLIENT:
+        case WM_NCHITTEST:
+        case WM_SETCURSOR:
+        case WM_GETTEXTLENGTH:
+        case EM_GETSCROLLPOS: // The sampling probe below re-enters here
+        case EM_GETSEL:
+        case EM_EXGETSEL:
+        case EM_GETLINECOUNT:
+        case EM_GETMODIFY:
+        case WM_TIMER: // RichEdit's own timers are a suspect, not an excuse
+            return true;
+        default:
+            return false;
+    }
+}
+#endif
+
 // Live edit-control counters surfaced on the hidden Debug preferences page
 // (scroll/paint performance diagnostics)
 static unsigned g_paint_count = 0;
@@ -741,6 +800,29 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, L
         return MA_ACTIVATE;
     }
 
+#if NPAD_SCROLL_TELEMETRY
+    if (!tel_message_is_inert(msg)) {
+        g_tel.active_since_paint = true;
+    }
+    switch (msg) {
+        case WM_MOUSEWHEEL:
+            g_tel.wheel++;
+            break;
+        case WM_VSCROLL:
+            g_tel.vscroll++;
+            break;
+        case WM_LBUTTONDOWN:
+        case WM_LBUTTONUP:
+            g_tel.buttons++;
+            break;
+        case WM_CAPTURECHANGED:
+            g_tel.capture_ch++;
+            break;
+        default:
+            break;
+    }
+#endif
+
     // Markdown keyboard handling runs BEFORE the default proc so consumed
     // keys never reach the control. A consumed key still has its WM_CHAR
     // already queued by TranslateMessage, so that gets eaten too.
@@ -806,6 +888,34 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, L
             g_paint_max_ms = paint_ms;
         }
         g_paint_count++;
+
+#if NPAD_SCROLL_TELEMETRY
+        // Sample the scroll position here rather than on a timer: scrolling is
+        // what causes repaints, so this observes exactly the moments that
+        // matter and costs nothing while the window sits idle.
+        {
+            POINT sp = { 0, 0 };
+            SendMessageW(hwnd, EM_GETSCROLLPOS, 0, (LPARAM) &sp);
+            if (g_paint_count > 1 && sp.y != g_tel.last_y) {
+                long dy = sp.y - g_tel.last_y;
+                // Total movement is recorded unconditionally: if the view
+                // travels far further than the observed input could account
+                // for, that shows up here even when a ghost was masked.
+                g_tel.moves++;
+                g_tel.move_px += dy < 0 ? -dy : dy;
+                if (!g_tel.active_since_paint) {
+                    g_tel.ghosts++;
+                    g_tel.ghost_dy += dy;
+                    // Captured or button-down would mean a stuck drag or
+                    // scrollbar track; neither set points at RichEdit itself.
+                    g_tel.capture_at_ghost = (GetCapture() == hwnd);
+                    g_tel.button_at_ghost = (GetKeyState(VK_LBUTTON) & 0x8000) != 0;
+                }
+            }
+            g_tel.last_y = sp.y;
+            g_tel.active_since_paint = false;
+        }
+#endif
     } else {
         result = DefSubclassProc(hwnd, msg, wparam, lparam);
     }
@@ -902,7 +1012,11 @@ bool ui_platform_init(void) {
     g_match_case = settings_get_bool("find_match_case", false);
     g_whole_word = settings_get_bool("find_whole_word", false);
     g_search_down = settings_get_bool("find_search_down", true);
-    g_wrap_around = settings_get_bool("find_wrap_around", true);
+    // Off by default to match notepad.exe, whose "Wrap around" box ships
+    // unchecked. It changes what a search FINDS rather than adding to it - a
+    // term Notepad reports as missing would silently be found here - so by the
+    // project's own rule it is opt-in. Preferences > General turns it back on.
+    g_wrap_around = settings_get_bool("find_wrap_around", false);
     g_interpret_escapes = settings_get_bool("find_interpret_escapes", false);
     g_highlight_all = settings_get_bool("find_highlight_all", false);
 
@@ -3842,6 +3956,11 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
             CheckDlgButton(page, ID_PREF_CTRL_N_WINDOW,
                            settings_get_bool("ctrl_n_new_window", false) ? BST_CHECKED
                                                                          : BST_UNCHECKED);
+            // Seeded from the live flag, not the file: the Find dialog writes
+            // g_wrap_around without persisting on some paths, so the file can
+            // lag behind what searching actually does. Showing the file's value
+            // would contradict observed behaviour and then write it back.
+            CheckDlgButton(page, ID_PREF_FIND_WRAP, g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
             EnableWindow(GetDlgItem(page, ID_PREF_AUTOSAVE_INTERVAL),
                          editor_is_auto_save_enabled());
             EnableWindow(GetDlgItem(page, ID_PREF_SESSION_INTERVAL),
@@ -3854,7 +3973,7 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
             // Enable Apply when a value control changes (not the action buttons)
             if ((code == BN_CLICKED &&
                  (id == ID_PREF_AUTOSAVE_ENABLED || id == ID_PREF_SESSION_ENABLED ||
-                  id == ID_PREF_CTRL_N_WINDOW)) ||
+                  id == ID_PREF_CTRL_N_WINDOW || id == ID_PREF_FIND_WRAP)) ||
                 (code == EN_CHANGE &&
                  (id == ID_PREF_AUTOSAVE_INTERVAL || id == ID_PREF_LARGE_FILE_MB ||
                   id == ID_PREF_RECENT_MAX || id == ID_PREF_SESSION_INTERVAL))) {
@@ -3922,6 +4041,17 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                                   IsDlgButtonChecked(page, ID_PREF_CTRL_N_WINDOW) == BST_CHECKED);
                 if (g_main_window) {
                     apply_new_window_pref(g_main_window);
+                }
+
+                // Find wrap-around is also toggled from the Find/Replace
+                // dialog, so update the live flag and, if that dialog happens
+                // to be open, its checkbox - otherwise closing it would write
+                // the stale value straight back over this one.
+                g_wrap_around = IsDlgButtonChecked(page, ID_PREF_FIND_WRAP) == BST_CHECKED;
+                settings_set_bool("find_wrap_around", g_wrap_around);
+                if (g_find_dialog) {
+                    CheckDlgButton(g_find_dialog, ID_FIND_WRAP,
+                                   g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
                 }
 
                 settings_save(); // Apply button: persist + propagate immediately
@@ -4253,6 +4383,25 @@ static wchar_t *build_diagnostics_text(void) {
                 g_paint_max_ms);
     DIAG_APPEND(L"    (includes the Highlight All overlay; max is the number that\r\n");
     DIAG_APPEND(L"     matters for perceived scroll lag)\r\n");
+
+#if NPAD_SCROLL_TELEMETRY
+    DIAG_APPEND(L"\r\nScroll telemetry (diagnosing the self-scrolling report):\r\n");
+    DIAG_APPEND(L"  Input seen: %u wheel, %u WM_VSCROLL, %u button, %u capture-change\r\n",
+                g_tel.wheel, g_tel.vscroll, g_tel.buttons, g_tel.capture_ch);
+    DIAG_APPEND(L"  View moved at %u repaints, %ld px total\r\n", g_tel.moves, g_tel.move_px);
+    DIAG_APPEND(L"  Of those, unexplained: %u (net %ld px)\r\n", g_tel.ghosts, g_tel.ghost_dy);
+    if (g_tel.ghosts) {
+        DIAG_APPEND(L"    at the last one: capture=%ls, left button=%ls\r\n",
+                    g_tel.capture_at_ghost ? L"HELD" : L"no",
+                    g_tel.button_at_ghost ? L"DOWN" : L"up");
+    }
+    DIAG_APPEND(L"    Reading it: wheel or WM_VSCROLL climbing on their own means\r\n");
+    DIAG_APPEND(L"    something is feeding input. Unexplained moves climbing while\r\n");
+    DIAG_APPEND(L"    those stay flat means RichEdit is moving the view itself.\r\n");
+    DIAG_APPEND(L"    Capture or button set instead means a stuck drag or scrollbar\r\n");
+    DIAG_APPEND(L"    track. Total px far exceeding the input is the same signal\r\n");
+    DIAG_APPEND(L"    even when a cause could not be excluded.\r\n");
+#endif
     DIAG_APPEND(L"  Selection changes: %u\r\n", g_selchange_count);
 
 #undef DIAG_APPEND
@@ -6297,6 +6446,16 @@ static void reload_and_apply_settings(Window *window) {
     settings_clear_all();
     settings_load();
     editor_reload_prefs(); // Re-read auto-save / session settings and timers
+    // Find options are process-globals seeded at init, so a broadcast has to
+    // re-read them or a preference changed in another instance would appear to
+    // apply (its Preferences page reads the file) while searching here still
+    // used the stale value.
+    g_match_case = settings_get_bool("find_match_case", false);
+    g_whole_word = settings_get_bool("find_whole_word", false);
+    g_search_down = settings_get_bool("find_search_down", true);
+    g_wrap_around = settings_get_bool("find_wrap_around", false);
+    g_interpret_escapes = settings_get_bool("find_interpret_escapes", false);
+    g_highlight_all = settings_get_bool("find_highlight_all", false);
     apply_font(window);
     apply_theme(window);
     apply_new_window_pref(window); // Also rebuilds accelerators (list Ctrl+]/[ gating)

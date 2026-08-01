@@ -117,7 +117,8 @@
 #define ID_PREF_UPD_MODE 3148
 #define ID_PREF_UPD_ON_LAUNCH 3149
 #define ID_PREF_UPD_SKIP 3150
-#define ID_PREF_UPD_INSTALL 3157 // 3151-3156 are the Markdown paste radios
+#define ID_PREF_UPD_INSTALL 3157
+#define ID_PREF_FIND_WRAP 3158 // 3151-3156 are the Markdown paste radios
 
 // Static text controls
 #define IDC_STATIC -1

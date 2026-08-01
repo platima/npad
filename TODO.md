@@ -44,13 +44,24 @@ not "until I alter the text" — that it clears on edit means live counts are on
   with no `free` anywhere including `ui_platform_cleanup`. Retained for process
   life — hygiene only, no performance impact.
 
-### Product question: wrap-around search defaults ON
+### Product question: wrap-around search defaults ON — DECIDED, shipped v0.26.0
 
 `find_wrap_around` defaults to **true** (`ui_win32.c:905`). Windows 10 Notepad
 ships that box **unchecked**. It alters search results rather than adding to
 them — a search that Notepad reports as "cannot find" silently succeeds here —
-so by the project's own default-setting rule it arguably belongs OFF. Not
-changed; flagging it as a call to make.
+so by the project's own default-setting rule it arguably belongs OFF.
+
+**Decided 2026-08-01: default OFF, with a Preferences > General checkbox** so it
+is one tick to turn back on. Existing settings are untouched — only fresh
+installs see the new default.
+
+Adversarial review of that change found two real defects, both fixed in the same
+round: the Preferences checkbox was seeded from the persisted key rather than the
+live `g_wrap_around` (which the Find dialog mutates without persisting, so the
+page could contradict observed behaviour and then write the stale value back),
+and `reload_and_apply_settings` never re-read any `find_*` global, so promoting
+the option to a documented, propagated preference gave it propagation that did
+not actually work.
 
 ---
 
@@ -121,6 +132,36 @@ scroll-adjacent and none re-arms itself. There is no self-posting message loop.
   does not eat the button-up (it forwards everything to `DefSubclassProc`,
   fully consuming only `WM_MOUSEACTIVATE` and some Tab/Enter keys).
 
+#### FALSIFIED 2026-08-01 by user evidence — it IS npad
+
+The conclusion below (externally generated input) is **wrong** and is kept only
+so it is not re-derived. The user reports the fault has occurred repeatedly
+across **v0.16 to v0.25**, roughly every second day for a week, on **two
+different machines**, on a **raw console** (no RDP), with a **default mouse** —
+and it happens in **no other application** and **never happened in classic
+Notepad**. A mouse, driver or Windows-hover cause would not spare every other
+application on two machines.
+
+Notepad uses an `EDIT` control; npad uses **RichEdit**. That is the difference,
+so the motion originates inside RichEdit or in how npad drives it. The
+enumeration below stands — npad issues no scroll of its own — but "therefore
+external" was the wrong inference from it.
+
+Also eliminated for free: v0.16 predates `ES_DISABLENOSCROLL` (v0.20.0), so the
+always-visible scroll bar is not the cause. The document was pure ASCII pasted
+from a serial console, so `refresh_font_binding` early-returns and the sole
+`EM_SETSCROLLPOS` is provably inert for this case too.
+
+**v0.26.0 ships passive telemetry** (Preferences ▸ Debug, behind
+`#define NPAD_SCROLL_TELEMETRY`) to catch it in the act: input counters plus,
+per repaint, whether the view moved and whether anything could account for it.
+Expect it to show unexplained moves climbing while wheel and `WM_VSCROLL` stay
+flat — which would confirm RichEdit is moving the view itself. If instead the
+input counters climb, the external theory returns.
+
+<details>
+<summary>Superseded conclusion (kept for reference)</summary>
+
 **What survives is a category, not a diagnosis:** a continuously *generated*
 stream of scroll input originating outside npad. A finite queued backlog is
 ruled out on throughput grounds, but a live stream needs no backlog, is not
@@ -136,6 +177,8 @@ reconnect.
 person's recollection of an unreproduced event, recalled ten minutes later. If
 "still scrolling while I clicked" is imprecise, the stuck-capture family comes
 straight back.
+
+</details>
 
 **Next diagnostics, falsification first:**
 1. *Free.* Next occurrence: **does Explorer / notepad.exe / a browser scroll
