@@ -540,6 +540,53 @@ reachable by anyone who opens a binary file to peek at it.
 Recommendation when this is picked up: **2 first** (it removes the data-loss
 risk on its own), then 1. Defer 3 unless binary editing becomes a real goal.
 
+### Detect that the open file changed on disk
+
+Requested 2026-08-04. When the file npad has open is modified by something else,
+offer **Reload / Save As / Continue**, with an optional "don't ask again for this
+file" checkbox scoped to the session. **Off by default**, enabled from a
+preferences pane — consistent with the core principle, since Windows 10
+notepad.exe does not do this at all.
+
+**Nothing for this exists yet** (checked): npad tracks *nothing* about the file
+on disk — `file_ops` exposes only `file_exists` and `file_get_size`, there is no
+`FILETIME` / mtime handling anywhere in `src/core`, and there is **no
+`WM_ACTIVATE` handler at all** in `ui_win32.c`. Both the stamp and the hook are
+new.
+
+**Design constraints worth not rediscovering:**
+
+- **Detect on window activation, not on a timer.** It is what other editors do,
+  it is the moment the user would notice anyway, and it costs exactly nothing
+  while npad is unfocused — which matters given the standing preference for
+  keeping idle cost near zero. Also check immediately *before* a save, which is
+  the genuinely dangerous moment (silently overwriting someone else's edit).
+  `ReadDirectoryChangesW` is the event-driven alternative but needs a directory
+  handle per open document, which then blocks renaming or deleting that
+  directory — not worth it here.
+- **npad must not trip over its own writes.** Saves are atomic (temp file +
+  rename), so every save changes the file's identity on disk. The stamp has to
+  be re-captured after *every* successful write, including **auto-save**, which
+  is timer-driven and would otherwise fire this prompt against the user
+  endlessly.
+- **Stamp = size + last-write-time**, captured at open and at save. Size alone
+  misses an equal-length edit; mtime alone is unreliable because some tools
+  preserve it. A content hash is certain but costs a full re-read — not worth it
+  unless the cheap stamp proves inadequate.
+- **Reload is destructive when the buffer is unsaved** — it discards the user's
+  edits. It must not be the default button, and the wording must say so. Reuse
+  the existing `show_task_dialog` helper rather than a fresh `MessageBoxW`.
+- **"Don't ask again" is session- and file-scoped, in memory only.** Never
+  persist it: a stale suppression that outlived the session would silently hide
+  real external changes. Clear it on Save As and on opening a different file.
+  One document per window means it is naturally per-process state.
+- **File *deleted* is a distinct case** from modified. Reload is meaningless;
+  the offer should be keep-in-buffer or Save As.
+- **Interaction with the v0.25.0 handoff restore:** a restored document has a
+  file path but buffer content that came from a recovery snapshot, and the file
+  on disk may legitimately differ. Establish the stamp deliberately on that path
+  or the first activation after an update will report a phantom change.
+
 ### Theme-matched app icon + bundled file-type icons
 
 Noted 2026-07-31: the user is producing light and dark app icons so the icon
