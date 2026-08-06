@@ -540,6 +540,59 @@ reachable by anyone who opens a binary file to peek at it.
 Recommendation when this is picked up: **2 first** (it removes the data-loss
 risk on its own), then 1. Defer 3 unless binary editing becomes a real goal.
 
+### Convert Delimiters: no memory, no swap button, and `
+` can never match
+
+Reported 2026-08-06. Three things, two of them confirmed by reading.
+
+**1. It forgets what you last used.** Confirmed: `WM_INITDIALOG`
+(`ui_win32.c:5640-5641`) hard-codes `SetDlgItemTextW(dlg, ID_DELIM_FROM, L",")`
+and `ID_DELIM_TO, L"\r\n"` on *every* open. Nothing is persisted — no
+`history_push`, no settings write — unlike Find/Replace, which already has
+`history_load` / `history_push` (`find_hist` / `replace_hist`). Reuse that
+machinery rather than inventing another: `delim_from_hist` / `delim_to_hist`
+would also populate the dropdowns with recent values for free.
+
+**2. Wanted: a swap button** between From and To, so a conversion can be
+reversed without retyping. Cheap; the combo texts just trade places.
+
+**3. `
+` as the *source* can never match — root cause confirmed.**
+Reported as "a new file that said it was Windows CRLF, going from `
+` did
+not work, I had to go from just `
+`", suspected to be the pasted text. **It is
+not the pasted text.** It is deterministic:
+
+- `list_extract` (`ui_win32.c:5421`) fetches the range and then calls
+  `normalize_to_lf(utf8)` (`:5439`), so the text the conversion actually matches
+  against contains **only bare `
+`**, whatever the file's line ending is.
+- `list_replace` (`:5444`) mirrors it: normalise to LF, then emit CRLF uniformly
+  into the control. So the internal round-trip is consistent.
+- The status bar correctly reports the *file* as Windows (CRLF), because that is
+  its on-disk attribute — but the buffer the tool sees is LF-only. So a `
+`
+  source matches nothing, always, in every file.
+
+**The trap is self-inflicted:** the dialog's default *target* is `
+`
+(`:5641`, commented "OS default line ending"), which works fine because
+`list_replace` normalises it. So npad itself teaches the user that `
+` is a
+valid token, and it then silently fails the moment they use it as a source.
+
+Options when fixing: accept `
+` in the source and treat it as `
+`
+(smallest, matches what the user meant); or drop `
+` from the presets and
+the default target so it is never suggested; or state the LF-only rule in the
+dialog's escape hint (`ID_DELIM_HINT`). The first is the least surprising.
+Whichever, the "from" and "to" presets should stop disagreeing about whether
+`
+` is meaningful.
+
 ### Detect that the open file changed on disk
 
 Requested 2026-08-04. When the file npad has open is modified by something else,
