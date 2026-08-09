@@ -6,7 +6,15 @@ open loops.
 
 ---
 
-## 🐛 Confirmed, not yet fixed
+## 🐛 Confirmed — FIXED in v0.27.1
+
+All items in this section shipped in v0.27.1 (find status residue,
+IsDialogMessageW gating, the g_hl_matches leak, Paste-as-Markdown greying,
+Interpret-escapes staleness, the SB_SETPARTS clamp, the double menu redraw,
+the dark-mode resize band, and Convert Delimiters accepting 
+). Kept for
+the root-cause notes; the remaining Convert Delimiters items (persistence and
+the swap button) are features and are still open below.
 
 ### Find match info stays in the status bar after the dialog closes
 

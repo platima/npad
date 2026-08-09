@@ -5,6 +5,37 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.1] - 2026-08-09
+
+### 🐛 Fixed
+- **Convert Delimiters: a `\r\n` in the From field matched nothing**, in every
+  file regardless of its line endings. The document is normalised to `\n`
+  internally before matching, so a literal `\r\n` could never appear — while
+  the dialog's own default *target* is `\r\n`, which teaches you the token and
+  then fails silently when you use it as a source. `\r\n` is now accepted and
+  means `\n`.
+- **The Find match count stayed in the status bar after closing the dialog.**
+  Worse than it looked: the counts are what would otherwise overwrite it and
+  they are off by default, so in a stock configuration it persisted for the
+  rest of the session.
+- **The status bar drew inverted parts on a narrow window or at high DPI.** The
+  part edges were computed by subtraction with no clamp, so they could go
+  negative and out of order. Parts now collapse in order instead.
+- **Typing Tab, Enter, Escape or an arrow key in the editor could be diverted
+  to an open Find dialog.** `IsDialogMessageW` was called for every queued
+  message while that dialog existed, which MSDN explicitly warns against.
+- **"Paste as Markdown" was never greyed out**, so it stayed available over an
+  empty clipboard and did nothing. It now follows the clipboard, and correctly
+  stays enabled for HTML-only content that plain Paste cannot take.
+- **"Interpret escapes" appeared or disappeared only when the Find dialog was
+  reopened.** Toggling Basic Markdown support now reaches the open dialog.
+- **The menu bar flashed on every settings change**, being redrawn twice — once
+  for the Markdown menu and once for the update indicator.
+- **Dragging the window larger in a dark scheme flashed a white band** in the
+  newly exposed area. The frame painted the fixed system window colour rather
+  than the scheme's.
+- A memory leak: the Highlight All match list was never freed.
+
 ## [0.27.0] - 2026-08-09
 
 ### 🔄 Changed

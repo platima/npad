@@ -534,6 +534,20 @@ static bool resolve_theme_dark_mode(void) {
     return theme_colors(NULL, NULL);
 }
 
+// Frame background for WM_ERASEBKGND, rebuilt only when the scheme changes so
+// the erase path itself allocates nothing (it runs throughout a resize drag)
+static HBRUSH g_frame_brush = NULL;
+static COLORREF g_frame_color = CLR_INVALID;
+
+static void set_frame_brush(COLORREF back) {
+    if (g_frame_brush && g_frame_color == back)
+        return;
+    if (g_frame_brush)
+        DeleteObject(g_frame_brush);
+    g_frame_brush = CreateSolidBrush(back);
+    g_frame_color = back;
+}
+
 // Every dialog opens at this notepad-style offset into its owner window
 // (96-DPI units, scaled per monitor) rather than centred or at the screen's
 // top-left. Matches where classic Notepad drops its Find dialog.
@@ -1045,6 +1059,17 @@ void ui_platform_cleanup(void) {
         g_richedit_lib = NULL;
     }
 
+    free(g_hl_matches); // Grown by refresh_highlights, never released until now
+    g_hl_matches = NULL;
+    g_hl_count = 0;
+    g_hl_capacity = 0;
+
+    if (g_frame_brush) {
+        DeleteObject(g_frame_brush);
+        g_frame_brush = NULL;
+        g_frame_color = CLR_INVALID;
+    }
+
     CoUninitialize();
 }
 
@@ -1060,7 +1085,12 @@ int ui_platform_message_loop(void) {
         }
 
         // Keyboard navigation inside the modeless find/replace dialog
-        if (g_find_dialog && IsDialogMessageW(g_find_dialog, &msg)) {
+        // Only for messages actually bound for that dialog. MSDN warns against
+        // calling this for anything else, and unguarded it ran for EVERY queued
+        // message while the modeless dialog existed - able to divert Tab, Enter,
+        // Escape and the arrow keys typed in the editor.
+        if (g_find_dialog && (msg.hwnd == g_find_dialog || IsChild(g_find_dialog, msg.hwnd)) &&
+            IsDialogMessageW(g_find_dialog, &msg)) {
             continue;
         }
 
@@ -1511,11 +1541,22 @@ static wchar_t *read_clipboard_text(HWND owner) {
 // fragment as a malloc'd UTF-8 string (NULL if unavailable). CF_HTML data is a
 // UTF-8 byte buffer with a header; html_cf_extract_fragment pulls out the
 // fragment the source actually copied.
-static char *read_clipboard_html(HWND owner) {
-    static UINT cf_html = 0;
+static UINT npad_cf_html(void) {
+    static UINT cf_html = 0; // Registered lazily, then constant for the session
     if (!cf_html)
         cf_html = RegisterClipboardFormatW(L"HTML Format");
-    if (!cf_html || !IsClipboardFormatAvailable(cf_html))
+    return cf_html;
+}
+
+// Whether the clipboard holds rich text that Paste as Markdown could convert
+static bool clipboard_has_html(void) {
+    UINT cf = npad_cf_html();
+    return cf != 0 && IsClipboardFormatAvailable(cf);
+}
+
+static char *read_clipboard_html(HWND owner) {
+    UINT cf_html = npad_cf_html();
+    if (!clipboard_has_html())
         return NULL;
     if (!OpenClipboard(owner))
         return NULL;
@@ -3375,6 +3416,16 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
             KillTimer(dialog, 1);
             g_find_hl_pending = false;
             refresh_highlights(window, false); // Clear highlights with the dialog
+            // ...and the match count with them. Part 0 is otherwise only
+            // rewritten by the counts, which are off by default, so leaving it
+            // stranded "Match 3 of 7" forever in the default configuration.
+            // schedule_counts_update rather than apply_counts_pref: the latter
+            // recomputes synchronously (a full document fetch) and would put a
+            // hitch on closing the dialog.
+            if (window) {
+                set_status_part0(window, L"");
+                schedule_counts_update(window);
+            }
             RECT rect;
             if (GetWindowRect(dialog, &rect)) {
                 g_find_dialog_pos.x = rect.left;
@@ -3461,6 +3512,7 @@ static void apply_theme(Window *window) {
     // Colors and the dark flag come from the resolved color scheme
     COLORREF back, text;
     g_dark_mode = theme_colors(&back, &text);
+    set_frame_brush(back); // Used by WM_ERASEBKGND; see set_frame_brush
 
     // Preserve document state while re-styling
     LRESULT was_modified = SendMessageW(window->edit_hwnd, EM_GETMODIFY, 0, 0);
@@ -3610,7 +3662,11 @@ static bool register_window_class(void) {
     wc.hInstance = g_hinstance;
     wc.hIcon = LoadIconW(g_hinstance, MAKEINTRESOURCEW(IDI_NPAD));
     wc.hCursor = LoadCursorW(NULL, (LPCWSTR) IDC_ARROW);
-    wc.hbrBackground = (HBRUSH) (COLOR_WINDOW + 1);
+    // No class brush: the frame paints its own background from the active
+    // scheme in WM_ERASEBKGND. COLOR_WINDOW is always white, so in a dark
+    // scheme dragging the window larger flashed a white band in the newly
+    // exposed area before the edit control caught up.
+    wc.hbrBackground = NULL;
     wc.lpszMenuName = NULL;
     wc.lpszClassName = NPAD_WINDOW_CLASS;
     wc.hIconSm = LoadIconW(g_hinstance, MAKEINTRESOURCEW(IDI_NPAD));
@@ -5605,6 +5661,18 @@ static void populate_list_menu(HMENU menu) {
     AppendMenuW(menu, MF_STRING, ID_EDIT_PASTE_MARKDOWN, L"&Paste as Markdown");
 }
 
+// Redrawing the menu bar twice in a row flashes it. A settings broadcast
+// re-applies both the Markdown menu and the update indicator, so the pair is
+// bracketed by this counter and redrawn once at the end. Deferring rather than
+// skipping keeps the deliberate full rebuild that refreshes shortcut labels.
+static int g_menu_redraw_defer = 0;
+
+static void menu_redraw(HWND hwnd) {
+    if (g_menu_redraw_defer || !hwnd)
+        return;
+    DrawMenuBar(hwnd);
+}
+
 // Insert or remove the top-level Markdown menu to match the preference (always
 // rebuilt so shortcut labels stay current). Called at window creation and
 // whenever settings change (live toggle).
@@ -5626,8 +5694,7 @@ static void apply_list_tools_menu(Window *window) {
                     L"&Markdown");
         window->list_menu_present = true;
     }
-    if (window->hwnd)
-        DrawMenuBar(window->hwnd);
+    menu_redraw(window->hwnd);
 }
 
 static INT_PTR CALLBACK convert_delim_proc(HWND dlg, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -5663,6 +5730,13 @@ static INT_PTR CALLBACK convert_delim_proc(HWND dlg, UINT msg, WPARAM wparam, LP
                 char *to8 = wide_to_utf8(wto);
                 char *from_u = from8 ? list_unescape(from8) : NULL;
                 char *to_u = to8 ? list_unescape(to8) : NULL;
+                // The text this matches against has already been normalised to
+                // bare LF by list_extract, so a literal \r\n source could never
+                // match anything - in any file, however it is stored on disk.
+                // npad taught users that token itself, by defaulting the TARGET
+                // field to \r\n, so accept it and mean \n.
+                if (from_u)
+                    normalize_to_lf(from_u);
                 if (win && from_u && from_u[0] != '\0') {
                     LONG cpMin, cpMax;
                     list_target_range(win, 2, sel_only, &cpMin, &cpMax);
@@ -5755,8 +5829,7 @@ static void apply_update_indicator(Window *window) {
     free(latest);
     free(skipped);
 
-    if (window->hwnd)
-        DrawMenuBar(window->hwnd);
+    menu_redraw(window->hwnd);
 }
 
 static void create_menu(Window *window) {
@@ -5922,6 +5995,12 @@ static void apply_edit_command_states(Window *window, HMENU menu) {
     EnableMenuItem(menu, ID_EDIT_COPY, has_selection ? enabled : disabled);
     EnableMenuItem(menu, ID_EDIT_DELETE, has_selection ? enabled : disabled);
     EnableMenuItem(menu, ID_EDIT_PASTE, can_paste ? enabled : disabled);
+    // Paste as Markdown was never greyed at all, so it stayed live over an
+    // empty clipboard and did nothing. It can also convert an HTML-only
+    // clipboard, which carries no CF_TEXT, so it is enabled slightly more
+    // often than plain Paste rather than sharing its test.
+    EnableMenuItem(menu, ID_EDIT_PASTE_MARKDOWN,
+                   (can_paste || clipboard_has_html()) ? enabled : disabled);
     EnableMenuItem(menu, ID_EDIT_FIND, has_text ? enabled : disabled);
     EnableMenuItem(menu, ID_EDIT_FIND_NEXT,
                    (has_text && g_search_eff[0] != L'\0') ? enabled : disabled);
@@ -6437,6 +6516,17 @@ static void resize_controls(Window *window) {
         parts[2] = width - MulDiv(265, dpi, 96);
         parts[1] = width - MulDiv(320, dpi, 96);
         parts[0] = width - MulDiv(440, dpi, 96);
+        // Narrow the window (or raise the DPI) far enough and those subtractions
+        // go negative and out of order, which hands SB_SETPARTS a non-monotonic
+        // array and draws the parts inverted. Clamp so the edges stay ascending
+        // and non-negative: the message part collapses to nothing first, then
+        // each fixed part in turn, rather than the whole bar breaking.
+        for (int i = 4; i >= 0; i--) {
+            if (parts[i] > parts[i + 1])
+                parts[i] = parts[i + 1];
+            if (parts[i] < 0)
+                parts[i] = 0;
+        }
         SendMessageW(window->status_hwnd, SB_SETPARTS, 6, (LPARAM) parts);
         update_status_bar(window);
     }
@@ -6467,8 +6557,19 @@ static void reload_and_apply_settings(Window *window) {
     apply_theme(window);
     apply_new_window_pref(window); // Also rebuilds accelerators (list Ctrl+]/[ gating)
     rebuild_recent_menu(window);
+    // Both of these redraw the menu bar; bracket them so it happens once
+    g_menu_redraw_defer++;
     apply_list_tools_menu(window);  // Insert/remove the Markdown menu per the pref
     apply_update_indicator(window); // Mode/skip/latest may have changed live
+    g_menu_redraw_defer--;
+    menu_redraw(window->hwnd);
+
+    // The Find dialog is modeless, so a live change to Markdown support has to
+    // reach its escapes checkbox - WM_INITDIALOG only runs once
+    if (g_find_dialog) {
+        ShowWindow(GetDlgItem(g_find_dialog, ID_FIND_ESCAPES),
+                   settings_get_bool("list_tools_enabled", false) ? SW_SHOW : SW_HIDE);
+    }
 
     // Sync shared window options; per-window view state (font type, zoom)
     // is deliberately left alone
@@ -6759,6 +6860,24 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                 resize_controls(window);
             }
             return 0;
+        }
+
+        case WM_ERASEBKGND: {
+            // Paint the frame's background in the scheme's colour rather than
+            // the class brush's fixed white. Only the sliver not yet covered by
+            // the edit control and status bar is ever visible - during a resize
+            // drag - but in a dark scheme that sliver flashed white.
+            //
+            // The brush is prepared by apply_theme rather than resolved here:
+            // this runs repeatedly while a resize is dragged, and theme_colors
+            // does a settings lookup and a string allocation each call.
+            if (g_frame_brush) {
+                RECT rc;
+                GetClientRect(hwnd, &rc);
+                FillRect((HDC) wparam, &rc, g_frame_brush);
+                return 1;
+            }
+            break;
         }
 
         case WM_CLOSE: {

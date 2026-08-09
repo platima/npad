@@ -318,6 +318,10 @@ position). Not intended for direct use.
     interpret `\n \r \t \\ \0 \uXXXX`, so e.g. From `,` To `\r\n` turns a
     comma-separated line into separate lines. It applies to the selection
     (when "Selection only" is ticked) or the whole document.
+    Line breaks are matched as `\n` whatever the file's line ending is - the
+    document is normalised internally and the file's own ending restored on
+    save - so a **From** of `\r\n` is accepted and treated as `\n` rather than
+    silently matching nothing.
   - *Indent / Unindent* (Tab / Shift+Tab on a selection by default - a
     preference switches to Ctrl+] / Ctrl+[ - or the Indent submenu) prefix
     each target line. The formats are spaces, tab, `* `, `- `, ` * `, ` - `
