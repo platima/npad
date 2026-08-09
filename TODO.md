@@ -540,7 +540,8 @@ reachable by anyone who opens a binary file to peek at it.
 Recommendation when this is picked up: **2 first** (it removes the data-loss
 risk on its own), then 1. Defer 3 unless binary editing becomes a real goal.
 
-### Convert Delimiters: no memory, no swap button, and `
+### Convert Delimiters: no memory, no swap button, and `
+
 ` can never match
 
 Reported 2026-08-06. Three things, two of them confirmed by reading.
@@ -556,9 +557,11 @@ would also populate the dropdowns with recent values for free.
 **2. Wanted: a swap button** between From and To, so a conversion can be
 reversed without retyping. Cheap; the combo texts just trade places.
 
-**3. `
+**3. `
+
 ` as the *source* can never match — root cause confirmed.**
-Reported as "a new file that said it was Windows CRLF, going from `
+Reported as "a new file that said it was Windows CRLF, going from `
+
 ` did
 not work, I had to go from just `
 `", suspected to be the pasted text. **It is
@@ -571,26 +574,32 @@ not the pasted text.** It is deterministic:
 - `list_replace` (`:5444`) mirrors it: normalise to LF, then emit CRLF uniformly
   into the control. So the internal round-trip is consistent.
 - The status bar correctly reports the *file* as Windows (CRLF), because that is
-  its on-disk attribute — but the buffer the tool sees is LF-only. So a `
+  its on-disk attribute — but the buffer the tool sees is LF-only. So a `
+
 `
   source matches nothing, always, in every file.
 
-**The trap is self-inflicted:** the dialog's default *target* is `
+**The trap is self-inflicted:** the dialog's default *target* is `
+
 `
 (`:5641`, commented "OS default line ending"), which works fine because
-`list_replace` normalises it. So npad itself teaches the user that `
+`list_replace` normalises it. So npad itself teaches the user that `
+
 ` is a
 valid token, and it then silently fails the moment they use it as a source.
 
-Options when fixing: accept `
+Options when fixing: accept `
+
 ` in the source and treat it as `
 `
-(smallest, matches what the user meant); or drop `
+(smallest, matches what the user meant); or drop `
+
 ` from the presets and
 the default target so it is never suggested; or state the LF-only rule in the
 dialog's escape hint (`ID_DELIM_HINT`). The first is the least surprising.
 Whichever, the "from" and "to" presets should stop disagreeing about whether
-`
+`
+
 ` is meaningful.
 
 ### Detect that the open file changed on disk
@@ -639,6 +648,69 @@ new.
   file path but buffer content that came from a recovery snapshot, and the file
   on disk may legitimately differ. Establish the stamp deliberately on that path
   or the first activation after an update will report a phantom change.
+
+### v0.28.0 cosmetic round — surveyed and filtered 2026-08-09
+
+48 candidates surveyed across dialogs, menus/wording, theming and status
+bar/title; filtered against a strict "appearance only" test. Rejected: anything
+that changes behaviour, anything fixing an *incorrect* state (that is a bug, so
+it belongs in the patch), and anything moving away from notepad.exe without
+being opt-in.
+
+**The two that carry the round are dark-mode chrome, not the icon.**
+
+- **A1 — scroll bars stay white in dark mode.** `ES_DISABLENOSCROLL`
+  (`ui_win32.c:1135`) means the vertical gutter is *always* present, so a
+  full-height white bar sits against `RGB(30,30,30)`. There is no
+  `SetWindowTheme` call anywhere in the file. Fix: `SetWindowTheme(edit,
+  L"DarkMode_Explorer")` in `apply_theme` + `SWP_FRAMECHANGED`, with uxtheme
+  ordinal 135 resolved via `GetProcAddress` guarded like the existing
+  `DwmSetWindowAttribute` lookup. **Caveat:** `SetPreferredAppMode` is
+  process-wide and can re-theme other common controls — verify the light path
+  is byte-identical before shipping.
+- **A2 — status bar text is black on dark grey.** `apply_theme` sets only
+  `SB_SETBKCOLOR` to a hard-coded `RGB(45,45,45)`; there is no `WM_DRAWITEM`
+  and no `SBT_OWNERDRAW`, so comctl32 keeps painting `COLOR_BTNTEXT` (black).
+  Every readout — Ln/Col, zoom, Mono/Prop, EOL, encoding, match counts — is
+  effectively unreadable in both dark schemes. Fix: extend `theme_colors` to
+  return chrome fg/bg, owner-draw from the existing `window->status_cache`
+  (already authoritative, so no new state). Keep plain Light on the
+  non-owner-draw path so out-of-box pixels do not move.
+- **A3 — Preferences pages render in the wrong font.** All seven prefs pages
+  carry `DS_SETFONT` alone while every other dialog carries
+  `DS_SETFONT | DS_FIXEDSYS`, so "MS Shell Dlg" is taken literally and
+  substitutes to Microsoft Sans Serif *inside* a Segoe UI comctl32 frame. Fix
+  is adding `DS_FIXEDSYS` to those seven `STYLE` lines, then re-checking tight
+  statics since the DLU ratio differs between the faces.
+
+**A4 folds into the icon work:** `LoadIconW` always returns the `SM_CXICON`
+image, so the hand-tuned 16x16 already inside the .ico is *never used* — the
+caption bar shows a downscaled 32px instead. Use `LoadImageW` with
+`SM_CXSMICON`/`SM_CXICON` per slot, and re-run it from `WM_DPICHANGED`, which
+today refreshes font and layout but never the icons.
+
+**A5 — `Alt+E, P` pastes instead of opening Preferences.** `&Paste` and
+`&Preferences` collide; S is the only free letter in that popup.
+
+**Trivia batch (A6-A18):** "Text Files" -> "Text Documents (*.txt)" (5 sites,
+label only); "Error" -> "npad" dialog captions (3 sites, matches notepad.exe);
+Markdown menu mnemonics (`&Unique` vs `&Unindent`, plus four collisions against
+the context menu); Find/Replace geometry + tab order as one pass; prefs
+mnemonics and a control overlap at `ID_PREF_CTRL_N_WINDOW` / `ID_PREF_FIND_WRAP`;
+status bar "Monospace"/"Proportional" and part widths; highlight wash derived
+per scheme instead of fixed amber; Solarized Light body contrast (4.13:1, below
+AA); encoding popup mnemonics; copyright year; Debug page font ignoring DPI.
+
+**Sequencing constraint — read before scheduling.** A11 raises the status bar's
+fixed part budget from 440 to ~495 DIP, which makes the *unclamped*
+`SB_SETPARTS` array (`resize_controls`, `ui_win32.c:6434`) misbehave at wider
+window sizes than it does today. That clamp is a bug fix, so it belongs in the
+patch release — **land it first**, or A11 will look like it caused the problem.
+
+Rejected to the patch release, not cosmetic: the `SB_SETPARTS` clamp above; the
+menu bar redrawing twice per settings broadcast (`apply_list_tools_menu` and
+`apply_update_indicator` both call `DrawMenuBar`); and the white band on
+drag-resize in dark mode (`wc.hbrBackground = COLOR_WINDOW + 1`).
 
 ### Theme-matched app icon + bundled file-type icons
 
