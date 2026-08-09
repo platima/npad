@@ -5,6 +5,35 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.0] - 2026-08-09
+
+### 🔄 Changed
+- **npad now opens in Consolas 11 out of the box, matching notepad.exe.**
+  Notepad has a single font setting and ships it as Consolas 11 — exactly what
+  npad already used as its *monospace* default. But npad started every window in
+  *proportional* mode, so that correct default was never reached and you got
+  Segoe UI instead. New windows now start in monospace mode.
+
+  > **Existing installs:** if you never chose a font type, this will change your
+  > font on upgrade. **Ctrl+M** switches back to proportional immediately, and
+  > Preferences ▸ Defaults makes it stick. Anyone who has already picked a type,
+  > or set their own faces, is unaffected.
+
+  The proportional default stays **Segoe UI**. Making it Consolas too would have
+  matched Notepad equally on first launch but left the status bar reporting
+  "Prop" while showing a monospace face, and Ctrl+M doing nothing at all.
+- **The installer no longer sets the bundled fonts as npad's defaults unless you
+  ask.** That task is now **unchecked**, because it rewrites `settings.json` to
+  Intel One Mono / Roboto — a deliberate departure from the Notepad-like
+  appearance npad is supposed to have out of the box. The fonts are still
+  installed and available in the pickers; only the automatic override changed.
+  Silent deployments opt in with `/MERGETASKS="fontdefaults"`.
+
+### 📝 Notes
+- The documented rationale for the old default was simply wrong: it claimed
+  proportional mirrored classic Notepad. Notepad has never defaulted to a
+  proportional face — Fixedsys, then Lucida Console, then Consolas.
+
 ## [0.26.0] - 2026-08-01
 
 ### 🔄 Changed

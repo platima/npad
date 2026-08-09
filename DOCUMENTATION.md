@@ -44,10 +44,12 @@ chosen: the setup EXE asks (or accepts `/ALLUSERS`); the MSI takes
   documents** (`.md`, `.markdown`), **Data** (`.csv`, `.tsv`, `.json`, `.xml`,
   `.yaml`, `.yml`, `.toml`), **Config** (`.ini`, `.cfg`, `.conf`) and **Logs**
   (`.log`) - all opt-in except Text; 'notepad' alias (on by default - see
-  below), "set the bundled fonts as npad's default editor fonts" (on by
-  default, offered when the fonts are being installed or already present;
-  updates settings.json in place, preserving all other settings - deselect or
-  use `/MERGETASKS="!fontdefaults"` to skip), desktop icon (off).
+  below), "set the bundled fonts as npad's default editor fonts" (**off by
+  default** - out of the box npad should look like notepad.exe, and this
+  rewrites the editor fonts; offered when the fonts are being installed or
+  already present; updates settings.json in place, preserving all other
+  settings - tick it or use `/MERGETASKS="fontdefaults"` to opt in), desktop
+  icon (off).
 
 **MSI features** (silent-deployment oriented, no UI - use `/qn` or `/qb`):
 `Main`, `PathEnv`, `OpenWith`, `AssocText`, `NotepadAlias`, `Fonts` install by
@@ -159,7 +161,7 @@ All settings live in `settings.json` and are editable in Preferences
 |-----|------|---------|-------------|
 | `default_encoding` | int | `0` (UTF-8) | Encoding for new files: 0 UTF-8, 1 UTF-8 BOM, 2 UTF-16 LE, 3 UTF-16 BE, 4 ANSI. |
 | `default_line_ending` | int | `0` (CRLF) | Line endings for new files: 0 CRLF, 1 LF, 2 CR. |
-| `default_font_mono` | bool | `false` | New windows start in monospace (`true`) or proportional (`false`) mode. Proportional by default, mirroring classic Notepad. |
+| `default_font_mono` | bool | `true` | New windows start in monospace (`true`) or proportional (`false`) mode. **Monospace by default**, which is what mirrors notepad.exe: it has a single font setting and ships it as Consolas 11 - the same face and size as npad's monospace default. |
 | `default_zoom` | int | `100` | New windows' zoom percent (10-500). |
 | `auto_update_defaults` | bool | `false` | View changes (font type, zoom) immediately become the new defaults. |
 

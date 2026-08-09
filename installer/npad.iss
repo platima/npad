@@ -70,7 +70,11 @@ Name: "assoc\data"; Description: "Data files (.csv, .tsv, .json, .xml, .yaml, .y
 Name: "assoc\config"; Description: "Config files (.ini, .cfg, .conf)"; Flags: unchecked
 Name: "assoc\log"; Description: "Log files (.log)"; Flags: unchecked
 Name: "notepadalias"; Description: "Open 'notepad' with npad (Win+R and app launches; see docs for the Windows 11 Store alias)"
-Name: "fontdefaults"; Description: "Set the bundled fonts as npad's default editor fonts (updates settings.json)"; Check: FontDefaultsOfferable
+; Unchecked by default: out of the box npad should look like notepad.exe
+; (Consolas 11), and this task rewrites settings.json to Intel One Mono /
+; Roboto. The fonts are still installed and available in the pickers - this
+; only decides whether they are imposed as the defaults.
+Name: "fontdefaults"; Description: "Set the bundled fonts as npad's default editor fonts (updates settings.json)"; Check: FontDefaultsOfferable; Flags: unchecked
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
 [Files]

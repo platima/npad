@@ -1100,9 +1100,16 @@ Window *ui_platform_create_main_window(void) {
 
     // Font type is per-window view state, seeded from the Defaults setting
     // (falling back to the pre-0.7 "monospace_enabled" key for migration).
-    // Proportional by default, mirroring classic Notepad out of the box.
+    //
+    // Monospace by default, which is what actually mirrors notepad.exe: it has
+    // a single font setting and ships it as Consolas 11 - the same face and
+    // size as DEFAULT_MONO_FONT here. Starting in proportional mode meant that
+    // correct default was never reached out of the box. The alternative
+    // considered - making the proportional default Consolas too - was rejected
+    // because the status bar would then report "Prop" while showing a
+    // monospace face, and Ctrl+M would visibly do nothing.
     window->monospace_current =
-        settings_get_bool("default_font_mono", settings_get_bool("monospace_enabled", false));
+        settings_get_bool("default_font_mono", settings_get_bool("monospace_enabled", true));
 
     window->hwnd = CreateWindowExW(WS_EX_ACCEPTFILES, NPAD_WINDOW_CLASS, L"npad",
                                    WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT,
@@ -4507,12 +4514,12 @@ static INT_PTR CALLBACK prefs_defaults_proc(HWND page, UINT msg, WPARAM wparam, 
             // Match the new-window seeding fallback (pre-0.7 monospace_enabled),
             // so the shown default equals the effective default and Apply does
             // not silently flip a migrated user's mono default to proportional
-            SendMessageW(font_combo, CB_SETCURSEL,
-                         settings_get_bool("default_font_mono",
-                                           settings_get_bool("monospace_enabled", false))
-                             ? 0
-                             : 1,
-                         0);
+            SendMessageW(
+                font_combo, CB_SETCURSEL,
+                settings_get_bool("default_font_mono", settings_get_bool("monospace_enabled", true))
+                    ? 0
+                    : 1,
+                0);
 
             SetDlgItemInt(page, ID_PREF_DEFAULT_ZOOM, (UINT) settings_get_int("default_zoom", 100),
                           FALSE);
