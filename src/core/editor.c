@@ -481,7 +481,7 @@ bool editor_open_file(const char *filename) {
         char error_msg[512];
         snprintf(error_msg, sizeof(error_msg), "Could not open file: %.300s\n%.150s", filename,
                  file_get_last_error());
-        ui_show_message_box(g_editor.main_window, "Error", error_msg, false);
+        ui_show_message_box(g_editor.main_window, "npad", error_msg, false);
         return false;
     }
 
@@ -530,7 +530,7 @@ bool editor_save_file(void) {
         // No current file, prompt for save as
         FileDialogParams params = { .title = "Save As",
                                     .default_filename = "Untitled.txt",
-                                    .filter = "Text Files (*.txt)|*.txt|All Files (*.*)|*.*",
+                                    .filter = "Text Documents (*.txt)|*.txt|All Files (*.*)|*.*",
                                     .save_dialog = true,
                                     .encoding = g_editor.file_info.encoding };
 
@@ -567,7 +567,7 @@ bool editor_save_file(void) {
         char error_msg[512];
         snprintf(error_msg, sizeof(error_msg), "Could not save file: %.300s\n%.150s",
                  g_editor.current_file, file_get_last_error());
-        ui_show_message_box(g_editor.main_window, "Error", error_msg, false);
+        ui_show_message_box(g_editor.main_window, "npad", error_msg, false);
     }
 
     return success;
@@ -610,7 +610,7 @@ bool editor_save_file_as(const char *filename) {
         char error_msg[512];
         snprintf(error_msg, sizeof(error_msg), "Could not save file: %.300s\n%.150s", filename,
                  file_get_last_error());
-        ui_show_message_box(g_editor.main_window, "Error", error_msg, false);
+        ui_show_message_box(g_editor.main_window, "npad", error_msg, false);
     }
 
     return success;
@@ -812,7 +812,8 @@ bool editor_handle_event(const UIEvent *event) {
         case UI_EVENT_FILE_OPEN: {
             FileDialogParams params = { .title = "Open",
                                         .default_filename = "",
-                                        .filter = "Text Files (*.txt)|*.txt|All Files (*.*)|*.*",
+                                        .filter =
+                                            "Text Documents (*.txt)|*.txt|All Files (*.*)|*.*",
                                         .save_dialog = false };
 
             char *filename = ui_show_open_dialog(g_editor.main_window, &params);
@@ -830,13 +831,13 @@ bool editor_handle_event(const UIEvent *event) {
         case UI_EVENT_FILE_SAVE_AS: {
             // Pre-fill with the current file (full path so the dialog can open
             // its folder and reuse its name) rather than always "Untitled.txt"
-            FileDialogParams params = { .title = "Save As",
-                                        .default_filename = g_editor.current_file
-                                                                ? g_editor.current_file
-                                                                : "Untitled.txt",
-                                        .filter = "Text Files (*.txt)|*.txt|All Files (*.*)|*.*",
-                                        .save_dialog = true,
-                                        .encoding = g_editor.file_info.encoding };
+            FileDialogParams params = {
+                .title = "Save As",
+                .default_filename = g_editor.current_file ? g_editor.current_file : "Untitled.txt",
+                .filter = "Text Documents (*.txt)|*.txt|All Files (*.*)|*.*",
+                .save_dialog = true,
+                .encoding = g_editor.file_info.encoding
+            };
 
             char *filename = ui_show_save_dialog(g_editor.main_window, &params);
             if (filename) {

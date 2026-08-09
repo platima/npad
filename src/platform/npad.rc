@@ -14,8 +14,8 @@
 
 // Version Information (keep in sync with src/main.h)
 1 VERSIONINFO
-FILEVERSION 0,27,1,0
-PRODUCTVERSION 0,27,1,0
+FILEVERSION 0,28,0,0
+PRODUCTVERSION 0,28,0,0
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0x0L
 FILEOS VOS__WINDOWS32
@@ -28,12 +28,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Platima"
             VALUE "FileDescription", "npad - Lightweight Text Editor"
-            VALUE "FileVersion", "0.27.1.0"
+            VALUE "FileVersion", "0.28.0.0"
             VALUE "InternalName", "npad"
-            VALUE "LegalCopyright", "Copyright © 2025 Platima"
+            VALUE "LegalCopyright", "Copyright © 2025-2026 Platima"
             VALUE "OriginalFilename", "npad.exe"
             VALUE "ProductName", "npad"
-            VALUE "ProductVersion", "0.27.1.0"
+            VALUE "ProductVersion", "0.28.0.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -43,7 +43,12 @@ BEGIN
 END
 
 // Application Icon
-IDI_NPAD ICON "npad.ico"
+// Light and dark variants, switched at runtime (see resolve_icon_resource).
+// IDI_NPAD has the lowest id so it stays icon index 0, which is what the
+// installers' DefaultIcon entries and Explorer refer to as "npad.exe,0".
+IDI_NPAD ICON "npad-light.ico"
+IDI_NPAD_DARK ICON "npad-dark.ico"
+IDI_NPAD_CLASSIC ICON "npad-classic.ico"
 
 // Find Dialog (compact layout matching classic notepad.exe:
 // checkboxes bottom-left, Direction group to their right, buttons top-right)
@@ -129,7 +134,7 @@ END
 
 // Preferences: General page
 IDD_PREFS_GENERAL DIALOGEX 0, 0, 240, 196
-STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+STYLE DS_SETFONT | DS_FIXEDSYS | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "General"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
@@ -149,8 +154,8 @@ BEGIN
 END
 
 // Preferences: Appearance page
-IDD_PREFS_APPEARANCE DIALOGEX 0, 0, 240, 196
-STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+IDD_PREFS_APPEARANCE DIALOGEX 0, 0, 240, 236
+STYLE DS_SETFONT | DS_FIXEDSYS | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "Appearance"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
@@ -164,11 +169,17 @@ BEGIN
     CONTROL         "Show s&tatus bar", ID_PREF_STATUSBAR, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 10, 102, 150, 10
     CONTROL         "S&ync view (font type and zoom) across all instances", ID_PREF_SYNC_VIEW, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 120, 220, 18
     CONTROL         "Show &word / character / line counts in the status bar", ID_PREF_STATUS_COUNTS, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 142, 220, 18
+    GROUPBOX        "Application icon", IDC_STATIC, 10, 164, 220, 64
+    CONTROL         "&Follow the Windows light/dark setting", ID_PREF_ICON_SYSTEM, "Button", BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 18, 177, 204, 10
+    CONTROL         "Follow &npad's colour scheme", ID_PREF_ICON_NPAD, "Button", BS_AUTORADIOBUTTON, 18, 189, 204, 10
+    CONTROL         "Always &light", ID_PREF_ICON_LIGHT, "Button", BS_AUTORADIOBUTTON, 18, 201, 96, 10
+    CONTROL         "Always dar&k", ID_PREF_ICON_DARK, "Button", BS_AUTORADIOBUTTON, 120, 201, 100, 10
+    CONTROL         "&Classic (original) icon", ID_PREF_ICON_CLASSIC, "Button", BS_AUTORADIOBUTTON, 18, 213, 204, 10
 END
 
 // Preferences: Markdown page (optional Markdown list tools)
 IDD_PREFS_LISTS DIALOGEX 0, 0, 240, 236
-STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+STYLE DS_SETFONT | DS_FIXEDSYS | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "Markdown"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
@@ -198,7 +209,7 @@ END
 
 // Preferences: Defaults page (initial state for new windows)
 IDD_PREFS_DEFAULTS DIALOGEX 0, 0, 240, 196
-STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+STYLE DS_SETFONT | DS_FIXEDSYS | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "Defaults"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
@@ -217,7 +228,7 @@ END
 
 // Preferences: Backup page
 IDD_PREFS_BACKUP DIALOGEX 0, 0, 240, 196
-STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+STYLE DS_SETFONT | DS_FIXEDSYS | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "Backup"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
@@ -231,7 +242,7 @@ BEGIN
 END
 
 IDD_PREFS_DEBUG DIALOGEX 0, 0, 240, 196
-STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+STYLE DS_SETFONT | DS_FIXEDSYS | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "Debug"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
@@ -241,7 +252,7 @@ END
 
 // Preferences: Updates page (all opt-in; off by default)
 IDD_PREFS_UPDATES DIALOGEX 0, 0, 240, 196
-STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+STYLE DS_SETFONT | DS_FIXEDSYS | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "Updates"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN

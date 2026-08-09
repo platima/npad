@@ -324,6 +324,10 @@ static bool g_find_dialog_pos_valid = false;
 typedef UINT(WINAPI *GetDpiForWindowFunc)(HWND);
 static GetDpiForWindowFunc g_GetDpiForWindow = NULL;
 
+// Per-monitor system metrics (Windows 10 1607+), for picking icon sizes
+typedef int(WINAPI *GetSystemMetricsForDpiFunc)(int, UINT);
+static GetSystemMetricsForDpiFunc g_GetSystemMetricsForDpi = NULL;
+
 // Forward declarations
 static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
 static void create_menu(Window *window);
@@ -464,6 +468,34 @@ static UINT get_window_dpi(HWND hwnd) {
     return dpi;
 }
 
+// Read a DWORD from the Windows Personalize key (1 = light, 0 = dark).
+// Missing key or value means light, which is what Windows itself assumes.
+static bool read_personalize_light(const wchar_t *value_name) {
+    bool light = true;
+    HKEY hkey;
+    DWORD value = 1;
+    DWORD size = sizeof(value);
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                      L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", 0,
+                      KEY_READ, &hkey) == ERROR_SUCCESS) {
+        DWORD type = REG_DWORD;
+        if (RegQueryValueExW(hkey, value_name, NULL, &type, (LPBYTE) &value, &size) ==
+                ERROR_SUCCESS &&
+            type == REG_DWORD && size == sizeof(DWORD)) {
+            light = value != 0;
+        }
+        RegCloseKey(hkey);
+    }
+    return light;
+}
+
+// The taskbar / system surface theme, which is a SEPARATE setting from the app
+// theme below - Windows lets them differ. This is the one the window icon
+// follows, because that is the surface the icon is displayed on.
+static bool read_system_light_theme(void) {
+    return read_personalize_light(L"SystemUsesLightTheme");
+}
+
 // Whether apps should use dark mode according to the OS setting
 static bool read_system_dark_mode(void) {
     bool dark = false;
@@ -534,10 +566,120 @@ static bool resolve_theme_dark_mode(void) {
     return theme_colors(NULL, NULL);
 }
 
+// Status bar chrome, resolved by apply_theme. Owner-draw is used only for the
+// dark schemes; see the note there.
+static bool g_status_owner_draw = false;
+static COLORREF g_status_back = 0;
+static COLORREF g_status_text = 0;
+
 // Frame background for WM_ERASEBKGND, rebuilt only when the scheme changes so
 // the erase path itself allocates nothing (it runs throughout a resize drag)
 static HBRUSH g_frame_brush = NULL;
 static COLORREF g_frame_color = CLR_INVALID;
+
+// Dark scroll bars.
+//
+// ES_DISABLENOSCROLL keeps the vertical gutter permanently on screen, so in a
+// dark scheme a full-height white bar sat against the text. Windows will theme
+// a control's scroll bars dark, but only after the process opts in via
+// SetPreferredAppMode - an undocumented uxtheme export (ordinal 135, Windows 10
+// 1809+). Both are resolved dynamically: uxtheme is not otherwise imported, and
+// a missing export must degrade to today's light bars rather than fail to load.
+//
+// AllowDark rather than ForceDark: it permits dark theming per control instead
+// of imposing it process-wide on every common control npad owns.
+typedef enum { PAM_DEFAULT = 0, PAM_ALLOWDARK = 1 } PreferredAppMode;
+typedef PreferredAppMode(WINAPI *SetPreferredAppModeFunc)(PreferredAppMode);
+typedef HRESULT(WINAPI *SetWindowThemeFunc)(HWND, LPCWSTR, LPCWSTR);
+static SetWindowThemeFunc g_SetWindowTheme = NULL;
+static bool g_dark_mode_allowed = false;
+
+static void init_dark_mode_support(void) {
+    HMODULE ux = LoadLibraryExW(L"uxtheme.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!ux)
+        return;
+
+    union {
+        FARPROC proc;
+        SetWindowThemeFunc func;
+    } swt;
+    swt.proc = GetProcAddress(ux, "SetWindowTheme");
+    g_SetWindowTheme = swt.func;
+
+    union {
+        FARPROC proc;
+        SetPreferredAppModeFunc func;
+    } spam;
+    spam.proc = GetProcAddress(ux, MAKEINTRESOURCEA(135));
+    if (spam.func) {
+        spam.func(PAM_ALLOWDARK);
+        g_dark_mode_allowed = true;
+    }
+    // uxtheme is deliberately left loaded: the themed controls reference it for
+    // the process lifetime, and freeing it here would invalidate g_SetWindowTheme
+}
+
+static void apply_scroll_bar_theme(HWND control, bool dark) {
+    if (!control || !g_SetWindowTheme || !g_dark_mode_allowed)
+        return;
+    g_SetWindowTheme(control, dark ? L"DarkMode_Explorer" : NULL, NULL);
+    // The non-client area caches its theme, so force a frame recalculation
+    SetWindowPos(control, NULL, 0, 0, 0, 0,
+                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+// Which icon resource the "icon_style" preference resolves to.
+//
+// The variants are named for their ARTWORK colour, and the mapping is
+// deliberately by name rather than by contrast: light setting -> light icon.
+// That is the maintainer's call; "always light"/"always dark" exist for anyone
+// who prefers the other pairing.
+static int resolve_icon_resource(void) {
+    char *style = settings_get_string("icon_style", "system");
+    const char *s = style ? style : "system";
+    int res;
+
+    if (strcmp(s, "classic") == 0) {
+        res = IDI_NPAD_CLASSIC;
+    } else if (strcmp(s, "light") == 0) {
+        res = IDI_NPAD;
+    } else if (strcmp(s, "dark") == 0) {
+        res = IDI_NPAD_DARK;
+    } else if (strcmp(s, "npad") == 0) {
+        res = resolve_theme_dark_mode() ? IDI_NPAD_DARK : IDI_NPAD;
+    } else { // "system": follow the taskbar, which is where the icon is shown
+        res = read_system_light_theme() ? IDI_NPAD : IDI_NPAD_DARK;
+    }
+
+    free(style);
+    return res;
+}
+
+// Set the window's icons at the sizes Windows actually asks for.
+//
+// LoadIconW always hands back the SM_CXICON image, so the hand-tuned 16x16
+// inside the .ico was never used - the caption bar showed a downscaled 32px
+// instead. LoadImageW with explicit metrics picks the right entry per slot.
+// LR_SHARED means the handles are owned by the module and must not be freed.
+static void apply_window_icon(Window *window) {
+    if (!window || !window->hwnd)
+        return;
+
+    int res = resolve_icon_resource();
+    UINT dpi = get_window_dpi(window->hwnd);
+    int big = g_GetSystemMetricsForDpi ? g_GetSystemMetricsForDpi(SM_CXICON, dpi)
+                                       : GetSystemMetrics(SM_CXICON);
+    int small = g_GetSystemMetricsForDpi ? g_GetSystemMetricsForDpi(SM_CXSMICON, dpi)
+                                         : GetSystemMetrics(SM_CXSMICON);
+
+    HANDLE hbig = LoadImageW(g_hinstance, MAKEINTRESOURCEW(res), IMAGE_ICON, big, big, LR_SHARED);
+    HANDLE hsmall =
+        LoadImageW(g_hinstance, MAKEINTRESOURCEW(res), IMAGE_ICON, small, small, LR_SHARED);
+    if (hbig)
+        SendMessageW(window->hwnd, WM_SETICON, ICON_BIG, (LPARAM) hbig);
+    if (hsmall)
+        SendMessageW(window->hwnd, WM_SETICON, ICON_SMALL, (LPARAM) hsmall);
+}
 
 static void set_frame_brush(COLORREF back) {
     if (g_frame_brush && g_frame_color == back)
@@ -1002,7 +1144,16 @@ bool ui_platform_init(void) {
         } dpi_fn;
         dpi_fn.proc = GetProcAddress(user32, "GetDpiForWindow");
         g_GetDpiForWindow = dpi_fn.func;
+
+        union {
+            FARPROC proc;
+            GetSystemMetricsForDpiFunc func;
+        } metrics_fn;
+        metrics_fn.proc = GetProcAddress(user32, "GetSystemMetricsForDpi");
+        g_GetSystemMetricsForDpi = metrics_fn.func;
     }
+
+    init_dark_mode_support();
 
     if (!register_window_class()) {
         return false;
@@ -1152,11 +1303,7 @@ Window *ui_platform_create_main_window(void) {
         return NULL;
     }
 
-    HICON icon = LoadIconW(g_hinstance, MAKEINTRESOURCEW(IDI_NPAD));
-    if (icon) {
-        SendMessageW(window->hwnd, WM_SETICON, ICON_BIG, (LPARAM) icon);
-        SendMessageW(window->hwnd, WM_SETICON, ICON_SMALL, (LPARAM) icon);
-    }
+    apply_window_icon(window);
 
     // ES_DISABLENOSCROLL greys the scroll bars out instead of hiding them when
     // the content fits, matching notepad.exe. It also keeps the client width
@@ -1808,11 +1955,11 @@ bool ui_platform_can_redo(Window *window) {
 // Dialogs
 // ---------------------------------------------------------------------------
 
-// Convert a '|'-separated filter ("Text Files (*.txt)|*.txt|All Files (*.*)|*.*")
+// Convert a '|'-separated filter ("Text Documents (*.txt)|*.txt|All Files (*.*)|*.*")
 // into the double-NUL-terminated form common dialogs expect.
 static wchar_t *build_filter(const char *filter) {
     const char *source =
-        (filter && filter[0]) ? filter : "Text Files (*.txt)|*.txt|All Files (*.*)|*.*";
+        (filter && filter[0]) ? filter : "Text Documents (*.txt)|*.txt|All Files (*.*)|*.*";
     wchar_t *wide = utf8_to_wide(source);
     if (!wide)
         return NULL;
@@ -1891,7 +2038,7 @@ static char *show_save_dialog_com(Window *parent, FileDialogParams *params) {
     }
 
     COMDLG_FILTERSPEC types[] = {
-        { L"Text Files (*.txt)", L"*.txt" },
+        { L"Text Documents (*.txt)", L"*.txt" },
         { L"All Files (*.*)", L"*.*" },
     };
     dialog->lpVtbl->SetFileTypes(dialog, 2, types);
@@ -3512,7 +3659,9 @@ static void apply_theme(Window *window) {
     // Colors and the dark flag come from the resolved color scheme
     COLORREF back, text;
     g_dark_mode = theme_colors(&back, &text);
-    set_frame_brush(back); // Used by WM_ERASEBKGND; see set_frame_brush
+    set_frame_brush(back);     // Used by WM_ERASEBKGND; see set_frame_brush
+    apply_window_icon(window); // icon_style "npad" follows this scheme
+    apply_scroll_bar_theme(window->edit_hwnd, g_dark_mode);
 
     // Preserve document state while re-styling
     LRESULT was_modified = SendMessageW(window->edit_hwnd, EM_GETMODIFY, 0, 0);
@@ -3533,8 +3682,30 @@ static void apply_theme(Window *window) {
     SendMessageW(window->edit_hwnd, EM_SETMODIFY, (WPARAM) was_modified, 0);
 
     if (window->status_hwnd) {
+        // Only the BACKGROUND was ever set, so comctl32 kept drawing the text
+        // in COLOR_BTNTEXT - black on dark grey, which made every readout
+        // (Ln/Col, zoom, Mono/Prop, EOL, encoding, match counts) unreadable in
+        // both dark schemes. Dark schemes now own-draw; light stays on
+        // comctl32's default path so out-of-box pixels do not move.
+        bool was_owner_draw = g_status_owner_draw;
+        g_status_owner_draw = g_dark_mode;
+        g_status_back = back;
+        g_status_text = text;
         SendMessageW(window->status_hwnd, SB_SETBKCOLOR, 0,
-                     g_dark_mode ? (LPARAM) RGB(45, 45, 45) : (LPARAM) CLR_DEFAULT);
+                     g_dark_mode ? (LPARAM) back : (LPARAM) CLR_DEFAULT);
+
+        if (was_owner_draw != g_status_owner_draw) {
+            // The SBT_OWNERDRAW flag rides on SB_SETTEXT, so every part has to
+            // be re-sent to change style. set_status_part suppresses a re-send
+            // of identical text, so clear the cache first or the bar would keep
+            // its old painting until each part's text happened to change.
+            for (int i = 0; i < 6; i++) {
+                window->status_cache[i][0] = L'\0';
+            }
+            update_status_bar(window); // Parts 1-5
+            apply_counts_pref(window); // Part 0 (counts, or cleared)
+        }
+        InvalidateRect(window->status_hwnd, NULL, TRUE);
     }
 
     if (window->hwnd) {
@@ -4167,14 +4338,31 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
             CheckDlgButton(page, ID_PREF_STATUS_COUNTS,
                            settings_get_bool("status_show_counts", false) ? BST_CHECKED
                                                                           : BST_UNCHECKED);
+            {
+                char *style = settings_get_string("icon_style", "system");
+                const char *st = style ? style : "system";
+                int which = ID_PREF_ICON_SYSTEM;
+                if (strcmp(st, "npad") == 0)
+                    which = ID_PREF_ICON_NPAD;
+                else if (strcmp(st, "light") == 0)
+                    which = ID_PREF_ICON_LIGHT;
+                else if (strcmp(st, "dark") == 0)
+                    which = ID_PREF_ICON_DARK;
+                else if (strcmp(st, "classic") == 0)
+                    which = ID_PREF_ICON_CLASSIC;
+                CheckRadioButton(page, ID_PREF_ICON_SYSTEM, ID_PREF_ICON_CLASSIC, which);
+                free(style);
+            }
             return TRUE;
         }
 
         case WM_COMMAND: {
             WORD code = HIWORD(wparam);
             WORD id = LOWORD(wparam);
-            if ((code == BN_CLICKED && (id == ID_PREF_OPENDYSLEXIC || id == ID_PREF_STATUSBAR ||
-                                        id == ID_PREF_SYNC_VIEW || id == ID_PREF_STATUS_COUNTS)) ||
+            if ((code == BN_CLICKED &&
+                 (id == ID_PREF_OPENDYSLEXIC || id == ID_PREF_STATUSBAR ||
+                  id == ID_PREF_SYNC_VIEW || id == ID_PREF_STATUS_COUNTS ||
+                  (id >= ID_PREF_ICON_SYSTEM && id <= ID_PREF_ICON_CLASSIC))) ||
                 (code == CBN_SELCHANGE && id == ID_PREF_SCHEME)) {
                 mark_prefs_dirty(page);
             }
@@ -4231,6 +4419,20 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
                                   IsDlgButtonChecked(page, ID_PREF_STATUS_COUNTS) == BST_CHECKED);
                 if (g_main_window) {
                     apply_counts_pref(g_main_window);
+                }
+
+                const char *icon_style = "system";
+                if (IsDlgButtonChecked(page, ID_PREF_ICON_NPAD) == BST_CHECKED)
+                    icon_style = "npad";
+                else if (IsDlgButtonChecked(page, ID_PREF_ICON_LIGHT) == BST_CHECKED)
+                    icon_style = "light";
+                else if (IsDlgButtonChecked(page, ID_PREF_ICON_DARK) == BST_CHECKED)
+                    icon_style = "dark";
+                else if (IsDlgButtonChecked(page, ID_PREF_ICON_CLASSIC) == BST_CHECKED)
+                    icon_style = "classic";
+                settings_set_string("icon_style", icon_style);
+                if (g_main_window) {
+                    apply_window_icon(g_main_window);
                 }
 
                 settings_save(); // Apply button: persist + propagate immediately
@@ -5632,11 +5834,11 @@ static void populate_list_menu(HMENU menu) {
     AppendMenuW(sort, MF_STRING, ID_LIST_SORT_ASC, L"&Ascending");
     AppendMenuW(sort, MF_STRING, ID_LIST_SORT_DESC, L"&Descending");
     AppendMenuW(sort, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(sort, MF_STRING, ID_LIST_SORT_CASE, L"&Case sensitive");
+    AppendMenuW(sort, MF_STRING, ID_LIST_SORT_CASE, L"&Case Sensitive");
     CheckMenuItem(sort, ID_LIST_SORT_CASE,
                   settings_get_bool("list_sort_case_sensitive", false) ? MF_CHECKED : MF_UNCHECKED);
     AppendMenuW(menu, MF_STRING | MF_POPUP, (UINT_PTR) sort, L"&Sort");
-    AppendMenuW(menu, MF_STRING, ID_LIST_UNIQUE, L"&Unique");
+    AppendMenuW(menu, MF_STRING, ID_LIST_UNIQUE, L"Uni&que");
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(menu, MF_STRING, ID_LIST_CONVERT_DELIM, L"Convert &Delimiters...");
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
@@ -5884,7 +6086,9 @@ static void create_menu(Window *window) {
     AppendMenuW(hedit, MF_STRING, ID_EDIT_SELECT_ALL, L"Select &All\tCtrl+A");
     AppendMenuW(hedit, MF_STRING, ID_EDIT_TIME_DATE, L"Time/&Date\tF5");
     AppendMenuW(hedit, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(hedit, MF_STRING, ID_FILE_PREFERENCES, L"&Preferences...\tCtrl+,");
+    // "Preference&s", not "&Preferences": &P already belongs to Paste in this
+    // same popup, so Alt+E,P pasted instead of opening Preferences
+    AppendMenuW(hedit, MF_STRING, ID_FILE_PREFERENCES, L"Preference&s...\tCtrl+,");
 
     // Format menu
     AppendMenuW(hformat, MF_STRING, ID_FORMAT_WORD_WRAP, L"&Word Wrap\tAlt+Z");
@@ -6365,7 +6569,12 @@ static void set_status_part(Window *window, int part, const wchar_t *text) {
         return;
     wcsncpy(window->status_cache[part], text, cap - 1);
     window->status_cache[part][cap - 1] = L'\0';
-    SendMessageW(window->status_hwnd, SB_SETTEXTW, (WPARAM) part, (LPARAM) text);
+    // SBT_OWNERDRAW makes comctl32 send WM_DRAWITEM instead of painting the
+    // text itself, which is how a dark scheme gets a readable foreground. The
+    // cache above is the authoritative copy the draw handler reads back, so no
+    // extra state is needed - and the light path keeps the default painting.
+    SendMessageW(window->status_hwnd, SB_SETTEXTW,
+                 (WPARAM) (part | (g_status_owner_draw ? SBT_OWNERDRAW : 0)), (LPARAM) text);
 }
 
 // SB_SETPARTS defines only the RIGHT edge of each part, so part 0 starts at the
@@ -6844,6 +7053,18 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
             return 0;
         }
 
+        case WM_SETTINGCHANGE: {
+            // Windows broadcasts this with "ImmersiveColorSet" when the
+            // light/dark setting changes. There was no handler at all before,
+            // so the icon (and a "system" colour scheme) never noticed.
+            if (lparam && wcscmp((const wchar_t *) lparam, L"ImmersiveColorSet") == 0) {
+                if (window) {
+                    apply_theme(window); // Also re-applies the icon
+                }
+            }
+            break;
+        }
+
         case WM_DPICHANGED: {
             if (window) {
                 RECT *suggested_rect = (RECT *) lparam;
@@ -6858,8 +7079,29 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                 // only the default needs a refresh
                 apply_font_default(window);
                 resize_controls(window);
+                // The icon slots are sized in pixels, so they need re-picking
+                // at the new DPI - this previously refreshed font and layout
+                // but left the caption showing a stale-sized icon
+                apply_window_icon(window);
             }
             return 0;
+        }
+
+        case WM_DRAWITEM: {
+            // Owner-drawn status bar parts (dark schemes only - see apply_theme)
+            const DRAWITEMSTRUCT *di = (const DRAWITEMSTRUCT *) lparam;
+            if (di && di->CtlID == ID_STATUS_BAR && window) {
+                SetBkMode(di->hDC, TRANSPARENT);
+                SetTextColor(di->hDC, g_status_text);
+                RECT rc = di->rcItem;
+                const wchar_t *text = (di->itemID <= 5) ? window->status_cache[di->itemID] : L"";
+                // itemData carries the string comctl32 was given, but the cache
+                // is what npad owns and keeps padded; prefer it.
+                DrawTextW(di->hDC, text, -1, &rc,
+                          DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
+                return TRUE;
+            }
+            break;
         }
 
         case WM_ERASEBKGND: {

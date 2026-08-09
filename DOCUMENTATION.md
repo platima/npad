@@ -152,6 +152,7 @@ All settings live in `settings.json` and are editable in Preferences
 | `opendyslexic_enabled` | bool | `false` | Use the OpenDyslexic font (reading assistance). Requires the font to be installed; reverts with a hint if it is not. |
 | `opendyslexic_font` | string | `OpenDyslexic` | Face used when OpenDyslexic mode is on. |
 | `status_bar_visible` | bool | `true` | Show the status bar (also View > Status Bar). |
+| `icon_style` | string | `system` | Which app icon to show: `system` follows the Windows **taskbar** light/dark setting (the surface the icon appears on), `npad` follows npad's own colour scheme, `light` / `dark` pin one variant, `classic` restores the original pre-0.28 icon. Preferences > Appearance. |
 | `sync_view_state` | bool | `false` | Mirror per-window view changes (font type, zoom) live to every open npad window. |
 | `status_show_counts` | bool | `false` | Show word / character / line counts in the leftmost status bar segment. Refreshed live while typing (coalesced ~8x/second); documents over ~1 MB fall back to a settle-then-count debounce. Shared with transient messages, which win until the next change. Numbers are grouped using your Windows regional settings (e.g. `1,234,567`), including any separator customised in Control Panel. |
 
@@ -427,6 +428,11 @@ position). Not intended for direct use.
   suppresses *crash* nagging, and honouring it here would silently destroy the
   buffer. Only modified documents are parked, since restored content always
   returns flagged as unsaved.
+- **Dark schemes**: the scroll bars and status bar are themed along with the
+  text area. Scroll-bar theming needs Windows 10 1809 or later (npad asks
+  uxtheme to allow it); on older builds they stay light. The light schemes
+  deliberately keep the system default painting, so their appearance is
+  unchanged from earlier versions.
 - **Drag & drop**: drop a file to open it; hold Ctrl to insert its contents
   at the caret instead.
 - **Large files**: opening a file over the configured threshold asks for

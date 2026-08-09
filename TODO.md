@@ -6,12 +6,60 @@ open loops.
 
 ---
 
+## 👁️ Needs a visual inspection (v0.27.1 / v0.28.0)
+
+Things that were verified by reading the code and by the static gate, but whose
+*appearance* I cannot check - I can read control coordinates, not rendered text
+metrics, and I cannot see the taskbar. Each is small enough to be a patch if it
+is wrong. Nothing here is known-broken; this is the honest list of what went out
+unseen.
+
+**Highest risk first:**
+
+- [ ] **Preferences pages, every tab.** v0.28.0 added `DS_FIXEDSYS` to all seven
+      pages so they stop rendering in Microsoft Sans Serif inside a Segoe UI
+      frame. Dialog units are font-relative and the two faces do not share a
+      DLU-to-pixel ratio, so **tight labels may now clip or wrap**. Worst
+      candidates: the four Markdown bullet descriptions, the Backup and Reset
+      group captions, and the long checkbox labels on General and Appearance.
+- [ ] **Appearance page: the new "Application icon" radio group.** Five radios
+      added at y=164-226 on a page grown from 196 to 236 DLU. The property sheet
+      already sizes to the taller Markdown page, so it should fit without
+      resizing the sheet - confirm nothing is cut off at the bottom.
+- [ ] **The icon at 16px on the taskbar**, in both Windows themes. The mapping
+      is by name (light setting -> light artwork), which puts each icon on a
+      background of its own tone. A render at 16/24/32/48 showed both legible
+      but weaker than the contrasting pairing would be. If it looks washed out
+      in use, flipping the mapping is a one-line change.
+- [ ] **Dark scroll bars actually render dark** (needs Windows 10 1809+). If
+      they stay light, `SetPreferredAppMode` (uxtheme ordinal 135) did not
+      resolve on that build - npad degrades silently by design.
+- [ ] **Dark status bar text**: readable, and in the *same font* as before. It
+      is now owner-drawn in dark schemes only; a wrong device-context font would
+      show as a typeface change rather than a colour one.
+- [ ] **Light schemes unchanged.** The whole round is supposed to leave the
+      default appearance untouched. Scroll bars, status bar, dialogs.
+
+**Quick confirmations:**
+
+- [ ] `Alt+E, S` opens Preferences, and `Alt+E, P` pastes (they collided before).
+- [ ] Status bar at a very narrow window width and at 150%/200% DPI - parts
+      should collapse in order, never draw inverted (v0.27.1 clamp).
+- [ ] Dragging the window larger in a dark scheme shows no white band (v0.27.1).
+- [ ] The menu bar does not flash when settings change in another instance
+      (v0.27.1).
+- [ ] Explorer still shows a sensible icon for associated file types - the icon
+      resource ids changed, and the installers refer to `npad.exe,0`.
+
+---
+
 ## 🐛 Confirmed — FIXED in v0.27.1
 
 All items in this section shipped in v0.27.1 (find status residue,
 IsDialogMessageW gating, the g_hl_matches leak, Paste-as-Markdown greying,
 Interpret-escapes staleness, the SB_SETPARTS clamp, the double menu redraw,
-the dark-mode resize band, and Convert Delimiters accepting 
+the dark-mode resize band, and Convert Delimiters accepting 
+
 ). Kept for
 the root-cause notes; the remaining Convert Delimiters items (persistence and
 the swap button) are features and are still open below.

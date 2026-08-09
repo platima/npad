@@ -5,6 +5,39 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.0] - 2026-08-09
+
+A cosmetic release: appearance only, no behaviour changes.
+
+### ✨ Features
+- **A new app icon that follows your light/dark setting.** It tracks the
+  Windows *taskbar* theme, since that is the surface the icon is shown on.
+  **Preferences ▸ Appearance** offers: follow Windows, follow npad's own colour
+  scheme, always light, always dark, or the **classic icon** for anyone who
+  prefers it.
+- The icon is now loaded at the size Windows actually asks for. It previously
+  always used the 32px image, so the hand-tuned 16×16 inside the file was never
+  shown — the caption bar got a downscaled one. It also refreshes when a window
+  moves to a display with a different DPI.
+
+### 🎨 Appearance
+- **Dark schemes now theme the scroll bars.** The vertical bar is always
+  present, so until now a full-height white strip sat against the dark text
+  area. Requires Windows 10 1809 or later; older builds keep the light bars.
+- **The status bar is readable in dark schemes.** Only its background was ever
+  themed, so the text stayed black — every readout (Ln/Col, zoom, Mono/Prop,
+  line ending, encoding, match counts) was effectively unreadable. The light
+  schemes are untouched and render exactly as before.
+- **The Preferences pages use the same font as the rest of the app.** They were
+  falling back to Microsoft Sans Serif inside a Segoe UI frame — two typefaces
+  in one window.
+- **`Alt+E, P` opens Preferences instead of pasting.** It collided with
+  **P**aste; Preferences is now `Alt+E, S`.
+- The Markdown menu's **Uni**q**ue** no longer collides with **U**nindent.
+- File dialogs say **"Text Documents (\*.txt)"**, and file-error dialogs are
+  captioned **npad** — both matching notepad.exe. Filters and behaviour are
+  unchanged; only the labels moved.
+
 ## [0.27.1] - 2026-08-09
 
 ### 🐛 Fixed

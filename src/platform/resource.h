@@ -10,7 +10,9 @@
 #define RESOURCE_H
 
 // Application Icon
-#define IDI_NPAD 100
+#define IDI_NPAD 100 // Light variant; lowest id, so it is icon index 0
+#define IDI_NPAD_DARK 101
+#define IDI_NPAD_CLASSIC 102
 
 // Dialog IDs
 #define IDD_FIND 200
@@ -119,6 +121,11 @@
 #define ID_PREF_UPD_SKIP 3150
 #define ID_PREF_UPD_INSTALL 3157
 #define ID_PREF_FIND_WRAP 3158 // 3151-3156 are the Markdown paste radios
+#define ID_PREF_ICON_SYSTEM 3159
+#define ID_PREF_ICON_NPAD 3160
+#define ID_PREF_ICON_LIGHT 3161
+#define ID_PREF_ICON_DARK 3162
+#define ID_PREF_ICON_CLASSIC 3163
 
 // Static text controls
 #define IDC_STATIC -1
