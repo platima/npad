@@ -430,9 +430,12 @@ position). Not intended for direct use.
   returns flagged as unsaved.
 - **Dark schemes**: the scroll bars and status bar are themed along with the
   text area. Scroll-bar theming needs Windows 10 1809 or later (npad asks
-  uxtheme to allow it); on older builds they stay light. The light schemes
-  deliberately keep the system default painting, so their appearance is
-  unchanged from earlier versions.
+  uxtheme to force it); on older builds they stay light. The mode follows
+  **npad's own colour scheme**, not the Windows one, so a dark npad on a
+  light-themed Windows still gets dark chrome and a light npad on a
+  dark-themed Windows stays light throughout. The light schemes keep the
+  system default status-bar painting, so their appearance is unchanged from
+  earlier versions.
 - **Drag & drop**: drop a file to open it; hold Ctrl to insert its contents
   at the caret instead.
 - **Large files**: opening a file over the configured threshold asks for

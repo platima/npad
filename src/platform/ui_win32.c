@@ -569,6 +569,9 @@ static bool resolve_theme_dark_mode(void) {
 // Status bar chrome, resolved by apply_theme. Owner-draw is used only for the
 // dark schemes; see the note there.
 static bool g_status_owner_draw = false;
+// Set only while re-sending every part across an owner-draw flip, to suppress
+// set_status_part's identical-text dedupe (see there)
+static bool g_status_force_resend = false;
 static COLORREF g_status_back = 0;
 static COLORREF g_status_text = 0;
 
@@ -588,11 +591,18 @@ static COLORREF g_frame_color = CLR_INVALID;
 //
 // AllowDark rather than ForceDark: it permits dark theming per control instead
 // of imposing it process-wide on every common control npad owns.
-typedef enum { PAM_DEFAULT = 0, PAM_ALLOWDARK = 1 } PreferredAppMode;
+typedef enum {
+    PAM_DEFAULT = 0,
+    PAM_ALLOWDARK = 1,  // Dark applied only if WINDOWS is dark - not what npad wants
+    PAM_FORCEDARK = 2,  // Dark regardless of the Windows setting
+    PAM_FORCELIGHT = 3, // Light regardless of the Windows setting
+} PreferredAppMode;
 typedef PreferredAppMode(WINAPI *SetPreferredAppModeFunc)(PreferredAppMode);
 typedef HRESULT(WINAPI *SetWindowThemeFunc)(HWND, LPCWSTR, LPCWSTR);
+typedef void(WINAPI *FlushMenuThemesFunc)(void);
 static SetWindowThemeFunc g_SetWindowTheme = NULL;
-static bool g_dark_mode_allowed = false;
+static SetPreferredAppModeFunc g_SetPreferredAppMode = NULL;
+static FlushMenuThemesFunc g_FlushMenuThemes = NULL;
 
 static void init_dark_mode_support(void) {
     HMODULE ux = LoadLibraryExW(L"uxtheme.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -611,16 +621,40 @@ static void init_dark_mode_support(void) {
         SetPreferredAppModeFunc func;
     } spam;
     spam.proc = GetProcAddress(ux, MAKEINTRESOURCEA(135));
-    if (spam.func) {
-        spam.func(PAM_ALLOWDARK);
-        g_dark_mode_allowed = true;
-    }
+    g_SetPreferredAppMode = spam.func;
+
+    union {
+        FARPROC proc;
+        FlushMenuThemesFunc func;
+    } fmt;
+    fmt.proc = GetProcAddress(ux, MAKEINTRESOURCEA(136));
+    g_FlushMenuThemes = fmt.func;
     // uxtheme is deliberately left loaded: the themed controls reference it for
     // the process lifetime, and freeing it here would invalidate g_SetWindowTheme
 }
 
+// The app mode must follow NPAD's scheme, not the OS.
+//
+// AllowDark was wrong in both directions: it makes uxtheme follow the Windows
+// AppsUseLightTheme setting, so a stock (light) npad on a dark-themed Windows
+// picked up dark menus against its white editor, and - worse - npad's own Dark
+// scheme on a light-themed Windows got NO dark scroll bars at all, silently,
+// which is the combination this whole change exists to fix. Force the mode
+// instead, and re-apply it whenever the scheme changes.
+static void apply_preferred_app_mode(bool dark) {
+    static int applied = -1;
+    if (!g_SetPreferredAppMode || applied == (dark ? 1 : 0))
+        return;
+    applied = dark ? 1 : 0;
+    g_SetPreferredAppMode(dark ? PAM_FORCEDARK : PAM_FORCELIGHT);
+    if (g_FlushMenuThemes) {
+        g_FlushMenuThemes(); // Menus cache their theme; without this they lag a scheme change
+    }
+}
+
 static void apply_scroll_bar_theme(HWND control, bool dark) {
-    if (!control || !g_SetWindowTheme || !g_dark_mode_allowed)
+    apply_preferred_app_mode(dark);
+    if (!control || !g_SetWindowTheme || !g_SetPreferredAppMode)
         return;
     g_SetWindowTheme(control, dark ? L"DarkMode_Explorer" : NULL, NULL);
     // The non-client area caches its theme, so force a frame recalculation
@@ -3696,14 +3730,15 @@ static void apply_theme(Window *window) {
 
         if (was_owner_draw != g_status_owner_draw) {
             // The SBT_OWNERDRAW flag rides on SB_SETTEXT, so every part has to
-            // be re-sent to change style. set_status_part suppresses a re-send
-            // of identical text, so clear the cache first or the bar would keep
-            // its old painting until each part's text happened to change.
-            for (int i = 0; i < 6; i++) {
-                window->status_cache[i][0] = L'\0';
-            }
+            // be re-sent to change style. Clearing the cache is not enough:
+            // part 0's replacement is empty whenever counts are off (the
+            // default), which then compares equal to the cleared entry and is
+            // skipped - stranding its old text AND its old painting. Force the
+            // re-send instead.
+            g_status_force_resend = true;
             update_status_bar(window); // Parts 1-5
             apply_counts_pref(window); // Part 0 (counts, or cleared)
+            g_status_force_resend = false;
         }
         InvalidateRect(window->status_hwnd, NULL, TRUE);
     }
@@ -6565,7 +6600,11 @@ static void set_status_part(Window *window, int part, const wchar_t *text) {
     if (!text || part < 0 || part > 5)
         return;
     const size_t cap = sizeof(window->status_cache[0]) / sizeof(window->status_cache[0][0]);
-    if (wcsncmp(window->status_cache[part], text, cap - 1) == 0)
+    // The dedupe is against what comctl32 is displaying. Across an owner-draw
+    // flip that stops being true of the STYLE even when the text matches, so
+    // one unconditional pass is forced - otherwise an empty part (part 0 with
+    // counts off, the default) compares equal and keeps its old painting.
+    if (!g_status_force_resend && wcsncmp(window->status_cache[part], text, cap - 1) == 0)
         return;
     wcsncpy(window->status_cache[part], text, cap - 1);
     window->status_cache[part][cap - 1] = L'\0';

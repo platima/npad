@@ -5,6 +5,26 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.2] - 2026-08-09
+
+### 🐛 Fixed
+- **Dark scroll bars did nothing unless Windows itself was set to dark.** npad
+  asked uxtheme to *allow* dark theming, which follows the Windows app-mode
+  setting rather than npad's own colour scheme. Since npad defaults to Light
+  and dark is opt-in, "dark npad on a light desktop" is a common combination -
+  and it was exactly the one where v0.28.0's headline fix silently did nothing,
+  leaving the white scroll bar it was meant to remove. The mode is now forced
+  from npad's scheme.
+- **The reverse, too: a stock (light) npad on a dark-themed Windows picked up
+  dark menus** against its white editor. Light schemes are now light throughout,
+  whatever Windows is set to.
+- **The leftmost status bar segment kept its old text and colour when switching
+  schemes.** Changing scheme re-sends every segment to change its draw style,
+  but an empty segment - which is the default, with counts off - was skipped as
+  a no-op, so a lingering "Match 3 of 7" stayed black on the new dark
+  background. Exactly the unreadable text v0.28.0 set out to fix, surviving in
+  one segment.
+
 ## [0.28.1] - 2026-08-09
 
 ### 🐛 Fixed
