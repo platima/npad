@@ -5,6 +5,17 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.1] - 2026-08-09
+
+### 🐛 Fixed
+- **v0.28.0 published without its installers.** Renaming the icon resources in
+  that release left the MSI still pointing at the old `npad.ico`, so the
+  installer build failed after the release had already been created — leaving
+  only the portable executable, and no `setup.exe` for the in-app updater to
+  download. Fixed, and CI now verifies every file the installer sources
+  actually exists, so this fails on the pull request rather than half way
+  through a release.
+
 ## [0.28.0] - 2026-08-09
 
 A cosmetic release: appearance only, no behaviour changes.

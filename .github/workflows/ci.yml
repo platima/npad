@@ -31,6 +31,26 @@ jobs:
     - name: Check code formatting
       run: make format-check
 
+    # The installers are only BUILT in the release/installers workflows, which
+    # run too late to stop a partial release being published. v0.28.0 shipped
+    # with no installers because a deleted icon was still referenced here, and
+    # validate-release never ran to catch it. This is the cheap half: prove
+    # every file the installer sources actually exists.
+    - name: Verify installer source references resolve
+      run: |
+        missing=0
+        refs=$(grep -o 'SourceFile="[^"]*"' installer/npad.wxs | sed 's/SourceFile="//; s/"$//')
+        for f in $refs; do
+          path="installer/$(echo "$f" | tr '\\' '/')"
+          if [ ! -e "$path" ]; then
+            echo "npad.wxs references a missing file: $f"
+            missing=1
+          else
+            echo "ok: $f"
+          fi
+        done
+        if [ "$missing" -ne 0 ]; then exit 1; fi
+
   build-windows:
     runs-on: ubuntu-latest
     needs: lint

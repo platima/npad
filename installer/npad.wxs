@@ -30,7 +30,9 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of npad is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <Icon Id="npadIcon" SourceFile="..\src\platform\npad.ico" />
+    <!-- Add/Remove Programs entry. npad.ico became npad-light.ico in v0.28.0
+         when the icon gained light/dark variants; this is the default one. -->
+    <Icon Id="npadIcon" SourceFile="..\src\platform\npad-light.ico" />
     <Property Id="ARPPRODUCTICON" Value="npadIcon" />
     <Property Id="ARPNOMODIFY" Value="1" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/platima/npad" />
