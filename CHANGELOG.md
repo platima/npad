@@ -5,6 +5,20 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.3] - 2026-08-09
+
+### 🐛 Fixed
+- **Word wrap no longer inflates the line count or misdirect Go To.** With wrap
+  on, npad was counting *wrapped rows* rather than lines, so a 96-line document
+  with ten long lines reported 106, the Ln indicator climbed past the real line
+  count, and **Go To jumped to the wrong place**. All three now count the
+  document's actual lines, matching the file and each other, whether wrap is on
+  or off.
+- **Widened the gutter either side of the text.** It was tight enough that a
+  leading `l`, `I` or `h` could visually merge into the window border. It now
+  sits close to notepad.exe's, and scales with DPI instead of being a fixed
+  pixel count.
+
 ## [0.28.2] - 2026-08-09
 
 ### 🐛 Fixed

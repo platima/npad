@@ -662,6 +662,23 @@ static void apply_scroll_bar_theme(HWND control, bool dark) {
                  SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
+// Gutter either side of the text.
+//
+// Was a flat 4px, which left roughly 6px of visible gap once the client edge
+// is included - tight enough that a leading 'l', 'I' or 'h' merges into the
+// window border. notepad.exe sits nearer 11px, so 9 here lands about right.
+// Scaled, because a pixel constant would shrink visually as DPI rises.
+#define EDIT_MARGIN_DIP 9
+
+static void apply_edit_margins(Window *window) {
+    if (!window || !window->edit_hwnd)
+        return;
+    int dpi = (int) get_window_dpi(window->hwnd);
+    int m = MulDiv(EDIT_MARGIN_DIP, dpi, 96);
+    SendMessageW(window->edit_hwnd, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
+                 MAKELPARAM(m, m));
+}
+
 // Which icon resource the "icon_style" preference resolves to.
 //
 // The variants are named for their ARTWORK colour, and the mapping is
@@ -1365,8 +1382,7 @@ Window *ui_platform_create_main_window(void) {
     SendMessageW(window->edit_hwnd, EM_SETTEXTMODE, TM_PLAINTEXT, 0);
     SendMessageW(window->edit_hwnd, EM_EXLIMITTEXT, 0, 0x7FFFFFFE);
     SendMessageW(window->edit_hwnd, EM_SETUNDOLIMIT, 100000, 0);
-    SendMessageW(window->edit_hwnd, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
-                 MAKELPARAM(4, 4));
+    apply_edit_margins(window);
     SendMessageW(window->edit_hwnd, EM_SETEVENTMASK, 0, ENM_CHANGE | ENM_SELCHANGE);
     SetWindowSubclass(window->edit_hwnd, edit_subclass_proc, 1, 0);
 
@@ -3786,10 +3802,72 @@ void ui_platform_set_text_modified(Window *window, bool modified) {
     }
 }
 
+// --- Logical (paragraph) lines -------------------------------------------
+//
+// EM_GETLINECOUNT, EM_EXLINEFROMCHAR and EM_LINEINDEX all work in DISPLAY
+// lines, so with word wrap on a 96-line document reports 106, Ln counts
+// wrapped rows rather than lines, and Go To lands on the wrong paragraph.
+// get_paragraph_bounds already sidesteps them for exactly this reason.
+//
+// With wrap OFF display and logical lines coincide, so the cheap API is kept.
+// With wrap ON the '\r' breaks are counted directly - one text fetch and a
+// linear scan, which is the same order of work the live counts already do.
+// Returns the number of CR breaks before `end` - i.e. the 0-based logical
+// line at that position - and, via line_start, the index just after the last
+// of them, which is where that line begins. Both come from one fetch so the
+// caret path does not pay for the scan twice.
+static int count_breaks_before(HWND e, LONG end, LONG *line_start) {
+    if (line_start)
+        *line_start = 0;
+    if (end <= 0)
+        return 0;
+    wchar_t *buf = malloc(((size_t) end + 1) * sizeof(wchar_t));
+    if (!buf)
+        return 0;
+    TEXTRANGEW tr;
+    tr.chrg.cpMin = 0;
+    tr.chrg.cpMax = end;
+    tr.lpstrText = buf;
+    LRESULT got = SendMessageW(e, EM_GETTEXTRANGE, 0, (LPARAM) &tr);
+    if (got < 0)
+        got = 0;
+    int breaks = 0;
+    for (LRESULT i = 0; i < got; i++) {
+        if (buf[i] == L'\r')
+            breaks++;
+    }
+    free(buf);
+    return breaks;
+}
+
+// Character index at which 0-based logical line `line` starts, or -1 if the
+// document has no such line.
+static LONG logical_line_start(HWND e, int line) {
+    if (line <= 0)
+        return 0;
+    FINDTEXTEXW ft;
+    LONG len = (LONG) SendMessageW(e, WM_GETTEXTLENGTH, 0, 0);
+    LONG from = 0;
+    for (int i = 0; i < line; i++) {
+        memset(&ft, 0, sizeof(ft));
+        ft.lpstrText = L"\r";
+        ft.chrg.cpMin = from;
+        ft.chrg.cpMax = len;
+        if (SendMessageW(e, EM_FINDTEXTEXW, FR_DOWN, (LPARAM) &ft) < 0)
+            return -1; // Fewer lines than asked for
+        from = ft.chrgText.cpMax;
+    }
+    return from;
+}
+
 int ui_platform_get_line_count(Window *window) {
     if (!window || !window->edit_hwnd)
         return 0;
-    return (int) SendMessageW(window->edit_hwnd, EM_GETLINECOUNT, 0, 0);
+    if (!window->word_wrap_enabled) {
+        return (int) SendMessageW(window->edit_hwnd, EM_GETLINECOUNT, 0, 0);
+    }
+    LONG len = (LONG) SendMessageW(window->edit_hwnd, WM_GETTEXTLENGTH, 0, 0);
+    return count_breaks_before(window->edit_hwnd, len, NULL) + 1;
 }
 
 void ui_platform_get_cursor_line_column(Window *window, int *line, int *column) {
@@ -3801,6 +3879,17 @@ void ui_platform_get_cursor_line_column(Window *window, int *line, int *column) 
         return;
 
     int pos = ui_platform_get_cursor_position(window);
+
+    // Word wrap makes EM_EXLINEFROMCHAR count wrapped rows, so Ln would climb
+    // past the document's real line count and disagree with Go To
+    if (window->word_wrap_enabled) {
+        LONG start = 0;
+        int breaks = count_breaks_before(window->edit_hwnd, pos, &start);
+        *line = breaks + 1;
+        *column = pos - (int) start + 1;
+        return;
+    }
+
     int line_index = (int) SendMessageW(window->edit_hwnd, EM_EXLINEFROMCHAR, 0, pos);
 
     // RichEdit reports the previous line when the caret sits at the very
@@ -5299,7 +5388,12 @@ static void show_goto_dialog(Window *window) {
     if (line <= 0)
         return;
 
-    LRESULT char_index = SendMessageW(window->edit_hwnd, EM_LINEINDEX, (WPARAM) (line - 1), 0);
+    // Logical lines, so the number matches what Ln shows and what the file
+    // actually contains - EM_LINEINDEX would land on a wrapped row instead
+    LRESULT char_index =
+        window->word_wrap_enabled
+            ? logical_line_start(window->edit_hwnd, (int) (line - 1))
+            : SendMessageW(window->edit_hwnd, EM_LINEINDEX, (WPARAM) (line - 1), 0);
     if (char_index < 0) {
         MessageBoxW(window->hwnd, L"The line number is beyond the total number of lines", L"npad",
                     MB_OK | MB_ICONINFORMATION);
@@ -7117,6 +7211,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                 // runs - including font-bound emoji - keep their formatting;
                 // only the default needs a refresh
                 apply_font_default(window);
+                apply_edit_margins(window); // Pixel margins must rescale too
                 resize_controls(window);
                 // The icon slots are sized in pixels, so they need re-picking
                 // at the new DPI - this previously refreshed font and layout

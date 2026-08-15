@@ -42,6 +42,11 @@ unseen.
 
 **Quick confirmations:**
 
+- [ ] **Text gutter width** (v0.28.3). Raised from 4px to 9 DIP because a
+      leading `l`/`I`/`h` merged into the border. Measured against notepad.exe
+      at ~11px visible; re-measure and say if it should shift a pixel or two.
+
+
 - [ ] `Alt+E, S` opens Preferences, and `Alt+E, P` pastes (they collided before).
 - [ ] Status bar at a very narrow window width and at 150%/200% DPI - parts
       should collapse in order, never draw inverted (v0.27.1 clamp).
