@@ -63,9 +63,7 @@ unseen.
 All items in this section shipped in v0.27.1 (find status residue,
 IsDialogMessageW gating, the g_hl_matches leak, Paste-as-Markdown greying,
 Interpret-escapes staleness, the SB_SETPARTS clamp, the double menu redraw,
-the dark-mode resize band, and Convert Delimiters accepting 
-
-). Kept for
+the dark-mode resize band, and Convert Delimiters accepting CRLF). Kept for
 the root-cause notes; the remaining Convert Delimiters items (persistence and
 the swap button) are features and are still open below.
 
