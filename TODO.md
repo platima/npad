@@ -16,7 +16,7 @@ unseen.
 
 **Highest risk first:**
 
-- [ ] **Preferences pages, every tab.** v0.28.0 added `DS_FIXEDSYS` to all seven
+- [x] **Preferences pages, every tab** - CONFIRMED GOOD 2026-08-09. v0.28.0 added `DS_FIXEDSYS` to all seven
       pages so they stop rendering in Microsoft Sans Serif inside a Segoe UI
       frame. Dialog units are font-relative and the two faces do not share a
       DLU-to-pixel ratio, so **tight labels may now clip or wrap**. Worst
@@ -26,11 +26,19 @@ unseen.
       added at y=164-226 on a page grown from 196 to 236 DLU. The property sheet
       already sizes to the taller Markdown page, so it should fit without
       resizing the sheet - confirm nothing is cut off at the bottom.
-- [ ] **The icon at 16px on the taskbar**, in both Windows themes. The mapping
-      is by name (light setting -> light artwork), which puts each icon on a
-      background of its own tone. A render at 16/24/32/48 showed both legible
-      but weaker than the contrasting pairing would be. If it looks washed out
-      in use, flipping the mapping is a one-line change.
+- [x] **The icon on the taskbar** - CONFIRMED GOOD 2026-08-09 ("dark taskbar
+      icon looks good"). The by-name mapping stands.
+- [x] **The CAPTION icon** - FIXED in v0.28.4. The two are separate slots
+      (ICON_SMALL drives the caption, ICON_BIG the taskbar), established by
+      probing a scratch window with different artwork in each. Automatic mode
+      now matches each surface to the theme it sits on.
+- [ ] **Two Automatic-mode caveats worth a look**, both inherent to Windows and
+      neither breaking anything: a **grouped** taskbar button (several npad
+      windows combined - the Windows 11 default) is drawn from the *executable's*
+      icon, so the taskbar variant is not consulted; and with **small taskbar
+      buttons** the taskbar reads the caption slot, collapsing the two to the
+      same artwork. Worth confirming what you actually see with two windows
+      open, since that is the common case.
 - [ ] **Dark scroll bars actually render dark** (needs Windows 10 1809+). If
       they stay light, `SetPreferredAppMode` (uxtheme ordinal 135) did not
       resolve on that build - npad degrades silently by design.
@@ -42,9 +50,8 @@ unseen.
 
 **Quick confirmations:**
 
-- [ ] **Text gutter width** (v0.28.3). Raised from 4px to 9 DIP because a
-      leading `l`/`I`/`h` merged into the border. Measured against notepad.exe
-      at ~11px visible; re-measure and say if it should shift a pixel or two.
+- [x] **Text gutter width** - MEASURED 2026-08-09. 4 DIP was too tight; 9 DIP
+      overshot at 16px in use. Settled on **6 DIP** in v0.28.4.
 
 
 - [ ] `Alt+E, S` opens Preferences, and `Alt+E, P` pastes (they collided before).

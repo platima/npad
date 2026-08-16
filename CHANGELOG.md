@@ -5,6 +5,27 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.4] - 2026-08-09
+
+### 🎨 Appearance
+- **The window's own icon now follows npad's colour scheme, while the taskbar
+  icon keeps following Windows.** They are separate slots, so a light npad on a
+  dark-themed Windows no longer shows a dark icon in its own light title bar.
+  This is the **Automatic** mode (the default, renamed from "Follow the Windows
+  light/dark setting" since it now does something more specific). Picking
+  *always light*, *always dark* or *classic* still pins both surfaces, because
+  an explicit choice should be taken literally.
+- **Narrowed the gutter either side of the text.** v0.28.3 widened it from 4 to
+  9, which measured at 16px in use - too far. It is now 6.
+
+### 📝 Notes
+- Two limits of Automatic mode, both inherent to Windows: a **grouped** taskbar
+  button (several npad windows combined - the Windows 11 default) is drawn from
+  the executable's icon rather than the window's, so the taskbar variant is not
+  consulted there; and with **small taskbar buttons** the taskbar reads the
+  caption's slot, so both surfaces show the same artwork. Neither loses the
+  icon; they just stop differing.
+
 ## [0.28.3] - 2026-08-09
 
 ### 🐛 Fixed

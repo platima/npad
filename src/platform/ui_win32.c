@@ -664,11 +664,11 @@ static void apply_scroll_bar_theme(HWND control, bool dark) {
 
 // Gutter either side of the text.
 //
-// Was a flat 4px, which left roughly 6px of visible gap once the client edge
-// is included - tight enough that a leading 'l', 'I' or 'h' merges into the
-// window border. notepad.exe sits nearer 11px, so 9 here lands about right.
-// Scaled, because a pixel constant would shrink visually as DPI rises.
-#define EDIT_MARGIN_DIP 9
+// Was a flat 4px, which left a gap tight enough that a leading 'l', 'I' or 'h'
+// merged into the window border. 9 overshot - measured at 16px in use - so 6,
+// which is what the maintainer measured as right against notepad.exe. Scaled,
+// because a pixel constant would shrink visually as DPI rises.
+#define EDIT_MARGIN_DIP 6
 
 static void apply_edit_margins(Window *window) {
     if (!window || !window->edit_hwnd)
@@ -685,25 +685,44 @@ static void apply_edit_margins(Window *window) {
 // deliberately by name rather than by contrast: light setting -> light icon.
 // That is the maintainer's call; "always light"/"always dark" exist for anyone
 // who prefers the other pairing.
-static int resolve_icon_resource(void) {
+// A window has two independent icon slots, and they feed different surfaces:
+//
+//     ICON_SMALL -> the window's own caption (documented)
+//     ICON_BIG   -> the taskbar button, and Alt+Tab
+//
+// The caption mapping is documented; the taskbar's is not documented by
+// Microsoft anywhere, and was established by probing a scratch window with
+// different artwork in each slot and observing which surface showed which.
+//
+// So the two can differ, which is the point: the taskbar sits on Windows'
+// chrome and should match Windows, while the caption is painted by npad (see
+// set_title_bar_dark) and should match npad. Following Windows for both is
+// what made a dark icon appear in a light npad title bar.
+//
+// Only the default "system" mode splits. An explicit light/dark/classic choice
+// pins BOTH slots, because a user who picked an icon outright meant it.
+static void resolve_icon_resources(int *big, int *small) {
     char *style = settings_get_string("icon_style", "system");
     const char *s = style ? style : "system";
-    int res;
+    int pinned = 0;
 
     if (strcmp(s, "classic") == 0) {
-        res = IDI_NPAD_CLASSIC;
+        pinned = IDI_NPAD_CLASSIC;
     } else if (strcmp(s, "light") == 0) {
-        res = IDI_NPAD;
+        pinned = IDI_NPAD;
     } else if (strcmp(s, "dark") == 0) {
-        res = IDI_NPAD_DARK;
+        pinned = IDI_NPAD_DARK;
     } else if (strcmp(s, "npad") == 0) {
-        res = resolve_theme_dark_mode() ? IDI_NPAD_DARK : IDI_NPAD;
-    } else { // "system": follow the taskbar, which is where the icon is shown
-        res = read_system_light_theme() ? IDI_NPAD : IDI_NPAD_DARK;
+        pinned = resolve_theme_dark_mode() ? IDI_NPAD_DARK : IDI_NPAD;
     }
-
     free(style);
-    return res;
+
+    if (pinned) {
+        *big = *small = pinned;
+        return;
+    }
+    *big = read_system_light_theme() ? IDI_NPAD : IDI_NPAD_DARK;   // Windows' chrome
+    *small = resolve_theme_dark_mode() ? IDI_NPAD_DARK : IDI_NPAD; // npad's chrome
 }
 
 // Set the window's icons at the sizes Windows actually asks for.
@@ -716,16 +735,26 @@ static void apply_window_icon(Window *window) {
     if (!window || !window->hwnd)
         return;
 
-    int res = resolve_icon_resource();
+    int res_big = 0, res_small = 0;
+    resolve_icon_resources(&res_big, &res_small);
+
     UINT dpi = get_window_dpi(window->hwnd);
     int big = g_GetSystemMetricsForDpi ? g_GetSystemMetricsForDpi(SM_CXICON, dpi)
                                        : GetSystemMetrics(SM_CXICON);
     int small = g_GetSystemMetricsForDpi ? g_GetSystemMetricsForDpi(SM_CXSMICON, dpi)
                                          : GetSystemMetrics(SM_CXSMICON);
 
-    HANDLE hbig = LoadImageW(g_hinstance, MAKEINTRESOURCEW(res), IMAGE_ICON, big, big, LR_SHARED);
+    HANDLE hbig =
+        LoadImageW(g_hinstance, MAKEINTRESOURCEW(res_big), IMAGE_ICON, big, big, LR_SHARED);
     HANDLE hsmall =
-        LoadImageW(g_hinstance, MAKEINTRESOURCEW(res), IMAGE_ICON, small, small, LR_SHARED);
+        LoadImageW(g_hinstance, MAKEINTRESOURCEW(res_small), IMAGE_ICON, small, small, LR_SHARED);
+
+    // ORDER MATTERS, and not for an obvious reason. The shell caches the
+    // taskbar button's icon, and a WM_SETICON on ICON_BIG alone does NOT
+    // invalidate it - the button keeps the stale image. Re-sending ICON_SMALL
+    // is what makes the shell re-read, even when that artwork is unchanged.
+    // So ICON_BIG first, ICON_SMALL last, and always both. Undocumented, found
+    // by probing; do not "optimise" either send away.
     if (hbig)
         SendMessageW(window->hwnd, WM_SETICON, ICON_BIG, (LPARAM) hbig);
     if (hsmall)

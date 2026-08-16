@@ -14,8 +14,8 @@
 
 // Version Information (keep in sync with src/main.h)
 1 VERSIONINFO
-FILEVERSION 0,28,3,0
-PRODUCTVERSION 0,28,3,0
+FILEVERSION 0,28,4,0
+PRODUCTVERSION 0,28,4,0
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0x0L
 FILEOS VOS__WINDOWS32
@@ -28,12 +28,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Platima"
             VALUE "FileDescription", "npad - Lightweight Text Editor"
-            VALUE "FileVersion", "0.28.3.0"
+            VALUE "FileVersion", "0.28.4.0"
             VALUE "InternalName", "npad"
             VALUE "LegalCopyright", "Copyright © 2025-2026 Platima"
             VALUE "OriginalFilename", "npad.exe"
             VALUE "ProductName", "npad"
-            VALUE "ProductVersion", "0.28.3.0"
+            VALUE "ProductVersion", "0.28.4.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -169,12 +169,12 @@ BEGIN
     CONTROL         "Show s&tatus bar", ID_PREF_STATUSBAR, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 10, 102, 150, 10
     CONTROL         "S&ync view (font type and zoom) across all instances", ID_PREF_SYNC_VIEW, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 120, 220, 18
     CONTROL         "Show &word / character / line counts in the status bar", ID_PREF_STATUS_COUNTS, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 142, 220, 18
-    GROUPBOX        "Application icon", IDC_STATIC, 10, 164, 220, 64
-    CONTROL         "&Follow the Windows light/dark setting", ID_PREF_ICON_SYSTEM, "Button", BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 18, 177, 204, 10
-    CONTROL         "Follow &npad's colour scheme", ID_PREF_ICON_NPAD, "Button", BS_AUTORADIOBUTTON, 18, 189, 204, 10
-    CONTROL         "Always &light", ID_PREF_ICON_LIGHT, "Button", BS_AUTORADIOBUTTON, 18, 201, 96, 10
-    CONTROL         "Always dar&k", ID_PREF_ICON_DARK, "Button", BS_AUTORADIOBUTTON, 120, 201, 100, 10
-    CONTROL         "&Classic (original) icon", ID_PREF_ICON_CLASSIC, "Button", BS_AUTORADIOBUTTON, 18, 213, 204, 10
+    GROUPBOX        "Application icon", IDC_STATIC, 10, 164, 220, 68
+    CONTROL         "&Automatic - taskbar follows Windows, window follows npad", ID_PREF_ICON_SYSTEM, "Button", BS_AUTORADIOBUTTON | BS_MULTILINE | WS_GROUP | WS_TABSTOP, 18, 175, 204, 18
+    CONTROL         "Follow &npad's colour scheme", ID_PREF_ICON_NPAD, "Button", BS_AUTORADIOBUTTON, 18, 194, 204, 10
+    CONTROL         "Always &light", ID_PREF_ICON_LIGHT, "Button", BS_AUTORADIOBUTTON, 18, 206, 96, 10
+    CONTROL         "Always dar&k", ID_PREF_ICON_DARK, "Button", BS_AUTORADIOBUTTON, 120, 206, 100, 10
+    CONTROL         "&Classic (original) icon", ID_PREF_ICON_CLASSIC, "Button", BS_AUTORADIOBUTTON, 18, 218, 204, 10
 END
 
 // Preferences: Markdown page (optional Markdown list tools)
