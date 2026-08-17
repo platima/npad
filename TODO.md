@@ -82,9 +82,8 @@ unseen.
 - [ ] **Dark scroll bars actually render dark** (needs Windows 10 1809+). If
       they stay light, `SetPreferredAppMode` (uxtheme ordinal 135) did not
       resolve on that build - npad degrades silently by design.
-- [ ] **Dark status bar text**: readable, and in the *same font* as before. It
-      is now owner-drawn in dark schemes only; a wrong device-context font would
-      show as a typeface change rather than a colour one.
+- [~] ~~Dark status bar text~~ - MOOT. The dark status bar was reverted in
+      v0.28.6; it is system-themed in every scheme again.
 - [ ] **Light schemes unchanged.** The whole round is supposed to leave the
       default appearance untouched. Scroll bars, status bar, dialogs.
 
