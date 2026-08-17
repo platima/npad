@@ -26,9 +26,19 @@ idle instance and 1.7-2.5 GB for those still loading.
 responsive. **3.4 MB per window, 104.2 MB for 30** - linear, against 577 MB per
 idle instance before the fix. That is now the documented baseline in README.md.
 
-Remaining, lower priority:
-- [ ] Confirm the recovery directory does not accumulate slots when instances
-      are killed rather than closed.
+- [x] **Crash recovery with killed instances** - CONFIRMED 2026-08-18. Seven
+      instances edited then killed; six were offered on relaunch, all restored
+      correctly, and the recovery directory was emptied afterwards. No slot
+      accumulation.
+
+      The seventh is not a miss: snapshots run on a 30-second timer
+      (`session_interval`), so an instance killed before its first tick has
+      nothing on disk. That is the designed exposure - **up to 30 seconds of
+      work, and a brand-new window is unprotected for its first 30 seconds.**
+      Shortening the interval in Preferences > General trades disk writes for a
+      smaller window. Snapshotting on the *first* modification instead of
+      waiting for the timer would close the new-window gap specifically; not
+      done, since it adds a write on every first edit and nobody has asked.
 
 Not yet separately investigated, since the settings file explains what was
 observed: whether the cross-instance settings broadcast is O(instances^2) at
