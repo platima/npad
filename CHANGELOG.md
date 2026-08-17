@@ -5,6 +5,34 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.5] - 2026-08-17
+
+### 🐛 Fixed
+- **The status bar stayed light in dark schemes.** Its background was being set
+  correctly, but with visual styles active comctl32 paints the bar from the
+  theme and ignores that colour outright — so the bar stayed light while the
+  text went pale grey, which read as disabled. The dark schemes now drop the
+  theme for that one control so the colour takes effect. Light schemes are
+  untouched.
+- **Status messages no longer hide the word / character / line counts.** They
+  shared the same segment, so "Checking for updates…" replaced the counts for
+  as long as it was up — worst on exactly the slow operations where you might
+  still want to read them. The counts now hold their place and the message
+  appears beside them.
+- **The installer kept re-ticking "set the bundled fonts as npad's default
+  editor fonts".** It was made unchecked in v0.27.0, but Inno restores whatever
+  was selected on the *previous* install, so anyone who had once enabled it got
+  it back on every upgrade — quietly reapplying non-Notepad fonts. The task is
+  renamed so there is no prior selection to inherit. Silent installs opt in with
+  `/MERGETASKS="fontdefaults2"`.
+
+### 📝 Notes
+- **The menu bar is still light in dark schemes, and stays that way for now.**
+  Windows draws it as part of the non-client area and offers no supported way to
+  recolour it; doing so means owner-drawing it through undocumented messages,
+  which is a lot of risk for a strip of chrome. Drop-down menus, the title bar,
+  scroll bars, the status bar and the text area all follow the scheme.
+
 ## [0.28.4] - 2026-08-09
 
 ### 🎨 Appearance

@@ -74,7 +74,14 @@ Name: "notepadalias"; Description: "Open 'notepad' with npad (Win+R and app laun
 ; (Consolas 11), and this task rewrites settings.json to Intel One Mono /
 ; Roboto. The fonts are still installed and available in the pickers - this
 ; only decides whether they are imposed as the defaults.
-Name: "fontdefaults"; Description: "Set the bundled fonts as npad's default editor fonts (updates settings.json)"; Check: FontDefaultsOfferable; Flags: unchecked
+; Renamed from "fontdefaults" in v0.28.5, deliberately. Inno's UsePreviousTasks
+; defaults to yes, so it restores whatever was ticked on the PREVIOUS install -
+; which meant anyone who enabled this before v0.27.0 made it unchecked kept
+; getting it re-ticked on every upgrade, silently reapplying non-Notepad fonts.
+; A task name with no history falls back to its declared Flags, so the rename
+; is what actually makes "unchecked" stick. Silent installs opt in with
+; /MERGETASKS="fontdefaults2".
+Name: "fontdefaults2"; Description: "Set the bundled fonts as npad's default editor fonts (updates settings.json)"; Check: FontDefaultsOfferable; Flags: unchecked
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
 [Files]
@@ -371,7 +378,7 @@ begin
   RegWriteExpandStringValue(EnvPathRootKey(), EnvPathSubKey(), 'Path', Paths);
 end;
 
-// --- Default-font preset ('fontdefaults' task) ---------------------------
+// --- Default-font preset ('fontdefaults2' task) --------------------------
 // A font family counts as available when its component is being installed
 // OR it is already present on the system (user or machine font store).
 
@@ -442,7 +449,7 @@ var
   SettingsDir, SettingsFile: String;
   Json: AnsiString;
 begin
-  if not WizardIsTaskSelected('fontdefaults') then
+  if not WizardIsTaskSelected('fontdefaults2') then
     Exit;
   if not (MonoFontAvailable() or PropFontAvailable()) then
     Exit;

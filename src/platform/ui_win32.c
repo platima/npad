@@ -239,6 +239,11 @@ typedef struct Window {
     // longest part-0 counts line in full - a short cache would compare equal on
     // a shared prefix and silently skip the update.
     wchar_t status_cache[6][128];
+    // Part 0 shows the optional counts and any transient message TOGETHER, so
+    // each is kept and the part recomposed - a message used to replace the
+    // counts outright, hiding them for as long as it was on screen.
+    wchar_t status_counts[160];
+    wchar_t status_msg[160];
     bool list_menu_present;     // The optional top-level Markdown menu is inserted
     bool line_cut_pending;      // Last Ctrl+X was a whole-line cut (paste-above mode)
     DWORD line_cut_clip_seq;    // Clipboard sequence number right after that cut
@@ -2445,24 +2450,48 @@ void ui_platform_show_about_dialog(Window *parent) {
 // Show a transient message in the leftmost status bar part (shared with the
 // optional counts display, whose cache must stay in sync so the next counts
 // refresh is not skipped as a duplicate)
+// Part 0 carries two things at once: the optional word/char/line counts and
+// whatever transient message is current ("Checking for updates...", "Match 3
+// of 7"). A message used to overwrite the counts, which hid them for as long
+// as it was up - unhelpful when the message is a slow operation and the counts
+// are what you were reading. Counts come first so they hold a stable position
+// and the message appends beside them.
+static void compose_status_part0(Window *window) {
+    if (!window || !window->status_hwnd)
+        return;
+    const wchar_t *counts = window->status_counts;
+    const wchar_t *msg = window->status_msg;
+    wchar_t combined[336];
+
+    if (counts[0] && msg[0]) {
+        _snwprintf(combined, 335, L"%ls   -   %ls", counts, msg);
+    } else if (counts[0]) {
+        _snwprintf(combined, 335, L"%ls", counts);
+    } else if (msg[0]) {
+        _snwprintf(combined, 335, L"%ls", msg);
+    } else {
+        combined[0] = L'\0';
+    }
+    combined[335] = L'\0';
+    set_status_part0(window, combined);
+}
+
 static void set_status_message(Window *window, const char *message) {
     if (!window || !window->status_hwnd)
         return;
-    // Cancel any pending counts refresh: a debounce armed by an earlier edit
-    // must not fire later and overwrite this (newer) message. Clearing the
-    // pending flag alongside the timer is essential - it is otherwise only
-    // cleared by the timer handler we just cancelled, so it would latch on and
-    // schedule_counts_update would skip every future refresh, freezing the
-    // counts for the life of the window.
-    if (window->hwnd) {
-        KillTimer(window->hwnd, NPAD_COUNTS_TIMER_ID);
-        window->counts_pending = false;
-    }
+    // No longer cancels the pending counts refresh: the two coexist now, so a
+    // debounce firing later recomposes rather than overwrites. (It used to
+    // KillTimer here, which once latched counts_pending on and froze the
+    // counts for the life of the window.)
     wchar_t *wide = utf8_to_wide(message ? message : "");
     if (wide) {
-        set_status_part0(window, wide);
+        wcsncpy(window->status_msg, wide, 159);
+        window->status_msg[159] = L'\0';
         free(wide);
+    } else {
+        window->status_msg[0] = L'\0';
     }
+    compose_status_part0(window);
 }
 
 // ---------------------------------------------------------------------------
@@ -3770,6 +3799,16 @@ static void apply_theme(Window *window) {
         g_status_owner_draw = g_dark_mode;
         g_status_back = back;
         g_status_text = text;
+        // With visual styles active comctl32 paints the status bar from the
+        // theme and IGNORES SB_SETBKCOLOR entirely - which is why the bar
+        // stayed light in a dark scheme while the owner-drawn text correctly
+        // went pale grey, making it look disabled. Dropping the theme for this
+        // one control lets the colour take effect; light restores it so the
+        // default appearance is untouched.
+        if (g_SetWindowTheme) {
+            g_SetWindowTheme(window->status_hwnd, g_dark_mode ? L"" : NULL,
+                             g_dark_mode ? L"" : NULL);
+        }
         SendMessageW(window->status_hwnd, SB_SETBKCOLOR, 0,
                      g_dark_mode ? (LPARAM) back : (LPARAM) CLR_DEFAULT);
 
@@ -6819,10 +6858,9 @@ static void update_text_counts(Window *window) {
     format_count_w((unsigned long) chars, c, 32);
     format_count_w((unsigned long) lines, l, 32);
 
-    wchar_t msg[160];
-    _snwprintf(msg, 159, L"%ls words, %ls chars, %ls lines", w, c, l);
-    msg[159] = L'\0';
-    set_status_part0(window, msg);
+    _snwprintf(window->status_counts, 159, L"%ls words, %ls chars, %ls lines", w, c, l);
+    window->status_counts[159] = L'\0';
+    compose_status_part0(window);
 }
 
 // Refresh the counts while typing. Normal documents coalesce (one recompute
@@ -6854,7 +6892,8 @@ static void apply_counts_pref(Window *window) {
     if (settings_get_bool("status_show_counts", false)) {
         update_text_counts(window);
     } else if (window->status_hwnd) {
-        set_status_part0(window, L"");
+        window->status_counts[0] = L'\0';
+        compose_status_part0(window);
     }
 }
 
@@ -7062,6 +7101,12 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 
                 if (control_id == ID_EDIT_CONTROL) {
                     if (notification == EN_CHANGE) {
+                        // A transient message lasts until the text changes,
+                        // which is the lifetime it had when it simply got
+                        // overwritten by the next counts refresh. Now that the
+                        // two are shown side by side, retiring it has to be
+                        // explicit or it would linger for ever.
+                        window->status_msg[0] = L'\0';
                         // Counts refresh on programmatic changes too (open,
                         // transforms), not only user edits
                         schedule_counts_update(window);

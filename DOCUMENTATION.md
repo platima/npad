@@ -48,7 +48,9 @@ chosen: the setup EXE asks (or accepts `/ALLUSERS`); the MSI takes
   default** - out of the box npad should look like notepad.exe, and this
   rewrites the editor fonts; offered when the fonts are being installed or
   already present; updates settings.json in place, preserving all other
-  settings - tick it or use `/MERGETASKS="fontdefaults"` to opt in), desktop
+  settings - tick it or use `/MERGETASKS="fontdefaults2"` to opt in; the task
+  was renamed in v0.28.5 so that Inno's "remember the previous install's tasks"
+  behaviour could no longer keep re-ticking it), desktop
   icon (off).
 
 **MSI features** (silent-deployment oriented, no UI - use `/qn` or `/qb`):
