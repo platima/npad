@@ -431,8 +431,9 @@ position). Not intended for direct use.
   suppresses *crash* nagging, and honouring it here would silently destroy the
   buffer. Only modified documents are parked, since restored content always
   returns flagged as unsaved.
-- **Dark schemes**: the scroll bars and status bar are themed along with the
-  text area. Scroll-bar theming needs Windows 10 1809 or later (npad asks
+- **Dark schemes**: the scroll bars are themed along with the text area. The
+  **status bar and menu bar stay light in every scheme** - Windows offers no
+  supported way to recolour either without also losing its modern rendering. Scroll-bar theming needs Windows 10 1809 or later (npad asks
   uxtheme to force it); on older builds they stay light. The mode follows
   **npad's own colour scheme**, not the Windows one, so a dark npad on a
   light-themed Windows still gets dark chrome and a light npad on a

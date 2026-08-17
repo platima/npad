@@ -5,6 +5,26 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.6] - 2026-08-17
+
+### 🔄 Changed
+- **The status bar is light in every colour scheme again**, reverting the dark
+  version from v0.28.5. Colouring it was only possible by dropping the visual
+  style for that control, which also dropped it to classic Windows 95 rendering
+  — a sunken bevel around every segment, and text jammed against each segment's
+  left edge because the theme's own padding went with it. The colour was right;
+  the chrome that came with it was not, and a light status bar is both familiar
+  and less jarring than a sunken one.
+
+  Doing it properly would mean npad hand-painting a control Windows normally
+  owns — subclassing it, erasing the background and owner-drawing every segment
+  borderless. That remains possible if it ever seems worth it; it is a lot of
+  surface area for a strip of chrome.
+
+Everything else still follows the colour scheme: the text area, title bar,
+scroll bars and drop-down menus. The menu bar stays light for the separate
+reason noted in v0.28.5 — Windows draws it as non-client area.
+
 ## [0.28.5] - 2026-08-17
 
 ### 🐛 Fixed

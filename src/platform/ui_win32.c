@@ -571,14 +571,8 @@ static bool resolve_theme_dark_mode(void) {
     return theme_colors(NULL, NULL);
 }
 
-// Status bar chrome, resolved by apply_theme. Owner-draw is used only for the
-// dark schemes; see the note there.
-static bool g_status_owner_draw = false;
-// Set only while re-sending every part across an owner-draw flip, to suppress
-// set_status_part's identical-text dedupe (see there)
-static bool g_status_force_resend = false;
-static COLORREF g_status_back = 0;
-static COLORREF g_status_text = 0;
+// The status bar is deliberately left on the system theme in every colour
+// scheme - see the note in apply_theme.
 
 // Frame background for WM_ERASEBKGND, rebuilt only when the scheme changes so
 // the erase path itself allocates nothing (it runs throughout a resize drag)
@@ -3789,43 +3783,24 @@ static void apply_theme(Window *window) {
     window->setting_text_programmatically = false;
     SendMessageW(window->edit_hwnd, EM_SETMODIFY, (WPARAM) was_modified, 0);
 
-    if (window->status_hwnd) {
-        // Only the BACKGROUND was ever set, so comctl32 kept drawing the text
-        // in COLOR_BTNTEXT - black on dark grey, which made every readout
-        // (Ln/Col, zoom, Mono/Prop, EOL, encoding, match counts) unreadable in
-        // both dark schemes. Dark schemes now own-draw; light stays on
-        // comctl32's default path so out-of-box pixels do not move.
-        bool was_owner_draw = g_status_owner_draw;
-        g_status_owner_draw = g_dark_mode;
-        g_status_back = back;
-        g_status_text = text;
-        // With visual styles active comctl32 paints the status bar from the
-        // theme and IGNORES SB_SETBKCOLOR entirely - which is why the bar
-        // stayed light in a dark scheme while the owner-drawn text correctly
-        // went pale grey, making it look disabled. Dropping the theme for this
-        // one control lets the colour take effect; light restores it so the
-        // default appearance is untouched.
-        if (g_SetWindowTheme) {
-            g_SetWindowTheme(window->status_hwnd, g_dark_mode ? L"" : NULL,
-                             g_dark_mode ? L"" : NULL);
-        }
-        SendMessageW(window->status_hwnd, SB_SETBKCOLOR, 0,
-                     g_dark_mode ? (LPARAM) back : (LPARAM) CLR_DEFAULT);
-
-        if (was_owner_draw != g_status_owner_draw) {
-            // The SBT_OWNERDRAW flag rides on SB_SETTEXT, so every part has to
-            // be re-sent to change style. Clearing the cache is not enough:
-            // part 0's replacement is empty whenever counts are off (the
-            // default), which then compares equal to the cleared entry and is
-            // skipped - stranding its old text AND its old painting. Force the
-            // re-send instead.
-            g_status_force_resend = true;
-            update_status_bar(window); // Parts 1-5
-            apply_counts_pref(window); // Part 0 (counts, or cleared)
-            g_status_force_resend = false;
-        }
-        InvalidateRect(window->status_hwnd, NULL, TRUE);
-    }
+    // The status bar deliberately keeps the system theme in EVERY scheme.
+    //
+    // Colouring it dark was tried in v0.28.0-0.28.5 and reverted. With visual
+    // styles active comctl32 paints the bar from the theme and ignores
+    // SB_SETBKCOLOR, so the only way to recolour it is to drop the theme for
+    // that control - which also drops it to classic Windows 95 rendering, with
+    // a sunken bevel around every part. The colour worked; the chrome that came
+    // with it looked broken, and a light status bar is both familiar and less
+    // jarring than a sunken one.
+    //
+    // Recolouring it properly means npad hand-painting a control Windows
+    // normally owns: subclass it, erase the background, and owner-draw every
+    // part borderless. That is a real option if it ever becomes worth it, but
+    // it is a lot of surface area for a strip of chrome.
+    //
+    // Dropping the theme also removed comctl32's own text inset, which is why
+    // the sunken version had text hard against each part's left edge; on the
+    // themed path that padding comes for free.
 
     if (window->hwnd) {
         set_title_bar_dark(window->hwnd, g_dark_mode);
@@ -6762,20 +6737,14 @@ static void set_status_part(Window *window, int part, const wchar_t *text) {
     if (!text || part < 0 || part > 5)
         return;
     const size_t cap = sizeof(window->status_cache[0]) / sizeof(window->status_cache[0][0]);
-    // The dedupe is against what comctl32 is displaying. Across an owner-draw
-    // flip that stops being true of the STYLE even when the text matches, so
-    // one unconditional pass is forced - otherwise an empty part (part 0 with
-    // counts off, the default) compares equal and keeps its old painting.
-    if (!g_status_force_resend && wcsncmp(window->status_cache[part], text, cap - 1) == 0)
+    // Skip a re-send of identical text: the cache mirrors what comctl32 is
+    // currently displaying, and the bar is repainted often enough that the
+    // redundant sends were visible as a drag while scroll keys were held.
+    if (wcsncmp(window->status_cache[part], text, cap - 1) == 0)
         return;
     wcsncpy(window->status_cache[part], text, cap - 1);
     window->status_cache[part][cap - 1] = L'\0';
-    // SBT_OWNERDRAW makes comctl32 send WM_DRAWITEM instead of painting the
-    // text itself, which is how a dark scheme gets a readable foreground. The
-    // cache above is the authoritative copy the draw handler reads back, so no
-    // extra state is needed - and the light path keeps the default painting.
-    SendMessageW(window->status_hwnd, SB_SETTEXTW,
-                 (WPARAM) (part | (g_status_owner_draw ? SBT_OWNERDRAW : 0)), (LPARAM) text);
+    SendMessageW(window->status_hwnd, SB_SETTEXTW, (WPARAM) part, (LPARAM) text);
 }
 
 // SB_SETPARTS defines only the RIGHT edge of each part, so part 0 starts at the
@@ -7293,23 +7262,6 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                 apply_window_icon(window);
             }
             return 0;
-        }
-
-        case WM_DRAWITEM: {
-            // Owner-drawn status bar parts (dark schemes only - see apply_theme)
-            const DRAWITEMSTRUCT *di = (const DRAWITEMSTRUCT *) lparam;
-            if (di && di->CtlID == ID_STATUS_BAR && window) {
-                SetBkMode(di->hDC, TRANSPARENT);
-                SetTextColor(di->hDC, g_status_text);
-                RECT rc = di->rcItem;
-                const wchar_t *text = (di->itemID <= 5) ? window->status_cache[di->itemID] : L"";
-                // itemData carries the string comctl32 was given, but the cache
-                // is what npad owns and keeps padded; prefer it.
-                DrawTextW(di->hDC, text, -1, &rc,
-                          DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
-                return TRUE;
-            }
-            break;
         }
 
         case WM_ERASEBKGND: {
