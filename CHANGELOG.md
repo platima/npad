@@ -5,6 +5,43 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.7] - 2026-08-17
+
+### 🐛 Fixed
+- **settings.json grew exponentially and could reach gigabytes**, eventually
+  making npad unusable. Backslashes in a value — a Windows file path, in
+  practice — were escaped every time the file was written but never unescaped
+  when it was read, so each save/load cycle **doubled** them. Around thirty
+  cycles turns one path into a billion characters.
+
+  In the field this produced a **1.2 GB settings file**. Every npad window
+  loads that file at startup, so twenty windows consumed 21 GB of RAM between
+  them, hammered the disk, and stopped responding; Preferences ▸ Apply became
+  slow because each save rewrote it; and eventually npad could not start at all.
+
+  Three separate changes, because the escaping fix alone would not rescue an
+  install that is already corrupt:
+  - Values are now unescaped when read, so they round-trip unchanged. This is
+    the root cause.
+  - An implausibly large settings file is ignored at startup, and an
+    implausibly long individual value is dropped. **A corrupt file now
+    self-heals on the next save instead of preventing npad from starting.**
+  - A save that cannot fit every setting is refused outright rather than
+    writing a truncated file. The runaway value had overflowed the write
+    buffer, silently discarding *every other preference* — which is why the
+    corrupt install lost its settings entirely, not just the bad one.
+
+  If you are hit by this, npad now recovers by itself. To reclaim the disk
+  space, delete `settings.json` from `%APPDATA%\Platima\npad` while npad is
+  closed.
+
+### 🧪 Tests
+- The save/load round trip had no test at all, which is exactly why this
+  survived so long — a single cycle looks correct, and only repetition exposes
+  the doubling. Four cases now cover it, including ten consecutive cycles
+  asserting the value does not grow. Verified by reverting the fix and
+  confirming they fail.
+
 ## [0.28.6] - 2026-08-17
 
 ### 🔄 Changed

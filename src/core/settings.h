@@ -47,6 +47,13 @@ bool settings_save(void);
 bool settings_load(void);
 const char *settings_get_file_path(void);
 
+// Point settings at a specific file instead of the derived location.
+// settings_init() sets the normal path; this exists so the save/load round
+// trip can be exercised against a temporary file without touching the user's
+// real settings - the escaping bug that grew a value exponentially on every
+// round trip was invisible precisely because that path had no test.
+bool settings_set_file_path(const char *path);
+
 // The directory settings are stored in (malloc'd; caller frees). NULL on error.
 char *settings_get_config_dir(void);
 

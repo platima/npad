@@ -120,6 +120,35 @@ DLU-to-pixel ratio, so adding it can reflow tight labels.
 `Alt+E, P` pasted. Check the whole popup's set, including items appended to the
 *context* menu from elsewhere.
 
+## Core: settings
+
+**An escape without a matching unescape compounds.** `serialize_settings`
+escaped `\` and `"` on write; the parser walked *over* escapes to find the
+value's end but stored the raw bytes. So every save/load cycle doubled every
+backslash in a value. A Windows path reached **1.2 GB** in about thirty cycles.
+
+The damage was not proportional to the bug. Every npad window loads the
+settings file at startup, so twenty windows held 21 GB between them, saturated
+the disk, and stopped responding — and eventually npad could not start at all.
+The runaway value also overflowed the serializer's write buffer, whose loop
+silently stopped, so the file was rewritten containing *that key alone* and
+every other preference was lost.
+
+→ Three lessons, all general:
+- **Round-trip anything you serialise, repeatedly, in a test.** One cycle looks
+  perfect; only repetition exposes compounding. This path had no test at all,
+  which is the whole reason it survived.
+- **Reject implausible input on load, not just on write.** A fix that only
+  stops *creating* corruption leaves existing users unable to start. Bounding
+  the file size and the value length lets a broken install heal itself.
+- **A serialiser that cannot fit everything must fail, not truncate.** Silently
+  writing a well-formed file that is missing data is far worse than refusing:
+  the caller keeps the previous file, which is the safe direction.
+
+**Beware anything every instance loads at startup.** Cost is multiplied by
+window count, and npad is one-process-per-window. A file that is merely
+annoying at one instance is fatal at twenty.
+
 ## Core: text model
 
 **npad's core passes NUL-terminated `char *`.** So any file containing a NUL
