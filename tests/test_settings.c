@@ -13,6 +13,8 @@
 #include "test_framework.h"
 #include "../src/core/settings.h"
 #include "../src/core/thread_safety.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 // The exact preserve list used by reset_all_preferences (kept in sync here so
@@ -83,6 +85,104 @@ TEST_CASE(reset_returns_removed_count) {
     settings_clear_all();
 }
 
+// --- Save/load round trip -------------------------------------------------
+//
+// The escaping bug lived here, unseen, because nothing exercised the round
+// trip. serialize_settings escaped backslashes on write and the parser never
+// unescaped them on read, so every save/load DOUBLED each backslash in a
+// value. A Windows path reached 1.2 GB in the field, exhausted 64 GB of RAM
+// across a handful of instances, and took every other setting with it when it
+// overflowed the serializer's buffer.
+//
+// The growth test below is the one that matters: a single round trip looks
+// fine to the eye, and only repetition exposes the doubling.
+
+#define ROUNDTRIP_FILE "test_settings_roundtrip.json"
+
+static void roundtrip(void) {
+    settings_save();
+    settings_clear_all();
+    settings_load();
+}
+
+TEST_CASE(roundtrip_preserves_windows_path) {
+    settings_clear_all();
+    settings_set_file_path(ROUNDTRIP_FILE);
+    const char *path = "E:\\Projects\\npad\\data.json";
+    settings_set_string("recent_file_0", path);
+
+    roundtrip();
+
+    char *got = settings_get_string("recent_file_0", "");
+    TEST_ASSERT_STR_EQ(path, got, "a Windows path survives one round trip");
+    free(got);
+    settings_clear_all();
+    remove(ROUNDTRIP_FILE);
+}
+
+TEST_CASE(roundtrip_does_not_grow_value) {
+    settings_clear_all();
+    settings_set_file_path(ROUNDTRIP_FILE);
+    const char *path = "E:\\Projects\\npad\\data.json";
+    settings_set_string("recent_file_0", path);
+    size_t original = strlen(path);
+
+    // Ten cycles. Under the old behaviour this value would be 1024x longer.
+    for (int i = 0; i < 10; i++) {
+        roundtrip();
+    }
+
+    char *got = settings_get_string("recent_file_0", "");
+    TEST_ASSERT_EQ((int) original, (int) strlen(got), "value length is stable across 10 cycles");
+    TEST_ASSERT_STR_EQ(path, got, "and the content is still exact");
+    free(got);
+    settings_clear_all();
+    remove(ROUNDTRIP_FILE);
+}
+
+TEST_CASE(roundtrip_preserves_quotes_and_tabs) {
+    settings_clear_all();
+    settings_set_file_path(ROUNDTRIP_FILE);
+    settings_set_string("delim_from", "a\"b\tc\\d");
+
+    roundtrip();
+
+    char *got = settings_get_string("delim_from", "");
+    TEST_ASSERT_STR_EQ("a\"b\tc\\d", got, "quote, tab and backslash all round trip");
+    free(got);
+    settings_clear_all();
+    remove(ROUNDTRIP_FILE);
+}
+
+TEST_CASE(oversized_value_is_dropped_on_load) {
+    settings_clear_all();
+    settings_set_file_path(ROUNDTRIP_FILE);
+
+    // Hand-write a file with one absurd value, as a corrupt install would have.
+    // It must be ignored rather than loaded, so npad still starts.
+    FILE *f = fopen(ROUNDTRIP_FILE, "wb");
+    TEST_ASSERT_NOT_NULL(f, "test file created");
+    if (f) {
+        fputs("{\n  \"sane_key\": \"ok\",\n  \"runaway\": \"", f);
+        for (int i = 0; i < 70000; i++) {
+            fputc('x', f);
+        }
+        fputs("\"\n}\n", f);
+        fclose(f);
+    }
+
+    settings_clear_all();
+    settings_load();
+
+    char *sane = settings_get_string("sane_key", "");
+    TEST_ASSERT_STR_EQ("ok", sane, "a sane key beside it still loads");
+    free(sane);
+    TEST_ASSERT(!settings_has_key("runaway"), "the oversized value is dropped");
+
+    settings_clear_all();
+    remove(ROUNDTRIP_FILE);
+}
+
 int main(void) {
     thread_safety_init();
     TEST_INIT();
@@ -90,6 +190,10 @@ int main(void) {
     RUN_TEST(reset_clears_preferences);
     RUN_TEST(reset_preserves_kept_categories);
     RUN_TEST(reset_returns_removed_count);
+    RUN_TEST(roundtrip_preserves_windows_path);
+    RUN_TEST(roundtrip_does_not_grow_value);
+    RUN_TEST(roundtrip_preserves_quotes_and_tabs);
+    RUN_TEST(oversized_value_is_dropped_on_load);
 
     TEST_SUMMARY();
     thread_safety_cleanup();

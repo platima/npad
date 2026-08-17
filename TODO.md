@@ -7,6 +7,39 @@ this file is for open loops.
 
 ---
 
+## 🧪 Needs a stress test
+
+### Many instances at once - ROOT CAUSE FIXED in v0.28.7, still worth retesting
+
+Reported 2026-08-17: opening instances with Ctrl+Shift+N until the taskbar
+buttons collapsed made npad lag badly, stop responding and stop drawing, reach
+**24 GB of RAM across 20 instances**, hammer the disk, and finally refuse to
+stay open at all.
+
+**Root cause found and fixed** - it was not the instance count. `settings.json`
+had grown to **1.2 GB** through an escaping bug that doubled every backslash on
+each save/load cycle (see LESSONS.md). Each window loads that file at startup,
+so the cost was multiplied by the window count: Task Manager showed 577 MB per
+idle instance and 1.7-2.5 GB for those still loading.
+
+**Still worth re-running once on v0.28.7+**, because the original test was never
+completed on a healthy install:
+- [ ] 30+ instances via Ctrl+Shift+N. Memory should stay flat per instance and
+      every window should stay responsive.
+- [ ] Watch `%APPDATA%\Platima
+pad\settings.json` stays small (hundreds of
+      bytes) across many Preferences saves.
+- [ ] Confirm Preferences > Apply is instant.
+- [ ] Confirm the recovery directory does not accumulate slots when instances
+      are killed rather than closed.
+
+Not yet separately investigated, since the settings file explains what was
+observed: whether the cross-instance settings broadcast is O(instances^2) at
+this scale, and whether the session-snapshot timers add up. Measure before
+assuming either is a problem.
+
+---
+
 ## 👁️ Needs a visual inspection (v0.27.1 / v0.28.0)
 
 Things that were verified by reading the code and by the static gate, but whose

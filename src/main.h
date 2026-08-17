@@ -15,7 +15,7 @@
 
 #define NPAD_VERSION_MAJOR 0
 #define NPAD_VERSION_MINOR 28
-#define NPAD_VERSION_PATCH 6
+#define NPAD_VERSION_PATCH 7
 #define NPAD_VERSION_RELEASE "dev"
 
 // Version information (the Makefile may override with a git-derived string)

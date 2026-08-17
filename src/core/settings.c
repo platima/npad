@@ -49,6 +49,47 @@ static void free_settings_list(void);
 static bool parse_settings_file(const char *content);
 static char *serialize_settings(void);
 
+// A settings value long enough to be nonsense rather than data. Real values are
+// paths, face names and small numbers; the runaway-escaping bug produced one of
+// 1.2 GB. Anything past this is dropped on load so a corrupt file cannot stop
+// npad starting.
+#define SETTINGS_MAX_VALUE_LEN 65536
+
+// The whole file, likewise. Loading is a full read into memory, so an absurd
+// file must be rejected before it is read rather than after.
+#define SETTINGS_MAX_FILE_BYTES (8 * 1024 * 1024)
+
+// Reverse serialize_settings' escaping, in place (the result is never longer).
+// Its absence was the root cause of the growth bug: values were stored still
+// escaped, then escaped again on the next save.
+static void json_unescape_inplace(char *s) {
+    if (!s)
+        return;
+    char *w = s;
+    for (const char *r = s; *r; r++) {
+        if (*r == '\\' && r[1]) {
+            r++;
+            switch (*r) {
+                case 'n':
+                    *w++ = '\n';
+                    break;
+                case 't':
+                    *w++ = '\t';
+                    break;
+                case 'r':
+                    *w++ = '\r';
+                    break;
+                default: // \\ and \" round-trip as themselves
+                    *w++ = *r;
+                    break;
+            }
+        } else {
+            *w++ = *r;
+        }
+    }
+    *w = '\0';
+}
+
 bool settings_init(void) {
     // Get settings directory
     char *settings_dir = get_settings_directory();
@@ -342,6 +383,18 @@ bool settings_load(void) {
         return true; // No file to load, that's OK
     }
 
+    // Refuse to read an implausibly large settings file. Loading is a full
+    // read into memory, so with a corrupt one (the escaping bug reached 1.2 GB)
+    // every instance would allocate it - which is what exhausted 64 GB of RAM
+    // across a handful of windows. Starting with defaults beats not starting.
+    size_t size = file_get_size(g_settings_file_path);
+    if (size > SETTINGS_MAX_FILE_BYTES) {
+        NPAD_ERROR_WARNING(NPAD_ERROR_FILE_IO, 0, "Settings",
+                           "settings.json is implausibly large and was ignored; "
+                           "defaults are in use and the next save will replace it");
+        return true; // Not fatal: carry on with defaults
+    }
+
     char *content = file_read_text(g_settings_file_path);
     if (!content)
         return false;
@@ -354,6 +407,18 @@ bool settings_load(void) {
 
 const char *settings_get_file_path(void) {
     return g_settings_file_path;
+}
+
+bool settings_set_file_path(const char *path) {
+    if (!path)
+        return false;
+    char *copy = malloc(strlen(path) + 1);
+    if (!copy)
+        return false;
+    strcpy(copy, path);
+    free(g_settings_file_path);
+    g_settings_file_path = copy;
+    return true;
 }
 
 char *settings_get_config_dir(void) {
@@ -697,7 +762,17 @@ static bool parse_settings_file(const char *content) {
 
             if (current < content_end && *current == '"') {
                 *current = '\0'; // Null-terminate value
-                settings_set_string(key_start, value_start);
+                // Undo the escaping serialize_settings applied. Without this
+                // every save/load cycle DOUBLED each backslash in a value: a
+                // Windows path grew exponentially, reached 1.2 GB in the
+                // field, and took the whole settings file with it.
+                json_unescape_inplace((char *) value_start);
+                // Drop implausible values rather than carrying them forward.
+                // Without this an already-corrupt file keeps npad from
+                // starting instead of healing itself on the next save.
+                if (strlen(value_start) <= SETTINGS_MAX_VALUE_LEN) {
+                    settings_set_string(key_start, value_start);
+                }
                 current++; // Skip closing quote
             }
         } else if (current < content_end) {
@@ -851,6 +926,19 @@ static char *serialize_settings(void) {
         written += ret;
 
         current = current->next;
+    }
+
+    // The loop above also stops on its size guard, which would emit a
+    // well-formed file that is silently MISSING every remaining setting - which
+    // is how the corrupt install lost all its preferences, not just the one bad
+    // value. Refuse to serialize at all rather than write a lossy file: the
+    // caller keeps the previous settings.json, which is the safe direction.
+    if (current) {
+        free(content);
+        npad_mutex_unlock(&g_settings_mutex);
+        NPAD_ERROR_WARNING(NPAD_ERROR_MEMORY, 0, "Settings",
+                           "Refusing to write a truncated settings file");
+        return NULL;
     }
 
     ret = snprintf(content + written, total_size - written, "\n}\n");
