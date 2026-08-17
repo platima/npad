@@ -1,8 +1,9 @@
 # npad TODO
 
 Working notes for things that are parked, unverified, or waiting on a decision.
-Curated release history lives in [CHANGELOG.md](CHANGELOG.md); this file is for
-open loops.
+Curated release history lives in [CHANGELOG.md](CHANGELOG.md), and the
+non-obvious findings worth not rediscovering live in [LESSONS.md](LESSONS.md);
+this file is for open loops.
 
 ---
 

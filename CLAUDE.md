@@ -66,6 +66,14 @@ Platform Implementation (Win32/X11/Cocoa/ncurses)
 
 ## Development Notes
 
+**Before touching a subsystem, read [LESSONS.md](LESSONS.md).** It is the
+register of non-obvious findings that already cost time or shipped a
+regression — status bar theming, icon slots, dark mode, RichEdit line
+handling, the installers, and the tooling traps (cppcheck version skew, shell
+heredocs mangling C escapes, `git commit -m` quoting). Each entry is
+*what looks true → what is actually true → what to do*. Add to it whenever
+something turns out to work differently than it reasonably appears to.
+
 **Code style:**
 - C99 standard with -Wall -Wextra compiler flags
 - clang-format configuration in `.clang-format`
