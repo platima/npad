@@ -48,7 +48,7 @@ npad aims to recreate the beloved simplicity of original Windows Notepad while a
 Current features (Windows build):
 
 - **⚡ Lightning fast** - Native API implementation with minimal overhead; a ~314 KB executable that imports only 8 system libraries, loading the rest (update check, file dialogs) on first use
-- **💨 Minimal resource usage** - Tiny memory footprint and fast startup (~40 ms from process start to a usable window)
+- **💨 Minimal resource usage** - ~3.4 MB of RAM per window and ~40 ms from process start to a usable window. Each window is its own process, and the cost stays linear: 30 windows measured 104 MB in total
 - **🎯 Classic interface** - Familiar Notepad-style UI and behavior
 - **🌍 Unicode throughout** - Detects and preserves UTF-8, UTF-8 BOM, UTF-16 LE/BE and ANSI encodings
 - **↩️ Line ending aware** - Detects and preserves Windows (CRLF), Unix (LF) and Mac (CR) line endings, shown in the status bar

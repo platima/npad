@@ -22,14 +22,11 @@ each save/load cycle (see LESSONS.md). Each window loads that file at startup,
 so the cost was multiplied by the window count: Task Manager showed 577 MB per
 idle instance and 1.7-2.5 GB for those still loading.
 
-**Still worth re-running once on v0.28.7+**, because the original test was never
-completed on a healthy install:
-- [ ] 30+ instances via Ctrl+Shift+N. Memory should stay flat per instance and
-      every window should stay responsive.
-- [ ] Watch `%APPDATA%\Platima
-pad\settings.json` stays small (hundreds of
-      bytes) across many Preferences saves.
-- [ ] Confirm Preferences > Apply is instant.
+**Re-run on v0.28.7 and PASSED (2026-08-18).** 30 instances, no crash, all
+responsive. **3.4 MB per window, 104.2 MB for 30** - linear, against 577 MB per
+idle instance before the fix. That is now the documented baseline in README.md.
+
+Remaining, lower priority:
 - [ ] Confirm the recovery directory does not accumulate slots when instances
       are killed rather than closed.
 
@@ -66,13 +63,12 @@ unseen.
       (ICON_SMALL drives the caption, ICON_BIG the taskbar), established by
       probing a scratch window with different artwork in each. Automatic mode
       now matches each surface to the theme it sits on.
-- [ ] **Two Automatic-mode caveats worth a look**, both inherent to Windows and
-      neither breaking anything: a **grouped** taskbar button (several npad
-      windows combined - the Windows 11 default) is drawn from the *executable's*
-      icon, so the taskbar variant is not consulted; and with **small taskbar
-      buttons** the taskbar reads the caption slot, collapsing the two to the
-      same artwork. Worth confirming what you actually see with two windows
-      open, since that is the common case.
+- [x] **Grouped taskbar button** - CONFIRMED 2026-08-18. Collapsing several
+      windows into one taskbar button shows the **light** icon, because Windows
+      draws a grouped button from the *executable's* icon (resource index 0 =
+      IDI_NPAD) rather than the window's. Inherent and unfixable - the exe's
+      icon is fixed at build time - so "always dark" and "classic" cannot reach
+      that surface either. Documented in DOCUMENTATION.md.
 - [ ] **Dark scroll bars actually render dark** (needs Windows 10 1809+). If
       they stay light, `SetPreferredAppMode` (uxtheme ordinal 135) did not
       resolve on that build - npad degrades silently by design.
