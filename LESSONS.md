@@ -149,6 +149,18 @@ every other preference was lost.
 window count, and npad is one-process-per-window. A file that is merely
 annoying at one instance is fatal at twenty.
 
+**npad rewrites settings.json on every exit**, unconditionally — `main()` calls
+`settings_save_window_state()` then `settings_save()` after the message loop,
+whether or not anything changed. Normally harmless; with a corrupt 1.2 GB file
+it meant every one-second launch wrote 1.2 GB, and it is why a fresh
+settings.json reappeared moments after the corrupt one was renamed away.
+
+**Stopping corruption is not the same as repairing it.** The unescape fix
+freezes an already-doubled path rather than fixing it, because a corrupted `\\`
+is indistinguishable from a deliberate one (UNC paths begin with two). Decide
+explicitly which you are doing, and say so — here the entries age out of Recent
+Files on their own, so freezing was the right trade.
+
 ## Core: text model
 
 **npad's core passes NUL-terminated `char *`.** So any file containing a NUL

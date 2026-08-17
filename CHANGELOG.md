@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   space, delete `settings.json` from `%APPDATA%\Platima\npad` while npad is
   closed.
 
+  Note that a path which had *already* doubled stops growing but is not
+  repaired - npad cannot distinguish a corrupted `\\` from a deliberate one,
+  since UNC paths legitimately begin with two. Such entries age out of Recent
+  Files within ten file opens.
+
 ### 🧪 Tests
 - The save/load round trip had no test at all, which is exactly why this
   survived so long — a single cycle looks correct, and only repetition exposes
