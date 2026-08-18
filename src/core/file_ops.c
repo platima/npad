@@ -600,6 +600,41 @@ char *file_read_text(const char *filename) {
     return (char *) read_all_bytes(filename, &size);
 }
 
+char *file_read_text_limited(const char *filename, size_t max_bytes) {
+    if (!is_valid_path(filename) || max_bytes == 0)
+        return NULL;
+
+    FILE *file = open_file_utf8(filename, "rb");
+    if (!file) {
+        set_errno_error("Failed to open file", filename);
+        return NULL;
+    }
+
+    char *buf = malloc(max_bytes + 1);
+    if (!buf) {
+        fclose(file);
+        return NULL;
+    }
+
+    size_t got = fread(buf, 1, max_bytes, file);
+    fclose(file);
+    buf[got] = 0; // NUL-terminate the prefix
+    return buf;
+}
+
+bool file_rename(const char *from, const char *to) {
+    if (!is_valid_path(from) || !is_valid_path(to))
+        return false;
+#ifdef _WIN32
+    wchar_t wfrom[1024], wto[1024];
+    if (MultiByteToWideChar(CP_UTF8, 0, from, -1, wfrom, 1024) > 0 &&
+        MultiByteToWideChar(CP_UTF8, 0, to, -1, wto, 1024) > 0) {
+        return MoveFileExW(wfrom, wto, MOVEFILE_REPLACE_EXISTING) != 0;
+    }
+#endif
+    return rename(from, to) == 0;
+}
+
 char *file_read_text_ex(const char *filename, TextFileInfo *info) {
     size_t size;
     uint8_t *raw = read_all_bytes(filename, &size);

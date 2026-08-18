@@ -12,6 +12,7 @@
 
 #include "test_framework.h"
 #include "../src/core/settings.h"
+#include "../src/core/file_ops.h"
 #include "../src/core/thread_safety.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -183,6 +184,46 @@ TEST_CASE(oversized_value_is_dropped_on_load) {
     remove(ROUNDTRIP_FILE);
 }
 
+TEST_CASE(oversized_file_is_salvaged_not_discarded) {
+    settings_clear_all();
+    settings_set_file_path(ROUNDTRIP_FILE);
+    remove(ROUNDTRIP_FILE ".corrupt");
+
+    // A file too large to load whole, with real settings written BEFORE the
+    // runaway value - which is the shape the escaping bug actually produced.
+    // v0.28.7 discarded the lot, and because npad rewrites settings on exit
+    // the original was then overwritten: upgrading lost the user's settings.
+    FILE *f = fopen(ROUNDTRIP_FILE, "wb");
+    TEST_ASSERT_NOT_NULL(f, "oversized test file created");
+    if (f) {
+        fputs("{\n  \"theme\": \"solarized-dark\",\n", f);
+        fputs("  \"window_width\": \"2150\",\n", f);
+        fputs("  \"runaway\": \"", f);
+        for (long i = 0; i < 9L * 1024 * 1024; i++) {
+            fputc('x', f);
+        }
+        fputs("\"\n}\n", f);
+        fclose(f);
+    }
+
+    settings_clear_all();
+    settings_load();
+
+    char *theme = settings_get_string("theme", "");
+    TEST_ASSERT_STR_EQ("solarized-dark", theme, "settings before the runaway value survive");
+    free(theme);
+    TEST_ASSERT_EQ(2150, settings_get_int("window_width", 0), "and so do later ones");
+    TEST_ASSERT(!settings_has_key("runaway"), "the runaway value itself is not kept");
+
+    // The original must still exist somewhere: losing it is the regression
+    TEST_ASSERT(file_exists(ROUNDTRIP_FILE ".corrupt"), "original preserved as .corrupt");
+    TEST_ASSERT(!file_exists(ROUNDTRIP_FILE), "and moved out of the load path");
+
+    settings_clear_all();
+    remove(ROUNDTRIP_FILE);
+    remove(ROUNDTRIP_FILE ".corrupt");
+}
+
 int main(void) {
     thread_safety_init();
     TEST_INIT();
@@ -194,6 +235,7 @@ int main(void) {
     RUN_TEST(roundtrip_does_not_grow_value);
     RUN_TEST(roundtrip_preserves_quotes_and_tabs);
     RUN_TEST(oversized_value_is_dropped_on_load);
+    RUN_TEST(oversized_file_is_salvaged_not_discarded);
 
     TEST_SUMMARY();
     thread_safety_cleanup();

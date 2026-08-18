@@ -145,6 +145,13 @@ every other preference was lost.
   writing a well-formed file that is missing data is far worse than refusing:
   the caller keeps the previous file, which is the safe direction.
 
+**A guard that discards data is a data-loss bug wearing a fix's clothes.**
+v0.28.7 protected against an oversized settings file by ignoring it - and
+because npad rewrites settings on exit, the original was then overwritten. The
+release that fixed the corruption destroyed the settings of the people it was
+meant to rescue. Salvage what parses, move the rest aside, and never leave a
+path where the only copy is deleted by the next ordinary operation.
+
 **Beware anything every instance loads at startup.** Cost is multiplied by
 window count, and npad is one-process-per-window. A file that is merely
 annoying at one instance is fatal at twenty.

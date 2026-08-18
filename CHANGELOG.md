@@ -5,6 +5,24 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.8] - 2026-08-18
+
+### 🐛 Fixed
+- **Updating from an affected version could lose your settings.** v0.28.7
+  stopped the runaway growth, but it dealt with an already-oversized
+  `settings.json` by ignoring it outright - and since npad rewrites that file on
+  every exit, the original was then overwritten with defaults. So the release
+  that fixed the growth bug could silently discard the settings of the very
+  users it was meant to help.
+
+  npad now **salvages** instead of discarding: everything written before the
+  runaway value is parsed and kept, and the original is moved aside to
+  `settings.json.corrupt` rather than left to be overwritten. Nothing is
+  discarded without a copy remaining.
+
+  If you already lost settings upgrading to v0.28.7 they are unfortunately gone;
+  this prevents it happening to anyone else, and preserves the file from here on.
+
 ## [0.28.7] - 2026-08-17
 
 ### 🐛 Fixed

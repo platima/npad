@@ -383,16 +383,37 @@ bool settings_load(void) {
         return true; // No file to load, that's OK
     }
 
-    // Refuse to read an implausibly large settings file. Loading is a full
-    // read into memory, so with a corrupt one (the escaping bug reached 1.2 GB)
-    // every instance would allocate it - which is what exhausted 64 GB of RAM
-    // across a handful of windows. Starting with defaults beats not starting.
+    // An implausibly large settings file cannot be loaded whole: that full read,
+    // multiplied by one process per window, is what exhausted 64 GB of RAM.
+    //
+    // But it must not simply be DISCARDED either. v0.28.7 did exactly that, and
+    // since main() rewrites settings.json on every exit, the original was then
+    // overwritten with defaults - so upgrading silently lost the user's real
+    // settings. Instead: salvage what can be parsed from a bounded prefix (the
+    // runaway value is a single entry, and everything written before it is
+    // intact), then move the original aside so it is recoverable by hand and is
+    // not read again.
     size_t size = file_get_size(g_settings_file_path);
     if (size > SETTINGS_MAX_FILE_BYTES) {
+        char *prefix = file_read_text_limited(g_settings_file_path, SETTINGS_MAX_FILE_BYTES);
+        if (prefix) {
+            parse_settings_file(prefix); // Truncated final entry is simply not stored
+            free(prefix);
+        }
+
+        size_t path_len = strlen(g_settings_file_path);
+        char *aside = malloc(path_len + 9); // ".corrupt" + NUL
+        if (aside) {
+            memcpy(aside, g_settings_file_path, path_len);
+            memcpy(aside + path_len, ".corrupt", 9);
+            file_rename(g_settings_file_path, aside);
+            free(aside);
+        }
+
         NPAD_ERROR_WARNING(NPAD_ERROR_FILE_IO, 0, "Settings",
-                           "settings.json is implausibly large and was ignored; "
-                           "defaults are in use and the next save will replace it");
-        return true; // Not fatal: carry on with defaults
+                           "settings.json was implausibly large; recoverable settings were "
+                           "salvaged and the original moved to settings.json.corrupt");
+        return true; // Not fatal
     }
 
     char *content = file_read_text(g_settings_file_path);

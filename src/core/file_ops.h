@@ -37,6 +37,11 @@ typedef struct {
 
 // File reading operations
 char *file_read_text(const char *filename); // Raw bytes, NUL-terminated
+
+// As file_read_text, but reads at most max_bytes. For salvaging a file too
+// large to load whole: the caller gets a NUL-terminated prefix rather than
+// nothing at all.
+char *file_read_text_limited(const char *filename, size_t max_bytes);
 bool file_read_binary(const char *filename, void **data, size_t *size);
 
 // Read a text file, detect its encoding and line endings, and return the
@@ -89,6 +94,10 @@ bool file_looks_binary(const char *filename);
 void file_count_text_stats(const char *utf8, size_t *words, size_t *chars, size_t *lines);
 bool file_delete(const char *filename);
 bool file_copy(const char *source, const char *destination);
+
+// Move/rename a file, honouring UTF-8 paths on Windows. Replaces the
+// destination if it exists.
+bool file_rename(const char *from, const char *to);
 
 // Path utilities
 char *file_get_directory(const char *filepath);
