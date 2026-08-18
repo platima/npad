@@ -47,6 +47,46 @@ assuming either is a problem.
 
 ---
 
+## 🧪 Needs testing - v0.28.9 through v0.30.0
+
+Shipped without runtime testing. None of it is verifiable from here: it is all
+dialogs, file interaction and timing.
+
+**v0.28.9 - binary file save hazard (the important one)**
+- [ ] Open a PNG, choose "Open in npad", type a character, press Ctrl+S. It must
+      offer Save As, NOT overwrite the image. Check the PNG afterwards.
+- [ ] Cancelling that Save As leaves the original untouched.
+- [ ] Saving it elsewhere then works normally, and Ctrl+S after that overwrites
+      the new file without complaint.
+- [ ] **Regression check:** ordinary UTF-16 files still save over themselves
+      normally. Every ASCII character in UTF-16 contains a zero byte, so a
+      mistake here would block saving real documents.
+- [ ] With auto-save on and a binary file open, no file dialog appears from the
+      timer.
+
+**v0.29.0 - Convert Delimiters, first-edit snapshot**
+- [ ] Convert Delimiters reopens with your last From/To rather than the defaults,
+      and both dropdowns list recent values.
+- [ ] The Swap button exchanges the two fields.
+- [ ] Type one character in a brand-new window, kill npad from Task Manager
+      within a few seconds, relaunch: the work should be offered. Previously
+      nothing was written for the first 30 seconds.
+
+**v0.30.0 - external file change detection (off by default)**
+- [ ] Enable it in Preferences > General. Open a file in npad, edit it in
+      another editor, then click back to npad: the prompt should appear.
+- [ ] **Keep editing** is the default (Enter and Escape both choose it) and
+      writes nothing.
+- [ ] **Reload** replaces the text and clears the modified marker.
+- [ ] **Save as a different file** keeps your version and leaves the other alone.
+- [ ] The tick box stops further prompts for that file until npad restarts.
+- [ ] Delete the open file externally: different wording, and no Reload option.
+- [ ] **Regression check:** npad must never report its OWN saves. Save
+      repeatedly, alt-tab away and back each time - no prompt should appear.
+- [ ] With the preference off (the default), none of this happens at all.
+
+---
+
 ## 👁️ Needs a visual inspection (v0.27.1 / v0.28.0)
 
 Things that were verified by reading the code and by the static gate, but whose
@@ -708,7 +748,7 @@ Whichever, the "from" and "to" presets should stop disagreeing about whether
 
 ` is meaningful.
 
-### Detect that the open file changed on disk
+### Detect that the open file changed on disk - SHIPPED in v0.30.0
 
 Requested 2026-08-04. When the file npad has open is modified by something else,
 offer **Reload / Save As / Continue**, with an optional "don't ask again for this
