@@ -595,7 +595,7 @@ snapshot and *how* to restore without prompting, not new storage.
 
 </details>
 
-### Binary files load truncated at the first NUL byte — ROOT CAUSE CONFIRMED
+### Binary files load truncated at the first NUL - SAVE HAZARD FIXED in v0.28.9
 
 Reported 2026-07-31: opening a ~200 KB PNG warned it was binary (correct),
 opened it anyway (correct), then showed **2 words, 5 chars, 3 lines**.
@@ -645,7 +645,8 @@ reachable by anyone who opens a binary file to peek at it.
 Recommendation when this is picked up: **2 first** (it removes the data-loss
 risk on its own), then 1. Defer 3 unless binary editing becomes a real goal.
 
-### Convert Delimiters: no memory, no swap button, and `
+### Convert Delimiters - FIXED/SHIPPED (
+ in v0.27.1, memory + swap in v0.29.0)
 
 ` can never match
 

@@ -5,6 +5,30 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.29.0] - 2026-08-18
+
+### 🆕 Features
+- **Convert Delimiters remembers what you last used**, and its two fields offer
+  your recent values as dropdowns. It previously reset to the same defaults on
+  every open, so a repeated conversion meant retyping both fields each time.
+- **A Swap button** in Convert Delimiters, to reverse a conversion without
+  retyping either field.
+- The default target is now `
+` rather than `
+`. npad normalises the
+  document to `
+` internally, so the old default quietly taught a token that
+  could never work as a *source* - which is what made a `
+` search match
+  nothing before v0.27.1.
+
+### 🔄 Changed
+- **Unsaved work is now snapshotted on the first edit**, rather than only when
+  the recovery timer next fires. A brand-new window used to be unprotected for
+  a full interval - 30 seconds by default - which is precisely the moment you
+  have just started jotting something down. The timer handles everything after
+  that, so this costs one extra write per document.
+
 ## [0.28.9] - 2026-08-18
 
 ### 🐛 Fixed

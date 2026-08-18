@@ -14,8 +14,8 @@
 
 // Version Information (keep in sync with src/main.h)
 1 VERSIONINFO
-FILEVERSION 0,28,9,0
-PRODUCTVERSION 0,28,9,0
+FILEVERSION 0,29,0,0
+PRODUCTVERSION 0,29,0,0
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0x0L
 FILEOS VOS__WINDOWS32
@@ -28,12 +28,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Platima"
             VALUE "FileDescription", "npad - Lightweight Text Editor"
-            VALUE "FileVersion", "0.28.9.0"
+            VALUE "FileVersion", "0.29.0.0"
             VALUE "InternalName", "npad"
             VALUE "LegalCopyright", "Copyright © 2025-2026 Platima"
             VALUE "OriginalFilename", "npad.exe"
             VALUE "ProductName", "npad"
-            VALUE "ProductVersion", "0.28.9.0"
+            VALUE "ProductVersion", "0.29.0.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -110,9 +110,10 @@ CAPTION "Convert Delimiters"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
     LTEXT           "&From:", IDC_STATIC, 9, 11, 40, 8
-    COMBOBOX        ID_DELIM_FROM, 52, 9, 179, 90, CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP
+    COMBOBOX        ID_DELIM_FROM, 52, 9, 152, 90, CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP
     LTEXT           "&To:", IDC_STATIC, 9, 29, 40, 8
-    COMBOBOX        ID_DELIM_TO, 52, 27, 179, 90, CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP
+    COMBOBOX        ID_DELIM_TO, 52, 27, 152, 90, CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "S&wap", ID_DELIM_SWAP, 209, 17, 22, 14
     LTEXT           "Escapes: \\n newline  \\r CR  \\t tab  \\\\ backslash  \\uXXXX", ID_DELIM_HINT, 9, 47, 222, 8
     CONTROL         "&Selection only", ID_DELIM_SEL_ONLY, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 9, 62, 100, 10
     DEFPUSHBUTTON   "&Convert", IDOK, 126, 84, 50, 14

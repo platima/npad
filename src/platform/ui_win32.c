@@ -6085,8 +6085,25 @@ static INT_PTR CALLBACK convert_delim_proc(HWND dlg, UINT msg, WPARAM wparam, LP
                 SendMessageW(from, CB_ADDSTRING, 0, (LPARAM) presets[i]);
                 SendMessageW(to, CB_ADDSTRING, 0, (LPARAM) presets[i]);
             }
-            SetDlgItemTextW(dlg, ID_DELIM_FROM, L",");
-            SetDlgItemTextW(dlg, ID_DELIM_TO, L"\\r\\n"); // OS default line ending
+            // Recent values first, so the dropdowns offer what was used before.
+            // Reuses Find/Replace's history machinery rather than inventing a
+            // second one, which also gives persistence across sessions free.
+            history_load(from, "delim_from_hist");
+            history_load(to, "delim_to_hist");
+
+            // Seed from the last conversion. Falls back to comma -> newline;
+            // the old default was a literal \r\n, which npad itself could never
+            // match as a SOURCE because the buffer is normalised to \n.
+            char *last_from = settings_get_string("delim_from_hist_0", ",");
+            char *last_to = settings_get_string("delim_to_hist_0", "\\n");
+            wchar_t *wlast_from = utf8_to_wide(last_from ? last_from : ",");
+            wchar_t *wlast_to = utf8_to_wide(last_to ? last_to : "\\n");
+            SetDlgItemTextW(dlg, ID_DELIM_FROM, wlast_from ? wlast_from : L",");
+            SetDlgItemTextW(dlg, ID_DELIM_TO, wlast_to ? wlast_to : L"\\n");
+            free(wlast_from);
+            free(wlast_to);
+            free(last_from);
+            free(last_to);
             bool has_sel = win && ui_platform_has_selection(win);
             EnableWindow(GetDlgItem(dlg, ID_DELIM_SEL_ONLY), has_sel);
             CheckDlgButton(dlg, ID_DELIM_SEL_ONLY, has_sel ? BST_CHECKED : BST_UNCHECKED);
@@ -6099,6 +6116,11 @@ static INT_PTR CALLBACK convert_delim_proc(HWND dlg, UINT msg, WPARAM wparam, LP
                 GetDlgItemTextW(dlg, ID_DELIM_FROM, wfrom, 256);
                 GetDlgItemTextW(dlg, ID_DELIM_TO, wto, 256);
                 bool sel_only = IsDlgButtonChecked(dlg, ID_DELIM_SEL_ONLY) == BST_CHECKED;
+
+                // Remember what was used, so the next open starts from here
+                // rather than resetting to the defaults every single time
+                history_push("delim_from_hist", wfrom);
+                history_push("delim_to_hist", wto);
 
                 char *from8 = wide_to_utf8(wfrom);
                 char *to8 = wide_to_utf8(wto);
@@ -6129,6 +6151,15 @@ static INT_PTR CALLBACK convert_delim_proc(HWND dlg, UINT msg, WPARAM wparam, LP
                 free(from_u);
                 free(to_u);
                 EndDialog(dlg, 1);
+                return TRUE;
+            }
+            if (LOWORD(wparam) == ID_DELIM_SWAP) {
+                // Reverse a conversion without retyping either field
+                wchar_t a[256] = L"", b[256] = L"";
+                GetDlgItemTextW(dlg, ID_DELIM_FROM, a, 256);
+                GetDlgItemTextW(dlg, ID_DELIM_TO, b, 256);
+                SetDlgItemTextW(dlg, ID_DELIM_FROM, b);
+                SetDlgItemTextW(dlg, ID_DELIM_TO, a);
                 return TRUE;
             }
             if (LOWORD(wparam) == IDCANCEL) {

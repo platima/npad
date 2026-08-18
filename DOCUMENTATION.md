@@ -139,7 +139,7 @@ All settings live in `settings.json` and are editable in Preferences
 | `auto_save_interval` | int | `300` | Auto-save period in seconds (minimum 10). |
 | `large_file_warning_mb` | int | adaptive | Confirm before opening files larger than this (MB). `0` disables the prompt. When never set, the default scales with installed RAM (1/64th, clamped 50-1024 MB; 100 MB when memory size is unknown). |
 | `recent_files_max` | int | `10` | Recent Files menu length (0-10). |
-| `session_resume_enabled` | bool | `true` | Crash recovery: snapshot unsaved work on a timer; offer to restore after an unclean exit. On by default: snapshots never touch the user's file. All windows are restored, extras in their own cascaded windows. Does **not** gate handoff snapshots taken when an update or a Windows restart closes npad - those would otherwise be silently discarded. |
+| `session_resume_enabled` | bool | `true` | Crash recovery: snapshot unsaved work on the first edit and then on a timer; offer to restore after an unclean exit. On by default: snapshots never touch the user's file. All windows are restored, extras in their own cascaded windows. Does **not** gate handoff snapshots taken when an update or a Windows restart closes npad - those would otherwise be silently discarded. |
 | `session_interval` | int | `30` | Snapshot period in seconds (minimum 5). |
 | `ctrl_n_new_window` | bool | `false` | Swap Ctrl+N / Ctrl+Shift+N between "New" (clear this window) and "New Window" (open another instance). |
 
@@ -326,6 +326,8 @@ position). Not intended for direct use.
     document is normalised internally and the file's own ending restored on
     save - so a **From** of `\r\n` is accepted and treated as `\n` rather than
     silently matching nothing.
+    Both fields remember recent values and reopen with your last conversion; a
+    **Swap** button reverses the direction without retyping.
   - *Indent / Unindent* (Tab / Shift+Tab on a selection by default - a
     preference switches to Ctrl+] / Ctrl+[ - or the Indent submenu) prefix
     each target line. The formats are spaces, tab, `* `, `- `, ` * `, ` - `

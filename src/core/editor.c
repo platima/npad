@@ -964,6 +964,13 @@ bool editor_handle_event(const UIEvent *event) {
             if (!g_editor.is_modified) {
                 g_editor.is_modified = true;
                 editor_update_title();
+                // Snapshot immediately on the FIRST edit rather than waiting
+                // for the timer. Otherwise a brand-new window is unprotected
+                // for a whole interval - the least protected moment being the
+                // one right after you start jotting something down, which is
+                // exactly how npad gets used. Costs one write per document;
+                // the timer handles everything after this.
+                editor_snapshot_session();
             }
             return true;
 

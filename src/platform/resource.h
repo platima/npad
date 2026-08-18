@@ -126,6 +126,7 @@
 #define ID_PREF_ICON_LIGHT 3161
 #define ID_PREF_ICON_DARK 3162
 #define ID_PREF_ICON_CLASSIC 3163
+#define ID_DELIM_SWAP 3164
 
 // Static text controls
 #define IDC_STATIC -1
