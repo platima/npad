@@ -2246,6 +2246,12 @@ typedef struct {
     // Optional "don't ask me again" tick box. When set, show_task_dialog_ex
     // reports whether it was ticked; plain show_task_dialog ignores it.
     const wchar_t *verification;
+    // Render the buttons as command links - the large-target style where a
+    // newline in the label separates the action from an explanation of it.
+    // REQUIRED for any label containing a newline: without it Windows draws
+    // an ordinary push button around the whole string, which stretches the
+    // dialog and pushes the text outside the button.
+    bool command_links;
 } TaskDialogSpec;
 
 // Show spec and return the id of the button pressed: one of the custom ids, or
@@ -2272,6 +2278,9 @@ static int show_task_dialog_ex(HWND owner, const TaskDialogSpec *spec, bool *ver
         cfg.cbSize = sizeof(cfg);
         cfg.hwndParent = owner;
         cfg.dwFlags = TDF_POSITION_RELATIVE_TO_WINDOW; // Centre on npad, not the monitor
+        if (spec->command_links) {
+            cfg.dwFlags |= TDF_USE_COMMAND_LINKS;
+        }
         if (!spec->cancel_button) {
             // Without a Cancel button Esc and the close box are dead unless
             // cancellation is allowed explicitly - an uncloseable dialog
@@ -3057,13 +3066,13 @@ static void prompt_external_change(Window *window) {
 
     bool deleted = (change == EDITOR_FILE_DELETED);
     const TASKDIALOG_BUTTON reload_buttons[] = {
-        { 101, L"&Reload from disk\nDiscards the changes you have made here" },
-        { 102, L"&Save as a different file\nKeeps your version, leaves the other alone" },
-        { 103, L"&Keep editing\nDecide later; nothing is written either way" },
+        { 101, L"&Reload from disk\nDiscards your unsaved changes" },
+        { 102, L"&Save as a different file\nKeeps your version" },
+        { 103, L"&Keep editing\nDecide later; nothing is written" },
     };
     const TASKDIALOG_BUTTON deleted_buttons[] = {
-        { 102, L"&Save as a different file\nYour text is still here until you close it" },
-        { 103, L"&Keep editing\nDecide later; nothing is written either way" },
+        { 102, L"&Save as a different file\nKeeps your version" },
+        { 103, L"&Keep editing\nDecide later; nothing is written" },
     };
 
     TaskDialogSpec spec;
@@ -3079,6 +3088,7 @@ static void prompt_external_change(Window *window) {
     spec.default_button = 103; // Keep editing: the only choice that writes nothing
     spec.cancel_button = false;
     spec.verification = L"Stop telling me about this file";
+    spec.command_links = true; // The labels carry an explanation on a second line
 
     bool suppress = false;
     int choice = show_task_dialog_ex(window->hwnd, &spec, &suppress);

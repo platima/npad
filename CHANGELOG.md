@@ -5,6 +5,14 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.30.1] - 2026-08-19
+
+### 🐛 Fixed
+- **The "file changed on disk" dialog was oversized with text spilling out of
+  its buttons.** Its choices carry a short explanation on a second line, which
+  is the *command link* style - but the dialog was not told to use it, so
+  Windows drew an ordinary push button around each whole two-line string.
+
 ## [0.30.0] - 2026-08-18
 
 ### 🆕 Features

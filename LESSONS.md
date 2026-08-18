@@ -116,6 +116,11 @@ explicitly.
 inside a Segoe UI comctl32 frame. Note the two faces do not share a
 DLU-to-pixel ratio, so adding it can reflow tight labels.
 
+**A newline in a TaskDialog button label requires `TDF_USE_COMMAND_LINKS`.**
+The two-line "action, then explanation" style only renders as intended with
+that flag; without it Windows draws a normal push button around the whole
+string, stretching the dialog and pushing text outside the button.
+
 **Mnemonics collide silently.** `&Paste` and `&Preferences` in one popup meant
 `Alt+E, P` pasted. Check the whole popup's set, including items appended to the
 *context* menu from elsewhere.
