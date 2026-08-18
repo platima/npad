@@ -190,6 +190,20 @@ Changing a task's default only affects users with no prior selection; anyone who
 ticked it once gets it restored on every upgrade. → Renaming the task removes
 the history it inherits, which is what actually makes the new default stick.
 
+**Do not tag several releases in quick succession.** Four tags pushed within
+an hour produced four concurrent release runs; one wedged on a runner and the
+rest queued behind it, publishing releases with *no assets at all* while the
+tags and commits were perfectly fine. The last one completed normally, so the
+practical damage was only untidy history - but the failure mode is silent and
+looks like a build break when it is really contention. Tag, wait for the run to
+finish, then tag the next.
+
+**Check release state through the web endpoints, not the API, when polling.**
+Unauthenticated api.github.com allows 60 requests an hour, and a polling loop
+burns that in minutes - after which you cannot see the state you are waiting
+for. `releases.atom` and `releases/expanded_assets/<tag>` are plain pages and
+answer both questions (what published, and with which assets).
+
 **The release workflow creates the GitHub release *before* validating assets.**
 So an installer build failure leaves a published, half-complete release — and
 `validate-release`, which would have caught it, is skipped because it runs
