@@ -14,8 +14,8 @@
 
 // Version Information (keep in sync with src/main.h)
 1 VERSIONINFO
-FILEVERSION 0,30,1,0
-PRODUCTVERSION 0,30,1,0
+FILEVERSION 0,31,0,0
+PRODUCTVERSION 0,31,0,0
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0x0L
 FILEOS VOS__WINDOWS32
@@ -28,12 +28,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Platima"
             VALUE "FileDescription", "npad - Lightweight Text Editor"
-            VALUE "FileVersion", "0.30.1.0"
+            VALUE "FileVersion", "0.31.0.0"
             VALUE "InternalName", "npad"
             VALUE "LegalCopyright", "Copyright © 2025-2026 Platima"
             VALUE "OriginalFilename", "npad.exe"
             VALUE "ProductName", "npad"
-            VALUE "ProductVersion", "0.30.1.0"
+            VALUE "ProductVersion", "0.31.0.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -134,7 +134,7 @@ BEGIN
 END
 
 // Preferences: General page
-IDD_PREFS_GENERAL DIALOGEX 0, 0, 240, 196
+IDD_PREFS_GENERAL DIALOGEX 0, 0, 240, 236
 STYLE DS_SETFONT | DS_FIXEDSYS | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "General"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
@@ -153,6 +153,10 @@ BEGIN
     CONTROL         "Ctrl+N opens a new win&dow (Ctrl+Shift+N clears the current one)", ID_PREF_CTRL_N_WINDOW, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 160, 220, 20
     CONTROL         "Find and &Replace wrap around by default", ID_PREF_FIND_WRAP, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 178, 220, 14
     CONTROL         "Tell me when an open file is changed by another program", ID_PREF_WATCH_FILE, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 194, 220, 14
+    LTEXT           "Print h&eader:", IDC_STATIC, 10, 206, 60, 8
+    EDITTEXT        ID_PREF_PRINT_HEADER, 74, 204, 156, 13, ES_AUTOHSCROLL
+    LTEXT           "Print f&ooter:", IDC_STATIC, 10, 224, 60, 8
+    EDITTEXT        ID_PREF_PRINT_FOOTER, 74, 222, 156, 13, ES_AUTOHSCROLL
 END
 
 // Preferences: Appearance page

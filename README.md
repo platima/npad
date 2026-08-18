@@ -64,6 +64,7 @@ Current features (Windows build):
   - Zoom (Ctrl+Plus / Ctrl+Minus / Ctrl+0, Ctrl+Scroll)
   - Word wrap toggle (Alt+Z), Go To Line (Ctrl+G), Time/Date (F5)
   - Line ending conversion (Format menu, Ctrl+E to cycle, or click the status bar)
+  - Printing (Ctrl+P) and Page Setup, with notepad's header/footer codes (`&f` `&p` `&d` `&t`, `&l`/`&c`/`&r`) editable in Preferences; prints the document rather than the window, in the font that window is showing
   - Encoding picker in the Save dialog (or click the status bar); warns before an ANSI save would lose characters
   - Right-click context menu (Undo/Redo/Cut/Copy/Paste/Delete/Select All)
   - Notepad-style unsaved-changes prompt (Save / Don't Save / Cancel), always-visible scroll bars, and a first click into an unfocused window that acts immediately
@@ -311,6 +312,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] Word wrap support (add Alt+Z shortcut)
   - [x] Font chooser
   - [x] Find/Replace dialog
+  - [x] Printing & Page Setup
 - [ ] **Core Enhancements**
   - [x] Settings system with JSON storage
   - [x] Auto-save feature (enabled by default)

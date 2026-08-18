@@ -52,17 +52,14 @@ assuming either is a problem.
 Shipped without runtime testing. None of it is verifiable from here: it is all
 dialogs, file interaction and timing.
 
-**v0.28.9 - binary file save hazard (the important one)**
-- [ ] Open a PNG, choose "Open in npad", type a character, press Ctrl+S. It must
-      offer Save As, NOT overwrite the image. Check the PNG afterwards.
-- [ ] Cancelling that Save As leaves the original untouched.
-- [ ] Saving it elsewhere then works normally, and Ctrl+S after that overwrites
-      the new file without complaint.
-- [ ] **Regression check:** ordinary UTF-16 files still save over themselves
+**v0.28.9 - binary file save hazard (the important one)** - CONFIRMED 2026-08-19
+- [x] Open a PNG, choose "Open in npad", type a character, press Ctrl+S. It must
+      offer Save As, NOT overwrite the image. **"Works as designed."**
+- [x] **Regression check:** ordinary UTF-16 files still save over themselves
       normally. Every ASCII character in UTF-16 contains a zero byte, so a
-      mistake here would block saving real documents.
-- [ ] With auto-save on and a binary file open, no file dialog appears from the
-      timer.
+      mistake here would block saving real documents. **"Saved and opened as
+      UTF-16 LE when tested."** This was the check that mattered - the guard
+      distinguishes a zero *byte* from a zero *code unit*, and this proves it.
 
 **v0.29.0 - Convert Delimiters, first-edit snapshot**
 - [ ] Convert Delimiters reopens with your last From/To rather than the defaults,
@@ -72,9 +69,14 @@ dialogs, file interaction and timing.
       within a few seconds, relaunch: the work should be offered. Previously
       nothing was written for the first 30 seconds.
 
-**v0.30.0 - external file change detection (off by default)**
-- [ ] Enable it in Preferences > General. Open a file in npad, edit it in
+**v0.30.0 - external file change detection (off by default)** - CONFIRMED
+working 2026-08-19. One defect found and fixed in v0.30.1: the dialog was
+oversized with the text spilling out of its buttons (two-line choices were
+drawn as ordinary push buttons instead of command links).
+- [x] Enable it in Preferences > General. Open a file in npad, edit it in
       another editor, then click back to npad: the prompt should appear.
+- [ ] **Re-check on v0.30.1:** the dialog is now sized normally, each choice a
+      command link with its explanation on the second line.
 - [ ] **Keep editing** is the default (Enter and Escape both choose it) and
       writes nothing.
 - [ ] **Reload** replaces the text and clears the modified marker.
@@ -84,6 +86,39 @@ dialogs, file interaction and timing.
 - [ ] **Regression check:** npad must never report its OWN saves. Save
       repeatedly, alt-tab away and back each time - no prompt should appear.
 - [ ] With the preference off (the default), none of this happens at all.
+
+---
+
+## 🧪 Needs testing - v0.31.0 printing
+
+New code, and none of it is verifiable from here: it needs a real printer (or
+Microsoft Print to PDF, which exercises the same path).
+
+- [ ] **Ctrl+P** and File > Print both open the print dialog; printing produces
+      the document's text.
+- [ ] **Cancelling the print dialog does nothing** - no error, no blank page.
+- [ ] **Long lines wrap to the page**, broken at a space rather than mid-word,
+      regardless of whether word wrap is on in the editor. Turning word wrap off
+      must not truncate anything on the page.
+- [ ] **Multiple pages** paginate correctly, with nothing lost at the boundary.
+- [ ] The page uses **the font that window is showing** - toggle Ctrl+M and
+      print again; the output face should change with it, and zoom should NOT
+      affect it (zoom is a view setting).
+- [ ] **Header/footer defaults** match notepad: file name top-left, `Page N`
+      bottom-left.
+- [ ] Edit them on **Preferences > General** and confirm each code:
+      `&f` `&p` `&d` `&t`, `&l`/`&c`/`&r` alignment, `&&` for a literal `&`.
+- [ ] **Clearing a field omits that line** and gives the text more of the page.
+- [ ] **Page Setup** margins take effect, survive a restart, and are still
+      correct after switching Windows between metric and imperial units (they
+      are stored in thousandths of an inch precisely so this holds).
+- [ ] **Landscape** set in Page Setup applies to the printed output.
+- [ ] Absurd margins (larger than the paper) fall back to the whole page rather
+      than printing nothing.
+- [ ] An **empty document** prints one page (or nothing) without hanging.
+- [ ] The job appears in the print queue named after the **file**, not "npad".
+- [ ] **Regression check:** startup is unchanged for a launch that never prints.
+      comdlg32 is delay-loaded and confirmed absent from the static import table.
 
 ---
 
@@ -913,11 +948,19 @@ side — worth not rediscovering):
   Default apps. The installer already says as much (`npad.iss:127`, `:270`) and
   offers to open that Settings page — the pane should do the same rather than
   imply it can do more.
-- **Scope.** The installer writes 95 keys under `HKA` (which resolves to HKLM
-  for an all-users install, HKCU otherwise) and 12 explicitly under HKCU. A
+- **Scope - DECIDED 2026-08-19.** The installer writes 95 keys under `HKA`
+  (which resolves to HKLM for an all-users install, HKCU otherwise) and 12
+  explicitly under HKCU. A
   prefs pane runs unelevated, so it can only safely write **HKCU\\Software\\
   Classes** — meaning on an all-users install the pane's changes would shadow
-  rather than edit the installed ones. That needs deciding, not glossing over.
+  rather than edit the installed ones. Decided as follows.
+
+  The user's call: **per-user by default**, plus a checkbox reading *"Save for
+  all users (requires elevated permissions)"*. Ticking it re-launches the write
+  elevated (`ShellExecuteW` with the `runas` verb, i.e. the standard UAC consent
+  dialog) so the same changes land in HKLM. Unticked - the default - nothing
+  prompts, and nothing outside the user's own hive is touched.
+
 - **Ownership and cleanup.** The uninstaller removes what *it* wrote. Anything
   the pane adds later would leak unless it is either written where uninstall
   already sweeps, or tracked in settings so uninstall can find it.

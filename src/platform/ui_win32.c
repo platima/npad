@@ -31,6 +31,7 @@
 #include "../core/session.h"
 #include "../core/settings.h"
 #include "../core/startup_prof.h"
+#include "print_win32.h"
 #include "../core/update_check.h"
 #include "resource.h"
 #include <stdio.h>
@@ -168,6 +169,8 @@ static double qpc_ms(void) {
 // Hidden: opens Preferences with the Debug page (Ctrl+Shift+. or
 // Shift+click on the Preferences menu item)
 #define ID_FILE_PREFERENCES_DEBUG 2021
+#define ID_FILE_PAGE_SETUP 2022
+#define ID_FILE_PRINT 2023
 
 // Control ids for the modern Save dialog's custom encoding dropdown
 #define SAVE_ENC_GROUP_ID 1200
@@ -4467,6 +4470,19 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
             CheckDlgButton(page, ID_PREF_WATCH_FILE,
                            settings_get_bool("watch_file_changes", false) ? BST_CHECKED
                                                                           : BST_UNCHECKED);
+            {
+                // Header/footer codes match notepad.exe; see DOCUMENTATION.md
+                char *hdr = settings_get_string("print_header", "&f");
+                char *ftr = settings_get_string("print_footer", "Page &p");
+                wchar_t *whdr = utf8_to_wide(hdr ? hdr : "");
+                wchar_t *wftr = utf8_to_wide(ftr ? ftr : "");
+                SetDlgItemTextW(page, ID_PREF_PRINT_HEADER, whdr ? whdr : L"");
+                SetDlgItemTextW(page, ID_PREF_PRINT_FOOTER, wftr ? wftr : L"");
+                free(whdr);
+                free(wftr);
+                free(hdr);
+                free(ftr);
+            }
             EnableWindow(GetDlgItem(page, ID_PREF_AUTOSAVE_INTERVAL),
                          editor_is_auto_save_enabled());
             EnableWindow(GetDlgItem(page, ID_PREF_SESSION_INTERVAL),
@@ -4483,7 +4499,8 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                   id == ID_PREF_WATCH_FILE)) ||
                 (code == EN_CHANGE &&
                  (id == ID_PREF_AUTOSAVE_INTERVAL || id == ID_PREF_LARGE_FILE_MB ||
-                  id == ID_PREF_RECENT_MAX || id == ID_PREF_SESSION_INTERVAL))) {
+                  id == ID_PREF_RECENT_MAX || id == ID_PREF_SESSION_INTERVAL ||
+                  id == ID_PREF_PRINT_HEADER || id == ID_PREF_PRINT_FOOTER))) {
                 mark_prefs_dirty(page);
             }
 
@@ -4556,6 +4573,19 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                 // the stale value straight back over this one.
                 settings_set_bool("watch_file_changes",
                                   IsDlgButtonChecked(page, ID_PREF_WATCH_FILE) == BST_CHECKED);
+                {
+                    wchar_t whdr[256] = L"", wftr[256] = L"";
+                    GetDlgItemTextW(page, ID_PREF_PRINT_HEADER, whdr, 256);
+                    GetDlgItemTextW(page, ID_PREF_PRINT_FOOTER, wftr, 256);
+                    char *hdr = wide_to_utf8(whdr);
+                    char *ftr = wide_to_utf8(wftr);
+                    if (hdr)
+                        settings_set_string("print_header", hdr);
+                    if (ftr)
+                        settings_set_string("print_footer", ftr);
+                    free(hdr);
+                    free(ftr);
+                }
 
                 g_wrap_around = IsDlgButtonChecked(page, ID_PREF_FIND_WRAP) == BST_CHECKED;
                 settings_set_bool("find_wrap_around", g_wrap_around);
@@ -5664,6 +5694,7 @@ static void build_accelerators(Window *window) {
                       { FVIRTKEY, VK_F5, ID_EDIT_TIME_DATE },
                       { FALT | FVIRTKEY, 'Z', ID_FORMAT_WORD_WRAP },
                       { FCONTROL | FVIRTKEY, 'M', ID_FORMAT_MONOSPACE },
+                      { FCONTROL | FVIRTKEY, 'P', ID_FILE_PRINT },
                       { FCONTROL | FVIRTKEY, 'E', ID_FORMAT_EOL_CYCLE },
                       { FCONTROL | FVIRTKEY, VK_OEM_COMMA, ID_FILE_PREFERENCES },
                       // Hidden: Preferences opened on the Debug diagnostics page
@@ -6373,6 +6404,9 @@ static void create_menu(Window *window) {
     AppendMenuW(hfile, MF_STRING, ID_FILE_SAVE, L"&Save\tCtrl+S");
     AppendMenuW(hfile, MF_STRING, ID_FILE_SAVE_AS, L"Save &As...\tCtrl+Shift+S");
     AppendMenuW(hfile, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(hfile, MF_STRING, ID_FILE_PAGE_SETUP, L"Page Set&up...");
+    AppendMenuW(hfile, MF_STRING, ID_FILE_PRINT, L"&Print...	Ctrl+P");
+    AppendMenuW(hfile, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hfile, MF_STRING | MF_POPUP, (UINT_PTR) hrecent, L"&Recent Files");
     AppendMenuW(hfile, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hfile, MF_STRING, ID_FILE_CLOSE, L"&Close\tCtrl+W");
@@ -6741,6 +6775,43 @@ static void handle_command(Window *window, WORD command) {
             // Shift+click reveals the hidden Debug diagnostics page
             show_preferences_dialog(window, -1, (GetKeyState(VK_SHIFT) & 0x8000) != 0);
             break;
+        case ID_FILE_PAGE_SETUP:
+            print_show_page_setup(window->hwnd);
+            return;
+
+        case ID_FILE_PRINT: {
+            // Print the DOCUMENT, not what the window shows: the printed page
+            // has its own width, so the editor's wrapping is irrelevant.
+            char *utf8 = ui_platform_get_text(window);
+            if (!utf8)
+                return;
+            wchar_t *wide = utf8_to_wide(utf8);
+            free(utf8);
+            if (!wide)
+                return;
+
+            const char *path = editor_get_current_file();
+            wchar_t *title = path ? utf8_to_wide(path) : NULL;
+            const wchar_t *shown = title ? path_basename(title) : L"Untitled";
+
+            // Print in the font this window is showing, not a fixed default
+            const char *default_face = DEFAULT_MONO_FONT;
+            const char *key = active_font_key(window, &default_face);
+            char *face_utf8 = settings_get_string(key, default_face);
+            wchar_t *face = face_utf8 ? utf8_to_wide(face_utf8) : NULL;
+            free(face_utf8);
+
+            if (!print_document(window->hwnd, wide, shown, face,
+                                settings_get_int("font_size", 11))) {
+                MessageBoxW(window->hwnd, L"The document could not be printed.", L"npad",
+                            MB_OK | MB_ICONWARNING);
+            }
+            free(face);
+            free(title);
+            free(wide);
+            return;
+        }
+
         case ID_FILE_PREFERENCES_DEBUG: // Ctrl+Shift+. accelerator
             show_preferences_dialog(window, -1, true);
             break;

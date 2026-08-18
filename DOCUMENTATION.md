@@ -143,6 +143,11 @@ All settings live in `settings.json` and are editable in Preferences
 | `session_resume_enabled` | bool | `true` | Crash recovery: snapshot unsaved work on the first edit and then on a timer; offer to restore after an unclean exit. On by default: snapshots never touch the user's file. All windows are restored, extras in their own cascaded windows. Does **not** gate handoff snapshots taken when an update or a Windows restart closes npad - those would otherwise be silently discarded. |
 | `session_interval` | int | `30` | Snapshot period in seconds (minimum 5). |
 | `ctrl_n_new_window` | bool | `false` | Swap Ctrl+N / Ctrl+Shift+N between "New" (clear this window) and "New Window" (open another instance). |
+| `print_header` | string | `&f` | Printed page header. Uses the codes below; edited in Preferences > General. |
+| `print_footer` | string | `Page &p` | Printed page footer. Same codes as the header. |
+| `print_margin_left` / `_right` | int | `750` | Print margins in **thousandths of an inch**, set in File > Page Setup. Stored in that unit rather than the locale's, so a settings file means the same thing on a metric and an imperial machine. |
+| `print_margin_top` / `_bottom` | int | `1000` | As above. |
+| `print_orientation` | int | `0` | `0` printer default, `1` portrait, `2` landscape. Set in Page Setup. |
 
 ### Appearance (Preferences > Appearance)
 
@@ -235,6 +240,7 @@ propagates live to all open npad windows.
 | Ctrl+N | New (or New Window, per preference) |
 | Ctrl+Shift+N | New Window (or New, per preference) |
 | Ctrl+O / Ctrl+S / Ctrl+Shift+S | Open / Save / Save As |
+| Ctrl+P | Print (File > Page Setup sets margins, orientation and paper) |
 | Ctrl+W / Ctrl+Shift+W | Close this window / Close all windows (each save-checked) |
 | Ctrl+Z / Ctrl+Y | Undo / Redo (100,000-step history) |
 | Ctrl+X / Ctrl+C / Ctrl+V / Del | Cut / Copy / Paste / Delete |
@@ -301,6 +307,29 @@ position). Not intended for direct use.
 - **Clicking an unfocused window acts immediately**: the click that activates
   npad also places the caret, and a click-drag starts selecting - no need to
   click once to focus and again to act.
+- **Printing** (Ctrl+P) prints the *document*, not the window. The page has its
+  own width, so the editor's word-wrap setting does not affect the output:
+  lines too long for the printable width are re-wrapped there, broken at a
+  space rather than mid-word. The page uses the font that window is currently
+  showing, at the same point size.
+  - **Page Setup** (File menu) sets margins, orientation and paper. Margins are
+    persisted in thousandths of an inch, so they mean the same thing on a
+    metric and an imperial machine.
+  - **Header and footer** are set on Preferences > General, and use the same
+    codes as notepad.exe:
+
+    | Code | Prints |
+    |------|--------|
+    | `&f` | The file name (`Untitled` for an unsaved document) |
+    | `&p` | The page number |
+    | `&d` | The date, in your regional short-date format |
+    | `&t` | The time, in your regional format |
+    | `&l` `&c` `&r` | Left-align / centre / right-align what follows |
+    | `&&` | A literal `&` |
+
+    Text before any alignment code is left-aligned. The defaults are `&f` for
+    the header and `Page &p` for the footer, as in notepad.exe; clearing a
+    field omits that line entirely and gives the text more of the page.
 - **Encodings & line endings**: detected on open (BOM + heuristics) and
   preserved on save. Line endings are changeable via the status bar or
   Format > Line Endings; encoding via the status bar or the Save As dialog's

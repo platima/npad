@@ -5,6 +5,28 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.0] - 2026-08-19
+
+### 🆕 Features
+- **Printing.** **File → Print...** (Ctrl+P) and **File → Page Setup...**, both
+  behaving as classic notepad.exe does:
+  - The *document* is printed, not the window. The page has its own width, so
+    the editor's word-wrap setting has no bearing on the output; lines are
+    re-wrapped to the printable width and broken at spaces rather than
+    mid-word.
+  - Printing uses the font the window is currently showing (face and size), so
+    the page matches the screen rather than a fixed default face.
+  - **Headers and footers** use notepad's own codes - `&f` file, `&p` page,
+    `&d` date, `&t` time, `&l`/`&c`/`&r` alignment, `&&` for a literal
+    ampersand. The defaults match notepad: `&f` and `Page &p`. They are edited
+    on **Preferences → General** rather than buried in Page Setup.
+  - **Margins and orientation** are set in Page Setup and persist. They are
+    stored in thousandths of an inch regardless of the machine's measurement
+    system, so a settings file means the same thing on a metric and an
+    imperial machine.
+  - comdlg32's print dialogs are **delay-loaded**, so a launch that never
+    prints does not pay for them.
+
 ## [0.30.1] - 2026-08-19
 
 ### 🐛 Fixed

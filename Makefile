@@ -38,7 +38,7 @@ TEST_FRAMEWORK_SOURCES = tests/test_framework.c
 TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c  # Core sources without UI dependencies
 
 # Windows GUI specific
-WINDOWS_GUI_SOURCES = src/platform/ui_win32.c
+WINDOWS_GUI_SOURCES = src/platform/ui_win32.c src/platform/print_win32.c
 # Delay-loaded DLLs: none of these are needed to open a window, so binding them
 # statically made the loader page them in on every launch - which costs most on
 # a cold start, exactly when startup feels slow. winhttp/bcrypt serve only the

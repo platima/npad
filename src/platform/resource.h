@@ -128,6 +128,8 @@
 #define ID_PREF_ICON_CLASSIC 3163
 #define ID_DELIM_SWAP 3164
 #define ID_PREF_WATCH_FILE 3165
+#define ID_PREF_PRINT_HEADER 3166
+#define ID_PREF_PRINT_FOOTER 3167
 
 // Static text controls
 #define IDC_STATIC -1

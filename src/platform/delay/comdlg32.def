@@ -1,7 +1,9 @@
 ; Delay-load surface for comdlg32.dll - the classic Open / Save As / Font
-; dialogs. None of these run during startup.
+; dialogs, plus Page Setup and Print. None of these run during startup.
 LIBRARY comdlg32.dll
 EXPORTS
 ChooseFontW
 GetOpenFileNameW
 GetSaveFileNameW
+PageSetupDlgW
+PrintDlgW
