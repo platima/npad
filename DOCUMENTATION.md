@@ -444,6 +444,12 @@ position). Not intended for direct use.
   at the caret instead.
 - **Large files**: opening a file over the configured threshold asks for
   confirmation first.
+- **Binary files and saving**: npad holds text as NUL-terminated strings, so a
+  file containing a NUL byte loads only up to that point. When that happens npad
+  **will not save over the original** - Save behaves as Save As, so the file it
+  could not read in full is never overwritten with the fragment. Auto-save skips
+  such documents entirely. This is detected when the file is decoded, so it also
+  covers files that do not trip the binary-looking warning below.
 - **Binary files**: a file whose first bytes look binary (NUL bytes outside
   UTF-16, or mostly control characters) prompts with **Cancel / Open in
   npad / Open with the default app** before anything else happens - the

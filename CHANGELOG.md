@@ -5,6 +5,29 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.9] - 2026-08-18
+
+### 🐛 Fixed
+- **Opening a binary file and saving could destroy it.** npad carries text as
+  NUL-terminated strings, so a file containing a NUL byte loads only up to that
+  point - a 120 KB PNG becomes nine bytes. That much was merely odd; the danger
+  was that the document still pointed at the original file, so typing one
+  character and pressing Ctrl+S replaced the image with the fragment.
+
+  npad now detects that it could not read a file in full and **refuses to save
+  over it**, offering Save As instead so the original is never the target.
+  Auto-save skips such documents outright rather than raising a file dialog
+  from a timer.
+
+  Detection happens when the file is decoded rather than from the
+  binary-looking warning, because a file can contain a NUL without looking
+  binary at all - and a zero *byte* is distinguished from a zero *code unit*,
+  so ordinary UTF-16 documents (where every ASCII character contains a zero
+  byte) are unaffected.
+
+  Displaying binary content properly is a separate, much larger change and is
+  still not attempted; this closes the way it could lose data.
+
 ## [0.28.8] - 2026-08-18
 
 ### 🐛 Fixed

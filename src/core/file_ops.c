@@ -635,6 +635,33 @@ bool file_rename(const char *from, const char *to) {
     return rename(from, to) == 0;
 }
 
+// Does the decoded text stop short of the file's real content? npad carries
+// text as NUL-terminated strings, so a NUL anywhere in a file silently cuts
+// everything after it - a 120 KB PNG loads as nine bytes. Detected here, at
+// decode time, rather than from the binary-looking heuristic: a file can hold
+// a NUL without looking binary at all.
+static bool raw_has_embedded_nul(const uint8_t *raw, size_t size, TextEncoding enc) {
+    if (!raw || size == 0)
+        return false;
+    if (enc == NPAD_ENC_UTF16_LE || enc == NPAD_ENC_UTF16_BE) {
+        // A zero CODE UNIT, not a zero byte - every ASCII character in UTF-16
+        // contains one of those legitimately.
+        bool be = (enc == NPAD_ENC_UTF16_BE);
+        for (size_t i = 0; i + 1 < size; i += 2) {
+            uint16_t unit = be ? (uint16_t) ((raw[i] << 8) | raw[i + 1])
+                               : (uint16_t) ((raw[i + 1] << 8) | raw[i]);
+            if (unit == 0)
+                return true;
+        }
+        return false;
+    }
+    for (size_t i = 0; i < size; i++) {
+        if (raw[i] == 0)
+            return true;
+    }
+    return false;
+}
+
 char *file_read_text_ex(const char *filename, TextFileInfo *info) {
     size_t size;
     uint8_t *raw = read_all_bytes(filename, &size);
@@ -643,6 +670,7 @@ char *file_read_text_ex(const char *filename, TextFileInfo *info) {
 
     TextEncoding encoding;
     char *utf8 = NULL;
+    bool truncated = false;
 
     if (size >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF) {
         encoding = NPAD_ENC_UTF8_BOM;
@@ -664,14 +692,18 @@ char *file_read_text_ex(const char *filename, TextFileInfo *info) {
             utf8 = utf16_to_utf8(raw, size, big_endian);
         } else if (utf8_is_valid(raw, size)) {
             encoding = NPAD_ENC_UTF8;
+            truncated = raw_has_embedded_nul(raw, size, encoding);
             utf8 = (char *) raw;
-            raw = NULL; // Ownership transferred
+            raw = NULL; // Ownership transferred (check it BEFORE handing it over)
         } else {
             encoding = NPAD_ENC_ANSI;
             utf8 = ansi_to_utf8(raw, size);
         }
     }
 
+    if (raw) { // NULL only on the UTF-8 branch above, which already checked
+        truncated = raw_has_embedded_nul(raw, size, encoding);
+    }
     free(raw);
 
     if (!utf8) {
@@ -682,6 +714,7 @@ char *file_read_text_ex(const char *filename, TextFileInfo *info) {
     if (info) {
         info->encoding = encoding;
         info->line_ending = file_detect_line_ending(utf8);
+        info->truncated = truncated;
     }
 
     return utf8;
@@ -762,7 +795,7 @@ bool file_write_binary(const char *filename, const void *data, size_t size) {
 // Convert UTF-8 content to the target encoding/line endings as raw bytes.
 // Returns malloc'd buffer, sets *out_len.
 static uint8_t *encode_text(const char *utf8_content, const TextFileInfo *info, size_t *out_len) {
-    TextFileInfo defaults = { NPAD_ENC_UTF8, NPAD_EOL_CRLF };
+    TextFileInfo defaults = { NPAD_ENC_UTF8, NPAD_EOL_CRLF, false };
     if (!info)
         info = &defaults;
 

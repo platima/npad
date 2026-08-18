@@ -548,6 +548,33 @@ bool editor_save_file(void) {
     if (!g_editor.main_window)
         return false;
 
+    // npad could not read this file in full - it held a NUL, and npad's text is
+    // NUL-terminated throughout, so only the part before it was loaded. Saving
+    // would replace the original with that fragment: a 120 KB image becomes
+    // nine bytes. Divert to Save As so the original is never the target.
+    if (g_editor.file_info.truncated) {
+        ui_show_message_box(g_editor.main_window, "npad",
+                            "This file contains binary data, so npad could only load the "
+                            "part before it.\n\n"
+                            "Saving over the original would discard the rest, so choose a "
+                            "different file to save this text to.",
+                            false);
+
+        FileDialogParams params = { .title = "Save As",
+                                    .default_filename = "Untitled.txt",
+                                    .filter = "Text Documents (*.txt)|*.txt|All Files (*.*)|*.*",
+                                    .save_dialog = true,
+                                    .encoding = g_editor.file_info.encoding };
+        char *filename = ui_show_save_dialog(g_editor.main_window, &params);
+        if (!filename)
+            return false; // Cancelled - original still intact, which is the point
+
+        g_editor.file_info.encoding = params.encoding;
+        bool saved = editor_save_file_as(filename);
+        free(filename);
+        return saved;
+    }
+
     char *content = ui_get_text(g_editor.main_window);
     if (!content)
         return false;
@@ -601,6 +628,10 @@ bool editor_save_file_as(const char *filename) {
             free(g_editor.current_file);
         }
         g_editor.current_file = new_path;
+
+        // Whatever was loaded has now been written in full to THIS file, so it
+        // is no longer a fragment of something larger and Save may overwrite it
+        g_editor.file_info.truncated = false;
 
         settings_add_recent_file(filename);
         editor_set_modified(false);
@@ -860,8 +891,12 @@ bool editor_handle_event(const UIEvent *event) {
             // (the user gets the prompt on their next manual save; session
             // snapshots still protect the unsaved content meanwhile).
             if (g_editor.auto_save_enabled && g_editor.is_modified && g_editor.current_file) {
-                bool skip = false;
-                if (g_editor.file_info.encoding == NPAD_ENC_ANSI && g_editor.main_window) {
+                // A truncated document is skipped outright: editor_save_file
+                // diverts it to Save As, and a modal file dialog raised by a
+                // timer is exactly what this path avoids. The snapshot still
+                // protects the text, and a manual save gets the explanation.
+                bool skip = g_editor.file_info.truncated;
+                if (!skip && g_editor.file_info.encoding == NPAD_ENC_ANSI && g_editor.main_window) {
                     char *content = ui_get_text(g_editor.main_window);
                     if (content) {
                         skip = file_ansi_is_lossy(content);

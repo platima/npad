@@ -170,6 +170,13 @@ Files on their own, so freezing was the right trade.
 
 ## Core: text model
 
+**Detect a limitation where you can prove it, not where you guessed it.** The
+binary-truncation guard keys off the decoder finding a NUL, not off the
+"looks binary" heuristic that runs before loading - a file can contain a NUL
+without looking binary. And in UTF-16 a zero *byte* is normal (every ASCII
+character has one); only a zero *code unit* means truncation. Getting that
+wrong would make npad refuse to save ordinary documents.
+
 **npad's core passes NUL-terminated `char *`.** So any file containing a NUL
 truncates at that byte: a 120 KB PNG loads as 9 bytes. The counts are then
 honest — it is the *load* that is broken. Worse, `current_file` still points at

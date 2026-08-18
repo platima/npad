@@ -33,6 +33,12 @@ typedef enum {
 typedef struct {
     TextEncoding encoding;
     LineEnding line_ending;
+    // The file held a NUL before its end, so what was loaded is only the part
+    // up to it. npad's text is NUL-terminated throughout, so a binary file
+    // cannot be represented - and saving over the original would replace it
+    // with the fragment. Set by file_read_text_ex; callers must not overwrite
+    // the source file while it is true.
+    bool truncated;
 } TextFileInfo;
 
 // File reading operations

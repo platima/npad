@@ -211,6 +211,68 @@ TEST_CASE(path_traversal_protection) {
     TEST_ASSERT_NULL(content2, "Path traversal with backslashes should be blocked");
 }
 
+
+// --- Binary / embedded-NUL detection --------------------------------------
+//
+// npad carries text as NUL-terminated strings, so a file containing a NUL
+// loads only up to it - a 120 KB PNG becomes nine bytes. That alone is
+// cosmetic; the danger is that current_file still points at the original, so
+// saving would replace the image with the fragment. file_read_text_ex flags it
+// and the editor refuses to overwrite the source.
+
+TEST_CASE(embedded_nul_is_flagged_as_truncated) {
+    // A PNG signature: bytes, then the IHDR length whose first byte is NUL
+    const unsigned char png[] = { 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A,
+                                  0x00, 0x00, 0x00, 0x0D, 'I',  'H', 'D',  'R' };
+    FILE *f = fopen("test_trunc.bin", "wb");
+    TEST_ASSERT_NOT_NULL(f, "binary fixture created");
+    if (f) {
+        fwrite(png, 1, sizeof(png), f);
+        fclose(f);
+    }
+
+    TextFileInfo info;
+    memset(&info, 0, sizeof(info));
+    char *text = file_read_text_ex("test_trunc.bin", &info);
+    TEST_ASSERT_NOT_NULL(text, "the readable prefix still loads");
+    TEST_ASSERT(info.truncated, "a NUL before the end is reported as truncated");
+    free(text);
+    remove("test_trunc.bin");
+}
+
+TEST_CASE(ordinary_text_is_not_flagged) {
+    file_write_text("test_trunc.txt", "Perfectly ordinary text.\nTwo lines.\n");
+
+    TextFileInfo info;
+    memset(&info, 0, sizeof(info));
+    char *text = file_read_text_ex("test_trunc.txt", &info);
+    TEST_ASSERT_NOT_NULL(text, "text file loads");
+    TEST_ASSERT(!info.truncated, "a normal file is never flagged");
+    free(text);
+    remove("test_trunc.txt");
+}
+
+TEST_CASE(utf16_ascii_is_not_flagged) {
+    // Every ASCII character in UTF-16 contains a zero BYTE. Only a zero CODE
+    // UNIT means truncation, so a plain UTF-16 file must not be flagged -
+    // getting this wrong would make npad refuse to save ordinary documents.
+    const unsigned char utf16le[] = { 0xFF, 0xFE, 'H', 0x00, 'i', 0x00 };
+    FILE *f = fopen("test_trunc16.txt", "wb");
+    if (f) {
+        fwrite(utf16le, 1, sizeof(utf16le), f);
+        fclose(f);
+    }
+
+    TextFileInfo info;
+    memset(&info, 0, sizeof(info));
+    char *text = file_read_text_ex("test_trunc16.txt", &info);
+    TEST_ASSERT_NOT_NULL(text, "UTF-16 file loads");
+    TEST_ASSERT_STR_EQ("Hi", text, "and decodes correctly");
+    TEST_ASSERT(!info.truncated, "zero BYTES in UTF-16 ASCII are not truncation");
+    free(text);
+    remove("test_trunc16.txt");
+}
+
 int main(void) {
     // Initialize error system for testing
     npad_error_init();
@@ -239,6 +301,9 @@ int main(void) {
     RUN_TEST(count_stats_unicode_and_eols);
     RUN_TEST(count_stats_whitespace_runs);
     RUN_TEST(path_traversal_protection);
+    RUN_TEST(embedded_nul_is_flagged_as_truncated);
+    RUN_TEST(ordinary_text_is_not_flagged);
+    RUN_TEST(utf16_ascii_is_not_flagged);
     
     // Cleanup error system
     npad_error_cleanup();
