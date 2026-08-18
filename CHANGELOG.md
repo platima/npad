@@ -5,6 +5,23 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.30.0] - 2026-08-18
+
+### 🆕 Features
+- **npad can tell you when a file you have open is changed by something else.**
+  On returning to the window it offers **Reload from disk**, **Save as a
+  different file**, or **Keep editing**, with a *"stop telling me about this
+  file"* tick box for the rest of the session. A file that has been **deleted**
+  is reported differently, since reloading it is not possible.
+
+  **Off by default** - classic Notepad does not do this - and enabled from
+  **Preferences > General**.
+
+  It checks when the window is activated rather than polling on a timer: that
+  is when you would notice anyway, and it costs nothing while npad is not in
+  front. *Keep editing* is the default choice, because Reload discards your
+  unsaved edits and that must never be what Enter or Escape does.
+
 ## [0.29.0] - 2026-08-18
 
 ### 🆕 Features

@@ -139,6 +139,7 @@ All settings live in `settings.json` and are editable in Preferences
 | `auto_save_interval` | int | `300` | Auto-save period in seconds (minimum 10). |
 | `large_file_warning_mb` | int | adaptive | Confirm before opening files larger than this (MB). `0` disables the prompt. When never set, the default scales with installed RAM (1/64th, clamped 50-1024 MB; 100 MB when memory size is unknown). |
 | `recent_files_max` | int | `10` | Recent Files menu length (0-10). |
+| `watch_file_changes` | bool | `false` | Notice when the open file is changed on disk by another program and offer Reload / Save As / Keep editing, with a session-scoped "stop telling me about this file" option. Checked when the npad window is activated, not on a timer. Off by default: classic Notepad does not do this. |
 | `session_resume_enabled` | bool | `true` | Crash recovery: snapshot unsaved work on the first edit and then on a timer; offer to restore after an unclean exit. On by default: snapshots never touch the user's file. All windows are restored, extras in their own cascaded windows. Does **not** gate handoff snapshots taken when an update or a Windows restart closes npad - those would otherwise be silently discarded. |
 | `session_interval` | int | `30` | Snapshot period in seconds (minimum 5). |
 | `ctrl_n_new_window` | bool | `false` | Swap Ctrl+N / Ctrl+Shift+N between "New" (clear this window) and "New Window" (open another instance). |

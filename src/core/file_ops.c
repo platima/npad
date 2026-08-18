@@ -622,6 +622,42 @@ char *file_read_text_limited(const char *filename, size_t max_bytes) {
     return buf;
 }
 
+bool file_get_stamp(const char *filename, FileStamp *out) {
+    if (!out)
+        return false;
+    out->size = -1;
+    out->write_time = 0;
+    if (!is_valid_path(filename))
+        return false;
+
+#ifdef _WIN32
+    wchar_t wpath[1024];
+    if (MultiByteToWideChar(CP_UTF8, 0, filename, -1, wpath, 1024) > 0) {
+        WIN32_FILE_ATTRIBUTE_DATA data;
+        if (!GetFileAttributesExW(wpath, GetFileExInfoStandard, &data))
+            return false;
+        out->size = ((long long) data.nFileSizeHigh << 32) | data.nFileSizeLow;
+        out->write_time = ((long long) data.ftLastWriteTime.dwHighDateTime << 32) |
+                          data.ftLastWriteTime.dwLowDateTime;
+        return true;
+    }
+    return false;
+#else
+    struct stat st;
+    if (stat(filename, &st) != 0)
+        return false;
+    out->size = (long long) st.st_size;
+    out->write_time = (long long) st.st_mtime;
+    return true;
+#endif
+}
+
+bool file_stamp_equal(const FileStamp *a, const FileStamp *b) {
+    if (!a || !b)
+        return false;
+    return a->size == b->size && a->write_time == b->write_time;
+}
+
 bool file_rename(const char *from, const char *to) {
     if (!is_valid_path(from) || !is_valid_path(to))
         return false;

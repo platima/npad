@@ -23,6 +23,12 @@ typedef struct {
     bool session_resume_enabled; // Crash-recovery snapshots
     int session_interval;        // seconds
     TextFileInfo file_info;      // Encoding and line endings of the current file
+    // Identity of current_file as npad last read or wrote it. Compared on
+    // window activation to notice an edit made by something else. Re-captured
+    // after EVERY write, including auto-save - npad's own atomic saves change
+    // the file's identity, so without that it would report its own writes.
+    FileStamp file_stamp;
+    bool suppress_change_prompt; // "Don't ask again for this file", session only
     Window *main_window;
 } EditorState;
 
@@ -36,6 +42,21 @@ void editor_set_main_window(Window *window);
 // File operations
 bool editor_new_file(void);
 bool editor_open_file(const char *filename);
+
+// Has current_file been changed on disk by something other than npad? Called
+// when the window is activated and before a save. Returns the kind of change
+// so the caller can offer the right choices - a deleted file cannot be
+// reloaded, so it needs different wording.
+typedef enum {
+    EDITOR_FILE_UNCHANGED = 0,
+    EDITOR_FILE_MODIFIED,
+    EDITOR_FILE_DELETED
+} EditorExternalChange;
+
+EditorExternalChange editor_check_external_change(void);
+void editor_accept_external_change(void); // Stop reporting this one
+void editor_suppress_change_prompt(void); // For this file, this session only
+bool editor_reload_from_disk(void);       // Discards unsaved edits deliberately
 bool editor_save_file(void);
 bool editor_save_file_as(const char *filename);
 bool editor_close_file(void);

@@ -498,6 +498,11 @@ bool editor_open_file(const char *filename) {
     }
     free(content);
 
+    // Baseline for external-change detection, and a fresh slate for the
+    // per-file "don't ask again" choice
+    file_get_stamp(filename, &g_editor.file_stamp);
+    g_editor.suppress_change_prompt = false;
+
     if (g_editor.current_file) {
         free(g_editor.current_file);
     }
@@ -523,6 +528,64 @@ static bool editor_confirm_lossy_ansi(const char *content) {
                                "This document contains characters that cannot be saved in "
                                "ANSI encoding.\nThey will be replaced with '?'. Save anyway?",
                                true);
+}
+
+// --- External change detection --------------------------------------------
+//
+// Checked when the window is activated rather than on a timer: that is the
+// moment the user would notice anyway, and it costs nothing while npad is not
+// in front. Also checked before a save, which is the genuinely dangerous
+// moment - silently overwriting someone else's edit.
+EditorExternalChange editor_check_external_change(void) {
+    if (!g_editor.current_file || g_editor.suppress_change_prompt)
+        return EDITOR_FILE_UNCHANGED;
+    if (!settings_get_bool("watch_file_changes", false))
+        return EDITOR_FILE_UNCHANGED;
+    // Nothing to compare against - the file was never successfully stamped
+    if (g_editor.file_stamp.size < 0)
+        return EDITOR_FILE_UNCHANGED;
+
+    FileStamp now;
+    if (!file_get_stamp(g_editor.current_file, &now)) {
+        return EDITOR_FILE_DELETED; // Reload is meaningless; the caller must differ
+    }
+    return file_stamp_equal(&now, &g_editor.file_stamp) ? EDITOR_FILE_UNCHANGED
+                                                        : EDITOR_FILE_MODIFIED;
+}
+
+void editor_suppress_change_prompt(void) {
+    // Session-scoped and in memory only. Persisting it would let a stale
+    // suppression silently hide a real change months later; it is cleared
+    // whenever a different file becomes current.
+    g_editor.suppress_change_prompt = true;
+}
+
+void editor_accept_external_change(void) {
+    // Adopt what is on disk now as the baseline, so the same change is not
+    // reported again on every activation
+    if (g_editor.current_file) {
+        file_get_stamp(g_editor.current_file, &g_editor.file_stamp);
+    }
+}
+
+bool editor_reload_from_disk(void) {
+    if (!g_editor.current_file || !g_editor.main_window)
+        return false;
+
+    TextFileInfo info;
+    char *content = file_read_text_ex(g_editor.current_file, &info);
+    if (!content)
+        return false;
+
+    ui_set_text(g_editor.main_window, content);
+    free(content);
+
+    g_editor.file_info = info;
+    file_get_stamp(g_editor.current_file, &g_editor.file_stamp);
+    editor_set_modified(false); // Now identical to the file again
+    editor_update_status_info();
+    editor_clear_session(); // The unsaved copy this replaced is gone by choice
+    return true;
 }
 
 bool editor_save_file(void) {
@@ -585,6 +648,12 @@ bool editor_save_file(void) {
     }
 
     bool success = file_write_text_ex(g_editor.current_file, content, &g_editor.file_info);
+    if (success) {
+        // npad's saves are atomic (temp + rename), so every write changes the
+        // file's identity. Without re-stamping, npad would report its OWN
+        // write as an external change the next time the window is activated.
+        file_get_stamp(g_editor.current_file, &g_editor.file_stamp);
+    }
     free(content);
 
     if (success) {
@@ -632,6 +701,8 @@ bool editor_save_file_as(const char *filename) {
         // Whatever was loaded has now been written in full to THIS file, so it
         // is no longer a fragment of something larger and Save may overwrite it
         g_editor.file_info.truncated = false;
+        file_get_stamp(new_path, &g_editor.file_stamp);
+        g_editor.suppress_change_prompt = false; // A different file, fresh slate
 
         settings_add_recent_file(filename);
         editor_set_modified(false);

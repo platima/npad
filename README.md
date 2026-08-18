@@ -77,13 +77,14 @@ Current features (Windows build):
   - Optional escape interpretation (`\n`, `\t`, `\uXXXX`, ...) in Find / Replace via a checkbox in the dialogs
   - Recent files menu (size configurable)
   - Drag-and-drop to open files; Ctrl+Drop inserts the file at the caret
+  - Optional notice when a file you have open is changed by another program (off by default), offering reload, save-as, or keep editing
   - Export / Import settings (Preferences > Backup) for backup or moving between machines
   - Atomic saves - a failed save can never destroy the existing file
   - JSON settings storage; remembers window position, size and maximized state
   - Confirmation prompt before opening very large files (threshold scales with the system's RAM by default)
   - Binary-file detection on open, offering Cancel / Open in npad / Open with the default app
   - **App icon that follows your light/dark setting**, with the classic icon and fixed light/dark still available (Preferences > Appearance)
-  - Dark colour schemes theme the whole window - scroll bars and status bar included, not just the text area
+  - Dark colour schemes theme the text area, title bar, scroll bars and drop-down menus (the menu bar and status bar stay light - Windows draws those, and offers no supported way to recolour them)
   - Optional word / character / line counts in the status bar (off by default; refreshed live while typing, with a debounced fallback so very large files stay smooth)
   - Check for Updates (Help menu) with an opt-in Updates preferences tab: off by default, or notify silently (a Help-menu dot), prompt, or download-and-install-automatically; optional launch check, Skip this version, an **Install Now** button whenever an update is known, and a SHA-256-verified download that resolves its file from the release itself (so future changes to asset naming cannot strand it)
 

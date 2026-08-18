@@ -273,6 +273,53 @@ TEST_CASE(utf16_ascii_is_not_flagged) {
     remove("test_trunc16.txt");
 }
 
+
+// --- File change stamps ----------------------------------------------------
+//
+// Backs the "this file changed on disk" prompt. Size and write time together,
+// because either alone misses cases: some tools preserve the timestamp, and an
+// edit can leave the size identical.
+
+TEST_CASE(stamp_is_stable_for_an_unchanged_file) {
+    file_write_text("test_stamp.txt", "original contents\n");
+
+    FileStamp a, b;
+    TEST_ASSERT(file_get_stamp("test_stamp.txt", &a), "stamp taken");
+    TEST_ASSERT(file_get_stamp("test_stamp.txt", &b), "stamp taken again");
+    TEST_ASSERT(file_stamp_equal(&a, &b), "an untouched file compares equal");
+
+    remove("test_stamp.txt");
+}
+
+TEST_CASE(stamp_changes_when_size_changes) {
+    file_write_text("test_stamp.txt", "short\n");
+    FileStamp before;
+    file_get_stamp("test_stamp.txt", &before);
+
+    file_write_text("test_stamp.txt", "a good deal longer than before\n");
+    FileStamp after;
+    file_get_stamp("test_stamp.txt", &after);
+
+    TEST_ASSERT(!file_stamp_equal(&before, &after), "a different size is detected");
+    remove("test_stamp.txt");
+}
+
+TEST_CASE(stamp_reports_a_missing_file) {
+    remove("test_stamp_gone.txt");
+    FileStamp s;
+    TEST_ASSERT(!file_get_stamp("test_stamp_gone.txt", &s), "a missing file returns false");
+    TEST_ASSERT_EQ(-1, (int) s.size, "and reports size -1, distinguishing gone from changed");
+}
+
+TEST_CASE(stamp_equality_rejects_nulls) {
+    FileStamp s;
+    file_write_text("test_stamp.txt", "x\n");
+    file_get_stamp("test_stamp.txt", &s);
+    TEST_ASSERT(!file_stamp_equal(NULL, &s), "NULL never compares equal");
+    TEST_ASSERT(!file_stamp_equal(&s, NULL), "in either position");
+    remove("test_stamp.txt");
+}
+
 int main(void) {
     // Initialize error system for testing
     npad_error_init();
@@ -304,6 +351,10 @@ int main(void) {
     RUN_TEST(embedded_nul_is_flagged_as_truncated);
     RUN_TEST(ordinary_text_is_not_flagged);
     RUN_TEST(utf16_ascii_is_not_flagged);
+    RUN_TEST(stamp_is_stable_for_an_unchanged_file);
+    RUN_TEST(stamp_changes_when_size_changes);
+    RUN_TEST(stamp_reports_a_missing_file);
+    RUN_TEST(stamp_equality_rejects_nulls);
     
     // Cleanup error system
     npad_error_cleanup();

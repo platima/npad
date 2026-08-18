@@ -85,6 +85,19 @@ LineEnding file_detect_line_ending(const char *text);
 char *file_convert_line_endings(const char *text, LineEnding target);
 
 // File utility functions
+// Identity stamp for change detection: size plus last-write time. Neither
+// alone is enough - some tools preserve the timestamp, and an edit can leave
+// the size unchanged. A content hash would be certain but costs a full re-read.
+typedef struct {
+    long long size;       // -1 when the file does not exist
+    long long write_time; // Platform-native resolution; only compared, never shown
+} FileStamp;
+
+// Capture a file's stamp. Returns false (and a size of -1) if it is gone,
+// which the caller must treat as a distinct case from "changed".
+bool file_get_stamp(const char *filename, FileStamp *out);
+bool file_stamp_equal(const FileStamp *a, const FileStamp *b);
+
 bool file_exists(const char *filename);
 bool file_is_readable(const char *filename);
 bool file_is_writable(const char *filename);

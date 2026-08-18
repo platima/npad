@@ -2243,12 +2243,19 @@ typedef struct {
     int button_count;
     int default_button; // A custom id, or IDCANCEL
     bool cancel_button; // Append the common Cancel button
+    // Optional "don't ask me again" tick box. When set, show_task_dialog_ex
+    // reports whether it was ticked; plain show_task_dialog ignores it.
+    const wchar_t *verification;
 } TaskDialogSpec;
 
 // Show spec and return the id of the button pressed: one of the custom ids, or
 // IDCANCEL. IDCANCEL also covers Esc, the close box and every failure path, so
 // callers can treat it uniformly as "the user chose nothing".
-static int show_task_dialog(HWND owner, const TaskDialogSpec *spec) {
+static int show_task_dialog(HWND owner, const TaskDialogSpec *spec);
+
+static int show_task_dialog_ex(HWND owner, const TaskDialogSpec *spec, bool *verified) {
+    if (verified)
+        *verified = false;
     if (!spec || !spec->buttons || spec->button_count <= 0)
         return IDCANCEL;
 
@@ -2265,6 +2272,12 @@ static int show_task_dialog(HWND owner, const TaskDialogSpec *spec) {
         cfg.cbSize = sizeof(cfg);
         cfg.hwndParent = owner;
         cfg.dwFlags = TDF_POSITION_RELATIVE_TO_WINDOW; // Centre on npad, not the monitor
+        if (!spec->cancel_button) {
+            // Without a Cancel button Esc and the close box are dead unless
+            // cancellation is allowed explicitly - an uncloseable dialog
+            cfg.dwFlags |= TDF_ALLOW_DIALOG_CANCELLATION;
+        }
+        cfg.pszVerificationText = spec->verification; // NULL renders no tick box
         cfg.dwCommonButtons = spec->cancel_button ? TDCBF_CANCEL_BUTTON : 0;
         cfg.pszWindowTitle = L"npad";
         cfg.pszMainIcon = spec->icon; // NULL renders no icon
@@ -2275,8 +2288,12 @@ static int show_task_dialog(HWND owner, const TaskDialogSpec *spec) {
         cfg.nDefaultButton = spec->default_button;
 
         int pressed = IDCANCEL;
-        if (SUCCEEDED(td.func(&cfg, &pressed, NULL, NULL)))
+        BOOL checked = FALSE;
+        if (SUCCEEDED(td.func(&cfg, &pressed, NULL, &checked))) {
+            if (verified)
+                *verified = (checked != FALSE);
             return pressed;
+        }
         return IDCANCEL;
     }
 
@@ -2313,6 +2330,10 @@ static int show_task_dialog(HWND owner, const TaskDialogSpec *spec) {
     if (res == IDNO && spec->button_count >= 2)
         return spec->buttons[1].nButtonID;
     return IDCANCEL;
+}
+
+static int show_task_dialog(HWND owner, const TaskDialogSpec *spec) {
+    return show_task_dialog_ex(owner, spec, NULL);
 }
 
 UiOpenChoice ui_platform_prompt_binary_open(Window *parent, const char *filename) {
@@ -2496,6 +2517,9 @@ static void set_status_message(Window *window, const char *message) {
 #define NPAD_WM_UPDATE_CHECKED (WM_APP + 1)
 #define NPAD_WM_UPDATE_PROGRESS (WM_APP + 2)
 #define NPAD_WM_UPDATE_DOWNLOADED (WM_APP + 3)
+// Posted from WM_ACTIVATE so the external-change dialog runs after the
+// activation completes rather than inside it
+#define NPAD_WM_CHECK_EXTERNAL (WM_APP + 4)
 
 typedef struct {
     bool ok;
@@ -3013,6 +3037,74 @@ static void wait_for_other_npads(DWORD timeout_ms) {
 }
 
 // UI-thread handler for the verified download: confirm, launch, quit
+// Something else changed the file npad has open. Offer the three things a user
+// can sensibly want, and make the safe one the default: Reload discards their
+// unsaved edits, so it must never be what Enter or Esc does.
+//
+// Re-entrancy matters here. This runs from WM_ACTIVATE, and every button leads
+// to a modal dialog of its own, which re-activates the window on the way out -
+// so without a guard it would ask again immediately, forever.
+static void prompt_external_change(Window *window) {
+    static bool in_prompt = false;
+    if (!window || in_prompt)
+        return;
+
+    EditorExternalChange change = editor_check_external_change();
+    if (change == EDITOR_FILE_UNCHANGED)
+        return;
+
+    in_prompt = true;
+
+    bool deleted = (change == EDITOR_FILE_DELETED);
+    const TASKDIALOG_BUTTON reload_buttons[] = {
+        { 101, L"&Reload from disk\nDiscards the changes you have made here" },
+        { 102, L"&Save as a different file\nKeeps your version, leaves the other alone" },
+        { 103, L"&Keep editing\nDecide later; nothing is written either way" },
+    };
+    const TASKDIALOG_BUTTON deleted_buttons[] = {
+        { 102, L"&Save as a different file\nYour text is still here until you close it" },
+        { 103, L"&Keep editing\nDecide later; nothing is written either way" },
+    };
+
+    TaskDialogSpec spec;
+    ZeroMemory(&spec, sizeof(spec));
+    spec.instruction =
+        deleted ? L"This file has been deleted or moved" : L"This file has changed on disk";
+    spec.content = deleted ? L"Something else removed it since npad opened it. Your text is "
+                             L"unaffected until you save or close."
+                           : L"Something else has modified it since npad opened it.";
+    spec.icon = TD_WARNING_ICON;
+    spec.buttons = deleted ? deleted_buttons : reload_buttons;
+    spec.button_count = deleted ? 2 : 3;
+    spec.default_button = 103; // Keep editing: the only choice that writes nothing
+    spec.cancel_button = false;
+    spec.verification = L"Stop telling me about this file";
+
+    bool suppress = false;
+    int choice = show_task_dialog_ex(window->hwnd, &spec, &suppress);
+
+    if (suppress) {
+        editor_suppress_change_prompt();
+    }
+
+    switch (choice) {
+        case 101:
+            editor_reload_from_disk();
+            break;
+        case 102:
+            ui_post_event(UI_EVENT_FILE_SAVE_AS, window, NULL);
+            break;
+        default:
+            // Keep editing, Esc, or the close box: adopt what is on disk as the
+            // new baseline so the same change is not reported on every
+            // activation from here on
+            editor_accept_external_change();
+            break;
+    }
+
+    in_prompt = false;
+}
+
 static void handle_update_downloaded(Window *window, UpdateDownloadResult *r) {
     HWND hwnd = window ? window->hwnd : NULL;
     if (!r->ok) {
@@ -4362,6 +4454,9 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
             // lag behind what searching actually does. Showing the file's value
             // would contradict observed behaviour and then write it back.
             CheckDlgButton(page, ID_PREF_FIND_WRAP, g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
+            CheckDlgButton(page, ID_PREF_WATCH_FILE,
+                           settings_get_bool("watch_file_changes", false) ? BST_CHECKED
+                                                                          : BST_UNCHECKED);
             EnableWindow(GetDlgItem(page, ID_PREF_AUTOSAVE_INTERVAL),
                          editor_is_auto_save_enabled());
             EnableWindow(GetDlgItem(page, ID_PREF_SESSION_INTERVAL),
@@ -4374,7 +4469,8 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
             // Enable Apply when a value control changes (not the action buttons)
             if ((code == BN_CLICKED &&
                  (id == ID_PREF_AUTOSAVE_ENABLED || id == ID_PREF_SESSION_ENABLED ||
-                  id == ID_PREF_CTRL_N_WINDOW || id == ID_PREF_FIND_WRAP)) ||
+                  id == ID_PREF_CTRL_N_WINDOW || id == ID_PREF_FIND_WRAP ||
+                  id == ID_PREF_WATCH_FILE)) ||
                 (code == EN_CHANGE &&
                  (id == ID_PREF_AUTOSAVE_INTERVAL || id == ID_PREF_LARGE_FILE_MB ||
                   id == ID_PREF_RECENT_MAX || id == ID_PREF_SESSION_INTERVAL))) {
@@ -4448,6 +4544,9 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                 // dialog, so update the live flag and, if that dialog happens
                 // to be open, its checkbox - otherwise closing it would write
                 // the stale value straight back over this one.
+                settings_set_bool("watch_file_changes",
+                                  IsDlgButtonChecked(page, ID_PREF_WATCH_FILE) == BST_CHECKED);
+
                 g_wrap_around = IsDlgButtonChecked(page, ID_PREF_FIND_WRAP) == BST_CHECKED;
                 settings_set_bool("find_wrap_around", g_wrap_around);
                 if (g_find_dialog) {
@@ -7259,6 +7358,22 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                 handle_update_downloaded(window, (UpdateDownloadResult *) lparam);
             return 0;
         }
+
+        case WM_ACTIVATE: {
+            // Coming to the foreground is when the user would notice a file
+            // changed underneath them anyway, and it costs nothing while npad
+            // is not in front - unlike polling. Posted rather than run inline
+            // so the activation completes first and the dialog owns a window
+            // that is already active.
+            if (LOWORD(wparam) != WA_INACTIVE && window) {
+                PostMessageW(hwnd, NPAD_WM_CHECK_EXTERNAL, 0, 0);
+            }
+            break;
+        }
+
+        case NPAD_WM_CHECK_EXTERNAL:
+            prompt_external_change(window);
+            return 0;
 
         case WM_SETTINGCHANGE: {
             // Windows broadcasts this with "ImmersiveColorSet" when the
