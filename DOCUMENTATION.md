@@ -241,6 +241,7 @@ propagates live to all open npad windows.
 | Ctrl+Shift+N | New Window (or New, per preference) |
 | Ctrl+O / Ctrl+S / Ctrl+Shift+S | Open / Save / Save As |
 | Ctrl+P | Print (File > Page Setup sets margins, orientation and paper) |
+| Ctrl+Shift+P | Print Preview |
 | Ctrl+W / Ctrl+Shift+W | Close this window / Close all windows (each save-checked) |
 | Ctrl+Z / Ctrl+Y | Undo / Redo (100,000-step history) |
 | Ctrl+X / Ctrl+C / Ctrl+V / Del | Cut / Copy / Paste / Delete |
@@ -307,6 +308,23 @@ position). Not intended for direct use.
 - **Clicking an unfocused window acts immediately**: the click that activates
   npad also places the caret, and a click-drag starts selecting - no need to
   click once to focus and again to act.
+- **Print Preview** (Ctrl+Shift+P) shows the pages exactly as they will print.
+  The layout is measured once against the real printer, in the printer's own
+  units, and the preview then draws those same coordinates - so a line that
+  wraps on screen wraps identically on paper. Toolbar: Print, Page Setup,
+  Previous / Next, One / Two Page, Zoom In / Out, Close. PgUp and PgDn page,
+  Home and End jump to the first and last page, the arrow keys and the mouse
+  wheel scroll a zoomed page, Ctrl+P prints and Esc closes.
+  - The document window is disabled while the preview is open. The preview is a
+    snapshot, and letting the text change behind it would make it a lie.
+  - **Page Setup** from inside the preview re-paginates immediately.
+  - The paper is drawn white in every colour scheme, because it is paper. Only
+    the backdrop follows npad's scheme.
+  - With **no printer installed at all** the preview still works, against the
+    locale's paper size at 600 dpi.
+  - Windows 11's own print dialog has a preview pane that reports *"This app
+    doesn't support print preview"* for classic Win32 printing clients. That
+    pane is Windows'; npad's own preview is the one to use.
 - **Printing** (Ctrl+P) prints the *document*, not the window. The page has its
   own width, so the editor's word-wrap setting does not affect the output:
   lines too long for the printable width are re-wrapped there, broken at a

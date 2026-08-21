@@ -5,6 +5,47 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.0] - 2026-08-21
+
+### 🆕 Features
+- **Print Preview.** **File → Print Preview...** (Ctrl+Shift+P), with the
+  classic toolbar: Print, Page Setup, Previous/Next, One/Two Page, Zoom In/Out
+  and Close. PgUp/PgDn page, Home/End jump to the first and last page, the
+  arrow keys and the wheel scroll a zoomed page, Ctrl+P prints and Esc closes.
+  - Windows 11's modernised print dialog shows a preview pane for every app and
+    fills it with *"This app doesn't support print preview"* unless the app
+    hands it an XPS page source. npad draws its own instead: it works on
+    Windows 10 as well, needs no new dependency, and can be trusted because it
+    measures against the real printer.
+  - The preview is **WYSIWYG, not an approximation**. The page layout is
+    computed once on the printer's own information context in printer dots, and
+    the preview and the printer then replay the same coordinates. Measuring on
+    screen instead would round every glyph advance to a ~96 dpi pixel and the
+    preview would break lines where the printer does not.
+  - The preview is a snapshot: the document window is disabled while it is
+    open, so what you are looking at cannot quietly stop being true.
+  - Paper is always white, whatever colour scheme npad is in - it is paper.
+    Only the backdrop follows the scheme, live, across instances.
+
+### ✨ Improved
+- **Tabs print as tabs.** They now advance to the next 8-character stop, as
+  notepad prints them. Previously a tab was handed to the font as an ordinary
+  character, which draws nothing useful.
+- **Margins are measured from the edge of the sheet**, as notepad's are, rather
+  than from the edge of the printable area. Previously the printer's own
+  unprintable border was added to whatever you set, so a 0.75 in margin came
+  out around 0.95 in on a typical inkjet.
+- **Print keeps its font from the driver's substitution.** The print font is
+  requested as TrueType-only, so a driver cannot swap in a printer-resident
+  face with different metrics behind the layout's back.
+- **Printing with no printer installed** no longer leaves Print Preview
+  unavailable: it falls back to the locale's paper size at 600 dpi.
+
+### 🐛 Fixed
+- **The print job name and the `&f` header showed the whole path** rather than
+  the file name. The basename helper split on `/` only, which is right for the
+  update-download URL it was written for and wrong for a Windows path.
+
 ## [0.31.0] - 2026-08-19
 
 ### 🆕 Features

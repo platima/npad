@@ -171,6 +171,7 @@ static double qpc_ms(void) {
 #define ID_FILE_PREFERENCES_DEBUG 2021
 #define ID_FILE_PAGE_SETUP 2022
 #define ID_FILE_PRINT 2023
+#define ID_FILE_PRINT_PREVIEW 2024
 
 // Control ids for the modern Save dialog's custom encoding dropdown
 #define SAVE_ENC_GROUP_ID 1200
@@ -358,6 +359,13 @@ static void draw_highlight_overlay(HWND e, HRGN clip);
 static void resize_controls(Window *window);
 static bool register_window_class(void);
 static void apply_theme(Window *window);
+
+// Print Preview lives further down, next to the menu it hangs off; the message
+// loop and cleanup are above it, so they reach it through these
+static HWND preview_active_window(void);
+static HACCEL preview_active_accelerators(void);
+static void preview_close_active(void);
+static void preview_retheme_active(void);
 static void apply_font(Window *window);
 static void apply_font_default(Window *window);
 static void refresh_font_binding(Window *window);
@@ -733,14 +741,14 @@ static void resolve_icon_resources(int *big, int *small) {
 // inside the .ico was never used - the caption bar showed a downscaled 32px
 // instead. LoadImageW with explicit metrics picks the right entry per slot.
 // LR_SHARED means the handles are owned by the module and must not be freed.
-static void apply_window_icon(Window *window) {
-    if (!window || !window->hwnd)
+static void apply_window_icon_hwnd(HWND hwnd) {
+    if (!hwnd)
         return;
 
     int res_big = 0, res_small = 0;
     resolve_icon_resources(&res_big, &res_small);
 
-    UINT dpi = get_window_dpi(window->hwnd);
+    UINT dpi = get_window_dpi(hwnd);
     int big = g_GetSystemMetricsForDpi ? g_GetSystemMetricsForDpi(SM_CXICON, dpi)
                                        : GetSystemMetrics(SM_CXICON);
     int small = g_GetSystemMetricsForDpi ? g_GetSystemMetricsForDpi(SM_CXSMICON, dpi)
@@ -758,9 +766,14 @@ static void apply_window_icon(Window *window) {
     // So ICON_BIG first, ICON_SMALL last, and always both. Undocumented, found
     // by probing; do not "optimise" either send away.
     if (hbig)
-        SendMessageW(window->hwnd, WM_SETICON, ICON_BIG, (LPARAM) hbig);
+        SendMessageW(hwnd, WM_SETICON, ICON_BIG, (LPARAM) hbig);
     if (hsmall)
-        SendMessageW(window->hwnd, WM_SETICON, ICON_SMALL, (LPARAM) hsmall);
+        SendMessageW(hwnd, WM_SETICON, ICON_SMALL, (LPARAM) hsmall);
+}
+
+static void apply_window_icon(Window *window) {
+    if (window)
+        apply_window_icon_hwnd(window->hwnd);
 }
 
 static void set_frame_brush(COLORREF back) {
@@ -1271,6 +1284,8 @@ bool ui_platform_init(void) {
 }
 
 void ui_platform_cleanup(void) {
+    preview_close_active();
+
     if (g_find_dialog) {
         DestroyWindow(g_find_dialog);
         g_find_dialog = NULL;
@@ -1315,6 +1330,23 @@ int ui_platform_message_loop(void) {
             NPAD_ERROR_ERROR(NPAD_ERROR_SYSTEM, GetLastError(), "message loop",
                              "GetMessage failed");
             return 1;
+        }
+
+        HWND preview = preview_active_window();
+
+        // Print Preview's own shortcuts, only while it is the active window
+        HACCEL preview_accel = preview_active_accelerators();
+        if (preview && preview_accel && GetActiveWindow() == preview &&
+            TranslateAcceleratorW(preview, preview_accel, &msg)) {
+            continue;
+        }
+
+        // Tab/Escape/Enter between the preview's toolbar buttons. Restricted to
+        // messages bound for a CHILD of the preview: with focus on the frame
+        // itself the canvas keys must reach its own WM_KEYDOWN instead.
+        if (preview && msg.hwnd != preview && IsChild(preview, msg.hwnd) &&
+            IsDialogMessageW(preview, &msg)) {
+            continue;
         }
 
         // Keyboard navigation inside the modeless find/replace dialog
@@ -2754,9 +2786,14 @@ static bool github_url_to_path(const char *url, wchar_t *out, int out_cap) {
     return MultiByteToWideChar(CP_UTF8, 0, url + plen, -1, out, out_cap) > 0;
 }
 
-// The trailing path segment, i.e. the asset's file name.
+// The trailing path segment: an asset's file name from a URL, or a document's
+// from a filesystem path. Both separators are honoured - a URL cannot contain
+// a backslash, so splitting on it costs the URL caller nothing, and without it
+// the print job and the &f header showed a whole Windows path.
 static const wchar_t *path_basename(const wchar_t *path) {
-    const wchar_t *slash = wcsrchr(path, L'/');
+    const wchar_t *fwd = wcsrchr(path, L'/');
+    const wchar_t *back = wcsrchr(path, L'\\');
+    const wchar_t *slash = (fwd && back) ? (fwd > back ? fwd : back) : (fwd ? fwd : back);
     return slash ? slash + 1 : path;
 }
 
@@ -5695,6 +5732,7 @@ static void build_accelerators(Window *window) {
                       { FALT | FVIRTKEY, 'Z', ID_FORMAT_WORD_WRAP },
                       { FCONTROL | FVIRTKEY, 'M', ID_FORMAT_MONOSPACE },
                       { FCONTROL | FVIRTKEY, 'P', ID_FILE_PRINT },
+                      { FCONTROL | FSHIFT | FVIRTKEY, 'P', ID_FILE_PRINT_PREVIEW },
                       { FCONTROL | FVIRTKEY, 'E', ID_FORMAT_EOL_CYCLE },
                       { FCONTROL | FVIRTKEY, VK_OEM_COMMA, ID_FILE_PREFERENCES },
                       // Hidden: Preferences opened on the Debug diagnostics page
@@ -6377,6 +6415,893 @@ static void apply_update_indicator(Window *window) {
     menu_redraw(window->hwnd);
 }
 
+// The document, its display name, and the font this window is showing - the
+// three things Print and Print Preview both need.
+typedef struct {
+    wchar_t *text;
+    wchar_t *path; // NULL for an unsaved document
+    const wchar_t *name;
+    wchar_t *face; // NULL falls back to the print module's default
+    int point_size;
+} PrintContext;
+
+static bool print_context_build(Window *window, PrintContext *pc) {
+    ZeroMemory(pc, sizeof(*pc));
+    char *utf8 = ui_platform_get_text(window);
+    if (!utf8)
+        return false;
+    pc->text = utf8_to_wide(utf8);
+    free(utf8);
+    if (!pc->text)
+        return false;
+
+    const char *path = editor_get_current_file();
+    pc->path = path ? utf8_to_wide(path) : NULL;
+    pc->name = pc->path ? path_basename(pc->path) : L"Untitled";
+
+    // Use the font this window is showing, not a fixed default
+    const char *default_face = DEFAULT_MONO_FONT;
+    const char *key = active_font_key(window, &default_face);
+    char *face_utf8 = settings_get_string(key, default_face);
+    pc->face = face_utf8 ? utf8_to_wide(face_utf8) : NULL;
+    free(face_utf8);
+    pc->point_size = settings_get_int("font_size", 11);
+    return true;
+}
+
+static void print_context_free(PrintContext *pc) {
+    free(pc->text);
+    free(pc->path);
+    free(pc->face);
+}
+
+// ---------------------------------------------------------------------------
+// Print Preview
+//
+// Its own window class, because NPAD_WINDOW_CLASS is an identity filter: the
+// EnumWindows tallies and the cross-instance broadcasts all match on it, and a
+// preview counted as a document window would skew the New Window cascade and
+// receive npadCloseAll.
+//
+// The consequence is that the preview does NOT get the npadSettingsChanged
+// broadcast, so reload_and_apply_settings re-themes it explicitly.
+// ---------------------------------------------------------------------------
+
+#define NPAD_PREVIEW_CLASS L"NpadPrintPreview"
+
+#define PV_ID_PRINT 4101
+#define PV_ID_PAGE_SETUP 4102
+#define PV_ID_PREV 4103
+#define PV_ID_NEXT 4104
+#define PV_ID_TWO_UP 4105
+#define PV_ID_ZOOM_IN 4106
+#define PV_ID_ZOOM_OUT 4107
+#define PV_ID_CLOSE 4108
+#define PV_ID_INDICATOR 4109
+#define PV_ID_FIRST 4110
+#define PV_ID_LAST 4111
+
+#define PV_BUTTON_COUNT 8
+
+typedef struct {
+    HWND hwnd;
+    HWND owner;
+    PrintLayout *layout;
+    HWND button[PV_BUTTON_COUNT];
+    HWND indicator;
+    HFONT font;
+    HACCEL haccel;
+
+    wchar_t *text;  // The snapshot this preview was built from
+    wchar_t *title; //
+    wchar_t face[LF_FACESIZE];
+    int point_size;
+
+    int page;  // 1-based, leftmost visible
+    int pages; // Total
+    int zoom_pct;
+    bool two_up;
+    int scroll_x, scroll_y;
+    int max_scroll_x, max_scroll_y;
+    int band_h;
+    UINT dpi;
+
+    COLORREF backdrop;
+    COLORREF shadow;
+    COLORREF border;
+} PreviewWindow;
+
+static PreviewWindow *g_preview = NULL;
+
+static wchar_t *preview_wcsdup(const wchar_t *s) {
+    if (!s)
+        s = L"";
+    size_t n = wcslen(s) + 1;
+    wchar_t *copy = malloc(n * sizeof(wchar_t));
+    if (copy)
+        memcpy(copy, s, n * sizeof(wchar_t));
+    return copy;
+}
+
+static const int PV_ZOOM_STEPS[] = { 25, 50, 75, 100, 150, 200, 300, 400 };
+#define PV_ZOOM_STEP_COUNT ((int) (sizeof(PV_ZOOM_STEPS) / sizeof(PV_ZOOM_STEPS[0])))
+
+typedef struct {
+    RECT canvas;
+    int gap;
+    int page_w, page_h;
+    int across;
+    int content_w, content_h;
+} PreviewGeom;
+
+static void preview_geometry(const PreviewWindow *pv, PreviewGeom *g) {
+    RECT rc;
+    GetClientRect(pv->hwnd, &rc);
+    g->canvas = rc;
+    g->canvas.top = pv->band_h;
+    if (g->canvas.bottom < g->canvas.top)
+        g->canvas.bottom = g->canvas.top;
+    g->gap = MulDiv(12, pv->dpi, 96);
+    g->across = pv->two_up ? 2 : 1;
+
+    int phys_w = 1, phys_h = 1, pdx = 96, pdy = 96;
+    print_layout_paper(pv->layout, &phys_w, &phys_h, &pdx, &pdy);
+    if (phys_w < 1)
+        phys_w = 1;
+    if (phys_h < 1)
+        phys_h = 1;
+    if (pdx < 1)
+        pdx = 96;
+    if (pdy < 1)
+        pdy = pdx;
+    // The sheet's SHAPE is in inches, not dots: a printer can report different
+    // horizontal and vertical resolutions (600x300 is common on dot matrix and
+    // some draft modes), and comparing raw dot counts would preview a portrait
+    // page as landscape. Express the height in horizontal dots to compare.
+    int shape_h = MulDiv(phys_h, pdx, pdy);
+    if (shape_h < 1)
+        shape_h = 1;
+
+    int cw = g->canvas.right - g->canvas.left;
+    int ch = g->canvas.bottom - g->canvas.top;
+
+    int page_w;
+    if (pv->zoom_pct <= 0) {
+        int avail_w = cw - (g->across + 1) * g->gap;
+        int avail_h = ch - 2 * g->gap;
+        if (avail_w < 1)
+            avail_w = 1;
+        if (avail_h < 1)
+            avail_h = 1;
+        int by_w = avail_w / g->across;
+        int by_h = MulDiv(avail_h, phys_w, shape_h);
+        page_w = by_w < by_h ? by_w : by_h;
+    } else {
+        // 100% means one inch of paper is one inch on screen
+        page_w = MulDiv(MulDiv(phys_w, (int) pv->dpi, pdx), pv->zoom_pct, 100);
+    }
+    if (page_w < 8)
+        page_w = 8;
+    g->page_w = page_w;
+    g->page_h = MulDiv(page_w, shape_h, phys_w);
+    if (g->page_h < 8)
+        g->page_h = 8;
+
+    g->content_w = g->across * g->page_w + (g->across + 1) * g->gap;
+    g->content_h = g->page_h + 2 * g->gap;
+}
+
+// The zoom the Fit setting is currently equivalent to, so Zoom In from Fit
+// lands on the next step up rather than jumping to 25%.
+static int preview_effective_zoom(const PreviewWindow *pv) {
+    if (pv->zoom_pct > 0)
+        return pv->zoom_pct;
+    PreviewGeom g;
+    preview_geometry(pv, &g);
+    int phys_w = 1, pdx = 96;
+    print_layout_paper(pv->layout, &phys_w, NULL, &pdx, NULL);
+    if (phys_w < 1 || pdx < 1)
+        return 100;
+    int natural = MulDiv(phys_w, (int) pv->dpi, pdx);
+    if (natural < 1)
+        return 100;
+    return MulDiv(g.page_w, 100, natural);
+}
+
+static void preview_update_scroll(PreviewWindow *pv) {
+    PreviewGeom g;
+    preview_geometry(pv, &g);
+    int cw = g.canvas.right - g.canvas.left;
+    int ch = g.canvas.bottom - g.canvas.top;
+    pv->max_scroll_x = g.content_w > cw ? g.content_w - cw : 0;
+    pv->max_scroll_y = g.content_h > ch ? g.content_h - ch : 0;
+    if (pv->scroll_x > pv->max_scroll_x)
+        pv->scroll_x = pv->max_scroll_x;
+    if (pv->scroll_y > pv->max_scroll_y)
+        pv->scroll_y = pv->max_scroll_y;
+    if (pv->scroll_x < 0)
+        pv->scroll_x = 0;
+    if (pv->scroll_y < 0)
+        pv->scroll_y = 0;
+
+    SCROLLINFO si;
+    ZeroMemory(&si, sizeof(si));
+    si.cbSize = sizeof(si);
+    // DISABLENOSCROLL keeps both bars on screen, greyed when the page
+    // fits, so the canvas never changes size under the fit calculation
+    si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS | SIF_DISABLENOSCROLL;
+    si.nMin = 0;
+    si.nMax = g.content_h > 0 ? g.content_h - 1 : 0;
+    si.nPage = (UINT) (ch > 0 ? ch : 1);
+    si.nPos = pv->scroll_y;
+    SetScrollInfo(pv->hwnd, SB_VERT, &si, TRUE);
+
+    si.nMax = g.content_w > 0 ? g.content_w - 1 : 0;
+    si.nPage = (UINT) (cw > 0 ? cw : 1);
+    si.nPos = pv->scroll_x;
+    SetScrollInfo(pv->hwnd, SB_HORZ, &si, TRUE);
+}
+
+static void preview_update_indicator(PreviewWindow *pv) {
+    wchar_t text[64];
+    int last = pv->page + (pv->two_up ? 1 : 0);
+    if (last > pv->pages)
+        last = pv->pages;
+    if (pv->two_up && last > pv->page)
+        _snwprintf(text, 63, L"Pages %d-%d of %d", pv->page, last, pv->pages);
+    else
+        _snwprintf(text, 63, L"Page %d of %d", pv->page, pv->pages);
+    text[63] = L'\0';
+    SetWindowTextW(pv->indicator, text);
+
+    EnableWindow(pv->button[2], pv->page > 1);
+    EnableWindow(pv->button[3], last < pv->pages);
+    SetWindowTextW(pv->button[4], pv->two_up ? L"One Page" : L"Two Page");
+}
+
+static void preview_refresh(PreviewWindow *pv) {
+    if (pv->page < 1)
+        pv->page = 1;
+    if (pv->page > pv->pages)
+        pv->page = pv->pages;
+    preview_update_scroll(pv);
+    preview_update_indicator(pv);
+    InvalidateRect(pv->hwnd, NULL, FALSE);
+}
+
+static void preview_apply_theme(PreviewWindow *pv) {
+    bool dark = theme_colors(NULL, NULL);
+    // The paper is always white - it is paper. Only the backdrop follows npad.
+    pv->backdrop = dark ? RGB(24, 24, 24) : RGB(0x80, 0x80, 0x80);
+    pv->shadow = dark ? RGB(0, 0, 0) : RGB(0x50, 0x50, 0x50);
+    pv->border = RGB(0x40, 0x40, 0x40);
+    set_title_bar_dark(pv->hwnd, dark);
+    // The preview's own scroll bars are always on screen, so without this they
+    // are two full-height white bars against a near-black canvas - exactly
+    // what the editor's gutter needed fixing for
+    apply_scroll_bar_theme(pv->hwnd, dark);
+    apply_window_icon_hwnd(pv->hwnd);
+    InvalidateRect(pv->hwnd, NULL, TRUE);
+}
+
+static void preview_paint(PreviewWindow *pv, HDC hdc, const RECT *client) {
+    RECT band = *client;
+    band.bottom = pv->band_h;
+    FillRect(hdc, &band, GetSysColorBrush(COLOR_BTNFACE));
+
+    PreviewGeom g;
+    preview_geometry(pv, &g);
+
+    HBRUSH back = CreateSolidBrush(pv->backdrop);
+    if (back) {
+        FillRect(hdc, &g.canvas, back);
+        DeleteObject(back);
+    }
+
+    int saved = SaveDC(hdc);
+    IntersectClipRect(hdc, g.canvas.left, g.canvas.top, g.canvas.right, g.canvas.bottom);
+
+    int cw = g.canvas.right - g.canvas.left;
+    int ch = g.canvas.bottom - g.canvas.top;
+    int origin_x = g.canvas.left - pv->scroll_x + (g.content_w < cw ? (cw - g.content_w) / 2 : 0);
+    int origin_y = g.canvas.top - pv->scroll_y + (g.content_h < ch ? (ch - g.content_h) / 2 : 0);
+
+    int drop = MulDiv(4, pv->dpi, 96);
+    if (drop < 1)
+        drop = 1;
+    HBRUSH shadow = CreateSolidBrush(pv->shadow);
+    HBRUSH border = CreateSolidBrush(pv->border);
+
+    for (int i = 0; i < g.across; i++) {
+        int page = pv->page + i;
+        if (page > pv->pages)
+            break;
+
+        RECT pr;
+        pr.left = origin_x + g.gap + i * (g.page_w + g.gap);
+        pr.top = origin_y + g.gap;
+        pr.right = pr.left + g.page_w;
+        pr.bottom = pr.top + g.page_h;
+
+        if (shadow) {
+            RECT s1 = { pr.left + drop, pr.bottom, pr.right + drop, pr.bottom + drop };
+            RECT s2 = { pr.right, pr.top + drop, pr.right + drop, pr.bottom + drop };
+            FillRect(hdc, &s1, shadow);
+            FillRect(hdc, &s2, shadow);
+        }
+        FillRect(hdc, &pr, (HBRUSH) GetStockObject(WHITE_BRUSH));
+
+        int page_saved = print_layout_begin_scaled(pv->layout, hdc, &pr);
+        if (page_saved) {
+            print_layout_draw_page(pv->layout, hdc, page);
+            print_layout_end_scaled(hdc, page_saved);
+        }
+        if (border)
+            FrameRect(hdc, &pr, border);
+    }
+
+    if (shadow)
+        DeleteObject(shadow);
+    if (border)
+        DeleteObject(border);
+    if (saved)
+        RestoreDC(hdc, saved);
+}
+
+typedef struct {
+    int id;
+    const wchar_t *label;
+    int width; // 96-DPI units
+} PreviewButtonSpec;
+
+static const PreviewButtonSpec PV_BUTTONS[PV_BUTTON_COUNT] = {
+    { PV_ID_PRINT, L"Print...", 76 },    { PV_ID_PAGE_SETUP, L"Page Setup...", 92 },
+    { PV_ID_PREV, L"Previous", 72 },     { PV_ID_NEXT, L"Next", 64 },
+    { PV_ID_TWO_UP, L"Two Page", 80 },   { PV_ID_ZOOM_IN, L"Zoom In", 70 },
+    { PV_ID_ZOOM_OUT, L"Zoom Out", 76 }, { PV_ID_CLOSE, L"Close", 64 },
+};
+
+static void preview_layout_band(PreviewWindow *pv) {
+    int pad = MulDiv(8, pv->dpi, 96);
+    int gap = MulDiv(6, pv->dpi, 96);
+    int h = MulDiv(23, pv->dpi, 96);
+    pv->band_h = h + 2 * pad;
+
+    int x = pad;
+    for (int i = 0; i < PV_BUTTON_COUNT; i++) {
+        int w = MulDiv(PV_BUTTONS[i].width, pv->dpi, 96);
+        SetWindowPos(pv->button[i], NULL, x, pad, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+        x += w + gap;
+    }
+    // Keep WM_GETMINMAXINFO's minimum width in step with this row
+    SetWindowPos(pv->indicator, NULL, x + gap, pad + MulDiv(4, pv->dpi, 96),
+                 MulDiv(140, pv->dpi, 96), h, SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+static void preview_set_font(PreviewWindow *pv) {
+    if (pv->font)
+        DeleteObject(pv->font);
+    pv->font = CreateFontW(-MulDiv(9, (int) pv->dpi, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                           DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+                           DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    HFONT use = pv->font ? pv->font : (HFONT) GetStockObject(DEFAULT_GUI_FONT);
+    for (int i = 0; i < PV_BUTTON_COUNT; i++)
+        SendMessageW(pv->button[i], WM_SETFONT, (WPARAM) use, TRUE);
+    SendMessageW(pv->indicator, WM_SETFONT, (WPARAM) use, TRUE);
+}
+
+static void preview_zoom(PreviewWindow *pv, int direction) {
+    int current = preview_effective_zoom(pv);
+    int target = 0;
+    if (direction > 0) {
+        for (int i = 0; i < PV_ZOOM_STEP_COUNT; i++) {
+            if (PV_ZOOM_STEPS[i] > current + 1) {
+                target = PV_ZOOM_STEPS[i];
+                break;
+            }
+        }
+    } else {
+        for (int i = PV_ZOOM_STEP_COUNT - 1; i >= 0; i--) {
+            if (PV_ZOOM_STEPS[i] < current - 1) {
+                target = PV_ZOOM_STEPS[i];
+                break;
+            }
+        }
+    }
+    if (target == 0)
+        return;
+    pv->zoom_pct = target;
+    preview_refresh(pv);
+}
+
+static void preview_scroll_by(PreviewWindow *pv, int dx, int dy) {
+    int old_x = pv->scroll_x, old_y = pv->scroll_y;
+    pv->scroll_x += dx;
+    pv->scroll_y += dy;
+    if (pv->scroll_x > pv->max_scroll_x)
+        pv->scroll_x = pv->max_scroll_x;
+    if (pv->scroll_y > pv->max_scroll_y)
+        pv->scroll_y = pv->max_scroll_y;
+    if (pv->scroll_x < 0)
+        pv->scroll_x = 0;
+    if (pv->scroll_y < 0)
+        pv->scroll_y = 0;
+    if (pv->scroll_x == old_x && pv->scroll_y == old_y)
+        return;
+    SetScrollPos(pv->hwnd, SB_HORZ, pv->scroll_x, TRUE);
+    SetScrollPos(pv->hwnd, SB_VERT, pv->scroll_y, TRUE);
+    InvalidateRect(pv->hwnd, NULL, FALSE);
+}
+
+// Re-paginate after Page Setup changed the paper, or the scheme changed the
+// font. The document snapshot itself never changes: the owner is disabled
+// while the preview is open, so it cannot be edited underneath.
+static void preview_rebuild(PreviewWindow *pv) {
+    PrintLayout *rebuilt =
+        print_layout_create(pv->text, pv->title, pv->face[0] ? pv->face : NULL, pv->point_size);
+    if (!rebuilt)
+        return;
+    print_layout_free(pv->layout);
+    pv->layout = rebuilt;
+    pv->pages = print_layout_page_count(rebuilt);
+    if (pv->pages < 1)
+        pv->pages = 1;
+    preview_refresh(pv);
+}
+
+static void preview_enable_owner(PreviewWindow *pv, bool enable) {
+    if (!pv || !pv->owner)
+        return;
+    EnableWindow(pv->owner, enable ? TRUE : FALSE);
+    // Find/Replace is a separate top-level window owned by the document, so
+    // enabling the document does not reach it. Left alone, Replace All could
+    // rewrite the document behind a preview that claims to be showing it.
+    if (g_find_dialog)
+        EnableWindow(g_find_dialog, enable ? TRUE : FALSE);
+}
+
+static void preview_destroy(PreviewWindow *pv) {
+    if (!pv)
+        return;
+    HWND hwnd = pv->hwnd;
+    pv->hwnd = NULL;
+    // Before DestroyWindow, not after: re-enabling a modal window's owner only
+    // after it is gone lets Windows activate another application instead
+    preview_enable_owner(pv, true);
+    if (hwnd)
+        DestroyWindow(hwnd);
+}
+
+static LRESULT CALLBACK preview_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    PreviewWindow *pv = (PreviewWindow *) GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+
+    switch (msg) {
+        case WM_CREATE: {
+            CREATESTRUCTW *cs = (CREATESTRUCTW *) lparam;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR) cs->lpCreateParams);
+            // CreateWindowExW sends WM_SIZE before it returns, so the handle
+            // has to be live now - not after the call
+            PreviewWindow *created = (PreviewWindow *) cs->lpCreateParams;
+            if (created)
+                created->hwnd = hwnd;
+            return 0;
+        }
+
+        case WM_GETMINMAXINFO: {
+            // Sent before WM_NCCREATE, so pv is not available on the first one
+            MINMAXINFO *mmi = (MINMAXINFO *) lparam;
+            UINT dpi = (pv && pv->dpi) ? pv->dpi : get_window_dpi(hwnd);
+            // Wide enough for the whole toolbar band plus the page indicator
+            mmi->ptMinTrackSize.x = MulDiv(880, (int) dpi, 96);
+            mmi->ptMinTrackSize.y = MulDiv(340, (int) dpi, 96);
+            return 0;
+        }
+
+        case WM_SIZE:
+            if (pv) {
+                preview_layout_band(pv);
+                preview_update_scroll(pv);
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+            return 0;
+
+        case WM_ERASEBKGND:
+            return 1; // Everything is painted in WM_PAINT, off screen
+
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            if (pv && rc.right > 0 && rc.bottom > 0) {
+                HDC mem = CreateCompatibleDC(hdc);
+                // Compatible with the WINDOW dc: a memory DC's default bitmap
+                // is 1bpp, and asking it for a compatible bitmap gives a
+                // monochrome surface with no antialiasing at all
+                HBITMAP bmp = mem ? CreateCompatibleBitmap(hdc, rc.right, rc.bottom) : NULL;
+                HGDIOBJ old = bmp ? SelectObject(mem, bmp) : NULL;
+                if (bmp) {
+                    preview_paint(pv, mem, &rc);
+                    BitBlt(hdc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
+                } else {
+                    preview_paint(pv, hdc, &rc);
+                }
+                if (old)
+                    SelectObject(mem, old);
+                if (bmp)
+                    DeleteObject(bmp);
+                if (mem)
+                    DeleteDC(mem);
+            }
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+
+        case WM_VSCROLL:
+        case WM_HSCROLL: {
+            if (!pv)
+                return 0;
+            bool vert = (msg == WM_VSCROLL);
+            int step = MulDiv(48, pv->dpi, 96);
+            int page_step = vert ? (pv->max_scroll_y > 0 ? step * 4 : 0) : step * 4;
+            int delta = 0;
+            switch (LOWORD(wparam)) {
+                case SB_LINEUP:
+                    delta = -step;
+                    break;
+                case SB_LINEDOWN:
+                    delta = step;
+                    break;
+                case SB_PAGEUP:
+                    delta = -page_step;
+                    break;
+                case SB_PAGEDOWN:
+                    delta = page_step;
+                    break;
+                case SB_THUMBTRACK:
+                case SB_THUMBPOSITION: {
+                    SCROLLINFO si;
+                    ZeroMemory(&si, sizeof(si));
+                    si.cbSize = sizeof(si);
+                    si.fMask = SIF_TRACKPOS;
+                    if (GetScrollInfo(hwnd, vert ? SB_VERT : SB_HORZ, &si)) {
+                        delta = si.nTrackPos - (vert ? pv->scroll_y : pv->scroll_x);
+                    }
+                    break;
+                }
+                default:
+                    return 0;
+            }
+            preview_scroll_by(pv, vert ? 0 : delta, vert ? delta : 0);
+            return 0;
+        }
+
+        case WM_MOUSEWHEEL: {
+            if (!pv)
+                return 0;
+            int delta = GET_WHEEL_DELTA_WPARAM(wparam);
+            if (pv->max_scroll_y > 0) {
+                preview_scroll_by(pv, 0, -MulDiv(delta, MulDiv(48, pv->dpi, 96), WHEEL_DELTA));
+            } else if (delta < 0) {
+                SendMessageW(hwnd, WM_COMMAND, PV_ID_NEXT, 0);
+            } else if (delta > 0) {
+                SendMessageW(hwnd, WM_COMMAND, PV_ID_PREV, 0);
+            }
+            return 0;
+        }
+
+        case WM_KEYDOWN: {
+            if (!pv)
+                return 0;
+            int step = MulDiv(48, pv->dpi, 96);
+            switch (wparam) {
+                case VK_TAB: {
+                    // The frame holds focus, so the dialog manager never gets a
+                    // chance at Tab until focus is already on a button
+                    HWND next =
+                        GetNextDlgTabItem(hwnd, NULL, (GetKeyState(VK_SHIFT) & 0x8000) != 0);
+                    if (next)
+                        SetFocus(next);
+                    return 0;
+                }
+                case VK_UP:
+                    preview_scroll_by(pv, 0, -step);
+                    return 0;
+                case VK_DOWN:
+                    preview_scroll_by(pv, 0, step);
+                    return 0;
+                case VK_LEFT:
+                    preview_scroll_by(pv, -step, 0);
+                    return 0;
+                case VK_RIGHT:
+                    preview_scroll_by(pv, step, 0);
+                    return 0;
+                default:
+                    break;
+            }
+            break;
+        }
+
+        case WM_COMMAND: {
+            if (!pv)
+                return 0;
+            int id = LOWORD(wparam);
+            switch (id) {
+                case PV_ID_PRINT: {
+                    // Print the same snapshot, re-paginated against whichever
+                    // printer the user picks in the dialog.
+                    //
+                    // The document stays disabled throughout. The print dialog
+                    // is owned by the PREVIEW, so it is reachable regardless -
+                    // and enabling the document here would let it be closed,
+                    // freeing this structure, while we are still on the stack.
+                    PrintResult result = print_document(
+                        hwnd, pv->text, pv->title, pv->face[0] ? pv->face : NULL, pv->point_size);
+                    if (result == PRINT_RESULT_FAILED) {
+                        MessageBoxW(hwnd, L"The document could not be printed.", L"npad",
+                                    MB_OK | MB_ICONWARNING);
+                    }
+                    // Cancelling the print dialog leaves you in the preview;
+                    // only an actual print is finished with it
+                    if (result == PRINT_RESULT_PRINTED)
+                        preview_destroy(pv);
+                    else
+                        SetFocus(hwnd);
+                    return 0;
+                }
+                case PV_ID_PAGE_SETUP:
+                    print_show_page_setup(hwnd);
+                    ui_platform_notify_settings_changed();
+                    preview_rebuild(pv);
+                    SetFocus(hwnd);
+                    return 0;
+                case PV_ID_PREV:
+                    pv->page -= pv->two_up ? 2 : 1;
+                    pv->scroll_y = 0;
+                    preview_refresh(pv);
+                    SetFocus(hwnd);
+                    return 0;
+                case PV_ID_NEXT:
+                    pv->page += pv->two_up ? 2 : 1;
+                    pv->scroll_y = 0;
+                    preview_refresh(pv);
+                    SetFocus(hwnd);
+                    return 0;
+                case PV_ID_FIRST:
+                    pv->page = 1;
+                    pv->scroll_y = 0;
+                    preview_refresh(pv);
+                    return 0;
+                case PV_ID_LAST:
+                    pv->page = pv->pages;
+                    pv->scroll_y = 0;
+                    preview_refresh(pv);
+                    return 0;
+                case PV_ID_TWO_UP:
+                    pv->two_up = !pv->two_up;
+                    if (pv->two_up && (pv->page % 2) == 0)
+                        pv->page--;
+                    pv->zoom_pct = 0; // Fit, or two pages would not both show
+                    preview_refresh(pv);
+                    SetFocus(hwnd);
+                    return 0;
+                case PV_ID_ZOOM_IN:
+                    preview_zoom(pv, 1);
+                    SetFocus(hwnd);
+                    return 0;
+                case PV_ID_ZOOM_OUT:
+                    preview_zoom(pv, -1);
+                    SetFocus(hwnd);
+                    return 0;
+                case PV_ID_CLOSE:
+                case IDCANCEL:
+                    preview_destroy(pv);
+                    return 0;
+                default:
+                    break;
+            }
+            return 0;
+        }
+
+        case WM_DPICHANGED: {
+            if (pv) {
+                RECT *suggested = (RECT *) lparam;
+                pv->dpi = HIWORD(wparam);
+                SetWindowPos(hwnd, NULL, suggested->left, suggested->top,
+                             suggested->right - suggested->left, suggested->bottom - suggested->top,
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+                preview_set_font(pv);
+                preview_layout_band(pv);
+                apply_window_icon_hwnd(hwnd); // The icon slots are pixel-sized
+                preview_refresh(pv);
+            }
+            return 0;
+        }
+
+        case WM_CLOSE:
+            preview_destroy(pv);
+            return 0;
+
+        case WM_DESTROY:
+            if (pv) {
+                preview_enable_owner(pv, true); // Idempotent; the normal path did it already
+                if (pv->owner)
+                    SetActiveWindow(pv->owner);
+                if (pv->haccel)
+                    DestroyAcceleratorTable(pv->haccel);
+                if (pv->font)
+                    DeleteObject(pv->font);
+                print_layout_free(pv->layout);
+                free(pv->text);
+                free(pv->title);
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                if (g_preview == pv)
+                    g_preview = NULL;
+                free(pv);
+            }
+            return 0;
+
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wparam, lparam);
+}
+
+static bool register_preview_class(void) {
+    static bool registered = false;
+    if (registered)
+        return true;
+
+    WNDCLASSEXW wc;
+    ZeroMemory(&wc, sizeof(wc));
+    wc.cbSize = sizeof(WNDCLASSEXW);
+    wc.style = CS_HREDRAW | CS_VREDRAW;
+    wc.lpfnWndProc = preview_proc;
+    wc.hInstance = g_hinstance;
+    wc.hIcon = LoadIconW(g_hinstance, MAKEINTRESOURCEW(IDI_NPAD));
+    wc.hCursor = LoadCursorW(NULL, (LPCWSTR) IDC_ARROW);
+    wc.hbrBackground = NULL; // Painted per scheme, off screen, in WM_PAINT
+    wc.lpszClassName = NPAD_PREVIEW_CLASS;
+    wc.hIconSm = LoadIconW(g_hinstance, MAKEINTRESOURCEW(IDI_NPAD));
+
+    registered = (RegisterClassExW(&wc) != 0);
+    if (!registered) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Preview class registration",
+                         "Failed to register the print preview window class");
+    }
+    return registered;
+}
+
+static void show_print_preview(Window *owner, const wchar_t *text, const wchar_t *title,
+                               const wchar_t *face, int point_size) {
+    if (!owner || !owner->hwnd)
+        return;
+    if (g_preview) {
+        SetForegroundWindow(g_preview->hwnd);
+        return;
+    }
+    if (!register_preview_class())
+        return;
+
+    HCURSOR wait = LoadCursorW(NULL, (LPCWSTR) IDC_WAIT);
+    HCURSOR old_cursor = wait ? SetCursor(wait) : NULL;
+
+    PreviewWindow *pv = calloc(1, sizeof(*pv));
+    if (!pv) {
+        if (old_cursor)
+            SetCursor(old_cursor);
+        return;
+    }
+
+    pv->owner = owner->hwnd;
+    pv->text = preview_wcsdup(text);
+    pv->title = preview_wcsdup(title ? title : L"Untitled");
+    if (face)
+        wcsncpy(pv->face, face, LF_FACESIZE - 1);
+    pv->point_size = point_size;
+    pv->page = 1;
+    pv->zoom_pct = 0; // Fit
+    pv->dpi = get_window_dpi(owner->hwnd);
+
+    pv->layout =
+        (pv->text && pv->title) ? print_layout_create(pv->text, pv->title, face, point_size) : NULL;
+    if (old_cursor)
+        SetCursor(old_cursor);
+
+    if (!pv->layout) {
+        free(pv->text);
+        free(pv->title);
+        free(pv);
+        MessageBoxW(owner->hwnd, L"The document could not be prepared for preview.", L"npad",
+                    MB_OK | MB_ICONWARNING);
+        return;
+    }
+    pv->pages = print_layout_page_count(pv->layout);
+    if (pv->pages < 1)
+        pv->pages = 1;
+
+    int x = 0, y = 0, w = 800, h = 600;
+    ui_platform_get_default_window_rect(&x, &y, &w, &h);
+
+    pv->hwnd = CreateWindowExW(0, NPAD_PREVIEW_CLASS, L"Print Preview - npad",
+                               WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_HSCROLL | WS_VSCROLL, x,
+                               y, w, h, owner->hwnd, NULL, g_hinstance, pv);
+    if (!pv->hwnd) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_UI, GetLastError(), "Preview window",
+                         "Failed to create the print preview window");
+        print_layout_free(pv->layout);
+        free(pv->text);
+        free(pv->title);
+        free(pv);
+        return;
+    }
+
+    // The window is placed from the primary monitor's work area, so re-read
+    // the DPI from where it actually landed rather than from the owner
+    pv->dpi = get_window_dpi(pv->hwnd);
+
+    for (int i = 0; i < PV_BUTTON_COUNT; i++) {
+        pv->button[i] = CreateWindowExW(
+            0, L"BUTTON", PV_BUTTONS[i].label, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            0, 0, 10, 10, pv->hwnd, (HMENU) (INT_PTR) PV_BUTTONS[i].id, g_hinstance, NULL);
+    }
+    pv->indicator =
+        CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP, 0, 0, 10, 10,
+                        pv->hwnd, (HMENU) (INT_PTR) PV_ID_INDICATOR, g_hinstance, NULL);
+
+    ACCEL accel[] = {
+        { FVIRTKEY, VK_ESCAPE, PV_ID_CLOSE },       { FVIRTKEY, VK_PRIOR, PV_ID_PREV },
+        { FVIRTKEY, VK_NEXT, PV_ID_NEXT },          { FVIRTKEY, VK_HOME, PV_ID_FIRST },
+        { FVIRTKEY, VK_END, PV_ID_LAST },           { FCONTROL | FVIRTKEY, 'P', PV_ID_PRINT },
+        { FVIRTKEY, VK_OEM_PLUS, PV_ID_ZOOM_IN },   { FVIRTKEY, VK_ADD, PV_ID_ZOOM_IN },
+        { FVIRTKEY, VK_OEM_MINUS, PV_ID_ZOOM_OUT }, { FVIRTKEY, VK_SUBTRACT, PV_ID_ZOOM_OUT },
+    };
+    pv->haccel = CreateAcceleratorTableW(accel, (int) (sizeof(accel) / sizeof(accel[0])));
+
+    if (!print_layout_has_printer(pv->layout)) {
+        // Measured against a synthetic sheet, so do not let it pass for the
+        // real thing
+        SetWindowTextW(pv->hwnd, L"Print Preview (no printer installed) - npad");
+    }
+
+    g_preview = pv;
+
+    preview_set_font(pv);
+    preview_layout_band(pv);
+    preview_apply_theme(pv);
+
+    // Modal to its own document: the preview is a snapshot, and letting the
+    // text change behind it would silently make it a lie
+    preview_enable_owner(pv, false);
+
+    ShowWindow(pv->hwnd, SW_SHOW);
+    SetFocus(pv->hwnd);
+    preview_refresh(pv);
+}
+
+static HWND preview_active_window(void) {
+    return g_preview ? g_preview->hwnd : NULL;
+}
+
+static HACCEL preview_active_accelerators(void) {
+    return g_preview ? g_preview->haccel : NULL;
+}
+
+static void preview_close_active(void) {
+    if (g_preview)
+        preview_destroy(g_preview);
+    g_preview = NULL;
+}
+
+static void preview_retheme_active(void) {
+    if (!g_preview)
+        return;
+    preview_apply_theme(g_preview);
+    // Margins, orientation and the header/footer are settings too, so a change
+    // from another instance invalidates the pagination, not just the colours
+    preview_rebuild(g_preview);
+}
+
 static void create_menu(Window *window) {
     HMENU hmenu = CreateMenu();
     HMENU hfile = CreatePopupMenu();
@@ -6405,6 +7330,7 @@ static void create_menu(Window *window) {
     AppendMenuW(hfile, MF_STRING, ID_FILE_SAVE_AS, L"Save &As...\tCtrl+Shift+S");
     AppendMenuW(hfile, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hfile, MF_STRING, ID_FILE_PAGE_SETUP, L"Page Set&up...");
+    AppendMenuW(hfile, MF_STRING, ID_FILE_PRINT_PREVIEW, L"Print Pre&view...	Ctrl+Shift+P");
     AppendMenuW(hfile, MF_STRING, ID_FILE_PRINT, L"&Print...	Ctrl+P");
     AppendMenuW(hfile, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hfile, MF_STRING | MF_POPUP, (UINT_PTR) hrecent, L"&Recent Files");
@@ -6782,33 +7708,24 @@ static void handle_command(Window *window, WORD command) {
         case ID_FILE_PRINT: {
             // Print the DOCUMENT, not what the window shows: the printed page
             // has its own width, so the editor's wrapping is irrelevant.
-            char *utf8 = ui_platform_get_text(window);
-            if (!utf8)
+            PrintContext pc;
+            if (!print_context_build(window, &pc))
                 return;
-            wchar_t *wide = utf8_to_wide(utf8);
-            free(utf8);
-            if (!wide)
-                return;
-
-            const char *path = editor_get_current_file();
-            wchar_t *title = path ? utf8_to_wide(path) : NULL;
-            const wchar_t *shown = title ? path_basename(title) : L"Untitled";
-
-            // Print in the font this window is showing, not a fixed default
-            const char *default_face = DEFAULT_MONO_FONT;
-            const char *key = active_font_key(window, &default_face);
-            char *face_utf8 = settings_get_string(key, default_face);
-            wchar_t *face = face_utf8 ? utf8_to_wide(face_utf8) : NULL;
-            free(face_utf8);
-
-            if (!print_document(window->hwnd, wide, shown, face,
-                                settings_get_int("font_size", 11))) {
+            if (print_document(window->hwnd, pc.text, pc.name, pc.face, pc.point_size) ==
+                PRINT_RESULT_FAILED) {
                 MessageBoxW(window->hwnd, L"The document could not be printed.", L"npad",
                             MB_OK | MB_ICONWARNING);
             }
-            free(face);
-            free(title);
-            free(wide);
+            print_context_free(&pc);
+            return;
+        }
+
+        case ID_FILE_PRINT_PREVIEW: {
+            PrintContext pc;
+            if (!print_context_build(window, &pc))
+                return;
+            show_print_preview(window, pc.text, pc.name, pc.face, pc.point_size);
+            print_context_free(&pc);
             return;
         }
 
@@ -7153,6 +8070,10 @@ static void reload_and_apply_settings(Window *window) {
     apply_update_indicator(window); // Mode/skip/latest may have changed live
     g_menu_redraw_defer--;
     menu_redraw(window->hwnd);
+
+    // Print Preview has its own window class, so the broadcast that drives
+    // re-theming never reaches it - push the new scheme in by hand
+    preview_retheme_active();
 
     // The Find dialog is modeless, so a live change to Markdown support has to
     // reach its escapes checkbox - WM_INITDIALOG only runs once

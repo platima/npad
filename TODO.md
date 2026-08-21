@@ -89,10 +89,17 @@ drawn as ordinary push buttons instead of command links).
 
 ---
 
-## 🧪 Needs testing - v0.31.0 printing
+## 🧪 Needs testing - v0.31.0 printing and v0.32.0 preview
 
-New code, and none of it is verifiable from here: it needs a real printer (or
-Microsoft Print to PDF, which exercises the same path).
+**Print Preview (v0.32.0) makes most of this checkable without printing.** The
+preview is measured against the real printer, so what it shows is what the page
+will be - wrap points, pagination, margins, header/footer and orientation can
+all be confirmed on screen. Only the last few items need paper or a PDF.
+
+Reported 2026-08-21: Windows 11's own print dialog says *"This app doesn't
+support print preview"* in its preview pane. That pane wants an XPS page
+source from the app; npad draws its own preview instead, which also works on
+Windows 10. Not a defect to chase further.
 
 - [ ] **Ctrl+P** and File > Print both open the print dialog; printing produces
       the document's text.
@@ -119,6 +126,39 @@ Microsoft Print to PDF, which exercises the same path).
 - [ ] The job appears in the print queue named after the **file**, not "npad".
 - [ ] **Regression check:** startup is unchanged for a launch that never prints.
       comdlg32 is delay-loaded and confirmed absent from the static import table.
+
+**v0.32.0 - Print Preview**
+- [ ] Ctrl+Shift+P and File > Print Preview open it; Esc and Close close it.
+- [ ] The document window is disabled while the preview is open, and usable
+      again the moment it closes (this is the one that must not go wrong - a
+      permanently disabled main window would be unrecoverable without Task
+      Manager). Check after Close, after Esc, after the X, and after printing.
+- [ ] Page count is right, Previous/Next grey out at the ends, and the
+      indicator reads "Page N of M".
+- [ ] Two Page shows two sheets and the indicator reads "Pages N-M of T";
+      One Page returns.
+- [ ] Zoom In / Zoom Out step through the sizes, scroll bars become live when
+      the page is larger than the window, and the arrow keys and wheel scroll it.
+- [ ] PgUp/PgDn page, Home/End jump to the first and last page.
+- [ ] **Page Setup from inside the preview re-paginates immediately** - change
+      the margins or orientation and the pages should visibly change.
+- [ ] Print from inside the preview prints the same thing and closes it.
+- [ ] **Fidelity, the whole point:** print one page to PDF and compare it with
+      the preview. Wrap points, line count per page and header/footer position
+      should match exactly, not approximately.
+- [ ] A document containing tabs: they should advance to 8-character stops,
+      not draw a box or nothing.
+- [ ] Margins now measure from the sheet edge. A 0.75 in margin should
+      measure 0.75 in on the paper, not ~0.95 in.
+- [ ] Dark scheme: the backdrop follows npad, the paper stays white, and the
+      title bar is dark. Change the scheme in another instance while the
+      preview is open - it should re-theme live.
+- [ ] Drag the preview to a monitor at a different DPI: the toolbar rescales
+      and nothing clips.
+- [ ] Keyboard: Tab moves between the toolbar buttons; with focus back on the
+      canvas the arrows scroll again. Typing in the editor must be unaffected
+      once the preview is closed.
+- [ ] An empty document, and a single very long line with no spaces.
 
 ---
 

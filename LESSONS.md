@@ -121,9 +121,82 @@ The two-line "action, then explanation" style only renders as intended with
 that flag; without it Windows draws a normal push button around the whole
 string, stretching the dialog and pushing text outside the button.
 
+**Widening a `bool` return to an enum silently inverts every `!` call site.**
+`print_document` grew a three-way result so Cancel could be told from failure;
+`PRINT_RESULT_PRINTED` is 0, so the surviving `if (!print_document(...))` then
+warned "could not be printed" on every *successful* print and stayed silent on
+real failures. The compiler has nothing to say about it. Grep every call site
+when a return type changes, even when the build is clean.
+
 **Mnemonics collide silently.** `&Paste` and `&Preferences` in one popup meant
 `Alt+E, P` pasted. Check the whole popup's set, including items appended to the
 *context* menu from elsewhere.
+
+## Win32: printing and preview
+
+**Measure the layout on the printer, never on screen.** Glyph advances are
+integer-rounded per ppem, so the same font realises differently at 600 dpi and
+at ~96 dpi. A preview that re-measures on its own DC breaks lines a word early
+or late and stops being a preview. Compute pagination once on a printer
+information context in printer dots, store `(page, x, y, offset, len)` runs,
+and have the preview and the printer both replay them.
+
+**`CreateICW` needs no dialog and starts no job.** `PrintDlgW` with
+`PD_RETURNDEFAULT` returns the default printer's `DEVNAMES` + `DEVMODE`
+silently, and `CreateICW(driver, device, NULL, devmode)` measures against it.
+That keeps printing on the already delay-loaded comdlg32 — winspool.drv
+(`GetDefaultPrinterW`, `OpenPrinterW`) is not linked and does not need to be.
+
+**Copy a DEVMODE as `dmSize + dmDriverExtra`, not `sizeof(DEVMODEW)`.** The
+driver-private tail carries the real settings; a truncated copy looks valid,
+applies cleanly, and quietly prints with default paper and orientation. And a
+field is honoured only when its bit is set in `dmFields`.
+
+**The printer DC's origin is the printable corner, not the paper corner.**
+`PHYSICALWIDTH`/`PHYSICALHEIGHT` are the sheet; `PHYSICALOFFSETX/Y` is the
+hardware margin. Margins measured from the printable corner silently add the
+hardware margin to whatever the user set. To scale printer coordinates into a
+preview rect, `MM_ANISOTROPIC` with window extent = sheet, viewport extent =
+the on-screen rect, and window origin = `(-PHYSICALOFFSETX, -PHYSICALOFFSETY)`
+makes logical units printer dots and logical (0,0) the printer's own origin.
+
+**`CreateCompatibleBitmap` must take the WINDOW dc.** Passing the memory DC
+returns a 1 bpp monochrome bitmap, because a fresh memory DC's default bitmap
+is monochrome — the preview then renders with no antialiasing at all.
+
+**Windows 11's modernised print dialog has its own preview pane**, and shows
+*"This app doesn't support print preview"* for classic GDI printing clients
+that have not handed it an XPS page source. Satisfying it means generating XPS;
+drawing our own preview costs less, works on Windows 10 too, and is the only
+version that can be measured against the real printer.
+
+**Paper shape is inches, not dots.** `PHYSICALWIDTH`/`PHYSICALHEIGHT` are dot
+counts on two independent rulers, and `LOGPIXELSX != LOGPIXELSY` on plenty of
+devices (600x300 is ordinary on dot matrix and in draft modes). Comparing the
+raw counts previews a portrait sheet as landscape and squashes every glyph with
+it. Convert one axis before taking the ratio.
+
+**`CreateWindowExW` sends `WM_SIZE` before it returns.** Storing the HWND in
+the struct only after the call means the first layout pass runs against
+`hwnd == NULL` - and `InvalidateRect(NULL, ...)` does not no-op, it invalidates
+the entire desktop. Set it in `WM_CREATE` from the handle you are given.
+
+**Re-enable a modal window's owner BEFORE `DestroyWindow`, not in
+`WM_DESTROY`.** Destroying the only enabled window in the app lets Windows pick
+the next candidate, which is whatever other application is behind it - npad
+drops out of the foreground as the dialog closes.
+
+**Disabling the document window does not reach Find/Replace.** It is a separate
+top-level window owned by the document, so `EnableWindow(doc, FALSE)` leaves it
+live - and Replace All would then edit the document behind a "modal" preview
+that claims to be showing it.
+
+**A new top-level window must not reuse `NPAD_WINDOW_CLASS`.** Three
+`EnumWindows` callbacks identify document windows by that class name, so a
+helper window registered under it gets counted in the New Window cascade and
+receives `npadCloseAll` / `npadCloseForHandoff`. The flip side: a distinct
+class means the `npadSettingsChanged` broadcast never arrives, so
+`reload_and_apply_settings` has to push the theme in by hand.
 
 ## Core: settings
 
