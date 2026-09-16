@@ -277,6 +277,27 @@ support needs length-carrying buffers throughout.
 
 ## Installers
 
+**Inno Setup's check lists do not scale their check box offset.**
+`TNewCheckListBox.Offset` defaults to 2 (Components) and 4 (Tasks) raw
+pixels, and stays there at any DPI while the glyph scales; at 150% with the
+default `WizardSizePercent` (`ScaleX(100)` = 167) the top-level boxes are drawn
+half outside the list. Not the wizard style: identical in `modern`, `classic`
+and `excludelightcontrols`, on 6.7.0 and 6.7.3. Set
+`WizardForm.ComponentsList.Offset := ScaleX(8)` (and the Tasks list) in
+`InitializeWizard`. Seen only when the maintainer's display went to 150% -
+the script had not changed in twelve releases.
+
+**The wizard can be inspected without touching the keyboard or mouse.** The
+bootstrapper spawns `<name>.tmp` for the wizard, so find it by window class
+(`TWizardForm`) rather than PID; `BM_CLICK` on the `&Next` / `I &accept`
+buttons walks the pages, `PrintWindow` with `PW_RENDERFULLCONTENT` captures
+them, and `WM_CLOSE` + `BM_CLICK` on the "Exit Setup?" Yes button leaves
+without installing (exit code 2). `/LOG=` plus `Log()` in `[Code]` reads any
+property back. `scripts/probe-installer.ps1` does all of it. Local variants
+build with ISCC from a copy of the script with the font `Source:` lines
+removed - the fonts are not in the tree.
+
+
 **Inno's `UsePreviousTasks` defaults to `yes`, and it beats `Flags: unchecked`.**
 Changing a task's default only affects users with no prior selection; anyone who
 ticked it once gets it restored on every upgrade. → Renaming the task removes

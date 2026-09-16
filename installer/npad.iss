@@ -65,7 +65,9 @@ Name: "fonts\opendyslexic"; Description: "OpenDyslexic (reading assistance)"; Ty
 Name: "addtopath"; Description: "Add npad to the PATH (run 'npad' from Command Prompt / PowerShell)"
 Name: "assoc"; Description: "Register npad as an editor for:"
 Name: "assoc\text"; Description: "Text files (.txt)"
-Name: "assoc\markdown"; Description: "Markdown & documents (.md, .markdown)"; Flags: unchecked
+; "&&": a single & is an accelerator prefix in task descriptions, and rendered
+; as an underscore under the following space
+Name: "assoc\markdown"; Description: "Markdown && documents (.md, .markdown)"; Flags: unchecked
 Name: "assoc\data"; Description: "Data files (.csv, .tsv, .json, .xml, .yaml, .yml, .toml)"; Flags: unchecked
 Name: "assoc\config"; Description: "Config files (.ini, .cfg, .conf)"; Flags: unchecked
 Name: "assoc\log"; Description: "Log files (.log)"; Flags: unchecked
@@ -287,6 +289,19 @@ Filename: "ms-settings:defaultapps"; Description: "Open Default Apps settings (m
 Filename: "ms-settings:advanced-apps"; Description: "Open Settings to disable the Windows 11 Notepad alias (App execution aliases)"; Flags: postinstall shellexec skipifsilent; Check: ShouldOfferAliasSettings
 
 [Code]
+// The Components and Tasks check lists draw their check boxes at a raw,
+// unscaled Offset of 2 and 4 pixels while the glyph itself scales with DPI.
+// At 150% (ScaleX(100) = 167 with the default WizardSizePercent) the top-level
+// boxes land half outside the list's left edge; the nested ones survive only
+// because their indent pushes them right. Reproduced with Inno Setup 6.7.0
+// and 6.7.3, in modern, classic and excludelightcontrols styles alike; fine
+// at 96 DPI. Scaling the offset ourselves is the whole fix.
+procedure InitializeWizard();
+begin
+  WizardForm.ComponentsList.Offset := ScaleX(8);
+  WizardForm.TasksList.Offset := ScaleX(8);
+end;
+
 // --- Was npad already running when setup started? -------------------------
 // The relaunch checkbox should only appear when setup actually interrupted a
 // running instance - offering to start an app the user was not using is noise.

@@ -5,7 +5,27 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.32.2] - 2026-09-16
+## [0.32.3] - 2026-09-16
+
+### 🐛 Fixed
+- **Installer: the Components and Tasks check boxes were drawn half outside
+  the list at 150% scaling.** Inno Setup's check list places its boxes at a
+  raw 2-4 pixel offset that it never scales, while the box glyph itself grows
+  with DPI; at 150% the top-level boxes fell off the left edge (nested ones
+  only survived because their indent pushed them right). Reproduced with Inno
+  6.7.0 and 6.7.3, in every wizard style, and fine at 96 DPI. The installer
+  now scales that offset itself. Nothing in npad's script had changed - the
+  trigger was the display, not the release.
+- **Installer: "Markdown & documents" rendered as "Markdown _documents".** A
+  single `&` is an accelerator prefix in a task description.
+
+### 🔧 Internal
+- `scripts/probe-installer.ps1` drives the setup wizard with window messages
+  only (no real input), captures the Components and Tasks pages with
+  `PrintWindow`, dumps every control's geometry, and exits before anything is
+  installed. This is how the above was found and verified.
+
+
 
 ### 🐛 Fixed
 - **Idle windows no longer restamp the document for nothing.** Two things
