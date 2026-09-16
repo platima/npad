@@ -36,6 +36,9 @@
 typedef struct {
     int left, right, top, bottom; // Thousandths of an inch, from the sheet edge
     short orientation;            // DMORIENT_PORTRAIT / _LANDSCAPE, 0 = printer default
+    short paper_size;             // DMPAPER_*, 0 = printer default
+    short paper_width;            // Tenths of a millimetre, only for DMPAPER_USER
+    short paper_length;
 } PageSetup;
 
 // One drawn segment of text: a wrapped line, or the piece between two tab
@@ -83,12 +86,63 @@ typedef struct {
     bool present;
 } PrintDevice;
 
+static bool device_acquire_default(PrintDevice *dev);
+static void device_free(PrintDevice *dev);
+
 static void page_setup_load(PageSetup *ps) {
     ps->left = settings_get_int("print_margin_left", MARGIN_DEFAULT_SIDE);
     ps->right = settings_get_int("print_margin_right", MARGIN_DEFAULT_SIDE);
     ps->top = settings_get_int("print_margin_top", MARGIN_DEFAULT_TOPBOTTOM);
     ps->bottom = settings_get_int("print_margin_bottom", MARGIN_DEFAULT_TOPBOTTOM);
     ps->orientation = (short) settings_get_int("print_orientation", 0);
+    ps->paper_size = (short) settings_get_int("print_paper_size", 0);
+    ps->paper_width = (short) settings_get_int("print_paper_width", 0);
+    ps->paper_length = (short) settings_get_int("print_paper_length", 0);
+}
+
+// Force the choices made in Page Setup into a DEVMODE. A field is honoured
+// only when its bit is set in dmFields; a zero means "leave the printer's own".
+// Every path that measures or prints must go through this, or the preview,
+// the printout and the Page Setup dialog each end up describing a different
+// sheet - which is exactly how "the preview fits more per line than the PDF"
+// happened when only the orientation was carried across.
+static void page_setup_apply(const PageSetup *ps, DEVMODEW *dm) {
+    if (!dm)
+        return;
+    if (ps->orientation != 0) {
+        dm->dmFields |= DM_ORIENTATION;
+        dm->dmOrientation = ps->orientation;
+    }
+    if (ps->paper_size != 0) {
+        dm->dmFields |= DM_PAPERSIZE;
+        dm->dmPaperSize = ps->paper_size;
+        if (ps->paper_size == DMPAPER_USER && ps->paper_width > 0 && ps->paper_length > 0) {
+            dm->dmFields |= DM_PAPERWIDTH | DM_PAPERLENGTH;
+            dm->dmPaperWidth = ps->paper_width;
+            dm->dmPaperLength = ps->paper_length;
+        } else {
+            // A named size and an explicit width/length are mutually exclusive
+            // to most drivers; carrying both makes some ignore the name
+            dm->dmFields &= ~(DWORD) (DM_PAPERWIDTH | DM_PAPERLENGTH);
+        }
+    }
+}
+
+// Read those same choices back out of a DEVMODE the dialog returned
+static void page_setup_read(PageSetup *ps, const DEVMODEW *dm) {
+    if (!dm)
+        return;
+    if (dm->dmFields & DM_ORIENTATION)
+        ps->orientation = dm->dmOrientation;
+    if (dm->dmFields & DM_PAPERSIZE) {
+        ps->paper_size = dm->dmPaperSize;
+        ps->paper_width = 0;
+        ps->paper_length = 0;
+        if ((dm->dmFields & (DM_PAPERWIDTH | DM_PAPERLENGTH)) == (DM_PAPERWIDTH | DM_PAPERLENGTH)) {
+            ps->paper_width = dm->dmPaperWidth;
+            ps->paper_length = dm->dmPaperLength;
+        }
+    }
 }
 
 static void page_setup_save(const PageSetup *ps) {
@@ -97,6 +151,9 @@ static void page_setup_save(const PageSetup *ps) {
     settings_set_int("print_margin_top", ps->top);
     settings_set_int("print_margin_bottom", ps->bottom);
     settings_set_int("print_orientation", ps->orientation);
+    settings_set_int("print_paper_size", ps->paper_size);
+    settings_set_int("print_paper_width", ps->paper_width);
+    settings_set_int("print_paper_length", ps->paper_length);
     settings_save();
 }
 
@@ -139,18 +196,25 @@ void print_show_page_setup(HWND owner) {
     psd.rtMargin.top = ps.top;
     psd.rtMargin.bottom = ps.bottom;
 
-    if (ps.orientation != 0) {
-        psd.hDevMode = GlobalAlloc(GHND, sizeof(DEVMODEW));
+    // Seed the dialog with the default printer's own DEVMODE (the full one,
+    // driver-private tail included) with our persisted choices applied on
+    // top. A fabricated sizeof(DEVMODEW) structure carrying only an
+    // orientation made the dialog show the printer's paper rather than the
+    // one previously chosen, and lost the choice again on OK.
+    PrintDevice dev;
+    if (device_acquire_default(&dev) && dev.devmode) {
+        size_t bytes = (size_t) dev.devmode->dmSize + dev.devmode->dmDriverExtra;
+        psd.hDevMode = GlobalAlloc(GHND, bytes);
         if (psd.hDevMode) {
             DEVMODEW *dm = GlobalLock(psd.hDevMode);
             if (dm) {
-                dm->dmSize = sizeof(DEVMODEW);
-                dm->dmFields = DM_ORIENTATION;
-                dm->dmOrientation = ps.orientation;
+                memcpy(dm, dev.devmode, bytes);
+                page_setup_apply(&ps, dm);
                 GlobalUnlock(psd.hDevMode);
             }
         }
     }
+    device_free(&dev);
 
     if (PageSetupDlgW(&psd)) {
         ps.left = psd.rtMargin.left;
@@ -159,9 +223,7 @@ void print_show_page_setup(HWND owner) {
         ps.bottom = psd.rtMargin.bottom;
         if (psd.hDevMode) {
             const DEVMODEW *dm = GlobalLock(psd.hDevMode);
-            if (dm && (dm->dmFields & DM_ORIENTATION)) {
-                ps.orientation = dm->dmOrientation;
-            }
+            page_setup_read(&ps, dm);
             if (dm)
                 GlobalUnlock(psd.hDevMode);
         }
@@ -341,15 +403,6 @@ static bool device_acquire_default(PrintDevice *dev) {
     if (!dev->present)
         device_free(dev);
     return dev->present;
-}
-
-// Force the orientation chosen in Page Setup into the DEVMODE. A field is
-// honoured only when its bit is set in dmFields.
-static void device_apply_orientation(PrintDevice *dev, short orientation) {
-    if (!dev->devmode || orientation == 0)
-        return;
-    dev->devmode->dmFields |= DM_ORIENTATION;
-    dev->devmode->dmOrientation = orientation;
 }
 
 // ---------------------------------------------------------------------------
@@ -674,23 +727,35 @@ static bool layout_prepare(PrintLayout *l, HDC dc, const wchar_t *face, int poin
 // Geometry for a machine with no printer at all: Microsoft Print to PDF can be
 // removed by policy, and Server Core has no spooler. Preview still works.
 static void layout_synthesise_paper(PrintLayout *l) {
+    PageSetup ps;
+    page_setup_load(&ps);
+
     // LOCALE_IPAPERSIZE uses the DMPAPER_* numbering: 1 Letter, 5 Legal, 9 A4
-    wchar_t buf[16] = { 0 };
-    long paper = 1; // DMPAPER_LETTER
-    if (GetLocaleInfoW(LOCALE_USER_DEFAULT, LOCALE_IPAPERSIZE, buf, 16) > 0)
-        paper = wcstol(buf, NULL, 10);
+    long paper = ps.paper_size;
+    if (paper == 0) {
+        wchar_t buf[16] = { 0 };
+        paper = DMPAPER_LETTER;
+        if (GetLocaleInfoW(LOCALE_USER_DEFAULT, LOCALE_IPAPERSIZE, buf, 16) > 0)
+            paper = wcstol(buf, NULL, 10);
+    }
 
     const int dpi = 600;
     l->dpi_x = dpi;
     l->dpi_y = dpi;
-    if (paper == 9) { // DMPAPER_A4, 210 x 297 mm
+    if (paper == DMPAPER_USER && ps.paper_width > 0 && ps.paper_length > 0) {
+        l->phys_w = MulDiv(ps.paper_width, dpi, 254); // Tenths of a millimetre
+        l->phys_h = MulDiv(ps.paper_length, dpi, 254);
+    } else if (paper == DMPAPER_A4) { // 210 x 297 mm
         l->phys_w = MulDiv(2100, dpi, 254);
         l->phys_h = MulDiv(2970, dpi, 254);
-    } else { // Letter, 8.5 x 11 in
+    } else if (paper == DMPAPER_LEGAL) { // 8.5 x 14 in
+        l->phys_w = MulDiv(85, dpi, 10);
+        l->phys_h = 14 * dpi;
+    } else { // Letter, 8.5 x 11 in - and anything else we cannot name
         l->phys_w = MulDiv(85, dpi, 10);
         l->phys_h = 11 * dpi;
     }
-    if (settings_get_int("print_orientation", 0) == DMORIENT_LANDSCAPE) {
+    if (ps.orientation == DMORIENT_LANDSCAPE) {
         int swap = l->phys_w;
         l->phys_w = l->phys_h;
         l->phys_h = swap;
@@ -723,7 +788,7 @@ PrintLayout *print_layout_create(const wchar_t *text, const wchar_t *doc_title, 
     HDC dc = NULL;
 
     if (device_acquire_default(&dev)) {
-        device_apply_orientation(&dev, ps.orientation);
+        page_setup_apply(&ps, dev.devmode);
         dc = CreateICW(dev.driver && dev.driver[0] ? dev.driver : L"WINSPOOL", dev.device, NULL,
                        dev.devmode);
     } else {
@@ -885,12 +950,15 @@ PrintResult print_document(HWND owner, const wchar_t *text, const wchar_t *doc_t
         return PRINT_RESULT_FAILED;
     }
 
-    // Apply the orientation chosen in Page Setup before any metric is read
-    if (ps.orientation != 0 && pd.hDevMode) {
+    // Apply the Page Setup choices (orientation AND paper) before any metric
+    // is read. The dialog may have handed back a DEVMODE describing a
+    // different sheet - Windows 11's modern dialog does so unless the user
+    // ticks "let the app change my printing preferences" - and the preview
+    // was measured against ours.
+    if ((ps.orientation != 0 || ps.paper_size != 0) && pd.hDevMode) {
         DEVMODEW *dm = GlobalLock(pd.hDevMode);
         if (dm) {
-            dm->dmFields |= DM_ORIENTATION;
-            dm->dmOrientation = ps.orientation;
+            page_setup_apply(&ps, dm);
             ResetDCW(hdc, dm);
             GlobalUnlock(pd.hDevMode);
         }

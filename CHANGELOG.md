@@ -5,7 +5,24 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.32.0] - 2026-08-21
+## [0.32.1] - 2026-09-16
+
+### 🐛 Fixed
+- **Page Setup could not change the paper size.** Only the orientation was
+  read back from the dialog; choosing A4 (or anything else) was discarded on
+  OK, and the dialog reopened showing the printer's own paper. The paper size
+  is now persisted alongside the margins and orientation.
+- **The preview fitted more per line than the printed PDF.** Same root cause:
+  the preview measured against the default printer's own sheet, while the
+  print dialog was free to hand back a different one - Windows 11's modern
+  dialog does exactly that unless "let the app change my printing preferences"
+  is ticked. The Page Setup choices (paper and orientation) are now forced
+  into every DEVMODE npad measures or prints with, so all three - the dialog,
+  the preview and the page - describe the same sheet.
+- Page Setup now seeds its dialog from the default printer's real DEVMODE
+  rather than a fabricated minimal one.
+
+
 
 ### 🆕 Features
 - **Print Preview.** **File → Print Preview...** (Ctrl+Shift+P), with the

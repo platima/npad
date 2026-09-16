@@ -128,7 +128,7 @@ Windows 10. Not a defect to chase further.
       comdlg32 is delay-loaded and confirmed absent from the static import table.
 
 **v0.32.0 - Print Preview**
-- [ ] Ctrl+Shift+P and File > Print Preview open it; Esc and Close close it.
+- [x] Ctrl+Shift+P and File > Print Preview open it; Esc and Close close it. CONFIRMED 2026-09-16.
 - [ ] The document window is disabled while the preview is open, and usable
       again the moment it closes (this is the one that must not go wrong - a
       permanently disabled main window would be unrecoverable without Task
@@ -140,12 +140,16 @@ Windows 10. Not a defect to chase further.
 - [ ] Zoom In / Zoom Out step through the sizes, scroll bars become live when
       the page is larger than the window, and the arrow keys and wheel scroll it.
 - [ ] PgUp/PgDn page, Home/End jump to the first and last page.
-- [ ] **Page Setup from inside the preview re-paginates immediately** - change
-      the margins or orientation and the pages should visibly change.
+- [x] **Page Setup from inside the preview re-paginates immediately** - CONFIRMED 2026-09-16 (margins).
 - [ ] Print from inside the preview prints the same thing and closes it.
 - [ ] **Fidelity, the whole point:** print one page to PDF and compare it with
       the preview. Wrap points, line count per page and header/footer position
       should match exactly, not approximately.
+      **2026-09-16: FAILED on v0.32.0** - preview fitted more per line than
+      the PDF, and Page Setup would not take A4. One bug: only orientation was
+      carried from Page Setup, so the dialog, the preview and the print each
+      used a different sheet. Fixed in v0.32.1; re-test with A4 chosen in
+      Page Setup, and once more with paper left at the printer default.
 - [ ] A document containing tabs: they should advance to 8-character stops,
       not draw a box or nothing.
 - [ ] Margins now measure from the sheet edge. A 0.75 in margin should

@@ -148,6 +148,8 @@ All settings live in `settings.json` and are editable in Preferences
 | `print_margin_left` / `_right` | int | `750` | Print margins in **thousandths of an inch**, set in File > Page Setup. Stored in that unit rather than the locale's, so a settings file means the same thing on a metric and an imperial machine. |
 | `print_margin_top` / `_bottom` | int | `1000` | As above. |
 | `print_orientation` | int | `0` | `0` printer default, `1` portrait, `2` landscape. Set in Page Setup. |
+| `print_paper_size` | int | `0` | Paper, as a `DMPAPER_*` code (`1` Letter, `5` Legal, `9` A4, `256` custom). `0` leaves the printer's own. Set in Page Setup. |
+| `print_paper_width` / `_length` | int | `0` | Custom paper only, in tenths of a millimetre. |
 
 ### Appearance (Preferences > Appearance)
 
@@ -318,6 +320,11 @@ position). Not intended for direct use.
   - The document window is disabled while the preview is open. The preview is a
     snapshot, and letting the text change behind it would make it a lie.
   - **Page Setup** from inside the preview re-paginates immediately.
+  - The preview measures against the **default printer**. Printing to a
+    different printer re-paginates against that one, so a device with a
+    different resolution or hardware margin can wrap differently. The paper
+    size and orientation chosen in Page Setup are forced onto whichever printer
+    is used, so those at least never differ.
   - The paper is drawn white in every colour scheme, because it is paper. Only
     the backdrop follows npad's scheme.
   - With **no printer installed at all** the preview still works, against the
