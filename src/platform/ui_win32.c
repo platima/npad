@@ -92,6 +92,20 @@ static struct {
     bool active_since_paint; // A non-inert message arrived since the last paint
     bool capture_at_ghost;   // Was the mouse captured when a ghost was seen?
     bool button_at_ghost;    // Was the left button physically down?
+
+    // Document restamps. These run while npad is idle, from outside input:
+    // a settings broadcast from another instance (including the automatic
+    // update check writing its result) and Windows' ImmersiveColorSet
+    // broadcast (theme or accent change - a wallpaper slideshow feeding the
+    // accent colour fires it on every slide). Each restamps the whole
+    // document, which is where an idle view can move.
+    unsigned broadcasts;       // npadSettingsChanged received from another instance
+    unsigned colour_sets;      // WM_SETTINGCHANGE "ImmersiveColorSet" received
+    unsigned restamps;         // Theme/font restamps that actually touched the document
+    unsigned restamps_skipped; // Skipped because nothing had changed
+    unsigned rebinds;          // Full text rewrites to rebind emoji faces
+    unsigned restamp_moved;    // Restamps after which the first visible line had moved
+    long restamp_delta;        // Net lines it had moved by, before correction
 } g_tel;
 
 // Messages that provably CANNOT move the view.
@@ -239,6 +253,14 @@ typedef struct Window {
     bool status_update_pending;  // Coalescing timer armed (see schedule_status_update)
     bool counts_pending;         // Counts coalescing timer armed (schedule_counts_update)
     bool highlight_pending;      // Highlight-all coalescing timer armed (EN_CHANGE)
+
+    // What the document was last restamped with, so a broadcast that changes
+    // nothing does not restamp it again (see view_save / apply_theme)
+    bool theme_applied;
+    COLORREF applied_bg, applied_fg;
+    bool applied_dark;
+    bool font_applied;
+    CHARFORMAT2W applied_font;
     // Last text sent per status part; skip identical sends. Sized to hold the
     // longest part-0 counts line in full - a short cache would compare equal on
     // a shared prefix and silently skip the update.
@@ -3896,6 +3918,41 @@ static void set_title_bar_dark(HWND hwnd, bool dark) {
     }
 }
 
+// The view, as the user sees it, across a document-wide restamp.
+//
+// Restamping (EM_SETCHARFORMAT with SCF_ALL, or re-setting the text to rebind
+// emoji faces) reflows the whole document, and RichEdit is free to move the
+// view while it does - typically towards the caret. Pixel scroll positions
+// (EM_GETSCROLLPOS) are unreliable across a reflow and while redraw is off;
+// the first visible LINE is what the user actually perceives, so that is what
+// is restored, by scrolling the difference. RedrawWindow rather than
+// InvalidateRect: after WM_SETREDRAW the control can otherwise sit blank
+// until something else forces a full repaint (un-maximising, say).
+typedef struct {
+    LRESULT first_line;
+    CHARRANGE sel;
+} ViewState;
+
+static void view_save(HWND edit, ViewState *v) {
+    v->first_line = SendMessageW(edit, EM_GETFIRSTVISIBLELINE, 0, 0);
+    v->sel.cpMin = 0;
+    v->sel.cpMax = 0;
+    SendMessageW(edit, EM_EXGETSEL, 0, (LPARAM) &v->sel);
+}
+
+static void view_restore(HWND edit, const ViewState *v) {
+    LRESULT now = SendMessageW(edit, EM_GETFIRSTVISIBLELINE, 0, 0);
+#if NPAD_SCROLL_TELEMETRY
+    if (now != v->first_line) {
+        g_tel.restamp_moved++;
+        g_tel.restamp_delta += (long) (now - v->first_line);
+    }
+#endif
+    if (now != v->first_line)
+        SendMessageW(edit, EM_LINESCROLL, 0, (LPARAM) (v->first_line - now));
+    RedrawWindow(edit, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
+}
+
 static void apply_theme(Window *window) {
     if (!window || !window->edit_hwnd)
         return;
@@ -3905,11 +3962,37 @@ static void apply_theme(Window *window) {
     g_dark_mode = theme_colors(&back, &text);
     set_frame_brush(back);     // Used by WM_ERASEBKGND; see set_frame_brush
     apply_window_icon(window); // icon_style "npad" follows this scheme
+
+    // The chrome above is cheap and may legitimately need refreshing when
+    // Windows' own theme flips (the "system" icon mode follows it). The
+    // document is another matter: this runs on every settings broadcast and
+    // every ImmersiveColorSet, most of which change nothing here, and a
+    // document-wide restamp is exactly the kind of thing that can move an
+    // idle window's view. Only touch it when the colours actually changed.
+    if (window->theme_applied && window->applied_bg == back && window->applied_fg == text &&
+        window->applied_dark == g_dark_mode) {
+#if NPAD_SCROLL_TELEMETRY
+        g_tel.restamps_skipped++;
+#endif
+        if (window->hwnd)
+            set_title_bar_dark(window->hwnd, g_dark_mode);
+        return;
+    }
+    window->theme_applied = true;
+    window->applied_bg = back;
+    window->applied_fg = text;
+    window->applied_dark = g_dark_mode;
+#if NPAD_SCROLL_TELEMETRY
+    g_tel.restamps++;
+#endif
+
     apply_scroll_bar_theme(window->edit_hwnd, g_dark_mode);
 
     // Preserve document state while re-styling
     LRESULT was_modified = SendMessageW(window->edit_hwnd, EM_GETMODIFY, 0, 0);
     window->setting_text_programmatically = true;
+    ViewState view;
+    view_save(window->edit_hwnd, &view);
 
     SendMessageW(window->edit_hwnd, EM_SETBKGNDCOLOR, 0, (LPARAM) back);
 
@@ -3922,6 +4005,7 @@ static void apply_theme(Window *window) {
     SendMessageW(window->edit_hwnd, EM_SETCHARFORMAT, SCF_DEFAULT, (LPARAM) &cf);
     refresh_font_binding(window); // Restamping can drop emoji fallback faces
 
+    view_restore(window->edit_hwnd, &view);
     window->setting_text_programmatically = false;
     SendMessageW(window->edit_hwnd, EM_SETMODIFY, (WPARAM) was_modified, 0);
 
@@ -4373,8 +4457,12 @@ static void refresh_font_binding(Window *window) {
         return;
     }
 
+#if NPAD_SCROLL_TELEMETRY
+    g_tel.rebinds++;
+#endif
     CHARRANGE saved_sel = { 0, 0 };
     SendMessageW(window->edit_hwnd, EM_EXGETSEL, 0, (LPARAM) &saved_sel);
+    LRESULT first_line = SendMessageW(window->edit_hwnd, EM_GETFIRSTVISIBLELINE, 0, 0);
     POINT scroll_pos = { 0, 0 };
     SendMessageW(window->edit_hwnd, EM_GETSCROLLPOS, 0, (LPARAM) &scroll_pos);
     WPARAM zoom_num = 0;
@@ -4395,7 +4483,15 @@ static void refresh_font_binding(Window *window) {
     SendMessageW(window->edit_hwnd, EM_EXSETSEL, 0, (LPARAM) &saved_sel);
     SendMessageW(window->edit_hwnd, EM_SETSCROLLPOS, 0, (LPARAM) &scroll_pos);
     SendMessageW(window->edit_hwnd, WM_SETREDRAW, TRUE, 0);
-    InvalidateRect(window->edit_hwnd, NULL, TRUE);
+    // The pixel position is a best effort across a full text reset; the first
+    // visible line is what the user sees, so settle on that. And RedrawWindow,
+    // not InvalidateRect: after WM_SETREDRAW the control can otherwise stay
+    // blank until something forces a full repaint.
+    LRESULT now = SendMessageW(window->edit_hwnd, EM_GETFIRSTVISIBLELINE, 0, 0);
+    if (now != first_line)
+        SendMessageW(window->edit_hwnd, EM_LINESCROLL, 0, (LPARAM) (first_line - now));
+    RedrawWindow(window->edit_hwnd, NULL, NULL,
+                 RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
     free(buf);
 }
 
@@ -4410,10 +4506,27 @@ static void apply_font(Window *window) {
     CHARFORMAT2W cf;
     build_char_format(window, &cf);
 
+    // Same reasoning as apply_theme: this runs on every settings broadcast,
+    // and re-applying an unchanged font still reflows the document
+    if (window->font_applied && memcmp(&cf, &window->applied_font, sizeof(cf)) == 0) {
+#if NPAD_SCROLL_TELEMETRY
+        g_tel.restamps_skipped++;
+#endif
+        return;
+    }
+    window->font_applied = true;
+    window->applied_font = cf;
+#if NPAD_SCROLL_TELEMETRY
+    g_tel.restamps++;
+#endif
+
     LRESULT was_modified = SendMessageW(window->edit_hwnd, EM_GETMODIFY, 0, 0);
     window->setting_text_programmatically = true;
+    ViewState view;
+    view_save(window->edit_hwnd, &view);
     SendMessageW(window->edit_hwnd, EM_SETCHARFORMAT, SCF_DEFAULT, (LPARAM) &cf);
     refresh_font_binding(window);
+    view_restore(window->edit_hwnd, &view);
     window->setting_text_programmatically = false;
     SendMessageW(window->edit_hwnd, EM_SETMODIFY, (WPARAM) was_modified, 0);
 }
@@ -5009,6 +5122,14 @@ static wchar_t *build_diagnostics_text(void) {
     DIAG_APPEND(L"    Capture or button set instead means a stuck drag or scrollbar\r\n");
     DIAG_APPEND(L"    track. Total px far exceeding the input is the same signal\r\n");
     DIAG_APPEND(L"    even when a cause could not be excluded.\r\n");
+    DIAG_APPEND(L"  Idle restamps: %u settings broadcasts, %u ImmersiveColorSet\r\n",
+                g_tel.broadcasts, g_tel.colour_sets);
+    DIAG_APPEND(L"    -> %u document restamps (%u skipped as unchanged), %u emoji rebinds\r\n",
+                g_tel.restamps, g_tel.restamps_skipped, g_tel.rebinds);
+    DIAG_APPEND(L"    -> view had moved after %u of them (net %ld lines, corrected)\r\n",
+                g_tel.restamp_moved, g_tel.restamp_delta);
+    DIAG_APPEND(L"    Reading it: broadcasts or ColorSet climbing while idle is the\r\n");
+    DIAG_APPEND(L"    trigger; 'moved' climbing with them is the drift, now caught.\r\n");
 #endif
     DIAG_APPEND(L"  Selection changes: %u\r\n", g_selchange_count);
 
@@ -8106,6 +8227,9 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
     // Ignore our own broadcast (wParam carries the sender's pid).
     if (msg == g_settings_changed_msg && g_settings_changed_msg != 0) {
         if (window && wparam != (WPARAM) GetCurrentProcessId()) {
+#if NPAD_SCROLL_TELEMETRY
+            g_tel.broadcasts++;
+#endif
             reload_and_apply_settings(window);
         }
         return 0;
@@ -8383,6 +8507,9 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
             // so the icon (and a "system" colour scheme) never noticed.
             if (lparam && wcscmp((const wchar_t *) lparam, L"ImmersiveColorSet") == 0) {
                 if (window) {
+#if NPAD_SCROLL_TELEMETRY
+                    g_tel.colour_sets++;
+#endif
                     apply_theme(window); // Also re-applies the icon
                 }
             }

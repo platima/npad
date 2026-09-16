@@ -7,6 +7,32 @@ this file is for open loops.
 
 ---
 
+## 👀 Pending observation - idle view drift (v0.32.2)
+
+Reported 2026-09-16: a window left open (maximised, at least) with text in
+it drifts upward over an hour to a day - half the text gone off the top, or
+a blank page that only repaints on un-maximising. Not reproducible on demand.
+
+**Probable cause, fixed in v0.32.2:** two idle-time triggers restamped the
+whole document even when nothing changed - the `npadSettingsChanged`
+broadcast from another instance (the automatic update check sends one on
+every launch) and Windows' `ImmersiveColorSet` broadcast (theme *or accent*
+change; a wallpaper slideshow driving the accent fires one per slide). A
+document-wide `EM_SETCHARFORMAT SCF_ALL` plus, with emoji present, a full
+`EM_SETTEXTEX` under `WM_SETREDRAW FALSE` and a pixel-based scroll restore
+is exactly the shape of "moved a bit, and blank until repainted". Now
+skipped when unchanged, view restored by first visible line, and repainted
+with `RedrawWindow`.
+
+- [ ] Leave a window open for a day on v0.32.2. If it drifts again, open
+      Preferences with **Ctrl+Shift+.** and read the *Idle restamps* block:
+      broadcasts / ImmersiveColorSet counts name the trigger; "view had
+      moved after N" climbing means the restamp path still moves it; all
+      zero with drift present means the cause is somewhere else entirely.
+- [ ] Note whether it happens non-maximised.
+
+---
+
 ## 🧪 Needs a stress test
 
 ### Many instances at once - ROOT CAUSE FIXED in v0.28.7, still worth retesting

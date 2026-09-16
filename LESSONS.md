@@ -89,6 +89,20 @@ non-client area. The only route is owner-drawing via undocumented
 
 ## Win32: RichEdit
 
+**Idle windows are not idle.** Two broadcasts reach a window nobody is
+touching: `npadSettingsChanged` from any other instance (the automatic
+update check writes its result and broadcasts on every launch) and Windows'
+`WM_SETTINGCHANGE "ImmersiveColorSet"` (theme *or accent* change - a
+wallpaper slideshow feeding the accent fires it per slide). Anything hung off
+those must be idempotent, or it runs on the document every time. A
+document-wide `EM_SETCHARFORMAT SCF_ALL` is not free: it reflows and RichEdit
+may move the view. Compare before applying, preserve the first visible line
+(`EM_GETFIRSTVISIBLELINE` + `EM_LINESCROLL`, not pixel `EM_SETSCROLLPOS`,
+which is unreliable across a reflow), and after `WM_SETREDRAW` use
+`RedrawWindow`, not `InvalidateRect` - the control can otherwise sit blank
+until something forces a full repaint.
+
+
 **RichEdit in plain-text mode stores line breaks as bare `\r`.** `GT_USECRLF`
 converts only on *retrieval* via `EM_GETTEXTEX`; `EM_GETTEXTRANGE` gives you the
 internal form. Anything matching on line breaks must expect `\r`.

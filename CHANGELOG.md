@@ -5,7 +5,30 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.32.1] - 2026-09-16
+## [0.32.2] - 2026-09-16
+
+### 🐛 Fixed
+- **Idle windows no longer restamp the document for nothing.** Two things
+  happen to an npad window while it sits untouched: another instance saves a
+  setting (the automatic update check does this every launch, for every
+  window), and Windows broadcasts an *ImmersiveColorSet* change (theme or
+  accent - a wallpaper slideshow feeding the accent colour fires one per
+  slide). Both re-applied the font and colour scheme to the whole document
+  even when nothing had changed, and a document-wide restamp is exactly the
+  kind of operation that can move the view. This is the probable cause of the
+  **text drifting upward in a window left open**, sometimes to a blank page
+  that only repainted on un-maximising. Now:
+  - a restamp is skipped outright when the font and colours are unchanged;
+  - when one is needed, the first visible line is captured before and
+    restored after, so the view cannot move;
+  - the control is repainted with `RedrawWindow` rather than just
+    invalidated, which is what left it blank after a redraw-off text reset.
+  Not reproducible on demand, so this is a fix to the only mechanism found
+  that fits, plus counters on the Debug page (Ctrl+Shift+.) that name the
+  trigger if it recurs: broadcasts, ColorSet events, restamps skipped, and
+  how many times a restamp had moved the view before being corrected.
+
+
 
 ### 🐛 Fixed
 - **Page Setup could not change the paper size.** Only the orientation was
