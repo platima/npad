@@ -296,10 +296,12 @@ Filename: "ms-settings:advanced-apps"; Description: "Open Settings to disable th
 // because their indent pushes them right. Reproduced with Inno Setup 6.7.0
 // and 6.7.3, in modern, classic and excludelightcontrols styles alike; fine
 // at 96 DPI. Scaling the offset ourselves is the whole fix.
+// RunList is the third one: the "Launch npad" boxes on the Finished page.
 procedure InitializeWizard();
 begin
   WizardForm.ComponentsList.Offset := ScaleX(8);
   WizardForm.TasksList.Offset := ScaleX(8);
+  WizardForm.RunList.Offset := ScaleX(8);
 end;
 
 // --- Was npad already running when setup started? -------------------------
