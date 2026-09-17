@@ -86,7 +86,7 @@ jobs:
       - name: Signing status
         shell: pwsh
         run: |
-          if ($env:SIGNING -eq 'true') { "Code signing: ON (Azure Trusted Signing)" }
+          if ($env:SIGNING -eq 'true') { "Code signing: ON (Azure Artifact Signing)" }
           else { "Code signing: OFF - set the AZURE_* repository variables to enable it" }
 
       - name: Sign in to Azure (OIDC, no stored secret)

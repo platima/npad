@@ -294,6 +294,22 @@ it is still `Azure.CodeSigning.Dlib.dll`, the endpoints are still
 `*.codesigning.azure.net`, and `metadata.json` still says
 `CodeSigningAccountName`. Search for the old names and you find stale advice.
 
+**GitHub's OIDC subject is name-based unless the repository opts in, and
+Entra's GitHub template now demands the ID-based one.** Repositories created
+before 2026-07-15 still emit `repo:owner/repo:...`; Entra's federated
+credential form requires the owner and repository IDs and generates
+`repo:owner@<owner_id>/repo@<repo_id>:...`. The two never match until the
+repo is switched: `PUT /repos/{owner}/{repo}/actions/oidc/customization/sub`
+with `use_immutable_subject: true` (the response's `sub_claim_prefix` shows
+the new form). Two runs failed on exactly this before the toggle was found.
+
+**Entra matches the subject case-sensitively, and GitHub lowercases the
+owner.** The token said `platima@...`; the credential, typed from the org's
+display name, said `Platima@...`. Entra's error names the problem ("matches
+case-insensitively but not case-sensitively"); the fix is to lowercase the
+organization in the credential. Read the presented subject straight out of
+the AADSTS error and paste it - it is the one string that is known correct.
+
 **Bind the federated credential to a GitHub *environment*, not a tag.** A Tag
 credential must name one exact tag (no wildcards), so it would need adding
 before every release. An Environment credential's subject is
