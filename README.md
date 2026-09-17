@@ -57,7 +57,7 @@ Current features (Windows build):
   - Optional auto-save (disabled by default - it overwrites your file, so it's opt-in; configurable)
   - Session resume / crash recovery (enabled by default - non-destructive, snapshots never touch your file); restores every window that was open, each in its own instance
   - Theme support: light (default), dark, follow-system, and Solarized Light / Dark colour schemes (chosen in Preferences); changes apply to all open windows live
-  - Opens at a large default sized to your display (remembered once you resize)
+  - Opens at a large default sized to your display (remembered once you resize); further windows cascade past the ones already open, however they were launched
   - Find / Replace with direction, match case, whole word, wrap-around and an optional highlight-all-matches overlay (Ctrl+F / Ctrl+H, F3 / Shift+F3)
   - Find remembers recent search / replace terms, and shows a live match count
   - Undo / Redo (Ctrl+Z / Ctrl+Y) with a deep undo history

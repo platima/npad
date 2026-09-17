@@ -5973,6 +5973,12 @@ static int count_npad_windows(void) {
     return count;
 }
 
+// main() asks before creating its own window, so the answer is the number of
+// windows a fresh launch should cascade past
+int ui_platform_count_main_windows(void) {
+    return count_npad_windows();
+}
+
 static void launch_new_window(void) {
     // Cascade the new window relative to the windows already open so it does
     // not land exactly on top of them

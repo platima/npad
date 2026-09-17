@@ -92,6 +92,17 @@ int main(int argc, char *argv[]) {
     }
     startup_prof_mark("ui + editor init");
 
+    // A launch that was not given a cascade index - Start > Run, Explorer,
+    // the command line - still cascades past whatever npad windows are
+    // already open, exactly as New Window does. Otherwise every such launch
+    // lands on the one saved position, dead on top of the last one; before a
+    // position was ever saved, Windows itself used to stagger them, which is
+    // why this looked like a regression the first time a window was resized.
+    // Counted before our own window exists so it is not included.
+    if (g_cascade_index == 0) {
+        g_cascade_index = ui_count_main_windows();
+    }
+
     // Create main window
     Window *main_window = ui_create_main_window();
     if (!main_window) {

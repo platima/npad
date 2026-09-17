@@ -107,6 +107,8 @@ bool ui_is_window_maximized(Window *window);
 // Sensible first-run window geometry: a DPI-correct fraction of the primary
 // monitor work area, centred.
 void ui_get_default_window_rect(int *x, int *y, int *width, int *height);
+// Number of npad main windows open on this desktop, across all instances
+int ui_count_main_windows(void);
 
 // Text editing
 void ui_set_text(Window *window, const char *text);

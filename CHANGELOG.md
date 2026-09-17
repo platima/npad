@@ -5,6 +5,18 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.5] - 2026-09-18
+
+### 🐛 Fixed
+- **A second npad opened from Start > Run, Explorer or the command line landed
+  exactly on top of the first.** Only New Window (Ctrl+Shift+N) and crash
+  recovery cascaded; any other launch went to the one saved position. It had
+  *looked* like it cascaded before, because until a window is first resized
+  there is no saved position and Windows staggers the placement itself - so
+  the behaviour changed the day the position was remembered, not with any
+  release. Every launch now cascades past the npad windows already open, with
+  the same 80 px step New Window uses.
+
 ## [0.32.4] - 2026-09-17
 
 ### 🐛 Fixed

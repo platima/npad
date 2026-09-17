@@ -295,8 +295,10 @@ npad [options] [filename]
 ```
 
 Internal options used by npad itself: `--recover <slot>` (reopen a specific
-crash-recovery slot) and `--cascade <n>` (offset a recovery window's
-position). Not intended for direct use.
+crash-recovery slot) and `--cascade <n>` (offset the window by n steps;
+without it, a launch cascades past however many npad windows are already
+open, so windows opened from Start > Run or Explorer stagger just as New
+Window does). Not intended for direct use.
 
 ## Behaviour notes
 

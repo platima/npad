@@ -155,6 +155,11 @@ bool ui_is_window_maximized(Window *window) {
     return ui_platform_is_window_maximized(window);
 }
 
+extern int ui_platform_count_main_windows(void);
+int ui_count_main_windows(void) {
+    return ui_platform_count_main_windows();
+}
+
 void ui_get_default_window_rect(int *x, int *y, int *width, int *height) {
     ui_platform_get_default_window_rect(x, y, width, height);
 }
