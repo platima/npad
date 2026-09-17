@@ -45,6 +45,14 @@ CloseApplications=yes
 RestartApplications=no
 MinVersion=10.0
 LicenseFile=..\LICENSE
+#ifdef Sign
+; Only when the build passes /DSign=1 and defines the tool with
+; /Snpadsign="<sign one file>" $f (build-installers.ps1 -SignCmd). The
+; uninstaller is a separate binary and needs its own signature, or Windows
+; shows an unknown-publisher prompt on uninstall alone.
+SignTool=npadsign
+SignedUninstaller=yes
+#endif
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

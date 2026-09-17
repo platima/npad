@@ -17,6 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   neither belonged there.
 
 ### ✨ Improved
+- **Releases are code-signed** with Azure Artifact Signing (formerly Trusted
+  Signing): the portable exe, the installer, its uninstaller, and the MSI.
+  The runner authenticates to Azure with a federated credential - no key or
+  secret is stored anywhere - and each signature is timestamped, so it outlives
+  the short-lived certificate. Signing is gated on the repository's `AZURE_*`
+  variables; with them absent a release still ships, unsigned. SmartScreen
+  reputation builds over the first few signed releases rather than instantly.
+- **The portable exe is now the very same binary the installers carry.** It is
+  built once on the Windows runner alongside the installers, signed once, and
+  published as-is. Previously it was a separate cross-compiled build.
 - **Find and Replace dialogs no longer carry a band of dead space** at the
   bottom when Markdown support is off. That row is the "Interpret escapes"
   option, which only appears with Markdown support on; the dialog now resizes

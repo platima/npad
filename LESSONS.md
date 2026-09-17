@@ -287,6 +287,35 @@ and `excludelightcontrols`, on 6.7.0 and 6.7.3. Set
 `InitializeWizard`. Seen only when the maintainer's display went to 150% -
 the script had not changed in twelve releases.
 
+**Azure Trusted Signing is now "Artifact Signing", and so is everything
+named after it.** The role is *Artifact Signing Certificate Profile Signer*,
+the client package is `Microsoft.ArtifactSigning.Client` - but the DLL inside
+it is still `Azure.CodeSigning.Dlib.dll`, the endpoints are still
+`*.codesigning.azure.net`, and `metadata.json` still says
+`CodeSigningAccountName`. Search for the old names and you find stale advice.
+
+**Bind the federated credential to a GitHub *environment*, not a tag.** A Tag
+credential must name one exact tag (no wildcards), so it would need adding
+before every release. An Environment credential's subject is
+`repo:<owner>/<repo>:environment:<name>` on any ref; the signing job then
+declares `environment: release`.
+
+**Inno's `SignTool` hands the command a QUOTED filename.** Wrapping the tool in
+`cmd.exe /c "wrapper" $f` therefore yields four quote characters, and cmd's
+quote-stripping rule mangles it (exit code 1, no explanation). Invoke a `.ps1`
+through `pwsh.exe -File` instead - and `pwsh`, not `powershell.exe`: Windows
+PowerShell 5.1 launched from a pwsh parent inherits a `PSModulePath` it cannot
+load its own modules from (`Set-AuthenticodeSignature` "could not be loaded").
+Also, with `SignTool` set Inno signs the finished setup exe itself as well as
+the uninstaller - signing it again afterwards just spends a signing call.
+
+**A signing pipeline can be dry-run without the signing service.** A throwaway
+`New-SelfSignedCertificate -Type CodeSigningCert` plus a `.ps1` that calls
+`Set-AuthenticodeSignature` exercises every hook (npad.exe, uninstaller, setup,
+MSI, portable, checksum ordering); `Get-AuthenticodeSignature` then reports
+`UnknownError` (untrusted root) with the throwaway subject, which is the pass
+condition. Remove the certificate from `Cert:\CurrentUser\My` afterwards.
+
 **The wizard can be inspected without touching the keyboard or mouse.** The
 bootstrapper spawns `<name>.tmp` for the wizard, so find it by window class
 (`TWizardForm`) rather than PID; `BM_CLICK` on the `&Next` / `I &accept`

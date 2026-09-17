@@ -21,7 +21,9 @@ rights:
 | `npad-v<v>-msi-win-x64.msi` | Silent/managed deployment (`msiexec`) |
 | `npad-v<v>-portable-win-x64.exe` | Portable - run from anywhere, no install |
 
-**SmartScreen / Defender**: releases are not code-signed yet, so Windows
+**SmartScreen / Defender**: releases from v0.32.4 are code-signed (Azure
+Artifact Signing; check Properties > Digital Signatures). A publisher's
+SmartScreen reputation still builds over its first signed releases, so Windows
 may block or warn about the downloaded installer or portable exe. Fix:
 right-click the file → **Properties** → tick **Unblock** → **Apply** (this
 clears the mark-of-the-web), or choose "More info" → "Run anyway" on the

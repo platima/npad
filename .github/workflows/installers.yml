@@ -1,8 +1,23 @@
 name: Installers
 
-# Builds the Windows installers (Inno Setup EXE + WiX MSI) on a hosted
-# Windows runner. Runs standalone via workflow_dispatch for testing, or is
-# called from release.yml with a release tag to attach the artifacts.
+# Builds the Windows deliverables on a hosted Windows runner: the Inno Setup
+# EXE, the WiX MSI, and the portable exe (the same npad.exe the installers
+# carry). Runs standalone via workflow_dispatch for testing, or is called from
+# release.yml with a release tag to attach the artifacts.
+#
+# Code signing (Azure Artifact Signing, formerly Trusted Signing) switches on
+# when ALL six repository variables below are set, and is skipped entirely
+# otherwise - so a release still ships, unsigned, until the Azure side exists.
+# Nothing secret is stored: the runner authenticates to Azure with a federated
+# (OIDC) credential on the app registration, bound to the "release" GitHub
+# environment, and the certificates are issued per signature.
+#
+#   AZURE_TRUSTED_SIGNING_ENDPOINT   e.g. https://eus.codesigning.azure.net
+#   AZURE_TRUSTED_SIGNING_ACCOUNT    the Artifact Signing account name
+#   AZURE_TRUSTED_SIGNING_PROFILE    the certificate profile name
+#   AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID
+#                                    the app registration granted
+#                                    "Artifact Signing Certificate Profile Signer"
 
 on:
   workflow_dispatch:
@@ -21,10 +36,17 @@ on:
 
 permissions:
   contents: write
+  id-token: write   # OIDC token for azure/login; harmless when signing is off
 
 jobs:
   build-installers:
     runs-on: windows-latest
+    # The app registration's federated credential is bound to this GitHub
+    # environment (subject repo:platima/npad:environment:release), which is
+    # matched on every ref - a Tag credential would have to name each tag
+    environment: release
+    env:
+      SIGNING: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT != '' && vars.AZURE_TRUSTED_SIGNING_ACCOUNT != '' && vars.AZURE_TRUSTED_SIGNING_PROFILE != '' && vars.AZURE_CLIENT_ID != '' && vars.AZURE_TENANT_ID != '' && vars.AZURE_SUBSCRIPTION_ID != '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -61,9 +83,82 @@ jobs:
           wix --version
           if ($LASTEXITCODE -ne 0) { throw "wix not on PATH" }
 
+      - name: Signing status
+        shell: pwsh
+        run: |
+          if ($env:SIGNING -eq 'true') { "Code signing: ON (Azure Trusted Signing)" }
+          else { "Code signing: OFF - set the AZURE_* repository variables to enable it" }
+
+      - name: Sign in to Azure (OIDC, no stored secret)
+        if: env.SIGNING == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Prepare the signing command
+        if: env.SIGNING == 'true'
+        shell: pwsh
+        env:
+          ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
+        # One command that signs one file, for build-installers.ps1 -SignCmd:
+        # the Windows SDK's signtool with Microsoft's Trusted Signing dlib. The
+        # dlib authenticates through DefaultAzureCredential, which azure/login
+        # above satisfies. The directory must contain no spaces: Inno Setup
+        # receives the same command for its uninstaller.
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP "npadsign"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+
+          # The service was renamed from Trusted Signing to Artifact Signing in
+          # 2026; the package followed, the DLL inside it did not
+          $zip = Join-Path $dir "client.zip"
+          Invoke-WebRequest "https://www.nuget.org/api/v2/package/Microsoft.ArtifactSigning.Client" -OutFile $zip
+          Expand-Archive $zip (Join-Path $dir "client") -Force
+          $dlib = Get-ChildItem (Join-Path $dir "client") -Recurse -Filter Azure.CodeSigning.Dlib.dll |
+                  Where-Object { $_.FullName -match '\\x64\\' } | Select-Object -First 1
+          if (-not $dlib) { throw "Azure.CodeSigning.Dlib.dll (x64) not found in the Artifact Signing client package" }
+          $nuspec = Get-ChildItem (Join-Path $dir "client") -Filter *.nuspec | Select-Object -First 1
+          if ($nuspec) { "Artifact Signing client: " + ([xml](Get-Content $nuspec.FullName)).package.metadata.version }
+
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+                      Where-Object { $_.FullName -match '\\x64\\' } |
+                      Sort-Object { [version]($_.Directory.Parent.Name) } -Descending | Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe not found in the Windows SDK" }
+          "signtool: $($signtool.FullName)"
+
+          $metadata = Join-Path $dir "metadata.json"
+          @{ Endpoint = $env:ENDPOINT; CodeSigningAccountName = $env:ACCOUNT; CertificateProfileName = $env:PROFILE } |
+            ConvertTo-Json | Set-Content $metadata -Encoding ascii
+
+          # A .ps1, not a .cmd: Inno Setup hands it a quoted path, and cmd.exe's
+          # quote-stripping rule mangles a command line with four quotes in it
+          $cmd = Join-Path $dir "sign.ps1"
+          @(
+            'param([string]$File)',
+            ('& "{0}" sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib "{1}" /dmdf "{2}" $File' -f $signtool.FullName, $dlib.FullName, $metadata),
+            'exit $LASTEXITCODE'
+          ) | Set-Content $cmd -Encoding ascii
+          "NPAD_SIGN_CMD=$cmd" >> $env:GITHUB_ENV
+
       - name: Build installers
         shell: pwsh
-        run: pwsh -NoProfile -File installer/build-installers.ps1
+        run: pwsh -NoProfile -File installer/build-installers.ps1 -SignCmd "$env:NPAD_SIGN_CMD"
+
+      - name: Verify signatures
+        if: env.SIGNING == 'true'
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($f in Get-ChildItem dist -Include *.exe, *.msi -Recurse) {
+            $sig = Get-AuthenticodeSignature $f.FullName
+            "{0,-45} {1,-10} {2}" -f $f.Name, $sig.Status, $sig.SignerCertificate.Subject
+            if ($sig.Status -ne 'Valid') { $failed = $true }
+          }
+          if ($failed) { throw "A deliverable is not validly signed" }
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v7

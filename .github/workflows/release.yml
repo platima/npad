@@ -9,6 +9,7 @@ on:
 # GITHUB_TOKEN is read-only
 permissions:
   contents: write
+  id-token: write   # Passed through to installers.yml for Azure Trusted Signing
 
 env:
   BUILD_TYPE: Release
@@ -29,7 +30,7 @@ jobs:
     - name: Get version from tag
       id: get_version
       run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-    
+
     - name: Create Release
       id: create_release
       uses: softprops/action-gh-release@v3
@@ -38,11 +39,11 @@ jobs:
         name: npad ${{ steps.get_version.outputs.version }}
         body: |
           ## npad ${{ steps.get_version.outputs.version }}
-          
+
           🎉 **New Release Available!**
-          
+
           ### Downloads
-          
+
           **Windows Builds:**
           - `npad-${{ steps.get_version.outputs.version }}-setup-win-x64.exe` - Windows installer (per-user by default; system-wide available)
           - `npad-${{ steps.get_version.outputs.version }}-msi-win-x64.msi` - Windows MSI for silent/managed deployment (`msiexec /i ... /qn`)
@@ -51,13 +52,13 @@ jobs:
           **Verification:**
           - `CHECKSUMS.txt` - SHA256 checksums for all files
           - Verify with: `sha256sum -c CHECKSUMS.txt` (Linux/macOS) or `Get-FileHash` (Windows)
-          
+
           ### Installation
           1. Download the appropriate file for your system from the Assets below
           2. **Windows**: Run `npad-v*-setup-win-x64.exe` to install (or `msiexec /i npad-v*-msi-win-x64.msi /qn` for silent), or run the portable exe directly
           3. **Verification**: Check the file integrity using the provided checksums
 
-          > **SmartScreen / Defender blocking the download?** Releases are not code-signed yet. Right-click the file → **Properties** → tick **Unblock** → **Apply**, or choose "More info" → "Run anyway". Verify the SHA256 against `CHECKSUMS.txt` first if unsure.
+          > **SmartScreen warning?** Check the file's Properties → Digital Signatures tab. A signed release names the publisher there; SmartScreen can still warn while a publisher's reputation is new. Verify the SHA256 against `CHECKSUMS.txt` if unsure, then "More info" → "Run anyway".
 
           ### Changes
           See the [commit history](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}) for detailed changes in this release.
@@ -72,62 +73,12 @@ jobs:
         prerelease: ${{ contains(steps.get_version.outputs.version, '-') }}
         generate_release_notes: true
 
-  # Only the implemented product ships as release assets: the Windows GUI
-  # (portable exe here; installers via build-installers). The Linux and
-  # terminal variants are unimplemented stubs - CI still compile-checks
-  # them, but they are not published as downloads.
-  build-and-upload:
-    runs-on: ubuntu-latest
-    needs: create-release
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: windows-gui
-            cc: x86_64-w64-mingw32-gcc
-            make_target: windows
-            output: npad.exe
-            asset_name: npad-${{ needs.create-release.outputs.version }}-portable-win-x64.exe
-
-    steps:
-    - uses: actions/checkout@v7
-
-    - name: Install dependencies
-      run: |
-        sudo apt-get update -q
-        sudo apt-get install -y -q build-essential gcc-mingw-w64-x86-64 \
-          libx11-dev libwayland-dev libncurses-dev
-    
-    - name: Build and validate ${{ matrix.target }}
-      run: |
-        make clean
-        CC=${{ matrix.cc }} make ${{ matrix.make_target }}
-
-        if [ ! -f "${{ matrix.output }}" ]; then
-          echo "ERROR: Expected output file ${{ matrix.output }} not found"
-          ls -la
-          exit 1
-        fi
-
-        echo "Build successful: ${{ matrix.output }}"
-        ls -la ${{ matrix.output }}
-
-        # Rename to versioned filename and checksum
-        mv ${{ matrix.output }} ${{ matrix.asset_name }}
-        sha256sum ${{ matrix.asset_name }} > ${{ matrix.asset_name }}.sha256
-
-        echo "Final asset: ${{ matrix.asset_name }}"
-        echo "Size: $(stat -c%s ${{ matrix.asset_name }}) bytes"
-        echo "SHA256: $(cat ${{ matrix.asset_name }}.sha256)"
-    
-    - name: Upload Release Asset
-      uses: softprops/action-gh-release@v3
-      with:
-        tag_name: ${{ needs.create-release.outputs.version }}
-        files: |
-          ${{ matrix.asset_name }}
-          ${{ matrix.asset_name }}.sha256
-
+  # Every published binary comes from the Windows job in installers.yml: the
+  # installers, and the portable exe, which is the very same npad.exe the
+  # installers carry. One build, one (optional) signature, one checksum set.
+  # ci.yml still cross-compiles the Windows target on Linux, so that path
+  # stays tested; it just is not what ships. The Linux and terminal variants
+  # are unimplemented stubs and are not published.
   build-installers:
     needs: create-release
     uses: ./.github/workflows/installers.yml
@@ -136,13 +87,14 @@ jobs:
     secrets: inherit
     permissions:
       contents: write
+      id-token: write
 
   # The published binaries are Windows-only (nothing releasable can execute
   # on this runner), so validation asserts the complete expected asset set
   # exists on the release with plausible sizes and matching checksums.
   validate-release:
     runs-on: ubuntu-latest
-    needs: [create-release, build-and-upload, build-installers]
+    needs: [create-release, build-installers]
     steps:
     - uses: actions/checkout@v7
 
@@ -239,10 +191,10 @@ jobs:
 
   create-checksums:
     runs-on: ubuntu-latest
-    needs: [create-release, build-and-upload, build-installers, validate-release]
+    needs: [create-release, build-installers, validate-release]
     steps:
     - uses: actions/checkout@v7
-    
+
     - name: Download release assets to create master checksum
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -251,9 +203,9 @@ jobs:
         release_id=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
           "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ needs.create-release.outputs.version }}" \
           | jq -r '.id')
-        
+
         echo "Release ID: $release_id"
-        
+
         # Download all .sha256 files
         curl -s -H "Authorization: token $GITHUB_TOKEN" \
           "https://api.github.com/repos/${{ github.repository }}/releases/$release_id/assets" \
@@ -262,7 +214,7 @@ jobs:
             echo "Downloading checksum: $url"
             curl -L -s "$url" >> temp_checksums.txt
           done
-    
+
     - name: Create master CHECKSUMS.txt
       run: |
         echo "# npad Release Checksums - ${{ needs.create-release.outputs.version }}" > CHECKSUMS.txt
@@ -270,21 +222,21 @@ jobs:
         echo "# Release: https://github.com/${{ github.repository }}/releases/tag/${{ needs.create-release.outputs.version }}" >> CHECKSUMS.txt
         echo "# Commit: ${{ github.sha }}" >> CHECKSUMS.txt
         echo "" >> CHECKSUMS.txt
-        
+
         # Add all checksums
         if [ -f temp_checksums.txt ]; then
           cat temp_checksums.txt >> CHECKSUMS.txt
         fi
-        
+
         echo "" >> CHECKSUMS.txt
         echo "# Verification Instructions:" >> CHECKSUMS.txt
         echo "# Linux/macOS: sha256sum -c CHECKSUMS.txt" >> CHECKSUMS.txt
         echo "# Windows PowerShell: Get-FileHash -Algorithm SHA256 <filename>" >> CHECKSUMS.txt
         echo "# Windows Command Prompt: certutil -hashfile <filename> SHA256" >> CHECKSUMS.txt
-        
+
         echo "Master checksums file created:"
         cat CHECKSUMS.txt
-    
+
     - name: Upload master checksums
       uses: softprops/action-gh-release@v3
       with:
@@ -293,7 +245,7 @@ jobs:
 
   update-release-notes:
     runs-on: ubuntu-latest
-    needs: [create-release, build-and-upload, validate-release, create-checksums]
+    needs: [create-release, build-installers, validate-release, create-checksums]
     steps:
     - name: Update release with final info
       uses: softprops/action-gh-release@v3
@@ -301,11 +253,11 @@ jobs:
         tag_name: ${{ needs.create-release.outputs.version }}
         body: |
           ## npad ${{ needs.create-release.outputs.version }}
-          
+
           🎉 **New Release Available!**
-          
+
           ### Downloads
-          
+
           **Windows Builds:**
           - `npad-${{ needs.create-release.outputs.version }}-setup-win-x64.exe` - Windows installer (per-user by default; system-wide available)
           - `npad-${{ needs.create-release.outputs.version }}-msi-win-x64.msi` - Windows MSI for silent/managed deployment (`msiexec /i ... /qn`)
@@ -315,13 +267,13 @@ jobs:
           - `CHECKSUMS.txt` - SHA256 checksums for all files
           - Individual `.sha256` files for each binary
           - Verify with: `sha256sum -c CHECKSUMS.txt` (Linux/macOS) or `Get-FileHash` (Windows)
-          
+
           ### Installation
           1. Download the appropriate file from the Assets below
           2. **Windows**: Run `npad-v*-setup-win-x64.exe` to install (or `msiexec /i npad-v*-msi-win-x64.msi /qn` for silent), or run the portable exe directly
           3. **Verification**: Check the file integrity using the provided checksums
 
-          > **SmartScreen / Defender blocking the download?** Releases are not code-signed yet. Right-click the file → **Properties** → tick **Unblock** → **Apply**, or choose "More info" → "Run anyway". Verify the SHA256 against `CHECKSUMS.txt` first if unsure.
+          > **SmartScreen warning?** Check the file's Properties → Digital Signatures tab. A signed release names the publisher there; SmartScreen can still warn while a publisher's reputation is new. Verify the SHA256 against `CHECKSUMS.txt` if unsure, then "More info" → "Run anyway".
 
           ### Changes
           See the [commit history](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}) for detailed changes in this release.
