@@ -3712,6 +3712,31 @@ static void replace_all(Window *window) {
     set_status_message(window, message);
 }
 
+// Show or hide the "Interpret escapes" row and resize the dialog to match. The
+// row is the last thing in both templates, so with Markdown support off (the
+// default) leaving it hidden meant a band of dead space along the bottom.
+// Idempotent: the current state is read from the control's own style rather
+// than IsWindowVisible, which reports FALSE for every child while the dialog
+// itself is still hidden during WM_INITDIALOG.
+static void find_dialog_show_escapes(HWND dialog, bool show) {
+    HWND escapes = GetDlgItem(dialog, ID_FIND_ESCAPES);
+    if (!escapes)
+        return;
+    bool shown = (GetWindowLongPtrW(escapes, GWL_STYLE) & WS_VISIBLE) != 0;
+    if (shown == show)
+        return;
+    ShowWindow(escapes, show ? SW_SHOW : SW_HIDE);
+
+    // One row of the template: 13 dialog units, in this dialog's font
+    RECT row = { 0, 0, 0, 13 };
+    MapDialogRect(dialog, &row);
+    RECT wr;
+    GetWindowRect(dialog, &wr);
+    int height = (wr.bottom - wr.top) + (show ? row.bottom : -row.bottom);
+    SetWindowPos(dialog, NULL, 0, 0, wr.right - wr.left, height,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
 static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, LPARAM lparam) {
     bool has_replace = GetDlgItem(dialog, ID_REPLACE_WITH) != NULL;
     Window *window = (Window *) GetWindowLongPtrW(dialog, GWLP_USERDATA);
@@ -3735,8 +3760,7 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
             // Escape interpretation is part of the optional Markdown feature
             // set, so the checkbox (now last) only appears when Markdown
             // support is enabled; read_search_text keeps it inert otherwise.
-            ShowWindow(GetDlgItem(dialog, ID_FIND_ESCAPES),
-                       settings_get_bool("list_tools_enabled", false) ? SW_SHOW : SW_HIDE);
+            find_dialog_show_escapes(dialog, settings_get_bool("list_tools_enabled", false));
             if (GetDlgItem(dialog, IDC_RADIO_UP)) {
                 CheckRadioButton(dialog, IDC_RADIO_UP, IDC_RADIO_DOWN,
                                  g_search_down ? IDC_RADIO_DOWN : IDC_RADIO_UP);
@@ -4612,27 +4636,9 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
             CheckDlgButton(page, ID_PREF_CTRL_N_WINDOW,
                            settings_get_bool("ctrl_n_new_window", false) ? BST_CHECKED
                                                                          : BST_UNCHECKED);
-            // Seeded from the live flag, not the file: the Find dialog writes
-            // g_wrap_around without persisting on some paths, so the file can
-            // lag behind what searching actually does. Showing the file's value
-            // would contradict observed behaviour and then write it back.
-            CheckDlgButton(page, ID_PREF_FIND_WRAP, g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
             CheckDlgButton(page, ID_PREF_WATCH_FILE,
                            settings_get_bool("watch_file_changes", false) ? BST_CHECKED
                                                                           : BST_UNCHECKED);
-            {
-                // Header/footer codes match notepad.exe; see DOCUMENTATION.md
-                char *hdr = settings_get_string("print_header", "&f");
-                char *ftr = settings_get_string("print_footer", "Page &p");
-                wchar_t *whdr = utf8_to_wide(hdr ? hdr : "");
-                wchar_t *wftr = utf8_to_wide(ftr ? ftr : "");
-                SetDlgItemTextW(page, ID_PREF_PRINT_HEADER, whdr ? whdr : L"");
-                SetDlgItemTextW(page, ID_PREF_PRINT_FOOTER, wftr ? wftr : L"");
-                free(whdr);
-                free(wftr);
-                free(hdr);
-                free(ftr);
-            }
             EnableWindow(GetDlgItem(page, ID_PREF_AUTOSAVE_INTERVAL),
                          editor_is_auto_save_enabled());
             EnableWindow(GetDlgItem(page, ID_PREF_SESSION_INTERVAL),
@@ -4645,12 +4651,10 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
             // Enable Apply when a value control changes (not the action buttons)
             if ((code == BN_CLICKED &&
                  (id == ID_PREF_AUTOSAVE_ENABLED || id == ID_PREF_SESSION_ENABLED ||
-                  id == ID_PREF_CTRL_N_WINDOW || id == ID_PREF_FIND_WRAP ||
-                  id == ID_PREF_WATCH_FILE)) ||
+                  id == ID_PREF_CTRL_N_WINDOW || id == ID_PREF_WATCH_FILE)) ||
                 (code == EN_CHANGE &&
                  (id == ID_PREF_AUTOSAVE_INTERVAL || id == ID_PREF_LARGE_FILE_MB ||
-                  id == ID_PREF_RECENT_MAX || id == ID_PREF_SESSION_INTERVAL ||
-                  id == ID_PREF_PRINT_HEADER || id == ID_PREF_PRINT_FOOTER))) {
+                  id == ID_PREF_RECENT_MAX || id == ID_PREF_SESSION_INTERVAL))) {
                 mark_prefs_dirty(page);
             }
 
@@ -4717,32 +4721,8 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                     apply_new_window_pref(g_main_window);
                 }
 
-                // Find wrap-around is also toggled from the Find/Replace
-                // dialog, so update the live flag and, if that dialog happens
-                // to be open, its checkbox - otherwise closing it would write
-                // the stale value straight back over this one.
                 settings_set_bool("watch_file_changes",
                                   IsDlgButtonChecked(page, ID_PREF_WATCH_FILE) == BST_CHECKED);
-                {
-                    wchar_t whdr[256] = L"", wftr[256] = L"";
-                    GetDlgItemTextW(page, ID_PREF_PRINT_HEADER, whdr, 256);
-                    GetDlgItemTextW(page, ID_PREF_PRINT_FOOTER, wftr, 256);
-                    char *hdr = wide_to_utf8(whdr);
-                    char *ftr = wide_to_utf8(wftr);
-                    if (hdr)
-                        settings_set_string("print_header", hdr);
-                    if (ftr)
-                        settings_set_string("print_footer", ftr);
-                    free(hdr);
-                    free(ftr);
-                }
-
-                g_wrap_around = IsDlgButtonChecked(page, ID_PREF_FIND_WRAP) == BST_CHECKED;
-                settings_set_bool("find_wrap_around", g_wrap_around);
-                if (g_find_dialog) {
-                    CheckDlgButton(g_find_dialog, ID_FIND_WRAP,
-                                   g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
-                }
 
                 settings_save(); // Apply button: persist + propagate immediately
                 ui_platform_notify_settings_changed();
@@ -5249,6 +5229,25 @@ static INT_PTR CALLBACK prefs_defaults_proc(HWND page, UINT msg, WPARAM wparam, 
             CheckDlgButton(page, ID_PREF_AUTO_DEFAULTS,
                            settings_get_bool("auto_update_defaults", false) ? BST_CHECKED
                                                                             : BST_UNCHECKED);
+
+            // Seeded from the live flag, not the file: the Find dialog writes
+            // g_wrap_around without persisting on some paths, so the file can
+            // lag behind what searching actually does. Showing the file's value
+            // would contradict observed behaviour and then write it back.
+            CheckDlgButton(page, ID_PREF_FIND_WRAP, g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
+            {
+                // Header/footer codes match notepad.exe; see DOCUMENTATION.md
+                char *hdr = settings_get_string("print_header", "&f");
+                char *ftr = settings_get_string("print_footer", "Page &p");
+                wchar_t *whdr = utf8_to_wide(hdr ? hdr : "");
+                wchar_t *wftr = utf8_to_wide(ftr ? ftr : "");
+                SetDlgItemTextW(page, ID_PREF_PRINT_HEADER, whdr ? whdr : L"");
+                SetDlgItemTextW(page, ID_PREF_PRINT_FOOTER, wftr ? wftr : L"");
+                free(whdr);
+                free(wftr);
+                free(hdr);
+                free(ftr);
+            }
             return TRUE;
         }
 
@@ -5258,8 +5257,9 @@ static INT_PTR CALLBACK prefs_defaults_proc(HWND page, UINT msg, WPARAM wparam, 
             if ((code == CBN_SELCHANGE &&
                  (id == ID_PREF_DEFAULT_ENCODING || id == ID_PREF_DEFAULT_EOL ||
                   id == ID_PREF_DEFAULT_FONT_TYPE)) ||
-                (code == EN_CHANGE && id == ID_PREF_DEFAULT_ZOOM) ||
-                (code == BN_CLICKED && id == ID_PREF_AUTO_DEFAULTS)) {
+                (code == EN_CHANGE && (id == ID_PREF_DEFAULT_ZOOM || id == ID_PREF_PRINT_HEADER ||
+                                       id == ID_PREF_PRINT_FOOTER)) ||
+                (code == BN_CLICKED && (id == ID_PREF_AUTO_DEFAULTS || id == ID_PREF_FIND_WRAP))) {
                 mark_prefs_dirty(page);
             }
             if (id == ID_PREF_USE_CURRENT) {
@@ -5307,6 +5307,30 @@ static INT_PTR CALLBACK prefs_defaults_proc(HWND page, UINT msg, WPARAM wparam, 
 
                 settings_set_bool("auto_update_defaults",
                                   IsDlgButtonChecked(page, ID_PREF_AUTO_DEFAULTS) == BST_CHECKED);
+
+                // Find wrap-around is also toggled from the Find/Replace
+                // dialog, so update the live flag and, if that dialog happens
+                // to be open, its checkbox - otherwise closing it would write
+                // the stale value straight back over this one.
+                g_wrap_around = IsDlgButtonChecked(page, ID_PREF_FIND_WRAP) == BST_CHECKED;
+                settings_set_bool("find_wrap_around", g_wrap_around);
+                if (g_find_dialog) {
+                    CheckDlgButton(g_find_dialog, ID_FIND_WRAP,
+                                   g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
+                }
+                {
+                    wchar_t whdr[256] = L"", wftr[256] = L"";
+                    GetDlgItemTextW(page, ID_PREF_PRINT_HEADER, whdr, 256);
+                    GetDlgItemTextW(page, ID_PREF_PRINT_FOOTER, wftr, 256);
+                    char *hdr = wide_to_utf8(whdr);
+                    char *ftr = wide_to_utf8(wftr);
+                    if (hdr)
+                        settings_set_string("print_header", hdr);
+                    if (ftr)
+                        settings_set_string("print_footer", ftr);
+                    free(hdr);
+                    free(ftr);
+                }
 
                 settings_save(); // Apply button: persist + propagate immediately
                 ui_platform_notify_settings_changed();
@@ -8199,8 +8223,7 @@ static void reload_and_apply_settings(Window *window) {
     // The Find dialog is modeless, so a live change to Markdown support has to
     // reach its escapes checkbox - WM_INITDIALOG only runs once
     if (g_find_dialog) {
-        ShowWindow(GetDlgItem(g_find_dialog, ID_FIND_ESCAPES),
-                   settings_get_bool("list_tools_enabled", false) ? SW_SHOW : SW_HIDE);
+        find_dialog_show_escapes(g_find_dialog, settings_get_bool("list_tools_enabled", false));
     }
 
     // Sync shared window options; per-window view state (font type, zoom)

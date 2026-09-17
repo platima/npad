@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Installer: the "Launch npad" boxes on the Finished page had the same
   clipped check boxes** as Components and Tasks in v0.32.2 - it is the third
   instance of the same list control, and v0.32.3 scaled only the first two.
+- **Preferences > General: the print header and footer fields overlapped the
+  check box above them.** They have moved to **Defaults**, along with the
+  Find/Replace wrap-around default - General is the file-handling page, and
+  neither belonged there.
+
+### ✨ Improved
+- **Find and Replace dialogs no longer carry a band of dead space** at the
+  bottom when Markdown support is off. That row is the "Interpret escapes"
+  option, which only appears with Markdown support on; the dialog now resizes
+  as the row is shown or hidden, including live when the setting changes.
 
 ## [0.32.3] - 2026-09-16
 

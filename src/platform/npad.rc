@@ -134,7 +134,7 @@ BEGIN
 END
 
 // Preferences: General page
-IDD_PREFS_GENERAL DIALOGEX 0, 0, 240, 236
+IDD_PREFS_GENERAL DIALOGEX 0, 0, 240, 200
 STYLE DS_SETFONT | DS_FIXEDSYS | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "General"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
@@ -151,12 +151,7 @@ BEGIN
     LTEXT           "Snapshot i&nterval (seconds):", IDC_STATIC, 22, 138, 120, 8
     EDITTEXT        ID_PREF_SESSION_INTERVAL, 150, 136, 44, 13, ES_AUTOHSCROLL | ES_NUMBER
     CONTROL         "Ctrl+N opens a new win&dow (Ctrl+Shift+N clears the current one)", ID_PREF_CTRL_N_WINDOW, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 160, 220, 20
-    CONTROL         "Find and &Replace wrap around by default", ID_PREF_FIND_WRAP, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 178, 220, 14
-    CONTROL         "Tell me when an open file is changed by another program", ID_PREF_WATCH_FILE, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 194, 220, 14
-    LTEXT           "Print h&eader:", IDC_STATIC, 10, 206, 60, 8
-    EDITTEXT        ID_PREF_PRINT_HEADER, 74, 204, 156, 13, ES_AUTOHSCROLL
-    LTEXT           "Print f&ooter:", IDC_STATIC, 10, 224, 60, 8
-    EDITTEXT        ID_PREF_PRINT_FOOTER, 74, 222, 156, 13, ES_AUTOHSCROLL
+    CONTROL         "Tell me when an open file is changed by another program", ID_PREF_WATCH_FILE, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 180, 220, 14
 END
 
 // Preferences: Appearance page
@@ -214,7 +209,7 @@ BEGIN
 END
 
 // Preferences: Defaults page (initial state for new windows)
-IDD_PREFS_DEFAULTS DIALOGEX 0, 0, 240, 196
+IDD_PREFS_DEFAULTS DIALOGEX 0, 0, 240, 216
 STYLE DS_SETFONT | DS_FIXEDSYS | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "Defaults"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
@@ -230,6 +225,11 @@ BEGIN
     PUSHBUTTON      "&Use Current", ID_PREF_USE_CURRENT, 10, 108, 80, 14
     LTEXT           "Copies this window's font type and zoom into the fields above.", IDC_STATIC, 96, 111, 134, 16
     CONTROL         "&Auto-update defaults in real time (view changes become the new defaults)", ID_PREF_AUTO_DEFAULTS, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 134, 220, 18
+    CONTROL         "Find and &Replace wrap around by default", ID_PREF_FIND_WRAP, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 158, 220, 14
+    LTEXT           "Print h&eader:", IDC_STATIC, 10, 182, 60, 8
+    EDITTEXT        ID_PREF_PRINT_HEADER, 74, 180, 156, 13, ES_AUTOHSCROLL
+    LTEXT           "Print f&ooter:", IDC_STATIC, 10, 200, 60, 8
+    EDITTEXT        ID_PREF_PRINT_FOOTER, 74, 198, 156, 13, ES_AUTOHSCROLL
 END
 
 // Preferences: Backup page

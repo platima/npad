@@ -133,6 +133,8 @@ All settings live in `settings.json` and are editable in Preferences
 
 ### General (Preferences > General)
 
+File handling: saving, opening, recent files, recovery, and what happens when a file changes underneath you.
+
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `auto_save_enabled` | bool | `false` | Silently save named documents on a timer. Off by default: overwriting the file from a timer is destructive, so it is opt-in. Untitled documents are never auto-saved. |
@@ -143,13 +145,6 @@ All settings live in `settings.json` and are editable in Preferences
 | `session_resume_enabled` | bool | `true` | Crash recovery: snapshot unsaved work on the first edit and then on a timer; offer to restore after an unclean exit. On by default: snapshots never touch the user's file. All windows are restored, extras in their own cascaded windows. Does **not** gate handoff snapshots taken when an update or a Windows restart closes npad - those would otherwise be silently discarded. |
 | `session_interval` | int | `30` | Snapshot period in seconds (minimum 5). |
 | `ctrl_n_new_window` | bool | `false` | Swap Ctrl+N / Ctrl+Shift+N between "New" (clear this window) and "New Window" (open another instance). |
-| `print_header` | string | `&f` | Printed page header. Uses the codes below; edited in Preferences > General. |
-| `print_footer` | string | `Page &p` | Printed page footer. Same codes as the header. |
-| `print_margin_left` / `_right` | int | `750` | Print margins in **thousandths of an inch**, set in File > Page Setup. Stored in that unit rather than the locale's, so a settings file means the same thing on a metric and an imperial machine. |
-| `print_margin_top` / `_bottom` | int | `1000` | As above. |
-| `print_orientation` | int | `0` | `0` printer default, `1` portrait, `2` landscape. Set in Page Setup. |
-| `print_paper_size` | int | `0` | Paper, as a `DMPAPER_*` code (`1` Letter, `5` Legal, `9` A4, `256` custom). `0` leaves the printer's own. Set in Page Setup. |
-| `print_paper_width` / `_length` | int | `0` | Custom paper only, in tenths of a millimetre. |
 
 ### Appearance (Preferences > Appearance)
 
@@ -167,7 +162,7 @@ All settings live in `settings.json` and are editable in Preferences
 | `sync_view_state` | bool | `false` | Mirror per-window view changes (font type, zoom) live to every open npad window. |
 | `status_show_counts` | bool | `false` | Show word / character / line counts in the leftmost status bar segment. Refreshed live while typing (coalesced ~8x/second); documents over ~1 MB fall back to a settle-then-count debounce. Shared with transient messages, which win until the next change. Numbers are grouped using your Windows regional settings (e.g. `1,234,567`), including any separator customised in Control Panel. |
 
-### Defaults (Preferences > Defaults) - initial state for new windows/files
+### Defaults (Preferences > Defaults) - initial state for new windows/files, and the print header/footer
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -176,6 +171,14 @@ All settings live in `settings.json` and are editable in Preferences
 | `default_font_mono` | bool | `true` | New windows start in monospace (`true`) or proportional (`false`) mode. **Monospace by default**, which is what mirrors notepad.exe: it has a single font setting and ships it as Consolas 11 - the same face and size as npad's monospace default. |
 | `default_zoom` | int | `100` | New windows' zoom percent (10-500). |
 | `auto_update_defaults` | bool | `false` | View changes (font type, zoom) immediately become the new defaults. |
+| `find_wrap_around` | bool | `false` | Whether Find and Replace wrap around by default. Off, matching notepad.exe. Also toggled from the dialogs themselves. |
+| `print_header` | string | `&f` | Printed page header. Uses the codes below; edited in Preferences > Defaults. |
+| `print_footer` | string | `Page &p` | Printed page footer. Same codes as the header. |
+| `print_margin_left` / `_right` | int | `750` | Print margins in **thousandths of an inch**, set in File > Page Setup. Stored in that unit rather than the locale's, so a settings file means the same thing on a metric and an imperial machine. |
+| `print_margin_top` / `_bottom` | int | `1000` | As above. |
+| `print_orientation` | int | `0` | `0` printer default, `1` portrait, `2` landscape. Set in Page Setup. |
+| `print_paper_size` | int | `0` | Paper, as a `DMPAPER_*` code (`1` Letter, `5` Legal, `9` A4, `256` custom). `0` leaves the printer's own. Set in Page Setup. |
+| `print_paper_width` / `_length` | int | `0` | Custom paper only, in tenths of a millimetre. |
 
 The **Use Current** button copies the active window's font type and zoom into
 the fields.
@@ -217,7 +220,7 @@ no-close update is not possible because Inno/MSI must replace the running
 | `word_wrap` | Word wrap on/off (Format > Word Wrap, Alt+Z). |
 | `window_x/y/width/height/maximized` | Window geometry, saved on exit. First run uses ~48% x ~72% of the monitor work area, centred. |
 | `recent_file_0..9` | Recent files list. |
-| `find_match_case`, `find_whole_word`, `find_search_down`, `find_wrap_around`, `find_interpret_escapes`, `find_highlight_all` | Find/Replace options (checkboxes in the dialogs). `find_wrap_around` defaults **off**, matching notepad.exe, and also has a Preferences > General checkbox. All propagate live to other instances. |
+| `find_match_case`, `find_whole_word`, `find_search_down`, `find_wrap_around`, `find_interpret_escapes`, `find_highlight_all` | Find/Replace options (checkboxes in the dialogs). `find_wrap_around` defaults **off**, matching notepad.exe, and also has a Preferences > Defaults checkbox. All propagate live to other instances. |
 | `find_hist_0..9`, `replace_hist_0..9` | Recent search/replace terms. |
 
 ## View state vs settings

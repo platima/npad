@@ -344,6 +344,8 @@ Reading an in-progress result file returned "0 findings", which was reported as
 a clean review; it later completed with six, including the critical one that
 took the release down.
 
+**npad itself can be inspected the same way.** `scripts/probe-prefs.ps1` posts WM_COMMAND for Preferences / Find / Replace to a fresh npad, walks the property sheet with `PSM_SETCURSEL`, captures each page with `PrintWindow`, and closes everything with `PSM_PRESSBUTTON` / `WM_CLOSE`. Two PowerShell traps met on the way: `$pid` is a read-only automatic variable (a parameter of that name fails at call time), and a static method is `[W]::Name`, never `W::Name`.
+
 ## Method
 
 **Measure before optimising, and let the measurement kill the hypothesis.** Two
