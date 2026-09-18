@@ -5,6 +5,15 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.6] - 2026-09-18
+
+### 🐛 Fixed
+- **The Print dialog said "Portrait" while the page came out landscape.** It
+  was opened with no DEVMODE, so it showed the printer's own defaults; npad
+  applied the Page Setup orientation and paper only after it closed. The
+  dialog is now seeded with those choices, so what it shows is what prints.
+  Page Setup remains the source of truth, as in notepad.exe.
+
 ## [0.32.5] - 2026-09-18
 
 ### 🐛 Fixed

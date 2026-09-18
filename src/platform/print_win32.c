@@ -938,8 +938,36 @@ PrintResult print_document(HWND owner, const wchar_t *text, const wchar_t *doc_t
     pd.Flags = PD_RETURNDC | PD_NOPAGENUMS | PD_NOSELECTION;
     pd.nCopies = 1;
 
-    if (!PrintDlgW(&pd))
+    // Seed the dialog with the default printer's DEVMODE plus the Page Setup
+    // choices, so it SHOWS the orientation and paper that will be used. Opened
+    // with no DEVMODE it displayed the printer's own defaults ("Portrait")
+    // while the page, correctly, came out landscape - the choices were only
+    // applied after it closed. Page Setup remains the source of truth below,
+    // as in notepad.exe; the dialog's copy is what it reports back.
+    {
+        PrintDevice dev;
+        if (device_acquire_default(&dev) && dev.devmode) {
+            size_t bytes = (size_t) dev.devmode->dmSize + dev.devmode->dmDriverExtra;
+            pd.hDevMode = GlobalAlloc(GHND, bytes);
+            if (pd.hDevMode) {
+                DEVMODEW *dm = GlobalLock(pd.hDevMode);
+                if (dm) {
+                    memcpy(dm, dev.devmode, bytes);
+                    page_setup_apply(&ps, dm);
+                    GlobalUnlock(pd.hDevMode);
+                }
+            }
+        }
+        device_free(&dev);
+    }
+
+    if (!PrintDlgW(&pd)) {
+        if (pd.hDevMode)
+            GlobalFree(pd.hDevMode);
+        if (pd.hDevNames)
+            GlobalFree(pd.hDevNames);
         return PRINT_RESULT_CANCELLED;
+    }
 
     HDC hdc = pd.hDC;
     if (!hdc) {
