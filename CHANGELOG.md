@@ -5,6 +5,17 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.8] - 2026-09-18
+
+### 🐛 Fixed
+- **Ctrl+P from Print Preview opened the print dialog without focus**, so
+  Enter did nothing until it was clicked. The print hook added in v0.32.7
+  answered every message with 0 - which, for WM_INITDIALOG, tells the dialog
+  the hook has set focus itself, so it never focused its default button.
+  From the editor that was masked by activation; from the preview, whose
+  owner is deliberately disabled, nothing rescued it. The hook now answers
+  WM_INITDIALOG correctly and brings the dialog to the front.
+
 ## [0.32.7] - 2026-09-18
 
 ### 🐛 Fixed

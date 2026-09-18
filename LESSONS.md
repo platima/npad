@@ -158,6 +158,13 @@ preview pane, so the "This app doesn't support print preview" message
 disappears as a side effect. Seeding the DEVMODE alone (v0.32.6) fixed
 nothing visible; it took the hook.
 
+**A common-dialog hook must return TRUE for `WM_INITDIALOG`.** Returning 0
+there means "the hook has set the focus itself", so the dialog skips focusing
+its default control. A no-op hook that returns 0 for everything therefore
+ships a dialog that opens unfocused - masked when the owner is active (the
+activation focuses it anyway), obvious when the owner is disabled, as Print
+Preview's is.
+
 **Measure the layout on the printer, never on screen.** Glyph advances are
 integer-rounded per ppem, so the same font realises differently at 600 dpi and
 at ~96 dpi. A preview that re-measures on its own DC breaks lines a word early

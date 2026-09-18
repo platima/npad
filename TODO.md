@@ -161,8 +161,11 @@ for a landscape job even after v0.32.6 seeded it. Both are the modern dialog
 ignoring what the application passes in. v0.32.7 opens the classic dialog
 instead (a print hook makes comdlg32 fall back to it); that honours Page
 Setup and has no preview pane to be empty.
-- [ ] **Re-check on v0.32.7:** Page Setup landscape, Ctrl+P - the dialog is
-      the classic one and says Landscape.
+- [x] **Re-check on v0.32.7:** CONFIRMED 2026-09-18 - the classic dialog
+      appears and the page prints landscape. (The classic dialog does not show
+      an orientation field at all; that lives in Page Setup, as in notepad.)
+- [ ] **Re-check on v0.32.8:** Ctrl+P inside Print Preview - the print dialog
+      has focus immediately, so Enter prints without clicking it first.
 
 **v0.32.0 - Print Preview**
 - [x] Ctrl+Shift+P and File > Print Preview open it; Esc and Close close it. CONFIRMED 2026-09-16.

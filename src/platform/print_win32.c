@@ -923,13 +923,20 @@ void print_layout_draw_page(const PrintLayout *l, HDC hdc, int page) {
 // Printing
 // ---------------------------------------------------------------------------
 
-// Deliberately handles nothing. Its existence is the point: see the
-// PD_ENABLEPRINTHOOK note in print_document.
+// Exists to make comdlg32 use the classic dialog - see the PD_ENABLEPRINTHOOK
+// note in print_document. It must still answer WM_INITDIALOG with TRUE: 0
+// there means "the hook set the focus itself", so the dialog skipped focusing
+// its default button. Opened from the editor that was masked by activation;
+// opened from Print Preview - whose owner is disabled on purpose - the dialog
+// came up unfocused and Enter went nowhere. Bring it forward as well, for the
+// same reason.
 static UINT_PTR CALLBACK print_dialog_hook(HWND dlg, UINT msg, WPARAM wparam, LPARAM lparam) {
-    (void) dlg;
-    (void) msg;
     (void) wparam;
     (void) lparam;
+    if (msg == WM_INITDIALOG) {
+        SetForegroundWindow(dlg);
+        return 1; // Let the dialog set focus to its default control
+    }
     return 0;
 }
 
