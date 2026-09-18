@@ -145,12 +145,20 @@ Windows 10. Not a defect to chase further.
 - [ ] **Page Setup** margins take effect, survive a restart, and are still
       correct after switching Windows between metric and imperial units (they
       are stored in thousandths of an inch precisely so this holds).
-- [ ] **Landscape** set in Page Setup applies to the printed output.
+- [x] **Landscape** set in Page Setup applies to the printed output. CONFIRMED
+      2026-09-18 - but the Print dialog showed "Portrait" while doing it,
+      because it was never seeded with the Page Setup choices. Fixed in v0.32.6.
 - [ ] Absurd margins (larger than the paper) fall back to the whole page rather
       than printing nothing.
 - [ ] An **empty document** prints one page (or nothing) without hanging.
 - [ ] The job appears in the print queue named after the **file**, not "npad".
-- [ ] **Regression check:** startup is unchanged for a launch that never prints.
+- [x] **Regression check:** startup is unchanged for a launch that never prints.
+      CONFIRMED 2026-09-18 in use.
+
+**Windows 11's Print dialog preview pane** still says "This app doesn't
+support print preview" (re-reported 2026-09-18). Expected, and not fixable
+short of generating XPS: that pane is Windows', and only fills for apps that
+hand it an XPS page source. npad's File > Print Preview is the one to use.
       comdlg32 is delay-loaded and confirmed absent from the static import table.
 
 **v0.32.0 - Print Preview**
