@@ -1052,6 +1052,24 @@ Per the project's core principle the pane itself is non-destructive (it only
 adds npad to choosers), but anything that could displace an existing default
 must stay opt-in and explicit.
 
+### Preview inside the Windows 11 Print dialog (modern print pipeline)
+
+Asked 2026-09-18. The dialog's preview pane is rendered by the *application*
+through the WinRT printing contract (`PrintManager` via `IPrintManagerInterop`,
+`IPrintDocumentSource`, `IPrintPreviewPageCollection`, pages drawn with
+Direct2D/DirectWrite into an XPS package target). A classic GDI printer has
+nothing to answer with, so the pane says "This app doesn't support print
+preview"; there is no flag that makes the GDI path preview.
+
+Doing it means moving printing off GDI entirely: three hand-written COM
+interfaces in C, Direct2D/DirectWrite rendering for both preview and output,
+and re-measuring the layout in DirectWrite's metrics (GDI and DirectWrite do
+not agree on advance widths). Roughly 1,500-2,500 lines, three more system
+DLLs (delay-loadable), works on Windows 10 too. File > Print Preview already
+shows the same pages, measured against the real printer - so this buys a nicer
+*place* to see them, not new information. Parked as a minor version of its own
+if wanted; not scheduled.
+
 ### Tab inserts spaces
 
 Requested 2026-07-26. An option on the Markdown preferences page to make Tab
