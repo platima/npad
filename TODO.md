@@ -164,8 +164,9 @@ Setup and has no preview pane to be empty.
 - [x] **Re-check on v0.32.7:** CONFIRMED 2026-09-18 - the classic dialog
       appears and the page prints landscape. (The classic dialog does not show
       an orientation field at all; that lives in Page Setup, as in notepad.)
-- [ ] **Re-check on v0.32.8:** Ctrl+P inside Print Preview - the print dialog
-      has focus immediately, so Enter prints without clicking it first.
+- [x] **Re-check on v0.32.8:** Ctrl+P inside Print Preview - the print dialog
+      has focus immediately. CONFIRMED 2026-09-18, along with the Install Now
+      busy state (v0.32.7) during the update to v0.32.8.
 
 **v0.32.0 - Print Preview**
 - [x] Ctrl+Shift+P and File > Print Preview open it; Esc and Close close it. CONFIRMED 2026-09-16.
