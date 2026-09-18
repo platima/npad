@@ -5,6 +5,23 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.7] - 2026-09-18
+
+### 🐛 Fixed
+- **The Print dialog still said "Portrait" for a landscape job, even seeded.**
+  Windows 11's modern print dialog ignores the DEVMODE an application passes
+  in - orientation and paper included - whatever "let the app change my
+  printing preferences" says. This is a known Windows 11 behaviour affecting
+  every classic Win32 application. npad now opens the classic print dialog
+  instead (comdlg32 falls back to it when the app supplies a print hook),
+  which honours the Page Setup choices. That dialog has no preview pane, so
+  the "This app doesn't support print preview" message goes with it.
+- **Install Now gave no sign that anything was happening** while the update
+  downloaded, so it got clicked several times. Preferences > Updates now
+  greys out Install Now and Check Now for the duration and runs a progress
+  marquee beside the current version; the same applies to a check in
+  progress, and to a download already running when the page is opened.
+
 ## [0.32.6] - 2026-09-18
 
 ### 🐛 Fixed

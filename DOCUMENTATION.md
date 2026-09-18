@@ -336,9 +336,11 @@ Window does). Not intended for direct use.
     the backdrop follows npad's scheme.
   - With **no printer installed at all** the preview still works, against the
     locale's paper size at 600 dpi.
-  - Windows 11's own print dialog has a preview pane that reports *"This app
-    doesn't support print preview"* for classic Win32 printing clients. That
-    pane is Windows'; npad's own preview is the one to use.
+  - npad opens the **classic** Windows print dialog, deliberately: Windows
+    11's modern one ignores the orientation and paper an application passes
+    in, so it would show "Portrait" for a landscape job. The classic dialog
+    honours Page Setup. It has no preview pane; File > Print Preview is the
+    preview.
 - **Printing** (Ctrl+P) prints the *document*, not the window. The page has its
   own width, so the editor's word-wrap setting does not affect the output:
   lines too long for the printable width are re-wrapped there, broken at a

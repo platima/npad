@@ -923,6 +923,16 @@ void print_layout_draw_page(const PrintLayout *l, HDC hdc, int page) {
 // Printing
 // ---------------------------------------------------------------------------
 
+// Deliberately handles nothing. Its existence is the point: see the
+// PD_ENABLEPRINTHOOK note in print_document.
+static UINT_PTR CALLBACK print_dialog_hook(HWND dlg, UINT msg, WPARAM wparam, LPARAM lparam) {
+    (void) dlg;
+    (void) msg;
+    (void) wparam;
+    (void) lparam;
+    return 0;
+}
+
 PrintResult print_document(HWND owner, const wchar_t *text, const wchar_t *doc_title,
                            const wchar_t *face, int point_size) {
     if (!text)
@@ -935,7 +945,15 @@ PrintResult print_document(HWND owner, const wchar_t *text, const wchar_t *doc_t
     ZeroMemory(&pd, sizeof(pd));
     pd.lStructSize = sizeof(pd);
     pd.hwndOwner = owner;
-    pd.Flags = PD_RETURNDC | PD_NOPAGENUMS | PD_NOSELECTION;
+    // PD_ENABLEPRINTHOOK with a hook that does nothing: Windows 11's modern
+    // print dialog ignores the DEVMODE an application passes in - orientation
+    // and paper included - whatever "let the app change my printing
+    // preferences" says, so it showed "Portrait" for a landscape job. Giving
+    // the dialog a hook makes comdlg32 fall back to the classic dialog, which
+    // honours the DEVMODE. That dialog also has no preview pane, so the
+    // "This app doesn't support print preview" message goes with it.
+    pd.Flags = PD_RETURNDC | PD_NOPAGENUMS | PD_NOSELECTION | PD_ENABLEPRINTHOOK;
+    pd.lpfnPrintHook = print_dialog_hook;
     pd.nCopies = 1;
 
     // Seed the dialog with the default printer's DEVMODE plus the Page Setup

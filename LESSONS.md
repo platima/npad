@@ -148,6 +148,16 @@ when a return type changes, even when the build is clean.
 
 ## Win32: printing and preview
 
+**Windows 11's modern print dialog ignores the DEVMODE you pass to
+`PrintDlgW`.** Orientation, paper, everything - regardless of its own "let
+the app change my printing preferences" toggle. A known Windows 11 22H2+
+behaviour that bites every classic Win32 app (WPF, wxWidgets and others have
+the same open issues). `PD_ENABLEPRINTHOOK` with a hook that returns 0 makes
+comdlg32 use the classic dialog, which honours the DEVMODE - and has no
+preview pane, so the "This app doesn't support print preview" message
+disappears as a side effect. Seeding the DEVMODE alone (v0.32.6) fixed
+nothing visible; it took the hook.
+
 **Measure the layout on the printer, never on screen.** Glyph advances are
 integer-rounded per ppem, so the same font realises differently at 600 dpi and
 at ~96 dpi. A preview that re-measures on its own DC breaks lines a word early

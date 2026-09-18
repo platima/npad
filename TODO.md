@@ -155,11 +155,14 @@ Windows 10. Not a defect to chase further.
 - [x] **Regression check:** startup is unchanged for a launch that never prints.
       CONFIRMED 2026-09-18 in use.
 
-**Windows 11's Print dialog preview pane** still says "This app doesn't
-support print preview" (re-reported 2026-09-18). Expected, and not fixable
-short of generating XPS: that pane is Windows', and only fills for apps that
-hand it an XPS page source. npad's File > Print Preview is the one to use.
-      comdlg32 is delay-loaded and confirmed absent from the static import table.
+**Windows 11's Print dialog** (re-reported 2026-09-18, twice): its preview
+pane said "This app doesn't support print preview", and it showed "Portrait"
+for a landscape job even after v0.32.6 seeded it. Both are the modern dialog
+ignoring what the application passes in. v0.32.7 opens the classic dialog
+instead (a print hook makes comdlg32 fall back to it); that honours Page
+Setup and has no preview pane to be empty.
+- [ ] **Re-check on v0.32.7:** Page Setup landscape, Ctrl+P - the dialog is
+      the classic one and says Landscape.
 
 **v0.32.0 - Print Preview**
 - [x] Ctrl+Shift+P and File > Print Preview open it; Esc and Close close it. CONFIRMED 2026-09-16.

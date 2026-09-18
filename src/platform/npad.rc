@@ -14,8 +14,8 @@
 
 // Version Information (keep in sync with src/main.h)
 1 VERSIONINFO
-FILEVERSION 0,32,6,0
-PRODUCTVERSION 0,32,6,0
+FILEVERSION 0,32,7,0
+PRODUCTVERSION 0,32,7,0
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0x0L
 FILEOS VOS__WINDOWS32
@@ -28,12 +28,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Platima"
             VALUE "FileDescription", "npad - Lightweight Text Editor"
-            VALUE "FileVersion", "0.32.6.0"
+            VALUE "FileVersion", "0.32.7.0"
             VALUE "InternalName", "npad"
             VALUE "LegalCopyright", "Copyright © 2025-2026 Platima"
             VALUE "OriginalFilename", "npad.exe"
             VALUE "ProductName", "npad"
-            VALUE "ProductVersion", "0.32.6.0"
+            VALUE "ProductVersion", "0.32.7.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -263,7 +263,10 @@ CAPTION "Updates"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
     LTEXT           "Current version:", IDC_STATIC, 10, 12, 70, 8
-    LTEXT           "", ID_PREF_UPD_CURRENT, 84, 12, 146, 8
+    LTEXT           "", ID_PREF_UPD_CURRENT, 84, 12, 80, 8
+    // Marquee progress bar (PBS_MARQUEE = 0x08), shown only while a check or
+    // download is running so a slow one is visibly in progress
+    CONTROL         "", ID_PREF_UPD_BUSY, "msctls_progress32", 0x08 | NOT WS_VISIBLE, 166, 10, 64, 11
     LTEXT           "Latest version:", IDC_STATIC, 10, 26, 70, 8
     LTEXT           "", ID_PREF_UPD_LATEST, 84, 26, 78, 8
     PUSHBUTTON      "&Install Now", ID_PREF_UPD_INSTALL, 166, 23, 64, 14

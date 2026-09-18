@@ -2608,6 +2608,37 @@ typedef struct {
 // One update operation (check or download) at a time
 static volatile LONG g_update_busy = 0;
 
+// Preferences > Updates, while it is open, so a check or download that is in
+// flight can be shown there: Install Now and Check Now grey out and a marquee
+// runs beside the current version. Without that a slow download looked like
+// nothing had happened, and Install Now got clicked three or four times.
+static HWND g_updates_page = NULL;
+static bool g_updates_install_enabled = true; // Install Now's state before busy greyed it
+
+static void updates_page_sync_busy(void) {
+    if (!g_updates_page)
+        return;
+    bool busy = InterlockedCompareExchange(&g_update_busy, 0, 0) != 0;
+    HWND bar = GetDlgItem(g_updates_page, ID_PREF_UPD_BUSY);
+    if (bar) {
+        SendMessageW(bar, PBM_SETMARQUEE, busy ? TRUE : FALSE, 30);
+        ShowWindow(bar, busy ? SW_SHOW : SW_HIDE);
+    }
+    HWND install = GetDlgItem(g_updates_page, ID_PREF_UPD_INSTALL);
+    HWND check = GetDlgItem(g_updates_page, ID_PREF_UPD_CHECK);
+    if (busy) {
+        if (install && IsWindowEnabled(install))
+            g_updates_install_enabled = true;
+        else if (install)
+            g_updates_install_enabled = false;
+        EnableWindow(install, FALSE);
+        EnableWindow(check, FALSE);
+    } else {
+        EnableWindow(install, g_updates_install_enabled ? TRUE : FALSE);
+        EnableWindow(check, TRUE);
+    }
+}
+
 // True while the in-flight check was user-initiated (Help menu / Check Now):
 // drives loud-vs-silent surfacing of the result. Set before spawning a check.
 static bool g_update_check_manual = false;
@@ -2969,6 +3000,7 @@ static void prompt_update_available(Window *window, const char *tag, const char 
         if (!spawn_update_download(window, tag)) {
             set_status_message(window, "Update download failed to start");
             InterlockedExchange(&g_update_busy, 0);
+            updates_page_sync_busy();
         }
         return; // Busy flag stays set for the download (or was cleared above)
     }
@@ -2981,6 +3013,7 @@ static void prompt_update_available(Window *window, const char *tag, const char 
         ui_platform_notify_settings_changed();
     }
     InterlockedExchange(&g_update_busy, 0);
+    updates_page_sync_busy();
     apply_update_indicator(window);
 }
 
@@ -2999,6 +3032,7 @@ static void handle_update_checked(Window *window, UpdateCheckResult *r) {
         }
         set_status_message(window, "Update check failed");
         InterlockedExchange(&g_update_busy, 0);
+        updates_page_sync_busy();
         free(r);
         return;
     }
@@ -3028,6 +3062,7 @@ static void handle_update_checked(Window *window, UpdateCheckResult *r) {
         set_status_message(window, status);
         if (!spawn_update_download(window, r->tag))
             InterlockedExchange(&g_update_busy, 0);
+        updates_page_sync_busy();
         apply_update_indicator(window);
         free(r);
         return;
@@ -3055,6 +3090,7 @@ static void handle_update_checked(Window *window, UpdateCheckResult *r) {
         set_status_message(window, "An update is available (see the Help menu)");
     }
     InterlockedExchange(&g_update_busy, 0);
+    updates_page_sync_busy();
     apply_update_indicator(window);
     free(r);
 }
@@ -3231,6 +3267,7 @@ static void handle_update_downloaded(Window *window, UpdateDownloadResult *r) {
         }
     }
     InterlockedExchange(&g_update_busy, 0);
+    updates_page_sync_busy();
     apply_update_indicator(window); // The update is still available if declined
     free(r);
 }
@@ -5410,6 +5447,7 @@ static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, L
             _snwprintf(wcur, 31, L"%hs", cur);
             wcur[31] = L'\0';
             SetDlgItemTextW(page, ID_PREF_UPD_CURRENT, wcur);
+            g_updates_page = page;
 
             char *latest = settings_get_string("update_latest_version", "");
             wchar_t *wlatest = utf8_to_wide((latest && latest[0]) ? latest : "unknown");
@@ -5445,6 +5483,7 @@ static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, L
                            settings_get_bool("update_check_on_launch", false) ? BST_CHECKED
                                                                               : BST_UNCHECKED);
             prefs_updates_sync_skip(page);
+            updates_page_sync_busy(); // A download may already be running
             return TRUE;
         }
 
@@ -5460,6 +5499,7 @@ static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, L
                 // Manual check from the prefs page (result goes to the main window)
                 if (g_main_window)
                     start_update_check(g_main_window, true);
+                updates_page_sync_busy();
                 return TRUE;
             }
             if (id == ID_PREF_UPD_INSTALL) {
@@ -5480,6 +5520,7 @@ static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, L
                     }
                 }
                 free(latest);
+                updates_page_sync_busy();
                 return TRUE;
             }
             if (id == ID_PREF_UPD_SKIP) {
@@ -5497,6 +5538,11 @@ static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, L
             }
             break;
         }
+
+        case WM_DESTROY:
+            if (g_updates_page == page)
+                g_updates_page = NULL;
+            break;
 
         case WM_NOTIFY: {
             const NMHDR *nmhdr = (const NMHDR *) lparam;
