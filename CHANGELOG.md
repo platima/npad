@@ -5,6 +5,73 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.33.0] - 2026-09-27
+
+### 🆕 Features
+- **Preferences > Associations: choose which file types npad is offered for,
+  without re-running setup.** The same five groups the installer offers -
+  Text, Markdown & documents, Data, Config and Logs - as tick boxes. The page
+  reads the registry rather than remembering its own state, so it always
+  shows what is really registered, including what the installer wrote. On
+  npad's default per-user install those entries live exactly where the page
+  writes, so unticking a group genuinely undoes the installer's work.
+  - **Only what you toggle is changed.** Apply touches exactly the groups
+    whose boxes you changed, and nothing else - not a group you left alone,
+    not one registered by some other copy of npad, not one an older
+    installer registered only in part.
+  - **npad cannot make itself the default app, and the page does not
+    pretend to.** Since Windows 8 the default handler is hash-protected, and
+    since 2024 a kernel driver enforces it and blocks reg.exe, regedit and
+    PowerShell as proxies. Ticking a box adds npad to **Open with** and to
+    Windows 11's Default apps page; **Set Default Apps...** opens that page
+    (straight to npad's own entry on Windows 11) where you can choose.
+  - **It never takes ownership of a file type.** The installer sets each
+    extension's default value to npad's ProgID; the page deliberately does
+    not, because that overwrites whatever previously owned the type with no
+    backup. Unticking removes that value only when it names npad's own
+    ProgID - another app's claim is left exactly as it was.
+  - **Save for all users (requires elevated permissions)** switches the boxes
+    to every account on the computer. Applying a change there relaunches npad
+    elevated, through the standard consent prompt; declining changes
+    nothing. It is available only when npad is installed under Program Files,
+    as the system records it: a per-user or portable copy lives where other
+    accounts cannot run it from, and where its owner could later replace it.
+    The elevated process checks that again for itself, writes the all-users
+    hive only, and accepts nothing but the five group names - no temporary
+    file, nothing user-supplied crossing the boundary.
+- **Updates no longer undo the page.** Inno Setup re-applies the task ticks
+  from the original install on every upgrade, so an update used to quietly
+  re-register every type you had since unticked. npad's in-app updater now
+  tells setup which groups are not registered. It never asks setup to *add*
+  a group: the installer's tasks also take ownership of the file type, which
+  the page deliberately never does. When both a per-user and an all-users
+  install exist, setup asks which to upgrade, so nothing is passed.
+- **Uninstalling (setup EXE) removes every npad file type registration**,
+  including groups added from the page after install, which the uninstaller
+  had no record of. On an all-users install it also removes the per-user
+  registrations of the account running the uninstall; other accounts'
+  per-user entries are beyond an uninstaller's reach. The MSI does not do
+  this: an MSI upgrade uninstalls the old product first, so a removal rule
+  there would wipe the page's registrations on every upgrade.
+
+### 🔧 Internal
+- `tests/test_assoc_win32.c` (`make test-assoc-win32`, run on Windows) drives
+  the real registry module against a sandbox: `RegOverridePredefKey`
+  redirects HKCU and HKLM for that one process, so nothing the machine uses
+  is touched. 16 tests, 67 assertions. Nine deliberate mutants are each
+  caught: claiming ownership, a loosened elevated-argument parser, clearing
+  another app's claim, rewriting untouched groups, dropping the elevated
+  location check, believing the ProgramFiles environment variable, the
+  updater selecting registered groups, the updater guessing between two
+  installs, and counting a leftover Open With entry as a registration.
+- Two adversarial reviews. The first found the all-users gate could be
+  bypassed from a copy outside Program Files, and that Apply rewrote
+  registrations whenever the tab had merely been visited. The second found
+  that the first round's updater fix would have made the installer take
+  ownership of every type ticked on the page, and that the MSI cleanup would
+  have run on every upgrade. All fixed, each with a test that fails without
+  the fix.
+
 ## [0.32.8] - 2026-09-18
 
 ### 🐛 Fixed

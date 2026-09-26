@@ -27,6 +27,7 @@
 #define IDD_PREFS_DEFAULTS 214
 #define IDD_PREFS_DEBUG 215
 #define IDD_PREFS_UPDATES 216
+#define IDD_PREFS_ASSOC 217
 
 // Control IDs for Find Dialog
 #define ID_FIND_TEXT 3001
@@ -131,6 +132,16 @@
 #define ID_PREF_PRINT_HEADER 3166
 #define ID_PREF_PRINT_FOOTER 3167
 #define ID_PREF_UPD_BUSY 3168
+
+// Preferences: Associations page
+#define ID_PREF_ASSOC_TEXT 3169
+#define ID_PREF_ASSOC_MARKDOWN 3170
+#define ID_PREF_ASSOC_DATA 3171
+#define ID_PREF_ASSOC_CONFIG 3172
+#define ID_PREF_ASSOC_LOG 3173
+#define ID_PREF_ASSOC_MACHINE 3174
+#define ID_PREF_ASSOC_NOTE 3175
+#define ID_PREF_ASSOC_DEFAULTS 3176
 
 // Static text controls
 #define IDC_STATIC -1

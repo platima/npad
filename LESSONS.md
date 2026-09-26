@@ -229,6 +229,75 @@ receives `npadCloseAll` / `npadCloseForHandoff`. The flip side: a distinct
 class means the `npadSettingsChanged` broadcast never arrives, so
 `reload_and_apply_settings` has to push the theme in by hand.
 
+## Win32: registry and file associations
+
+**A property sheet sends `PSN_APPLY` to every page that has been CREATED, not
+just the ones that changed.** Visiting a tab is enough. A page that applies
+its whole state on Apply therefore rewrites everything it shows whenever the
+user presses OK for an unrelated change on another tab. The Associations page
+did exactly that: it repointed registrations at whichever copy of npad was
+running, copied the all-users set into the user's hive, and deleted a
+half-registered legacy group. Snapshot the state at load and apply the diff.
+
+**A trust gate must be re-checked on the elevated side, and must not read the
+environment.** The unelevated page decided whether all-users registration was
+allowed; the elevated child simply obeyed. It also read `%ProgramFiles%`,
+which any launching process can set for its children. Read
+`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\ProgramFilesDir` instead,
+and repeat the check in the elevated process itself. The stakes: a
+machine-wide open command pointing at a user-writable copy of npad is code
+run by every account that opens the file.
+
+**"Enable it when X, or when something is already registered" is a bypass.**
+The all-users checkbox was enabled on a portable copy whenever HKLM already
+had entries - meant to allow clearing them, it also allowed re-registering
+them with the portable copy's own path.
+
+**Send changes across an elevation boundary, never a whole state.** A state
+means an empty or missing argument reads as "clear everything". `+text,-log`
+means an empty list is simply nothing to do, and anything that is not an
+exact sign-and-name is ignored.
+
+**A modal wait that pumps messages must disable the top-level window, not the
+page.** Disabling a property-sheet page leaves the sheet's OK and Cancel
+live, and Cancel destroys the page while its own `PSN_APPLY` is still on the
+stack.
+
+**Registry code can be tested against a sandbox with `RegOverridePredefKey`.**
+It redirects `HKEY_CURRENT_USER` or `HKEY_LOCAL_MACHINE` to any key, for the
+calling process only. Open the sandbox keys on the real hive first, redirect,
+run the real module, restore with `NULL`, delete the sandbox. Seed anything
+the module reads from the redirected hive (here, `ProgramFilesDir`).
+
+**Inno's `UsePreviousTasks` undoes runtime changes on every upgrade.** Setup
+re-applies the task ticks recorded at install time. An app that changes the
+same registrations at runtime must hand setup the real state:
+`/MERGETASKS="assoc\text,!assoc\markdown,..."`. And the uninstall log only
+knows what setup wrote - `ValueType: none; Flags: dontcreatekey
+uninsdeletekey` creates nothing but deletes the key on uninstall, whoever
+made it. WiX: `RemoveRegistryKey Action="removeOnUninstall"`.
+
+**An MSI major upgrade UNINSTALLS the old product before installing the new
+one.** With the default `<MajorUpgrade>` (RemoveExistingProducts after
+InstallValidate), every `RemoveRegistryKey Action="removeOnUninstall"` row in
+the old package fires on every upgrade. A rule meant to clean up at uninstall
+therefore wiped the page's registrations each time the MSI was updated.
+Inno does not have this problem: an upgrade installs over the top and runs
+no uninstall.
+
+**Never positively select an installer task to preserve runtime state.**
+`/MERGETASKS="assoc\data"` does not mean "keep what is registered"; it means
+"run that task", and the task does whatever the installer does - here, take
+ownership of seven file types the page had only registered. Pass only
+negations (`!assoc\data`), and leave registered groups to setup's own
+record. And if setup will prompt for its install mode (a per-user and an
+all-users install both present), no one state is the right one to pass.
+
+**A deliberately-left reference must not read as a registration.** Uninstall
+removes the ProgID but leaves `.ext\OpenWithProgids\npad.ext`, which Windows
+ignores. Code that read that entry alone as "registered" showed a removed
+group as ticked after a reinstall. Check that the thing referred to exists.
+
 ## Core: settings
 
 **An escape without a matching unescape compounds.** `serialize_settings`

@@ -38,7 +38,7 @@ TEST_FRAMEWORK_SOURCES = tests/test_framework.c
 TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c  # Core sources without UI dependencies
 
 # Windows GUI specific
-WINDOWS_GUI_SOURCES = src/platform/ui_win32.c src/platform/print_win32.c
+WINDOWS_GUI_SOURCES = src/platform/ui_win32.c src/platform/print_win32.c src/platform/assoc_win32.c
 # Delay-loaded DLLs: none of these are needed to open a window, so binding them
 # statically made the loader page them in on every launch - which costs most on
 # a cold start, exactly when startup feels slow. winhttp/bcrypt serve only the
@@ -294,6 +294,14 @@ test-settings: tests/test_settings
 test-html-md: tests/test_html_md
 	@echo "Running HTML/Markdown tests..."
 	./tests/test_html_md
+
+# Windows-only: the file type association module against a registry sandbox.
+# Cross-compiled here; run tests/test_assoc_win32.exe on Windows. Not part of
+# `make test`, which runs natively on Linux.
+test-assoc-win32: tests/test_assoc_win32.exe
+
+tests/test_assoc_win32.exe: tests/test_assoc_win32.c src/platform/assoc_win32.c $(TEST_FRAMEWORK_SOURCES)
+	$(MINGW_CC) $(CFLAGS) -o $@ $^ -ladvapi32 -lshell32 -luser32
 
 tests/test_file_ops: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_file_ops.c
 	@mkdir -p tests

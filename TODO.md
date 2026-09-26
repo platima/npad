@@ -7,6 +7,42 @@ this file is for open loops.
 
 ---
 
+## 🧪 Needs testing - v0.33.0 Associations
+
+The registry logic is covered by `tests/test_assoc_win32.c` against a
+sandbox (14 tests, 64 assertions, seven mutants caught). What it cannot
+cover is the page itself, the real consent prompt, and a real upgrade.
+
+- [ ] Preferences > Associations opens, nothing clips or overlaps, and the
+      ticks match what your install registered (all five, on this machine).
+- [ ] Untick Text, Apply: .txt no longer offers npad in Open with. Re-tick,
+      Apply: it does again. The page re-reads the registry after Apply.
+- [ ] **Visit the tab, change nothing, then change a setting on another tab
+      and press OK** - nothing on the Associations page should be rewritten
+      (this is the regression the first review caught).
+- [ ] **Set Default Apps...** opens Settings on npad's own page (Windows 11).
+- [ ] On this per-user install, "Save for all users" is greyed with the
+      explanation beneath it.
+- [ ] **Untick a group, then use Install Now for the next update.** The setup
+      wizard's Tasks page should show that group unticked, and after the
+      update it should still be unregistered. (Before v0.33.0, setup
+      re-applied the original install's ticks.)
+- [ ] Uninstall (when convenient): no npad.* entries left under
+      HKCU\Software\Classes, including groups ticked on the page.
+
+**Known limitation, MSI only:** groups added from the page are not removed by
+an MSI uninstall. A `removeOnUninstall` rule would also fire on every MSI
+major upgrade (the old product is uninstalled first) and wipe them, which is
+worse. Closing it properly needs a custom action conditioned on
+`REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE`. Not done; the MSI is for managed
+deployments, where the MSI's own features are the usual way to choose types.
+- [ ] If an all-users install is ever available: tick "Save for all users" -
+      the boxes switch to the all-users set; toggle one, Apply, accept the
+      prompt. Declining changes nothing and shows no error. Cancel on the
+      Preferences sheet while the prompt is up must not crash.
+
+---
+
 ## 👀 Pending observation - idle view drift (v0.32.2)
 
 Reported 2026-09-16: a window left open (maximised, at least) with text in
@@ -1013,69 +1049,17 @@ can match the active theme, plus per-association file-type icons meant to ship
 - This overlaps the associations preferences pane below — if that pane ever
   writes ProgIDs, it must write the same `DefaultIcon` paths.
 
-### Preferences pane for file-type associations
+### Preferences pane for file-type associations - SHIPPED in v0.33.0
 
-Requested 2026-07-31. Today associations are **installer-only**: the five
-grouped tasks in `installer/npad.iss` (Text / Markdown / Data / Config / Logs)
-and the matching MSI features. Once npad is installed, changing which
-extensions it registers for means re-running setup, which is heavy-handed for
-something a user might want to adjust once they have lived with it.
+Built to the recorded decisions: per-user by default, "Save for all users
+(requires elevated permissions)" through the consent prompt, the installer's
+five groups. Design choices made 2026-09-27, all on the recommended side:
+the all-users write relaunches npad.exe elevated with a closed set of group
+tokens (no .reg file - a user-writable temp file read after the prompt is a
+real privilege-escalation vector), gated on npad being under Program Files;
+and the pane never writes an extension's default value. See
+DOCUMENTATION.md > Associations for the behaviour and LESSONS.md for why.
 
-A Preferences page would let extensions be ticked and unticked at runtime.
-
-**Constraints to design around** (all established while building the installer
-side — worth not rediscovering):
-
-- **npad cannot make itself the default handler for anything.** Since Windows 8
-  the `FileExts\<ext>\UserChoice` key is hash-protected, and Windows rejects a
-  programmatic write. The pane can register a ProgID and add npad to the
-  Open-with list; making it the *default* still has to go through Settings ▸
-  Default apps. The installer already says as much (`npad.iss:127`, `:270`) and
-  offers to open that Settings page — the pane should do the same rather than
-  imply it can do more.
-- **Scope - DECIDED 2026-08-19.** The installer writes 95 keys under `HKA`
-  (which resolves to HKLM for an all-users install, HKCU otherwise) and 12
-  explicitly under HKCU. A
-  prefs pane runs unelevated, so it can only safely write **HKCU\\Software\\
-  Classes** — meaning on an all-users install the pane's changes would shadow
-  rather than edit the installed ones. Decided as follows.
-
-  The user's call: **per-user by default**, plus a checkbox reading *"Save for
-  all users (requires elevated permissions)"*. Ticking it re-launches the write
-  elevated (`ShellExecuteW` with the `runas` verb, i.e. the standard UAC consent
-  dialog) so the same changes land in HKLM. Unticked - the default - nothing
-  prompts, and nothing outside the user's own hive is touched.
-
-- **Ownership and cleanup.** The uninstaller removes what *it* wrote. Anything
-  the pane adds later would leak unless it is either written where uninstall
-  already sweeps, or tracked in settings so uninstall can find it.
-- **Do not write `SupportedTypes`.** It *filters* npad out of Open-with for
-  unlisted types; its absence is exactly what makes npad appear for anything.
-- The existing ProgIDs are `npad.txt`, `npad.md`, `npad.markdown`, `npad.csv`,
-  `npad.tsv`, `npad.json`, `npad.xml`, `npad.yaml`, `npad.yml`, `npad.toml`,
-  `npad.ini`, `npad.cfg`, `npad.conf`, `npad.log`.
-
-Per the project's core principle the pane itself is non-destructive (it only
-adds npad to choosers), but anything that could displace an existing default
-must stay opt-in and explicit.
-
-### Preview inside the Windows 11 Print dialog (modern print pipeline)
-
-Asked 2026-09-18. The dialog's preview pane is rendered by the *application*
-through the WinRT printing contract (`PrintManager` via `IPrintManagerInterop`,
-`IPrintDocumentSource`, `IPrintPreviewPageCollection`, pages drawn with
-Direct2D/DirectWrite into an XPS package target). A classic GDI printer has
-nothing to answer with, so the pane says "This app doesn't support print
-preview"; there is no flag that makes the GDI path preview.
-
-Doing it means moving printing off GDI entirely: three hand-written COM
-interfaces in C, Direct2D/DirectWrite rendering for both preview and output,
-and re-measuring the layout in DirectWrite's metrics (GDI and DirectWrite do
-not agree on advance widths). Roughly 1,500-2,500 lines, three more system
-DLLs (delay-loadable), works on Windows 10 too. File > Print Preview already
-shows the same pages, measured against the real printer - so this buys a nicer
-*place* to see them, not new information. Parked as a minor version of its own
-if wanted; not scheduled.
 
 ### Tab inserts spaces
 

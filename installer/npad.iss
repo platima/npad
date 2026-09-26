@@ -263,6 +263,47 @@ Root: HKA; Subkey: "Software\Classes\npad.log\shell\open\command"; ValueType: st
 Root: HKA; Subkey: "Software\Classes\.log"; ValueType: string; ValueData: "npad.log"; Tasks: assoc\log; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Classes\.log\OpenWithProgids"; ValueType: string; ValueName: "npad.log"; ValueData: ""; Tasks: assoc\log; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".log"; ValueData: "npad.log"; Tasks: assoc\log; Flags: uninsdeletevalue
+; Preferences > Associations can register groups the installer never did, so
+; the uninstall log knows nothing about them. These entries create nothing
+; (dontcreatekey, no value) but remove every npad ProgID on uninstall,
+; whoever created it. OpenWithProgids and Capabilities entries left behind
+; then name unregistered ProgIDs, which Windows ignores - its own guidance is
+; not to chase them.
+Root: HKA; Subkey: "Software\Classes\npad.txt"; ValueType: none; Flags: dontcreatekey uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.md"; ValueType: none; Flags: dontcreatekey uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.markdown"; ValueType: none; Flags: dontcreatekey uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.csv"; ValueType: none; Flags: dontcreatekey uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.tsv"; ValueType: none; Flags: dontcreatekey uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.json"; ValueType: none; Flags: dontcreatekey uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.xml"; ValueType: none; Flags: dontcreatekey uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.yaml"; ValueType: none; Flags: dontcreatekey uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.yml"; ValueType: none; Flags: dontcreatekey uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.toml"; ValueType: none; Flags: dontcreatekey uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.ini"; ValueType: none; Flags: dontcreatekey uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.cfg"; ValueType: none; Flags: dontcreatekey uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.conf"; ValueType: none; Flags: dontcreatekey uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\npad.log"; ValueType: none; Flags: dontcreatekey uninsdeletekey
+; On an all-users install HKA is HKLM, but Preferences > Associations writes
+; the per-user hive by default. Clean the uninstalling account's per-user
+; registrations as well. Other accounts' per-user entries are out of an
+; uninstaller's reach; DOCUMENTATION.md says so.
+Root: HKCU; Subkey: "Software\Classes\npad.txt"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\npad.md"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\npad.markdown"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\npad.csv"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\npad.tsv"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\npad.json"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\npad.xml"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\npad.yaml"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\npad.yml"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\npad.toml"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\npad.ini"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\npad.cfg"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\npad.conf"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\npad.log"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Applications\npad.exe"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\*\OpenWithList\npad.exe"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Platima\npad\Capabilities"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
 
 ; Per-user font registration (admin mode uses FontInstall above instead)
 Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Intel One Mono (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\IntelOneMono-Regular.ttf"; Check: not IsAdminInstallMode; Components: fonts\intelonemono

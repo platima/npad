@@ -31,6 +31,7 @@
 #include "../core/session.h"
 #include "../core/settings.h"
 #include "../core/startup_prof.h"
+#include "assoc_win32.h"
 #include "print_win32.h"
 #include "../core/update_check.h"
 #include "resource.h"
@@ -3250,7 +3251,19 @@ static void handle_update_downloaded(Window *window, UpdateDownloadResult *r) {
             // It cannot detect that itself: npad closes below, before setup
             // starts, so there is no window left for it to find. Inno ignores
             // parameters it does not recognise, so older installers are safe.
-            ShellExecuteW(hwnd, L"open", r->path, L"/RELAUNCH=1", NULL, SW_SHOWNORMAL);
+            //
+            // The association tasks come from the registry as it is NOW, not
+            // from Inno's memory of the original install: its UsePreviousTasks
+            // would otherwise quietly re-register every type the user has
+            // since unticked on Preferences > Associations.
+            wchar_t setup_args[256] = L"/RELAUNCH=1";
+            wchar_t merge[200];
+            if (assoc_installer_merge_tasks(merge, 200)) {
+                size_t used = wcslen(setup_args);
+                _snwprintf(setup_args + used, 255 - used, L" %s", merge);
+                setup_args[255] = L'\0';
+            }
+            ShellExecuteW(hwnd, L"open", r->path, setup_args, NULL, SW_SHOWNORMAL);
             // This instance parks its own work and goes last. If it cannot be
             // parked (a full or read-only profile volume) fall back to asking:
             // the dialog above promised the document would come back, and
@@ -5438,6 +5451,176 @@ static void prefs_updates_sync_skip(HWND page) {
     free(skipped);
 }
 
+// ---------------------------------------------------------------------------
+// Preferences: Associations page
+//
+// The five groups mirror the installer's association tasks exactly. Ticking a
+// box registers npad as an AVAILABLE handler for those types; nothing here can
+// make npad the default, because no application can - see assoc_win32.h.
+//
+// State is read from the registry rather than from settings.json, so the page
+// always shows what is really registered, including whatever the installer
+// wrote. On npad's default per-user install the installer's own entries live
+// in exactly the hive this page writes, so unticking genuinely undoes them.
+//
+// "Save for all users" is a SCOPE switch, not a mirrored state: unticked, the
+// boxes show and edit this account's registrations; ticked, they show and
+// edit every account's. Edits in each scope are kept separately while the
+// sheet is open, and Apply applies only what was actually toggled in each -
+// a property sheet sends Apply to every page that has merely been visited,
+// so anything else would rewrite registrations nobody asked to change.
+// ---------------------------------------------------------------------------
+
+enum { ASSOC_SCOPE_USER = 0, ASSOC_SCOPE_MACHINE = 1 };
+
+static const int ASSOC_CHECK_IDS[ASSOC_GROUP_COUNT] = {
+    ID_PREF_ASSOC_TEXT,   ID_PREF_ASSOC_MARKDOWN, ID_PREF_ASSOC_DATA,
+    ID_PREF_ASSOC_CONFIG, ID_PREF_ASSOC_LOG,
+};
+
+// The Preferences sheet is modal and single-instance, so one copy suffices
+static struct {
+    bool loaded[2][ASSOC_GROUP_COUNT];  // What the registry held when last read
+    bool current[2][ASSOC_GROUP_COUNT]; // What the boxes say, per scope
+    int scope;
+    bool available; // Machine scope permitted for this copy of npad
+} g_assoc_page;
+
+static void assoc_page_capture(HWND page) {
+    for (int g = 0; g < ASSOC_GROUP_COUNT; g++) {
+        g_assoc_page.current[g_assoc_page.scope][g] =
+            IsDlgButtonChecked(page, ASSOC_CHECK_IDS[g]) == BST_CHECKED;
+    }
+}
+
+static void assoc_page_show(HWND page) {
+    int scope = g_assoc_page.scope;
+    for (int g = 0; g < ASSOC_GROUP_COUNT; g++) {
+        CheckDlgButton(page, ASSOC_CHECK_IDS[g],
+                       g_assoc_page.current[scope][g] ? BST_CHECKED : BST_UNCHECKED);
+    }
+    CheckDlgButton(page, ID_PREF_ASSOC_MACHINE,
+                   scope == ASSOC_SCOPE_MACHINE ? BST_CHECKED : BST_UNCHECKED);
+
+    const wchar_t *note;
+    if (!g_assoc_page.available) {
+        note = L"Unavailable here: npad is not installed under Program Files, so other "
+               L"accounts could not safely run it from this location.";
+    } else if (scope == ASSOC_SCOPE_MACHINE) {
+        note = L"The boxes above now show every account on this computer. Applying asks "
+               L"for administrator permission.";
+    } else {
+        bool machine_any = false;
+        for (int g = 0; g < ASSOC_GROUP_COUNT; g++) {
+            if (g_assoc_page.loaded[ASSOC_SCOPE_MACHINE][g])
+                machine_any = true;
+        }
+        note = machine_any ? L"The boxes above are for your account. Some types are also "
+                             L"registered for every account - tick this to see them."
+                           : L"The boxes above are for your account only.";
+    }
+    SetDlgItemTextW(page, ID_PREF_ASSOC_NOTE, note);
+}
+
+static void assoc_page_load(HWND page) {
+    assoc_read_user_state(g_assoc_page.loaded[ASSOC_SCOPE_USER]);
+    assoc_read_machine_state(g_assoc_page.loaded[ASSOC_SCOPE_MACHINE]);
+    memcpy(g_assoc_page.current, g_assoc_page.loaded, sizeof(g_assoc_page.current));
+
+    // Not "available OR something is already registered machine-wide": that
+    // let a portable or per-user copy re-register the machine scope with its
+    // OWN path, which its owner could later replace
+    g_assoc_page.available = assoc_machine_available();
+    if (!g_assoc_page.available)
+        g_assoc_page.scope = ASSOC_SCOPE_USER;
+    EnableWindow(GetDlgItem(page, ID_PREF_ASSOC_MACHINE), g_assoc_page.available);
+    assoc_page_show(page);
+}
+
+static bool assoc_scope_changed(int scope) {
+    for (int g = 0; g < ASSOC_GROUP_COUNT; g++) {
+        if (g_assoc_page.current[scope][g] != g_assoc_page.loaded[scope][g])
+            return true;
+    }
+    return false;
+}
+
+static INT_PTR CALLBACK prefs_assoc_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
+    switch (msg) {
+        case WM_INITDIALOG:
+            g_assoc_page.scope = ASSOC_SCOPE_USER;
+            assoc_page_load(page);
+            return TRUE;
+
+        case WM_COMMAND: {
+            WORD code = HIWORD(wparam);
+            WORD id = LOWORD(wparam);
+            if (id == ID_PREF_ASSOC_DEFAULTS) {
+                assoc_open_default_apps(page);
+                return TRUE;
+            }
+            if (code != BN_CLICKED)
+                break;
+            if (id == ID_PREF_ASSOC_MACHINE) {
+                // Switch which scope the boxes edit, keeping any edits made
+                // in the other one. Viewing a scope is not a change.
+                assoc_page_capture(page);
+                g_assoc_page.scope =
+                    (IsDlgButtonChecked(page, ID_PREF_ASSOC_MACHINE) == BST_CHECKED &&
+                     g_assoc_page.available)
+                        ? ASSOC_SCOPE_MACHINE
+                        : ASSOC_SCOPE_USER;
+                assoc_page_show(page);
+                return TRUE;
+            }
+            for (int g = 0; g < ASSOC_GROUP_COUNT; g++) {
+                if (id == (WORD) ASSOC_CHECK_IDS[g]) {
+                    assoc_page_capture(page);
+                    mark_prefs_dirty(page);
+                    return TRUE;
+                }
+            }
+            break;
+        }
+
+        case WM_NOTIFY: {
+            const NMHDR *nmhdr = (const NMHDR *) lparam;
+            if (nmhdr->code == PSN_APPLY) {
+                assoc_page_capture(page);
+
+                if (assoc_scope_changed(ASSOC_SCOPE_USER) &&
+                    !assoc_apply_user(g_assoc_page.loaded[ASSOC_SCOPE_USER],
+                                      g_assoc_page.current[ASSOC_SCOPE_USER])) {
+                    MessageBoxW(page, L"Some file type registrations could not be written.",
+                                L"npad", MB_OK | MB_ICONWARNING);
+                }
+
+                if (g_assoc_page.available && assoc_scope_changed(ASSOC_SCOPE_MACHINE)) {
+                    bool cancelled = false;
+                    // The SHEET, not the page: the wait pumps messages, and
+                    // with only the page disabled the sheet's OK and Cancel
+                    // stay live - Cancel mid-wait would destroy this page while
+                    // its own PSN_APPLY is still on the stack
+                    if (!assoc_apply_machine(
+                            GetParent(page), g_assoc_page.loaded[ASSOC_SCOPE_MACHINE],
+                            g_assoc_page.current[ASSOC_SCOPE_MACHINE], &cancelled) &&
+                        !cancelled) {
+                        MessageBoxW(page,
+                                    L"The all-users file type registration could not be changed.",
+                                    L"npad", MB_OK | MB_ICONWARNING);
+                    }
+                }
+
+                assoc_page_load(page); // Re-read: the registry is the truth
+                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                return TRUE;
+            }
+            break;
+        }
+    }
+    return FALSE;
+}
+
 static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
         case WM_INITDIALOG: {
@@ -5695,7 +5878,7 @@ static void show_preferences_dialog(const Window *window, int start_page, bool s
     if (!window)
         return;
 
-    PROPSHEETPAGEW pages[7];
+    PROPSHEETPAGEW pages[8];
     ZeroMemory(pages, sizeof(pages));
 
     pages[0].dwSize = sizeof(PROPSHEETPAGEW);
@@ -5728,12 +5911,18 @@ static void show_preferences_dialog(const Window *window, int start_page, bool s
     pages[5].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_UPDATES);
     pages[5].pfnDlgProc = prefs_updates_proc;
 
-    // Hidden diagnostics page: only present when opened via Ctrl+Shift+.
-    // or a Shift+click on the Preferences menu item
     pages[6].dwSize = sizeof(PROPSHEETPAGEW);
     pages[6].hInstance = g_hinstance;
-    pages[6].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_DEBUG);
-    pages[6].pfnDlgProc = prefs_debug_proc;
+    pages[6].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_ASSOC);
+    pages[6].pfnDlgProc = prefs_assoc_proc;
+
+    // Hidden diagnostics page: only present when opened via Ctrl+Shift+.
+    // or a Shift+click on the Preferences menu item. It stays LAST, so the
+    // count below is all that hides it.
+    pages[7].dwSize = sizeof(PROPSHEETPAGEW);
+    pages[7].hInstance = g_hinstance;
+    pages[7].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_DEBUG);
+    pages[7].pfnDlgProc = prefs_debug_proc;
 
     PROPSHEETHEADERW psh;
     ZeroMemory(&psh, sizeof(psh));
@@ -5743,8 +5932,8 @@ static void show_preferences_dialog(const Window *window, int start_page, bool s
     psh.hwndParent = window->hwnd;
     psh.hInstance = g_hinstance;
     psh.pszCaption = L"Preferences";
-    psh.nPages = show_debug ? 7 : 6;
-    psh.nStartPage = (start_page >= 0) ? (UINT) start_page : (show_debug ? 6 : 0);
+    psh.nPages = show_debug ? 8 : 7;
+    psh.nStartPage = (start_page >= 0) ? (UINT) start_page : (show_debug ? 7 : 0);
     psh.ppsp = pages;
 
     PropertySheetW(&psh);

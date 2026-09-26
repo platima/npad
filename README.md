@@ -53,7 +53,8 @@ Current features (Windows build):
 - **🌍 Unicode throughout** - Detects and preserves UTF-8, UTF-8 BOM, UTF-16 LE/BE and ANSI encodings
 - **↩️ Line ending aware** - Detects and preserves Windows (CRLF), Unix (LF) and Mac (CR) line endings, shown in the status bar
 - **🔧 Quality-of-life enhancements:**
-  - Tabbed Preferences dialog (Edit menu, Ctrl+,) with an Apply button: General, Appearance, Defaults, Markdown, Backup and Updates pages (see [DOCUMENTATION.md](DOCUMENTATION.md) for every setting)
+  - Tabbed Preferences dialog (Edit menu, Ctrl+,) with an Apply button: General, Appearance, Defaults, Markdown, Backup, Updates and Associations pages (see [DOCUMENTATION.md](DOCUMENTATION.md) for every setting)
+  - Choose which file types npad is offered for from Preferences > Associations, per user or (elevated) for all users - never taking ownership of a type, with a shortcut to Windows' Default apps page
   - Optional auto-save (disabled by default - it overwrites your file, so it's opt-in; configurable)
   - Session resume / crash recovery (enabled by default - non-destructive, snapshots never touch your file); restores every window that was open, each in its own instance
   - Theme support: light (default), dark, follow-system, and Solarized Light / Dark colour schemes (chosen in Preferences); changes apply to all open windows live
@@ -375,6 +376,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] Optional 'notepad' command replacement (App Paths alias task in both installers)
   - [x] Add npad to PATH so it runs from Command Prompt / PowerShell (both installers)
   - [x] Grouped file associations (Text / Markdown / Data / Config / Logs)
+  - [x] Change them after install from Preferences > Associations
   - [x] Appear in Windows' "Open with" list for any file type (like notepad.exe)
 - [ ] **Cross-Platform Expansion**
   - [ ] macOS Cocoa implementation

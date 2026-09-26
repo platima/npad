@@ -14,8 +14,8 @@
 
 // Version Information (keep in sync with src/main.h)
 1 VERSIONINFO
-FILEVERSION 0,32,8,0
-PRODUCTVERSION 0,32,8,0
+FILEVERSION 0,33,0,0
+PRODUCTVERSION 0,33,0,0
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0x0L
 FILEOS VOS__WINDOWS32
@@ -28,12 +28,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Platima"
             VALUE "FileDescription", "npad - Lightweight Text Editor"
-            VALUE "FileVersion", "0.32.8.0"
+            VALUE "FileVersion", "0.33.0.0"
             VALUE "InternalName", "npad"
             VALUE "LegalCopyright", "Copyright © 2025-2026 Platima"
             VALUE "OriginalFilename", "npad.exe"
             VALUE "ProductName", "npad"
-            VALUE "ProductVersion", "0.32.8.0"
+            VALUE "ProductVersion", "0.33.0.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -254,6 +254,24 @@ FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
     EDITTEXT        ID_PREF_DEBUG_TEXT, 10, 12, 220, 156, ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | NOT WS_TABSTOP
     PUSHBUTTON      "&Copy Diagnostics", ID_PREF_COPY_DIAG, 10, 174, 90, 14
+END
+
+// Preferences: Associations page
+IDD_PREFS_ASSOC DIALOGEX 0, 0, 240, 198
+STYLE DS_SETFONT | DS_FIXEDSYS | WS_CHILD | WS_DISABLED | WS_CAPTION
+CAPTION "Associations"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "File types npad offers to open. These add npad to the Open With list; they do not make it the default.", IDC_STATIC, 10, 8, 220, 18
+    CONTROL         "&Text files (.txt)", ID_PREF_ASSOC_TEXT, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 14, 30, 216, 10
+    CONTROL         "&Markdown && documents (.md, .markdown)", ID_PREF_ASSOC_MARKDOWN, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 14, 44, 216, 10
+    CONTROL         "&Data files (.csv, .tsv, .json, .xml, .yaml, .yml, .toml)", ID_PREF_ASSOC_DATA, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 14, 58, 216, 10
+    CONTROL         "&Config files (.ini, .cfg, .conf)", ID_PREF_ASSOC_CONFIG, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 14, 72, 216, 10
+    CONTROL         "&Log files (.log)", ID_PREF_ASSOC_LOG, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 14, 86, 216, 10
+    CONTROL         "&Save for all users (requires elevated permissions)", ID_PREF_ASSOC_MACHINE, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 106, 220, 14
+    LTEXT           "", ID_PREF_ASSOC_NOTE, 22, 122, 208, 26
+    PUSHBUTTON      "Set De&fault Apps...", ID_PREF_ASSOC_DEFAULTS, 10, 154, 90, 14
+    LTEXT           "Windows does not let an app make itself the default. This opens the Settings page where you can.", IDC_STATIC, 106, 154, 124, 26
 END
 
 // Preferences: Updates page (all opt-in; off by default)

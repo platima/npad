@@ -84,7 +84,9 @@ App execution aliases for as full a takeover as Windows allows. (Running
 **Default editor**: Windows does not let installers set the default app for
 a file type. The installers register npad for the chosen extensions (it
 appears in "Open with" and Default Apps); the setup EXE offers the Default
-Apps Settings page after install to make it the default for .txt.
+Apps Settings page after install to make it the default for .txt. To change
+which types are registered later, use **Preferences > Associations** rather
+than re-running setup.
 
 **"Open with" for any file type**: separately from the association groups, the
 installers always register npad as a shell application
@@ -215,6 +217,63 @@ closes npad through the normal save-changes prompt; a fully seamless
 no-close update is not possible because Inno/MSI must replace the running
 `npad.exe`. Portable-exe users get the same verified installer download.
 
+### Associations (Preferences > Associations)
+
+Which file types npad is **offered** for. There are no settings keys: the page
+reads and writes the registry directly, so it always shows what is actually
+registered - including anything the installer registered.
+
+| Group | Extensions |
+|-------|-----------|
+| Text files | `.txt` |
+| Markdown & documents | `.md`, `.markdown` |
+| Data files | `.csv`, `.tsv`, `.json`, `.xml`, `.yaml`, `.yml`, `.toml` |
+| Config files | `.ini`, `.cfg`, `.conf` |
+| Log files | `.log` |
+
+- **Apply changes only the groups whose boxes you toggled.** A group you left
+  alone is never rewritten, even when you press OK for a change on another
+  page. (A property sheet sends Apply to every page you have visited.)
+- **Ticking a group** registers a ProgID per extension (`npad.txt`, ...),
+  lists it under the extension's `OpenWithProgids`, and adds it to npad's
+  `Capabilities\FileAssociations` - the same keys and values the installer
+  writes. npad then appears in **Open with** for those types and on Windows
+  11's **Default apps** page.
+- **It never sets the extension's default value** (the "take ownership"
+  write the installer makes). Doing so overwrites the previous owner with no
+  backup, and it would not make npad the default anyway: that is a
+  hash-protected per-user choice only Windows Settings can make.
+- **Unticking a group** removes npad's ProgIDs and entries for it. If an
+  extension's default value names npad's own ProgID - as the installer leaves
+  it - that value is removed too; one naming any other application is left
+  alone.
+- **Set Default Apps...** opens Windows Settings > Default apps, straight to
+  npad's entry on Windows 11 (`registeredAppUser` or `registeredAppMachine`,
+  whichever matches where npad is registered).
+- **Save for all users (requires elevated permissions)** switches which set
+  the boxes show and edit: unticked, your account's
+  (`HKEY_CURRENT_USER\Software\Classes`); ticked, every account's
+  (`HKEY_LOCAL_MACHINE`). Edits in both are kept while Preferences is open,
+  and Apply writes each. Changes to the all-users set go through a consent
+  prompt; declining it changes nothing. It is enabled only when `npad.exe` is
+  under Program Files as the system records it (`ProgramFilesDir` in HKLM,
+  not the environment variable): a per-user or portable copy lives where
+  other accounts could not run it from, and where its owner could replace it.
+- **Updates keep your choices.** npad's in-app updater tells setup which
+  groups are *not* registered (`/MERGETASKS="!assoc\markdown,..."`), so an
+  upgrade does not re-register what you unticked. It never selects a group:
+  the installer's tasks also set the extension's default value, which this
+  page never does. If both a per-user and an all-users install exist, setup
+  asks which to upgrade, and nothing is passed.
+- **Uninstalling with the setup EXE removes npad's file type
+  registrations**, including groups added here after install. On an
+  all-users install that covers the machine and the per-user registrations
+  of the account running the uninstall; other accounts' per-user entries
+  cannot be reached and remain, pointing at the removed program. **The MSI
+  does not remove groups added here**: an MSI upgrade uninstalls the old
+  product before installing the new one, so a removal rule would wipe them on
+  every upgrade instead.
+
 ### Other persisted state (no dedicated UI)
 
 | Key | Description |
@@ -294,7 +353,11 @@ npad [options] [filename]
   -v, --version   Show version
 ```
 
-Internal options used by npad itself: `--recover <slot>` (reopen a specific
+Internal options used by npad itself: `--register-machine <changes>` (run by
+npad, elevated, to apply the Associations page's all-users changes: a list
+such as `+text,-log`, where only the five group names are accepted; it
+refuses unless npad is under Program Files, writes the machine hive only, and
+exits without opening a window), `--recover <slot>` (reopen a specific
 crash-recovery slot) and `--cascade <n>` (offset the window by n steps;
 without it, a launch cascades past however many npad windows are already
 open, so windows opened from Start > Run or Explorer stagger just as New

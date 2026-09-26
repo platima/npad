@@ -25,6 +25,9 @@
 #include "core/startup_prof.h"
 #include "core/thread_safety.h"
 #include "ui_interface.h"
+#ifdef _WIN32
+#include "platform/assoc_win32.h"
+#endif
 
 #ifdef DEBUG
 #define DEBUG_PRINT(fmt, ...) printf("[DEBUG] " fmt "\n", ##__VA_ARGS__)
@@ -191,6 +194,24 @@ static void parse_command_line(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-v") == 0) {
             show_version();
             exit(0);
+        } else if (strcmp(argv[i], "--register-machine") == 0) {
+            // Internal: this process was re-launched elevated purely to write
+            // the machine-wide file type registrations. It writes HKLM, never
+            // HKCU - under a standard user the consent prompt asks for another
+            // account's credentials, so this process's HKCU is that
+            // administrator's hive, not the hive of the user who asked. Runs
+            // before any UI exists and exits immediately.
+#ifdef _WIN32
+            {
+                const char *groups = (i + 1 < argc) ? argv[i + 1] : "";
+                wchar_t wide[256];
+                MultiByteToWideChar(CP_UTF8, 0, groups, -1, wide, 256);
+                wide[255] = L'\0';
+                exit(assoc_machine_cli(wide));
+            }
+#else
+            exit(1);
+#endif
         } else if (strcmp(argv[i], "--recover") == 0) {
             // Internal: reopen a specific crash-recovery slot in this instance
             if (i + 1 < argc) {

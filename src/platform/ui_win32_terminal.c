@@ -294,3 +294,11 @@ bool ui_platform_is_window_maximized(Window *window) {
 int ui_platform_count_main_windows(void) {
     return 0;
 }
+
+// Stub: the terminal build has no file type associations, so the elevated
+// --register-machine entry point simply reports failure here
+#include "assoc_win32.h"
+int assoc_machine_cli(const wchar_t *groups) {
+    (void) groups;
+    return 1;
+}
