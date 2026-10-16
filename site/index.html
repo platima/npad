@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>npad - a fast, native, Notepad-faithful text editor</title>
+<meta name="description" content="npad is a lightweight native text editor that behaves like Windows 10 Notepad out of the box: a ~314 KB executable, crash recovery, atomic saves, dark mode, printing with preview. Windows now, Linux in progress.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1b1b1b" media="(prefers-color-scheme: dark)">
+<link rel="canonical" href="https://npad.dev/">
+
+<link rel="icon" href="favicon.ico" sizes="48x48">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="npad">
+<meta property="og:title" content="npad - a fast, native, Notepad-faithful text editor">
+<meta property="og:description" content="Out of the box it behaves like Windows 10 Notepad. A tiny native executable, with crash recovery, atomic saves, dark mode and printing with preview. No AI, no frameworks, no telemetry.">
+<meta property="og:url" content="https://npad.dev/">
+<meta property="og:image" content="https://npad.dev/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The npad notepad icon next to the word npad and the tagline: a fast, native, Notepad-faithful text editor">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="npad - a fast, native, Notepad-faithful text editor">
+<meta name="twitter:description" content="Out of the box it behaves like Windows 10 Notepad. A tiny native executable, no AI, no frameworks, no telemetry.">
+<meta name="twitter:image" content="https://npad.dev/assets/og.png">
+<meta name="twitter:image:alt" content="The npad notepad icon next to the word npad and the tagline: a fast, native, Notepad-faithful text editor">
+
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <picture>
+        <source srcset="assets/icon-dark-128.webp" media="(prefers-color-scheme: dark)">
+        <img src="assets/icon-light-128.webp" width="28" height="28" alt="">
+      </picture>
+      npad
+    </a>
+    <nav aria-label="Main">
+      <ul>
+        <li><a href="#download">Download</a></li>
+        <li><a href="#features">Features</a></li>
+        <li><a href="#screenshots">Screenshots</a></li>
+        <li><a href="#why">Why npad</a></li>
+        <li><a href="#docs">Docs</a></li>
+        <li><a href="https://github.com/platima/npad">GitHub</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+<div id="top"></div>
+
+<section class="hero" aria-labelledby="hero-title">
+  <div class="wrap">
+    <picture>
+      <source srcset="assets/icon-dark-256.webp" media="(prefers-color-scheme: dark)">
+      <img class="logo" src="assets/icon-light-256.webp" width="128" height="128" alt="The npad icon: a spiral-bound notepad with a pencil">
+    </picture>
+    <h1 id="hero-title">npad</h1>
+    <p class="lede">A fast, native, Notepad-faithful text editor.</p>
+    <p class="sub">Out of the box it behaves like Windows 10 Notepad. The extras (crash recovery, atomic saves, dark mode, printing with preview) never get in the way, and anything that changes how Notepad behaves is opt-in.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/platima/npad/releases/latest">Download for Windows</a>
+      <a class="btn" href="#linux">Linux (coming soon)</a>
+      <a class="btn" href="https://github.com/platima/npad">View on GitHub</a>
+    </div>
+    <p class="fine">Free and open source (MIT). Windows installer, MSI and portable .exe, code-signed.</p>
+
+    <figure class="hero-shot">
+      <img
+        src="assets/shot-prefs-dark-1600.webp"
+        srcset="assets/shot-prefs-dark-800.webp 800w, assets/shot-prefs-dark-1600.webp 1600w"
+        sizes="(min-width: 62rem) 62rem, 100vw"
+        width="1600" height="1018"
+        alt="npad in dark mode with the Preferences dialog open on the General tab, showing auto-save switched off and session resume / crash recovery switched on, above a status bar with line, column, zoom, font, line ending and encoding">
+      <figcaption>npad in dark mode with Preferences open. Note the status bar: position, zoom, font, line ending and encoding, all clickable.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<div class="stats">
+  <div class="wrap">
+    <ul aria-label="npad at a glance">
+      <li><strong>~314 KB</strong><span>executable, 8 system libraries</span></li>
+      <li><strong>~3.4 MB</strong><span>RAM per window</span></li>
+      <li><strong>~40 ms</strong><span>to a usable window</span></li>
+      <li><strong>0</strong><span>AI, telemetry or background services</span></li>
+    </ul>
+  </div>
+</div>
+
+<section id="download" aria-labelledby="download-title">
+  <div class="wrap">
+    <h2 id="download-title">Download</h2>
+    <p class="intro">Every release is on GitHub. All three Windows downloads install for the current user by default and need no admin rights.</p>
+
+    <div class="os-title"><h3>Windows</h3><span class="badge">x64</span></div>
+    <div class="cards">
+      <article class="card">
+        <h3>Installer</h3>
+        <p><code>npad-v&lt;version&gt;-setup-win-x64.exe</code></p>
+        <p>The interactive installer. Adds npad to your PATH, to the &ldquo;Open with&rdquo; menu, optional file associations and bundled fonts. Silent install: <code>/VERYSILENT</code>.</p>
+        <a class="btn primary" href="https://github.com/platima/npad/releases/latest">Get the installer</a>
+      </article>
+      <article class="card">
+        <h3>MSI</h3>
+        <p><code>npad-v&lt;version&gt;-msi-win-x64.msi</code></p>
+        <p>For managed and silent deployment.</p>
+        <pre><code>msiexec /i npad-v&lt;version&gt;-msi-win-x64.msi /qn</code></pre>
+        <p>Add <code>ALLUSERS=1</code> for a machine-wide install.</p>
+        <a class="btn" href="https://github.com/platima/npad/releases/latest">Get the MSI</a>
+      </article>
+      <article class="card">
+        <h3>Portable</h3>
+        <p><code>npad-v&lt;version&gt;-portable-win-x64.exe</code></p>
+        <p>Download and run it from anywhere. No installation, nothing written to the registry.</p>
+        <a class="btn" href="https://github.com/platima/npad/releases/latest">Get the portable .exe</a>
+      </article>
+    </div>
+    <p class="note"><strong>SmartScreen warning?</strong> Releases are code-signed, but Microsoft SmartScreen builds a publisher&rsquo;s reputation over time, so it may still warn. Right-click the file, choose <em>Properties</em>, tick <em>Unblock</em> and click <em>Apply</em> (or choose &ldquo;More info&rdquo; then &ldquo;Run anyway&rdquo;). You can check the file against the SHA-256 in the release&rsquo;s <code>CHECKSUMS.txt</code>. The <a href="https://github.com/platima/npad/blob/main/DOCUMENTATION.md#installation-windows">installation reference</a> covers every installer option.</p>
+
+    <div class="os-title" id="linux"><h3>Linux</h3><span class="badge soon">Coming soon</span></div>
+    <div class="cards">
+      <article class="card wide">
+        <h3>apt (Debian, Ubuntu, Mint)</h3>
+        <p>A signed apt repository at <code>pkg.npad.dev</code> is being set up. Planned usage, final commands will be confirmed here when it goes live:</p>
+        <pre><code>curl -fsSL https://pkg.npad.dev/npad.gpg \
+  | sudo tee /etc/apt/keyrings/npad.gpg &gt;/dev/null
+echo "deb [signed-by=/etc/apt/keyrings/npad.gpg] https://pkg.npad.dev/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/npad.list
+sudo apt update &amp;&amp; sudo apt install npad</code></pre>
+      </article>
+      <article class="card">
+        <h3>dnf (Fedora, RHEL)</h3>
+        <p>The same repository will serve RPMs. Planned usage:</p>
+        <pre><code>sudo dnf config-manager addrepo \
+  --from-repofile=https://pkg.npad.dev/rpm/npad.repo
+sudo dnf install npad</code></pre>
+      </article>
+      <article class="card">
+        <h3>.deb from releases</h3>
+        <p>A <code>.deb</code> package will be attached to GitHub releases once the Linux packaging round lands.</p>
+        <a class="btn" href="https://github.com/platima/npad/releases/latest">Latest release</a>
+      </article>
+    </div>
+    <p class="note"><strong>Where the Linux port is today.</strong> The GTK 3 desktop build (one binary for X11 and Wayland) has its foundation in v0.34.0: windows, menus, editing, open and save with encodings and line endings preserved, recent files, colour schemes and the status bar. Find / Replace, Preferences and printing are still being ported. Follow progress in <a href="https://github.com/platima/npad/blob/main/LINUX_PORT.md">LINUX_PORT.md</a>.</p>
+
+    <div class="os-title"><h3>Build from source</h3><span class="badge">C99</span></div>
+    <div class="cards">
+      <article class="card wide">
+        <p>npad is plain C on native platform APIs, with no dependencies beyond system libraries. You need a C compiler and <code>make</code>; the Linux build also needs <code>pkg-config</code> and the GTK 3 development files.</p>
+        <pre><code>git clone https://github.com/platima/npad.git
+cd npad
+make windows   # Windows x64 with MinGW-w64 (cross or native)
+make linux     # Linux GTK 3 build, produces ./npad-linux
+make test      # unit tests</code></pre>
+        <p>See the <a href="https://github.com/platima/npad#compile-yourself">build instructions</a> and <a href="https://github.com/platima/npad/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a>.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="features" class="alt" aria-labelledby="features-title">
+  <div class="wrap">
+    <h2 id="features-title">Notepad, plus the parts you wish it had</h2>
+    <p class="intro">npad has one rule for every feature: <strong>out of the box it behaves like Windows 10 Notepad.</strong> Enhancements that can&rsquo;t hurt you are on. Anything that changes or could destroy that behaviour is off until you switch it on.</p>
+
+    <div class="principle">
+      <article class="card">
+        <h3>On by default</h3>
+        <p>Non-destructive: crash recovery, the status bar, recent files, atomic saves.</p>
+      </article>
+      <article class="card">
+        <h3>Opt-in</h3>
+        <p>Anything that changes how Notepad behaves: auto-save, following the system colour scheme, Markdown list tools, update checks, change-detection notices, word counts.</p>
+      </article>
+    </div>
+
+    <div class="features spaced">
+      <div>
+        <h3>Safe by design</h3>
+        <ul>
+          <li><strong>Crash recovery.</strong> Snapshots on the first edit, then every 30 seconds, offered back after a crash. They never touch your file.</li>
+          <li><strong>Atomic saves.</strong> Written to a temporary file, verified, then renamed. A failed save can never destroy the existing file.</li>
+          <li><strong>Encodings preserved.</strong> Detects and keeps UTF-8, UTF-8 BOM, UTF-16 LE/BE and ANSI. It warns before an ANSI save would lose characters.</li>
+          <li><strong>Line endings preserved.</strong> CRLF, LF and CR are detected, shown in the status bar and convertible with a click (or Ctrl+E).</li>
+          <li><strong>Large and binary file checks</strong> before opening, so you don&rsquo;t freeze on a surprise.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Classic editing, quicker</h3>
+        <ul>
+          <li><strong>Find and Replace</strong> with direction, match case, whole word, wrap-around, a live match count and optional highlight-all.</li>
+          <li><strong>Go To Line</strong>, <strong>Time/Date</strong> (F5), <strong>word wrap</strong> (Alt+Z) and a 100,000-step <strong>undo</strong> history.</li>
+          <li><strong>Status bar</strong> with Ln/Col, zoom, font mode, line ending and encoding. Click any of them to act on it.</li>
+          <li><strong>Per-window zoom and font</strong> (Ctrl+Scroll, Ctrl+M), with monospace and proportional fonts chosen separately and an OpenDyslexic option.</li>
+          <li><strong>Drag and drop</strong> to open; Ctrl+Drop inserts a file at the caret. A recent files menu, and separate windows via Ctrl+Shift+N.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Looks and printing</h3>
+        <ul>
+          <li><strong>Light by default</strong>, like Notepad. Choose dark, follow the system, or <strong>Solarized</strong> Light / Dark; changes apply to every open window live.</li>
+          <li><strong>The app icon follows your light or dark setting</strong>, or keep the classic one.</li>
+          <li><strong>Printing and Page Setup</strong> with Notepad&rsquo;s header and footer codes, printing the document rather than the window.</li>
+          <li><strong>Print Preview</strong> (Ctrl+Shift+P) with paging, a two-page view and zoom, measured against your real printer so it wraps where the page does.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Optional extras (off by default)</h3>
+        <ul>
+          <li><strong>Markdown list tools.</strong> Sort and unique lines, convert delimiters, indent and unindent with list markers, Enter to continue a list, cut line and paste above.</li>
+          <li><strong>Rich-text paste.</strong> Turn HTML clipboard content into lists or Markdown. Plain-text clipboards always paste plain.</li>
+          <li><strong>Auto-save</strong>, with a configurable interval.</li>
+          <li><strong>Word, character and line counts</strong> in the status bar.</li>
+          <li><strong>Update checks</strong> (off, notify, prompt or install), SHA-256 verified. npad never updates silently.</li>
+          <li><strong>Notice when another program changes</strong> a file you have open, offering reload, save as or keep editing.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Windows integration</h3>
+        <ul>
+          <li><strong>On your PATH</strong>, so <code>npad file.txt</code> works in any terminal.</li>
+          <li><strong>In &ldquo;Open with&rdquo;</strong> for any file type, like notepad.exe, without taking over a type it doesn&rsquo;t own.</li>
+          <li><strong>Optional file associations</strong> in five groups (Text, Markdown, Data, Config, Logs), changeable later in Preferences.</li>
+          <li><strong>Optional <code>notepad</code> alias</strong> for Win+R.</li>
+          <li><strong>Settings as JSON</strong>, with export and import for backup or moving between machines.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Lean, on purpose</h3>
+        <ul>
+          <li><strong>Native APIs, no frameworks.</strong> Win32 on Windows, GTK 3 on Linux.</li>
+          <li><strong>One process per window,</strong> with memory cost that stays linear as you open more.</li>
+          <li><strong>No background services.</strong> The only network call is an update check you have to turn on.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="screenshots" aria-labelledby="shots-title">
+  <div class="wrap">
+    <h2 id="shots-title">Screenshots</h2>
+    <p class="intro">Same chrome you already know, with a status bar that does something.</p>
+    <div class="shots">
+      <figure>
+        <img
+          src="assets/shot-window-light-1200.webp"
+          srcset="assets/shot-window-light-640.webp 640w, assets/shot-window-light-1200.webp 1200w"
+          sizes="(min-width: 46rem) 33rem, calc(100vw - 2rem)"
+          width="1200" height="754" loading="lazy"
+          alt="A light npad window with File, Edit, Format, Markdown, View and Help menus and a status bar reading 0 words, 0 chars, 1 lines, Ln 1 Col 1, 100%, Mono, Windows (CRLF), UTF-8">
+        <figcaption>Light, like Notepad. The status bar shows counts (optional), position, zoom, font mode, line endings and encoding.</figcaption>
+      </figure>
+      <figure>
+        <img
+          src="assets/shot-prefs-dark-800.webp"
+          srcset="assets/shot-prefs-dark-800.webp 800w, assets/shot-prefs-dark-1600.webp 1600w"
+          sizes="(min-width: 46rem) 33rem, calc(100vw - 2rem)"
+          width="800" height="509" loading="lazy"
+          alt="npad in dark mode with the Preferences dialog open on its General tab, which has tabs for Appearance, Defaults, Markdown, Backup and Updates">
+        <figcaption>Dark mode and the tabbed Preferences dialog (Ctrl+,). Every change applies live to all open windows.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="why" class="alt" aria-labelledby="why-title">
+  <div class="narrow">
+    <h2 id="why-title">Why npad</h2>
+    <p>The new Windows Notepad has grown slow, heavy and crowded with features nobody asked for, and it doesn&rsquo;t seem to be possible to truly get the original back. There are plenty of great editors (Sublime Text, Notepad++, Neovim), and the author uses several of them, but none follow the design philosophy of notepad.exe.</p>
+    <p>npad is that philosophy, kept: open instantly, type, save, close. Then a short list of improvements that earn their place without changing how it feels.</p>
+    <h3 class="gap-top">What npad is not</h3>
+    <ul class="nots">
+      <li>No AI</li>
+      <li>No spellcheck</li>
+      <li>No syntax highlighting</li>
+      <li>No rich text</li>
+      <li>No frameworks</li>
+      <li>No forced or silent updates</li>
+      <li>No background services</li>
+    </ul>
+  </div>
+</section>
+
+<section id="docs" aria-labelledby="docs-title">
+  <div class="wrap">
+    <h2 id="docs-title">Docs, changelog and source</h2>
+    <p class="intro">The documentation lives as Markdown in the repository. A browsable docs site at npad.dev/docs will follow.</p>
+    <div class="links">
+      <a class="card" href="https://github.com/platima/npad/blob/main/DOCUMENTATION.md"><strong>Documentation</strong><p>Every setting, shortcut, status bar action and behaviour.</p></a>
+      <a class="card" href="https://github.com/platima/npad/blob/main/CHANGELOG.md"><strong>Changelog</strong><p>Curated release notes for every version.</p></a>
+      <a class="card" href="https://github.com/platima/npad/blob/main/LINUX_PORT.md"><strong>Linux port</strong><p>What works, what is next, how to test.</p></a>
+      <a class="card" href="https://github.com/platima/npad"><strong>GitHub</strong><p>Source, issues, releases and the roadmap.</p></a>
+      <a class="card" href="https://github.com/sponsors/platima"><strong>Sponsor</strong><p>Help keep npad small, fast and maintained.</p></a>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>npad is MIT licensed and made by <a href="https://github.com/platima">Platima</a>. Solarized colours by <a href="https://ethanschoonover.com/solarized/">Ethan Schoonover</a>.</p>
+    <ul>
+      <li><a href="https://github.com/platima/npad">GitHub</a></li>
+      <li><a href="https://github.com/platima/npad/blob/main/CHANGELOG.md">Changelog</a></li>
+      <li><a href="https://github.com/platima/npad/blob/main/LICENSE">License</a></li>
+      <li><a href="https://github.com/platima/npad/issues">Report an issue</a></li>
+    </ul>
+  </div>
+  <div class="wrap"><p>This site is static HTML and CSS: no scripts, no trackers, no third-party fonts or CDNs.</p></div>
+</footer>
+</body>
+</html>
