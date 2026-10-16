@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.platima.npad</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>npad</name>
+  <summary>A lightweight Notepad-style text editor</summary>
+  <description>
+    <p>
+      npad is a small, fast text editor inspired by classic Windows Notepad.
+      It opens instantly, keeps each file's encoding and line endings intact,
+      and saves atomically so a failed save never destroys the existing file.
+    </p>
+    <p>
+      It adds only quality-of-life features that do not change how Notepad
+      behaves: undo history, word wrap, zoom, a status bar, colour schemes and
+      crash recovery.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.platima.npad.desktop</launchable>
+  <provides>
+    <binary>npad</binary>
+  </provides>
+  <url type="homepage">https://github.com/platima/npad</url>
+  <url type="bugtracker">https://github.com/platima/npad/issues</url>
+  <categories>
+    <category>Utility</category>
+    <category>TextEditor</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <releases>
+    <release version="0.35.0" date="2026-10-16"/>
+  </releases>
+</component>

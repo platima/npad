@@ -139,6 +139,21 @@ ported so far, and the deliberate differences (window position on Wayland,
 colour schemes against a dark GTK theme, the Text Documents filter, no Check
 for Updates), are tracked in [LINUX_PORT.md](LINUX_PORT.md).
 
+### Installing on Linux
+
+- **.deb** (Debian 12/13, Ubuntu 22.04+, Mint): `sudo apt install
+  ./npad_<version>_amd64.deb`. It depends only on GTK 3 (`libgtk-3-0` or
+  `libgtk-3-0t64`) and installs `/usr/bin/npad`, the launcher
+  (`io.github.platima.npad.desktop`, offered for text, Markdown, JSON, XML and
+  similar files in "Open with"), hicolor icons from 16 to 256 px and the
+  AppStream metainfo for software centres.
+- **From source**: `make linux-gtk`, then `sudo make install`. `PREFIX`
+  (default `/usr/local`) and `DESTDIR` are honoured; `make uninstall` reverses
+  it. `make deb` builds the package into `dist/` (needs `dpkg-deb`).
+- The desktop file name, icon name and window class are all the application
+  id `io.github.platima.npad`; the shell matches windows to the launcher and
+  icon through it.
+
 ## Settings reference
 
 All settings live in `settings.json` and are editable in Preferences

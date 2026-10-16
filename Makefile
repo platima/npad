@@ -339,18 +339,36 @@ clean:
 	find src tests -name '*.o' -delete 2>/dev/null || true
 	rm -f src/platform/npad.res
 	rm -rf build
+	rm -rf dist/npad_*
 	rm -f tests/test_file_ops tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md tests/test_undo
 	rm -f tests/test_file_ops.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe tests/test_html_md.exe tests/test_undo.exe
 
-# Installation
+# Installation (Linux). PREFIX defaults to /usr/local; DESTDIR stages the tree
+# for packaging. Only the GTK desktop app is installed: the ncurses variant is
+# still an unimplemented stub.
+PREFIX ?= /usr/local
+BINDIR ?= $(PREFIX)/bin
+DATADIR ?= $(PREFIX)/share
+APP_ID = io.github.platima.npad
+LINUX_PKG_DIR = packaging/linux
+LINUX_ICON_SIZES = 16 24 32 48 64 128 256
+
+# Build first (make linux-gtk); install does not, so `sudo make install` never
+# compiles as root.
 install:
 ifeq ($(OS),Windows_NT)
 	@echo "On Windows, copy npad.exe to a directory on your PATH, for example:"
 	@echo "  mkdir %LOCALAPPDATA%\Programs\npad"
 	@echo "  copy npad.exe %LOCALAPPDATA%\Programs\npad\"
 else
-	install -D $(LINUX_GTK_TARGET) $(DESTDIR)/usr/local/bin/npad
-	install -D $(LINUX_TERMINAL_TARGET) $(DESTDIR)/usr/local/bin/npad-terminal
+	@test -f $(LINUX_GTK_TARGET) || { echo "$(LINUX_GTK_TARGET) not built. Run: make linux-gtk"; exit 1; }
+	install -D -m 755 $(LINUX_GTK_TARGET) $(DESTDIR)$(BINDIR)/npad
+	install -D -m 644 $(LINUX_PKG_DIR)/$(APP_ID).desktop $(DESTDIR)$(DATADIR)/applications/$(APP_ID).desktop
+	install -D -m 644 $(LINUX_PKG_DIR)/$(APP_ID).metainfo.xml $(DESTDIR)$(DATADIR)/metainfo/$(APP_ID).metainfo.xml
+	for s in $(LINUX_ICON_SIZES); do \
+		install -D -m 644 $(LINUX_PKG_DIR)/icons/hicolor/$${s}x$${s}/apps/$(APP_ID).png \
+			$(DESTDIR)$(DATADIR)/icons/hicolor/$${s}x$${s}/apps/$(APP_ID).png || exit 1; \
+	done
 endif
 
 uninstall:
@@ -358,8 +376,21 @@ ifeq ($(OS),Windows_NT)
 	@echo "Remove the directory you copied npad.exe into, for example:"
 	@echo "  rmdir /s %LOCALAPPDATA%\Programs\npad"
 else
-	rm -f $(DESTDIR)/usr/local/bin/npad $(DESTDIR)/usr/local/bin/npad-terminal
+	rm -f $(DESTDIR)$(BINDIR)/npad $(DESTDIR)$(BINDIR)/npad-terminal
+	rm -f $(DESTDIR)$(DATADIR)/applications/$(APP_ID).desktop
+	rm -f $(DESTDIR)$(DATADIR)/metainfo/$(APP_ID).metainfo.xml
+	for s in $(LINUX_ICON_SIZES); do \
+		rm -f $(DESTDIR)$(DATADIR)/icons/hicolor/$${s}x$${s}/apps/$(APP_ID).png; \
+	done
 endif
+
+# Debian/Ubuntu package: dist/npad_<version>_<arch>.deb (needs dpkg-deb and
+# objdump). Depends on libgtk-3-0t64 | libgtk-3-0 so one package installs on
+# Debian 12/13 and Ubuntu 22.04/24.04.
+DEB_VERSION = $(MAJOR).$(MINOR).$(PATCH)
+
+deb: $(LINUX_GTK_TARGET)
+	scripts/build-deb.sh $(DEB_VERSION) $(LINUX_GTK_TARGET) dist
 
 # Help
 help:
@@ -386,8 +417,9 @@ help:
 	@echo "  test-encoding    - Run encoding/line-ending tests"
 	@echo "  test-undo        - Run undo history tests"
 	@echo "  clean            - Remove build artifacts"
-	@echo "  install          - Install to system (Linux)"
-	@echo "  uninstall        - Remove from system (Linux)"
+	@echo "  install          - Install to PREFIX (default /usr/local; honours DESTDIR)"
+	@echo "  uninstall        - Remove from PREFIX"
+	@echo "  deb              - Build dist/npad_<version>_<arch>.deb (Linux)"
 	@echo "  help             - Show this help"
 	@echo ""
 	@echo "Variables:"
@@ -398,4 +430,4 @@ help:
 	@echo "  DEBUG=1          - Enable debug build"
 	@echo "  VERSION          - Version string (auto-detected from git)"
 
-.PHONY: all windows windows-gui windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo help detect-platform
+.PHONY: all windows windows-gui windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo help detect-platform

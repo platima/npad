@@ -197,6 +197,12 @@ installer reference (tasks, features, fonts, the Windows 11 notepad alias).
 > **Apply** (or choose "More info" → "Run anyway" on the SmartScreen
 > prompt). Verify the SHA256 against `CHECKSUMS.txt` first if unsure.
 
+- 🐧 **`npad_<version>_amd64.deb`** - Linux (Debian 12/13, Ubuntu 22.04+, Mint):
+  `sudo apt install ./npad_<version>_amd64.deb`. Installs the GTK 3 desktop app
+  (X11 and Wayland) with its launcher entry, icons and AppStream metadata.
+  From source instead: `make linux-gtk && sudo make install` (honours `PREFIX`
+  and `DESTDIR`; `sudo make uninstall` removes it).
+
 **Planned:** 🎁 **Winget** - for `winget install npad`.
 
 ### Compile Yourself

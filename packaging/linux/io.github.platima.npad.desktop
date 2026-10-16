@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=npad
+GenericName=Text Editor
+Comment=A lightweight Notepad-style text editor
+Exec=npad %F
+Icon=io.github.platima.npad
+Terminal=false
+Categories=Utility;TextEditor;
+Keywords=text;editor;notepad;plain;
+MimeType=text/plain;text/markdown;text/x-log;text/csv;text/tab-separated-values;text/x-csv;text/x-readme;text/x-makefile;text/x-python;text/x-csrc;text/x-chdr;text/x-c++src;text/x-c++hdr;text/css;text/html;text/xml;text/x-ini;application/json;application/xml;application/x-yaml;application/toml;application/x-shellscript;
+StartupNotify=true
+StartupWMClass=io.github.platima.npad

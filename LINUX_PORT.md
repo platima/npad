@@ -232,11 +232,11 @@ version.
 - [ ] Every transform is one undo step
 
 ### Batch E - Packaging (new `packaging/linux/`, Makefile, CI)
-- [ ] `io.github.platima.npad.desktop` (MimeType: text/plain and friends)
+- [x] `io.github.platima.npad.desktop` (MimeType: text/plain and friends)
       and hicolor icons generated from `assets/`
-- [ ] `make install` installs the desktop file and icons
-- [ ] `.deb` built with `dpkg-deb` in CI and attached to releases
-- [ ] AppStream metainfo (needed for software centres and Flathub)
+- [x] `make install` installs the desktop file and icons
+- [x] `.deb` built with `dpkg-deb` in CI and attached to releases
+- [x] AppStream metainfo (needed for software centres and Flathub)
 
 ### Batch F - Polish
 - [ ] `system` scheme follows the desktop's light/dark preference live
