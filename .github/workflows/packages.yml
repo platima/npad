@@ -1,0 +1,152 @@
+name: Linux packages
+
+# Builds npad_<v>_amd64.deb and npad-<v>-1.x86_64.rpm with nfpm
+# (packaging/linux/nfpm.yaml), proves both install on the distros they claim to
+# support. release.yml calls it with the release tag (which must match the
+# version in src/main.h) and attaches the artifact to the release; it is
+# attached there, not here, so a plain CI run never needs write access. The signed apt/dnf repositories at pkg.npad.dev are
+# built from those release assets by platima/npad-packages.
+#
+# The binary is built in a Debian 12 container so its glibc floor is low enough
+# for Debian 12 and Ubuntu 22.04; newer distros only need >=.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: "Release tag the version must match (empty = no check)"
+        type: string
+        required: false
+        default: ""
+      artifact_name:
+        description: "Artifact name; unique per run, so release.yml's call differs from CI's"
+        type: string
+        required: false
+        default: "npad-linux-packages"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: debian:12
+    steps:
+    - name: Install build dependencies
+      run: |
+        apt-get update -q
+        apt-get install -y -q build-essential pkg-config libgtk-3-dev libncurses-dev \
+          git ca-certificates curl binutils desktop-file-utils appstream
+
+    - uses: actions/checkout@v7
+
+    - name: Install nfpm (pinned, checksum-verified)
+      run: sh scripts/install-nfpm.sh
+
+    - name: Build the packages
+      env:
+        RELEASE_TAG: ${{ inputs.release_tag }}
+      run: |
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        make clean
+        make deb
+        make rpm
+        ls -la dist/
+        deb=$(ls dist/npad_*_amd64.deb)
+        rpm=$(ls dist/npad-*-1.x86_64.rpm)
+        # The package version comes from src/main.h; a release tag must agree
+        if [ -n "$RELEASE_TAG" ]; then
+          if [ "$(basename "$deb")" != "npad_${RELEASE_TAG#v}_amd64.deb" ]; then
+            echo "ERROR: built $(basename "$deb") but the tag is $RELEASE_TAG (bump src/main.h?)"
+            exit 1
+          fi
+        fi
+        dpkg-deb --info "$deb"
+        dpkg-deb --contents "$deb"
+
+    - name: Check the libc floor
+      run: |
+        # Ubuntu 22.04 ships glibc 2.35, the oldest distro we claim. A newer
+        # floor means the build image drifted or the code started using a
+        # newer libc symbol; either way 22.04 users would lose the update.
+        floor=$(dpkg-deb -f dist/npad_*_amd64.deb Depends | grep -o 'libc6 (>= [0-9.]*' | grep -o '[0-9.]*$')
+        echo "libc6 floor: $floor"
+        if [ "$(printf '%s\n%s\n' "$floor" 2.35 | sort -V | tail -n1)" != "2.35" ]; then
+          echo "ERROR: libc floor $floor is above 2.35 (Ubuntu 22.04)"
+          exit 1
+        fi
+
+    - name: Check the dpkg-deb fallback still agrees with nfpm.yaml
+      run: |
+        # `make deb` falls back to scripts/build-deb.sh when nfpm is missing.
+        # It carries its own Depends line; fail if the two ever drift.
+        sh scripts/build-deb.sh "$(ls dist/npad_*_amd64.deb | sed 's/.*npad_//; s/_amd64.deb//')" npad-linux fallback
+        want=$(dpkg-deb -f dist/npad_*_amd64.deb Depends)
+        have=$(dpkg-deb -f fallback/npad_*_amd64.deb Depends)
+        echo "nfpm:     $want"
+        echo "fallback: $have"
+        [ "$want" = "$have" ] || { echo "ERROR: Depends differ"; exit 1; }
+        rm -rf fallback
+
+    - name: Validate the desktop file and AppStream metainfo
+      run: |
+        desktop-file-validate packaging/linux/io.github.platima.npad.desktop
+        appstreamcli validate --no-net packaging/linux/io.github.platima.npad.metainfo.xml
+
+    - name: Checksums
+      run: |
+        cd dist
+        for f in npad_*_amd64.deb npad-*.x86_64.rpm; do sha256sum "$f" > "$f.sha256"; done
+        cat *.sha256
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.artifact_name }}
+        path: |
+          dist/npad_*_amd64.deb
+          dist/npad-*.x86_64.rpm
+          dist/*.sha256
+        retention-days: 7
+
+  # Install each package on the distros it is meant for and check that every
+  # shared library resolves. Mint 21+/LMDE are Ubuntu 22.04 / Debian based, so
+  # these cover them.
+  install-test:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - { image: "debian:12", kind: deb }
+        - { image: "debian:trixie", kind: deb }
+        - { image: "ubuntu:22.04", kind: deb }
+        - { image: "ubuntu:24.04", kind: deb }
+        - { image: "fedora:latest", kind: rpm }
+    container: ${{ matrix.image }}
+    steps:
+    - uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.artifact_name }}
+        path: pkgs
+
+    - name: Install the deb
+      if: matrix.kind == 'deb'
+      run: |
+        apt-get update -q
+        apt-get install -y -q ./pkgs/npad_*_amd64.deb
+
+    - name: Install the rpm
+      if: matrix.kind == 'rpm'
+      run: dnf install -y ./pkgs/npad-*.x86_64.rpm
+
+    - name: Check the install
+      run: |
+        test -x /usr/bin/npad
+        test -f /usr/share/applications/io.github.platima.npad.desktop
+        if ldd /usr/bin/npad | grep 'not found'; then
+          echo "ERROR: unresolved libraries"
+          exit 1
+        fi
+        echo "OK on ${{ matrix.image }}"

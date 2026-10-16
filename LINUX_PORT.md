@@ -235,8 +235,17 @@ version.
 - [x] `io.github.platima.npad.desktop` (MimeType: text/plain and friends)
       and hicolor icons generated from `assets/`
 - [x] `make install` installs the desktop file and icons
-- [x] `.deb` built with `dpkg-deb` in CI and attached to releases
+- [x] `.deb` built in CI and attached to releases
 - [x] AppStream metainfo (needed for software centres and Flathub)
+- [x] `.rpm` for Fedora (`make rpm`); `.deb` and `.rpm` both built by nfpm
+      from `packaging/linux/nfpm.yaml` in a Debian 12 container, install-tested
+      on Debian 12/13, Ubuntu 22.04/24.04 and Fedora in CI
+- [x] Signed apt and dnf repositories at <https://pkg.npad.dev>, built by the
+      separate `platima/npad-packages` repo from the release assets (the GPG
+      key lives only there). Install instructions: DOCUMENTATION.md >
+      Installing on Linux. Release notifies it via `NPAD_PACKAGES_TOKEN`.
+- [ ] Not verified on real Fedora / Mint hardware: installs are only tested in
+      CI containers (no display), so launching the app from the .rpm is unseen
 
 ### Batch F - Polish
 - [ ] `system` scheme follows the desktop's light/dark preference live

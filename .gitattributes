@@ -11,3 +11,6 @@
 *.otf binary
 *.exe binary
 *.msi binary
+
+# Shell scripts run on Linux; a CRLF checkout on Windows breaks them under WSL
+*.sh text eol=lf

@@ -49,8 +49,10 @@ jobs:
           - `npad-${{ steps.get_version.outputs.version }}-msi-win-x64.msi` - Windows MSI for silent/managed deployment (`msiexec /i ... /qn`)
           - `npad-${{ steps.get_version.outputs.version }}-portable-win-x64.exe` - Portable GUI version for Windows (no install needed)
 
-          **Linux (Debian, Ubuntu, Mint):**
-          - `npad_<version>_amd64.deb` - GTK 3 desktop app for X11 and Wayland (`sudo apt install ./npad_<version>_amd64.deb`)
+          **Linux (GTK 3 desktop app, X11 and Wayland):**
+          - `npad_<version>_amd64.deb` - Debian, Ubuntu, Mint (`sudo apt install ./npad_<version>_amd64.deb`)
+          - `npad-<version>-1.x86_64.rpm` - Fedora (`sudo dnf install ./npad-<version>-1.x86_64.rpm`)
+          - For automatic updates through `apt` or `dnf`, use the signed repositories at https://pkg.npad.dev instead
 
           **Verification:**
           - `CHECKSUMS.txt` - SHA256 checksums for all files
@@ -80,8 +82,8 @@ jobs:
   # installers, and the portable exe, which is the very same npad.exe the
   # installers carry. One build, one (optional) signature, one checksum set.
   # ci.yml still cross-compiles the Windows target on Linux, so that path
-  # stays tested; it just is not what ships. Linux ships as the .deb from
-  # build-deb below; the terminal variants are unimplemented stubs and are not
+  # stays tested; it just is not what ships. Linux ships as the .deb and .rpm
+  # from build-packages below; the terminal variants are unimplemented stubs and are not
   # published.
   build-installers:
     needs: create-release
@@ -93,47 +95,40 @@ jobs:
       contents: write
       id-token: write
 
-  # Linux: the .deb for Debian/Ubuntu (apt install ./npad_<v>_amd64.deb).
-  # Built on 22.04 rather than ubuntu-latest so the binary's glibc floor (which
-  # the package's Depends is computed from) stays low enough for Debian 12.
-  build-deb:
-    runs-on: ubuntu-22.04
+  # Linux: the .deb (Debian, Ubuntu, Mint) and .rpm (Fedora), built with nfpm
+  # in a Debian 12 container and install-tested on each distro by packages.yml.
+  # The artifact name differs from the one CI's own call uses: names must be
+  # unique within a run, and ci-validation above builds the packages too.
+  build-packages:
     needs: create-release
+    uses: ./.github/workflows/packages.yml
+    with:
+      release_tag: ${{ needs.create-release.outputs.version }}
+      artifact_name: npad-linux-packages-release
+
+  attach-packages:
+    runs-on: ubuntu-latest
+    needs: [create-release, build-packages]
     steps:
-    - uses: actions/checkout@v7
-
-    - name: Install dependencies
-      run: |
-        sudo apt-get update -q
-        sudo apt-get install -y -q build-essential pkg-config libgtk-3-dev libncurses-dev
-
-    - name: Build the .deb
-      env:
-        VERSION: ${{ needs.create-release.outputs.version }}
-      run: |
-        make clean
-        make deb
-        deb=$(ls dist/npad_*_amd64.deb)
-        # The package version comes from src/main.h; the tag must agree
-        if [ "$(basename "$deb")" != "npad_${VERSION#v}_amd64.deb" ]; then
-          echo "ERROR: built $(basename "$deb") but the tag is $VERSION (bump src/main.h?)"
-          exit 1
-        fi
-        cd dist && sha256sum "$(basename "$deb")" > "$(basename "$deb").sha256"
+    - uses: actions/download-artifact@v8
+      with:
+        name: npad-linux-packages-release
+        path: pkgs
 
     - name: Attach to the release
       uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ needs.create-release.outputs.version }}
         files: |
-          dist/npad_*_amd64.deb
-          dist/npad_*_amd64.deb.sha256
+          pkgs/npad_*_amd64.deb
+          pkgs/npad-*.x86_64.rpm
+          pkgs/*.sha256
 
   # Nothing releasable can execute on this runner, so validation asserts the complete expected asset set
   # exists on the release with plausible sizes and matching checksums.
   validate-release:
     runs-on: ubuntu-latest
-    needs: [create-release, build-installers, build-deb]
+    needs: [create-release, build-installers, attach-packages]
     steps:
     - uses: actions/checkout@v7
 
@@ -186,13 +181,15 @@ jobs:
           "https://api.github.com/repos/${{ github.repository }}/releases/$release_id/assets")
 
         # Windows assets share one scheme: npad-v<version>-<type>-win-x64.<ext>;
-        # the Linux package keeps the Debian name npad_<version>_amd64.deb
+        # the Linux packages keep their native names: npad_<version>_amd64.deb
+        # and npad-<version>-1.x86_64.rpm
         failed=0
         for asset in \
           "npad-$VERSION-setup-win-x64.exe:1000000" \
           "npad-$VERSION-msi-win-x64.msi:500000" \
           "npad-$VERSION-portable-win-x64.exe:100000" \
-          "npad_${VERSION#v}_amd64.deb:30000"
+          "npad_${VERSION#v}_amd64.deb:30000" \
+          "npad-${VERSION#v}-1.x86_64.rpm:30000"
         do
           name="${asset%%:*}"
           min_size="${asset##*:}"
@@ -232,7 +229,7 @@ jobs:
 
   create-checksums:
     runs-on: ubuntu-latest
-    needs: [create-release, build-installers, build-deb, validate-release]
+    needs: [create-release, build-installers, attach-packages, validate-release]
     steps:
     - uses: actions/checkout@v7
 
@@ -286,7 +283,7 @@ jobs:
 
   update-release-notes:
     runs-on: ubuntu-latest
-    needs: [create-release, build-installers, build-deb, validate-release, create-checksums]
+    needs: [create-release, build-installers, attach-packages, validate-release, create-checksums]
     steps:
     - name: Update release with final info
       uses: softprops/action-gh-release@v3
@@ -304,8 +301,10 @@ jobs:
           - `npad-${{ needs.create-release.outputs.version }}-msi-win-x64.msi` - Windows MSI for silent/managed deployment (`msiexec /i ... /qn`)
           - `npad-${{ needs.create-release.outputs.version }}-portable-win-x64.exe` - Portable GUI version for Windows (no install needed)
 
-          **Linux (Debian, Ubuntu, Mint):**
-          - `npad_<version>_amd64.deb` - GTK 3 desktop app for X11 and Wayland (`sudo apt install ./npad_<version>_amd64.deb`)
+          **Linux (GTK 3 desktop app, X11 and Wayland):**
+          - `npad_<version>_amd64.deb` - Debian, Ubuntu, Mint (`sudo apt install ./npad_<version>_amd64.deb`)
+          - `npad-<version>-1.x86_64.rpm` - Fedora (`sudo dnf install ./npad-<version>-1.x86_64.rpm`)
+          - For automatic updates through `apt` or `dnf`, use the signed repositories at https://pkg.npad.dev instead
 
           **Verification:**
           - `CHECKSUMS.txt` - SHA256 checksums for all files
@@ -329,3 +328,38 @@ jobs:
           - Built: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
           - [CI Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
           - All builds passed CI validation before release
+
+  # Tell npad-packages a release is ready so it rebuilds the signed apt/dnf
+  # repositories at pkg.npad.dev. Runs last, once every asset is attached and
+  # validated (a release is published before its assets are, so earlier would
+  # race the uploads). Pre-releases are not published to the repositories.
+  # npad-packages also rebuilds daily and on demand, so a missed dispatch only
+  # delays the update. Needs the NPAD_PACKAGES_TOKEN secret: a fine-grained
+  # personal access token limited to platima/npad-packages with
+  # "Contents: Read and write" (what the dispatches API requires) and
+  # "Metadata: Read-only". Without it this job warns and exits cleanly.
+  notify-packages:
+    runs-on: ubuntu-latest
+    needs: [create-release, validate-release, create-checksums, update-release-notes]
+    if: ${{ !contains(needs.create-release.outputs.version, '-') }}
+    steps:
+    - name: Dispatch to npad-packages
+      env:
+        TOKEN: ${{ secrets.NPAD_PACKAGES_TOKEN }}
+        VERSION: ${{ needs.create-release.outputs.version }}
+      run: |
+        if [ -z "$TOKEN" ]; then
+          echo "::warning::NPAD_PACKAGES_TOKEN is not set; pkg.npad.dev updates at its next daily rebuild"
+          exit 0
+        fi
+        status=$(curl -s -o response.txt -w '%{http_code}' -X POST \
+          -H "Authorization: Bearer $TOKEN" \
+          -H "Accept: application/vnd.github+json" \
+          https://api.github.com/repos/platima/npad-packages/dispatches \
+          -d "{\"event_type\":\"npad-release\",\"client_payload\":{\"tag\":\"$VERSION\"}}")
+        if [ "$status" = "204" ]; then
+          echo "Dispatched $VERSION to platima/npad-packages"
+        else
+          echo "::warning::dispatch to npad-packages returned HTTP $status; it will pick the release up at its next daily rebuild"
+          cat response.txt
+        fi

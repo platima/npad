@@ -5,6 +5,28 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.36.0] - 2026-10-16
+
+### 🆕 Features
+- **`.rpm` for Fedora, and signed apt/dnf repositories.** Releases now attach
+  `npad-<version>-1.x86_64.rpm` beside the `.deb` (`make rpm` builds it). Both
+  packages are described once in `packaging/linux/nfpm.yaml` and built by
+  [nfpm](https://nfpm.goreleaser.com) inside a Debian 12 container, so the
+  binary runs on Debian 12/13, Ubuntu 22.04+, Mint 21+/LMDE and current
+  Fedora. CI installs each package on those distros and checks every shared
+  library resolves, and fails if the libc floor rises above Ubuntu 22.04's.
+  Releases also notify `platima/npad-packages`, which publishes signed
+  repositories at <https://pkg.npad.dev> so `apt upgrade` and `dnf upgrade`
+  keep npad current. Setup instructions are in the README and
+  [DOCUMENTATION.md](DOCUMENTATION.md#installing-on-linux).
+  - `make deb` uses nfpm when it is installed and falls back to `dpkg-deb`
+    otherwise; CI fails if the two ever disagree about the package's
+    dependencies.
+  - The release workflow reads a new `NPAD_PACKAGES_TOKEN` secret for that
+    notification (see the comment on the `notify-packages` job). Without it
+    the job warns and the repositories pick the release up at their next
+    daily rebuild.
+
 ## [0.35.0] - 2026-10-16
 
 ### 🆕 Features

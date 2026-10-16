@@ -147,25 +147,11 @@ jobs:
           npad-linux-terminal.sha256
         retention-days: 7
 
-    # The .deb is what releases ship (release.yml rebuilds it from the tag);
-    # building it here proves packaging works on every push.
-    - name: Build Debian package
-      run: |
-        make deb
-        ls -la dist/
-        dpkg-deb --info dist/npad_*_amd64.deb
-        dpkg-deb --contents dist/npad_*_amd64.deb
-        # Desktop file and AppStream metainfo must stay valid
-        sudo apt-get install -y -q desktop-file-utils appstream
-        desktop-file-validate packaging/linux/io.github.platima.npad.desktop
-        appstreamcli validate --no-net packaging/linux/io.github.platima.npad.metainfo.xml
-
-    - name: Upload Debian package artifact
-      uses: actions/upload-artifact@v7
-      with:
-        name: npad-deb-amd64
-        path: dist/npad_*_amd64.deb
-        retention-days: 7
+  # .deb and .rpm: built in a Debian 12 container with nfpm and install-tested
+  # on Debian 12/13, Ubuntu 22.04/24.04 and Fedora (see packages.yml)
+  packages:
+    needs: lint
+    uses: ./.github/workflows/packages.yml
 
   test:
     runs-on: ubuntu-latest
