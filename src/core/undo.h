@@ -22,7 +22,7 @@
  *    other than the edit itself, so typing in two places is two steps
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #ifndef UNDO_H

@@ -3,7 +3,7 @@
  * macOS Cocoa-specific UI implementation
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  *
  * TODO: Implement Cocoa backend
  */

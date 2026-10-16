@@ -20,7 +20,7 @@
  * unit the core undo history uses.
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #ifndef UI_GTK_H

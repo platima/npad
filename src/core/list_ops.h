@@ -9,7 +9,7 @@
  * trailing newline if the input had one. NULL input yields NULL.
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #ifndef LIST_OPS_H

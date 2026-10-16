@@ -3,7 +3,7 @@
  * Basic thread safety primitives for critical sections
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #ifndef THREAD_SAFETY_H

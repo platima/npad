@@ -7,7 +7,7 @@
  * startup are leftovers from instances that did not exit cleanly.
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #include "session.h"

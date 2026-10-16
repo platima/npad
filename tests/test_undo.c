@@ -5,7 +5,7 @@
  * the callback table and compare the text.
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #include "test_framework.h"

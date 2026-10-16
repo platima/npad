@@ -6,7 +6,7 @@
  * from the platform message loop), so editor state needs no locking.
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #include "editor.h"

@@ -3,7 +3,7 @@
  * Cross-platform file I/O operations
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #include "file_ops.h"

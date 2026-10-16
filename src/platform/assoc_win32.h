@@ -23,7 +23,7 @@
  * at whichever copy of npad happened to be running.
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #ifndef ASSOC_WIN32_H

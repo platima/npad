@@ -3,7 +3,7 @@
  * Unit tests for sort, unique, unescape, delimiter replace, and indent/unindent
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #include "test_framework.h"

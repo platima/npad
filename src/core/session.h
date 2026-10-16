@@ -3,7 +3,7 @@
  * Crash-recovery snapshots of unsaved documents
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #ifndef SESSION_H

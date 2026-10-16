@@ -7,7 +7,7 @@
  * break lines identically. See LINUX_PORT.md, "Printing".
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #ifndef PRINT_GTK_H

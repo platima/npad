@@ -21,8 +21,9 @@
   <provides>
     <binary>npad</binary>
   </provides>
-  <url type="homepage">https://github.com/platima/npad</url>
+  <url type="homepage">https://npad.dev</url>
   <url type="bugtracker">https://github.com/platima/npad/issues</url>
+  <url type="vcs-browser">https://github.com/platima/npad</url>
   <categories>
     <category>Utility</category>
     <category>TextEditor</category>

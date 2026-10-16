@@ -3,7 +3,7 @@
  * Main entry point
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #include <stdio.h>
@@ -253,6 +253,6 @@ static void show_version(void) {
     printf("npad version 0.1.0-dev\n");
 #endif
     printf("Built on %s at %s\n", __DATE__, __TIME__);
-    printf("https://github.com/platima/npad\n");
+    printf("https://npad.dev\n");
     printf("\nFollows Semantic Versioning (SemVer) - https://semver.org/\n");
 }

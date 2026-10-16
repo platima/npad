@@ -3,7 +3,7 @@
  * Cross-platform settings storage using JSON format
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #include "settings.h"

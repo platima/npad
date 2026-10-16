@@ -3,7 +3,7 @@
  * Centralized error reporting and logging
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #include "error.h"

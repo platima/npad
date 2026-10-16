@@ -3,7 +3,7 @@
  * Global definitions and version information
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #ifndef MAIN_H

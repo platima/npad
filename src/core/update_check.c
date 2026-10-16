@@ -2,7 +2,7 @@
  * npad - Update check helpers implementation
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #include "update_check.h"

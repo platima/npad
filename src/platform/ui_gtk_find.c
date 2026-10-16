@@ -21,7 +21,7 @@
  *    are re-read when another instance broadcasts a settings change.
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #include "ui_gtk.h"

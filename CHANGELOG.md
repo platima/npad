@@ -64,6 +64,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Set `NPAD_PRINT_EXPORT=/path/file.pdf` to make Print skip its dialog and
     write a PDF - for checking output on a machine with no printer.
 
+### 🔄 Changed
+- **npad has a home page: [npad.dev](https://npad.dev).** The About box
+  (Windows and Linux), `npad --version`, the Windows installers' "more
+  information" link in Apps & features, and the Linux package and AppStream
+  metadata now point there. Issues, releases and the update check stay on
+  GitHub.
+
 ## [0.34.0] - 2026-10-16
 
 ### 🆕 Features

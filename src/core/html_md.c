@@ -2,7 +2,7 @@
  * npad - HTML to Markdown/text conversion (rich-text paste)
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #include "html_md.h"

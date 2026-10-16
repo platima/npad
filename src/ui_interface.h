@@ -3,7 +3,7 @@
  * Platform-independent UI abstraction
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #ifndef UI_INTERFACE_H

@@ -6,7 +6,7 @@
  * this layer converts to/from UTF-16 at the Win32 boundary.
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #define WIN32_LEAN_AND_MEAN
@@ -2507,7 +2507,7 @@ void ui_platform_show_about_dialog(Window *parent) {
              "A lightweight, cross-platform text editor\n"
              "inspired by classic Windows Notepad.\n\n"
              "Author: Platima\n"
-             "https://github.com/platima/npad",
+             "https://npad.dev",
              NPAD_VERSION);
     wchar_t *message = utf8_to_wide(about_utf8);
 

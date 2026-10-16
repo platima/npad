@@ -3,7 +3,7 @@
  * Windows Terminal/Console-specific UI implementation
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  *
  * TODO: Implement Windows Terminal backend
  */

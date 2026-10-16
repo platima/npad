@@ -2,7 +2,7 @@
  * npad - Page Setup, Print and Print Preview (GTK 3)
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #include "print_gtk.h"

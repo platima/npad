@@ -9,7 +9,7 @@
  * Wayland reserves for the compositor.
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #define _DEFAULT_SOURCE // setsid(), nl_langinfo()

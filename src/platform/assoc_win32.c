@@ -2,7 +2,7 @@
  * npad - File type associations (Win32)
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #include "assoc_win32.h"

@@ -105,6 +105,16 @@ something turns out to work differently than it reasonably appears to.
   window message; font type and zoom are per-window view state seeded from
   the Defaults preferences (see DOCUMENTATION.md for the full model)
 
+**Branches:**
+- `main` takes only releases and Windows fixes: every push to it runs the full
+  CI build, so it is never the place for work in progress
+- Linux port work integrates on the `linux` branch (feature branches merge
+  into `linux`, not `main`); `linux` merges into `main` when a release ships
+  it. Windows fixes made on `main` are merged back into `linux`
+- The website lives in `site/` (deployed to https://npad.dev by Pages); the
+  signed apt/dnf repos live in the separate `platima/npad-packages` repo
+  (https://pkg.npad.dev)
+
 **Versioning & changelog conventions (every change):**
 - Bump the version per semver in `src/main.h` AND `src/platform/npad.rc`
   (0.x: minor = feature rounds / breaking changes, patch = fix-only rounds)

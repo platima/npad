@@ -8,7 +8,7 @@
  * frees. NULL input yields NULL.
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #ifndef HTML_MD_H
