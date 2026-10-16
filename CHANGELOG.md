@@ -19,6 +19,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Ubuntu 22.04/24.04, and its `libc6` floor is read from the binary. CI builds
   and validates it on every push; releases attach it with a checksum, and
   release validation now requires it.
+- **Linux: Find, Replace and Go To Line.** The Edit menu's Find, Find Next /
+  Previous (F3 / Shift+F3), Replace and Go To (Ctrl+G, or click Ln/Col in the
+  status bar) now work in the GTK build, with the same options, settings keys
+  and wording as the Windows build: Match case, Match whole word only, Wrap
+  around, Highlight all matches, Up / Down (Find only), the optional
+  "Interpret escapes" row (shown with Basic Markdown support), search history,
+  and "Match n of m" / "Wrapped around" / "Replaced n occurrences" messages.
+  - **Replace All is a single undo step**, however many occurrences it
+    changed, and Highlight All is a text tag, so it never marks the document
+    modified or enters the undo history.
+  - Searching works in characters, not bytes: accented and non-Latin text
+    matches, folds case correctly (Café finds CAFÉ) and counts as one column
+    per character.
+  - F3, Shift+F3, Ctrl+F, Ctrl+H and Ctrl+G keep working while the Find /
+    Replace dialog has the focus.
+  - The dialog is placed by the window manager (centred over the npad window
+    by most desktops) rather than at a fixed offset, because Wayland does not
+    let an application position its own windows.
 
 ## [0.34.0] - 2026-10-16
 

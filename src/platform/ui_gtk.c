@@ -698,11 +698,6 @@ static bool command_available(NpadCommand command) {
         case NPAD_CMD_FILE_PAGE_SETUP:
         case NPAD_CMD_FILE_PRINT_PREVIEW:
         case NPAD_CMD_FILE_PRINT:
-        case NPAD_CMD_EDIT_FIND:
-        case NPAD_CMD_EDIT_FIND_NEXT:
-        case NPAD_CMD_EDIT_FIND_PREV:
-        case NPAD_CMD_EDIT_REPLACE:
-        case NPAD_CMD_EDIT_GOTO_LINE:
         case NPAD_CMD_EDIT_PREFERENCES:
         case NPAD_CMD_FORMAT_FONT:
             return false;

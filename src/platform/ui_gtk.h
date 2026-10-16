@@ -9,7 +9,7 @@
  *                       shortcuts, command dispatch, text access, undo, view
  *                       state (wrap, font, zoom, theme), status bar, timers
  *   ui_gtk_dialogs.c  - file choosers, message boxes and prompts, About
- *   ui_gtk_find.c     - Find / Replace / Go To (not yet ported)
+ *   ui_gtk_find.c     - Find / Replace / Go To
  *   ui_gtk_instance.c - cross-instance messaging over D-Bus: settings sync,
  *                       view sync, Close All, instance counting
  *

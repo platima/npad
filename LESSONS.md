@@ -412,6 +412,25 @@ binary's highest `GLIBC_x.y` symbol; releases build the .deb on ubuntu-22.04
 to keep that floor low. A .desktop file's name must equal the app id
 (`g_set_prgname`) or the shell shows a generic icon.
 
+**A `GtkComboBoxText` with an entry is not the entry's parent.** The entry sits
+inside a `GtkBox` inside the combo, so `gtk_widget_get_parent(entry)` and a
+cast to `GTK_COMBO_BOX_TEXT` fail with a CRITICAL and the history list stays
+empty - silently, apart from the log. → Keep the combo widget and fetch the
+entry with `gtk_bin_get_child`.
+
+**Applying a `GtkTextTag` invalidates `GtkTextIter`s**, just as an edit does.
+Highlighting every match by walking forward with one iterator and tagging as
+you go gives stale iterators. → Collect the matches as character offsets
+first, then rebuild iterators and apply.
+
+**`gtk_text_iter_forward_search` takes the string before the flags** (`iter,
+str, flags, ...`) - the reverse of what the name and every wrapper suggest. A
+wrong order is a compile error, not a runtime surprise.
+
+**Under `-std=c99`, `strdup` is not declared**, and the implicit declaration
+turns the result into an `int`. In the GTK files use `g_strdup`; GLib's
+allocator is plain `malloc` (2.46+), so core's `free()` is still right.
+
 ## Installers
 
 **Inno Setup's check lists do not scale their check box offset.**
@@ -551,6 +570,13 @@ launched window needs a click first. Screenshots are scaled (a 1280x720
 viewport comes back as 800x450), so measure in the screenshot's frame. When
 the pane cannot paint, verify through files: Ctrl+S and read the bytes, or
 watch `~/.config/npad/recovery/`.
+
+**Several sessions share one `broadwayd`, and `pkill broadwayd` is global.**
+Another session's cleanup killed the display mid-test (the page went dark and
+the app was gone). → Use your own display number (`:7` serves 8087) and run
+renamed copies of `broadwayd` and the binary so a sibling's `pkill` cannot
+match them. Also: the pane's screenshot trails the last action by a frame, and
+the `type` action does not reach GTK widgets (use `key`).
 
 **A user-local Xvfb (`apt-get download` + `dpkg -x`) cannot start.** It runs
 the keymap compiler from a path compiled into the binary (`/usr/bin/xkbcomp`)

@@ -139,6 +139,13 @@ ported so far, and the deliberate differences (window position on Wayland,
 colour schemes against a dark GTK theme, the Text Documents filter, no Check
 for Updates), are tracked in [LINUX_PORT.md](LINUX_PORT.md).
 
+Find, Find Next / Previous, Replace, Replace All and Go To Line (Ctrl+F,
+F3, Shift+F3, Ctrl+H, Ctrl+G, or a click on Ln/Col) behave as described
+elsewhere in this document, with the same settings keys. Differences: the
+dialogs are positioned by the window manager rather than at a fixed offset
+and a remembered position, and Whole word only demands a word boundary
+beside a term edge that is itself a letter, digit or underscore.
+
 ### Installing on Linux
 
 - **.deb** (Debian 12/13, Ubuntu 22.04+, Mint): `sudo apt install

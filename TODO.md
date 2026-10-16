@@ -7,6 +7,17 @@ this file is for open loops.
 
 ---
 
+## 🧪 Needs testing - v0.35.0 Linux Find / Replace / Go To (on Mint / Debian 13)
+
+Verified in Broadway only. On a real desktop:
+
+- [ ] Ctrl+F / Ctrl+H open the dialog centred over (or near) the npad window
+      on X11 and Wayland, and it stays above the main window
+- [ ] The history drop-down lists recent terms and picking one fills the box
+      (combo popups do not paint in Broadway)
+- [ ] Typing accented / CJK text into the Find box and searching for it
+- [ ] Highlight all stays right while editing a large file
+
 ## 🧪 Needs testing - v0.34.0 Linux foundation (on Mint / Debian 13)
 
 Verified only under GTK's Broadway backend in WSL (see LINUX_PORT.md). On a
