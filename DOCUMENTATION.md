@@ -161,6 +161,28 @@ beside a term edge that is itself a letter, digit or underscore.
   id `io.github.platima.npad`; the shell matches windows to the launcher and
   icon through it.
 
+### Printing on Linux
+
+File > Page Setup, Print (Ctrl+P) and Print Preview (Ctrl+Shift+P) behave as
+described under *Behaviour notes* for Windows - same header/footer codes, same
+`print_*` settings, the document rather than the window - with these
+differences:
+
+- **Print opens GTK's print dialog** (printers known to CUPS, plus *Print to
+  File* for a PDF). The paper and orientation from Page Setup seed it.
+- **Page Setup** is npad's own dialog for the margins (inches or millimetres,
+  following your locale) with a *Paper and Orientation...* button into GTK's
+  paper dialog. Margins run from the edge of the sheet, as in Notepad.
+- **Print Preview is npad's own window** (Print, Page Setup, Previous / Next,
+  Zoom In / Out; PgUp / PgDn, Ctrl+Home / End, Ctrl++ / Ctrl+-, Ctrl+P and
+  Esc), so it works without a PDF viewer installed. It is also what the print
+  dialog's *Preview* button opens.
+- **Date and time codes** (`&d`, `&t`) use the locale's short date and its
+  time format without seconds.
+- Setting the environment variable `NPAD_PRINT_EXPORT` to a file path makes
+  Print write a PDF there without showing the dialog (used to test printing
+  on a machine with no printer).
+
 ## Settings reference
 
 All settings live in `settings.json` and are editable in Preferences

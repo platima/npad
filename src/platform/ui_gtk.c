@@ -31,6 +31,7 @@
 #include "../core/file_ops.h"
 #include "../core/settings.h"
 #include "../core/startup_prof.h"
+#include "print_gtk.h"
 
 // Status refreshes are coalesced: caret movement and scrolling fire per
 // step, and recomputing Ln/Col on every one is wasted work (Win32: 33 ms)
@@ -695,9 +696,6 @@ static GtkWidget *create_status_bar(Window *window) {
 // when the feature lands - LINUX_PORT.md tracks what is left.
 static bool command_available(NpadCommand command) {
     switch (command) {
-        case NPAD_CMD_FILE_PAGE_SETUP:
-        case NPAD_CMD_FILE_PRINT_PREVIEW:
-        case NPAD_CMD_FILE_PRINT:
         case NPAD_CMD_EDIT_PREFERENCES:
         case NPAD_CMD_FORMAT_FONT:
             return false;
@@ -1017,6 +1015,31 @@ static void create_menu(Window *window) {
 // Commands
 // ---------------------------------------------------------------------------
 
+// Print and Print Preview: hand the document, not the view, to print_gtk.c,
+// in the font this window is showing (zoom does not apply to paper)
+static void print_document(Window *window, bool preview) {
+    const char *default_face = NPAD_GTK_DEFAULT_MONO_FONT;
+    const char *key = active_font_key(window, &default_face);
+    char *face = settings_get_string(key, default_face);
+    char *text = ui_get_text(window);
+    const char *path = editor_get_current_file();
+    char *title = path ? g_path_get_basename(path) : NULL;
+
+    NpadPrintDoc doc = {
+        .text = text,
+        .title = title,
+        .font_family = face,
+        .font_size = clamp_int(settings_get_int("font_size", 11), 6, 72),
+        .font_weight = clamp_int(settings_get_int("font_weight", 400), 100, 900),
+        .font_italic = settings_get_bool("font_italic", false),
+    };
+    npad_gtk_print_run(GTK_WINDOW(window->window), &doc, preview);
+
+    g_free(title);
+    g_free(text);
+    free(face);
+}
+
 // Notepad's F5 stamp: the locale's short time (no seconds) then short date
 static void insert_time_date(Window *window) {
     time_t now = time(NULL);
@@ -1106,6 +1129,13 @@ void npad_gtk_handle_command(Window *window, NpadCommand command) {
             break;
         case NPAD_CMD_FILE_SAVE_AS:
             ui_post_event(UI_EVENT_FILE_SAVE_AS, window, NULL);
+            break;
+        case NPAD_CMD_FILE_PAGE_SETUP:
+            npad_gtk_print_page_setup(GTK_WINDOW(window->window));
+            break;
+        case NPAD_CMD_FILE_PRINT:
+        case NPAD_CMD_FILE_PRINT_PREVIEW:
+            print_document(window, command == NPAD_CMD_FILE_PRINT_PREVIEW);
             break;
         case NPAD_CMD_FILE_RECENT_CLEAR:
             settings_clear_recent_files();
@@ -1331,6 +1361,7 @@ bool ui_platform_init(void) {
 
 void ui_platform_cleanup(void) {
     npad_gtk_find_cleanup();
+    npad_gtk_print_cleanup();
     if (g_gtk_main_window)
         ui_destroy_window(g_gtk_main_window);
     npad_gtk_instance_cleanup();

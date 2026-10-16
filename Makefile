@@ -65,8 +65,8 @@ MACOS_TARGET = npad-macos
 # Linux desktop: GTK 3, one binary for both X11 and Wayland (GDK picks the
 # display server at runtime). pkg-config is only consulted when this target
 # is actually built - these are recursively expanded.
-LINUX_GTK_SOURCES = src/platform/ui_gtk.c src/platform/ui_gtk_dialogs.c src/platform/ui_gtk_find.c src/platform/ui_gtk_instance.c
-LINUX_GTK_HEADERS = src/platform/ui_gtk.h
+LINUX_GTK_SOURCES = src/platform/ui_gtk.c src/platform/ui_gtk_dialogs.c src/platform/ui_gtk_find.c src/platform/ui_gtk_instance.c src/platform/print_gtk.c
+LINUX_GTK_HEADERS = src/platform/ui_gtk.h src/platform/print_gtk.h
 LINUX_GTK_CFLAGS = $(shell pkg-config --cflags gtk+-3.0)
 LINUX_GTK_LIBS = $(shell pkg-config --libs gtk+-3.0) -lpthread
 LINUX_GTK_TARGET = npad-linux
