@@ -403,6 +403,40 @@ becomes the Wayland `app_id` and the X11 `WM_CLASS`, which is how the desktop
 matches windows to the `.desktop` launcher and its icon. Get it wrong and the
 taskbar shows a generic icon however the launcher is set up.
 
+**GtkPrintOperation's built-in preview is a PDF viewer, not a preview.**
+`GTK_PRINT_OPERATION_ACTION_PREVIEW` exports a temporary PDF and opens it in
+the desktop's default PDF handler. On a machine with none (WSL, a minimal
+install) nothing appears and nothing reports an error; it also has no Print or
+Page Setup. → Connect the operation's `preview` signal, return TRUE and draw
+the pages yourself with `gtk_print_operation_preview_render_page` onto your own
+cairo context. The page count only exists after the preview's `ready` signal,
+so build the window there.
+
+**A `preview` handler must give the print context a cairo context before it
+returns, or GTK aborts.** `print_pages` checks right after the signal and calls
+`g_error("You must set a cairo context on the print context")` - a fatal abort
+with the backtrace inside libgtk, not in npad. Pagination (`begin-print`) runs
+afterwards and needs it too. → `gtk_print_context_set_cairo_context` with a
+throwaway surface straight away; set the real one in each draw.
+
+**GTK's 72 dpi print context hints glyph advances to whole points, so text
+measures differently at different resolutions.** A 14 pt monospace face is
+8.43 pt per glyph but laid out as 8 pt on the export/PDF context: 96 columns
+fit where 91 should, and a preview built on a 300 dpi context wraps five
+columns earlier than the page it claims to preview. Pango 1.44+ also rounds
+glyph positions on its own. → Measure and draw on a Pango context of your own
+(`pango_font_map_create_context(pango_cairo_font_map_get_default())`, 72 dpi,
+`CAIRO_HINT_METRICS_OFF`, `pango_context_set_round_glyph_positions(FALSE)`),
+work in points, and `cairo_scale(72 / dpi)` when drawing onto the print
+context. The same text then measures the same on every device.
+
+**`gtk_print_operation_set_use_full_page(TRUE)` is how margins can be measured
+from the sheet edge.** By default the context's origin and size are the page
+setup's own margins, which GTK's paper dialog cannot edit (it has no margin
+fields) and which start at the printer's hardware margins. Full page gives the
+corner of the sheet, so Notepad-style margins are applied by npad alone.
+Landscape needs no rotation here: the context is already orientation-aware.
+
 ## Installers
 
 **Inno Setup's check lists do not scale their check box offset.**
@@ -555,6 +589,25 @@ checkout is deep enough that the path does not exist; from a directory two
 levels below `/` it resolves to the real `/etc/passwd`, which reads fine and
 fails the test. Build mirrors at least three levels deep, and treat the test
 as asserting nothing about security.
+
+**Other sessions share the WSL and its Broadway displays.** `broadwayd :5` and
+`:7` were already in use by parallel sessions; starting a second one on the
+same number fails silently and the app connects to the *other* session's
+display - the screenshot then shows someone else's window, and keystrokes land
+in it. `pkill broadwayd` / `pkill npad-linux` kills theirs too. → Use an
+unused display number (`:23` is port 8103), record your own PIDs, and kill
+only those.
+
+**`lround` is in libm, which the Linux build does not link.** `make linux-gtk`
+fails at link time with "DSO missing from command line" for a single call to
+`lround`, even though the header compiles. → A one-line rounding helper, or
+add `-lm` deliberately.
+
+**A Python patch run from a heredoc can silently never match.** The Bash tool
+collapses a C `"\n"` (backslash-n) in a heredoc, so a `replace()` whose search
+text contained one failed its assertion and wrote nothing, and a heredoc with
+apostrophes broke the shell outright. → Write patch scripts with the file tool
+and run them, as with the existing heredoc advice.
 
 ## Method
 

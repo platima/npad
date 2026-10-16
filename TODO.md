@@ -7,6 +7,20 @@ this file is for open loops.
 
 ---
 
+## 🧪 Needs testing - v0.35.0 Linux printing (on Mint / Debian 13)
+
+Verified only with Print to File under Broadway in WSL. On a real desktop:
+
+- [ ] Print to a real CUPS printer: orientation, paper and margins as set in
+      Page Setup; a long line wraps at a space; header and footer on every page
+- [ ] The print dialog's *Page Setup* tab: a paper or orientation change made
+      there applies to that job (and Print Preview from the dialog shows it)
+- [ ] Print Preview on HiDPI / fractional scaling: sharp, correctly sized
+- [ ] Page Setup in a metric locale shows millimetres, and accepting it
+      untouched leaves the margins exactly as they were
+- [ ] The preview's line breaks match the printed page on the real printer
+      (they are measured in points, independent of the printer's dpi)
+
 ## 🧪 Needs testing - v0.34.0 Linux foundation (on Mint / Debian 13)
 
 Verified only under GTK's Broadway backend in WSL (see LINUX_PORT.md). On a

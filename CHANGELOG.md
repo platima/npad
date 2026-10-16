@@ -5,6 +5,36 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.35.0] - 2026-10-16
+
+### 🆕 Features
+- **Linux: Page Setup, Print and Print Preview.** File > Page Setup, Print
+  (Ctrl+P) and Print Preview (Ctrl+Shift+P) work in the GTK build, with the
+  same behaviour as Windows: they print the *document* rather than the
+  window, in the font that window is showing, at the same point size, with
+  the Notepad header and footer codes (`&f` `&p` `&d` `&t` `&l` `&c` `&r`
+  `&&`) from Preferences > Defaults, and lines too long for the page are
+  re-wrapped at a space.
+  - **Page Setup** sets paper, orientation and the four margins. Margins are
+    stored in thousandths of an inch under the same `print_*` keys as
+    Windows, so a settings file means the same on both; the dialog shows
+    inches or millimetres to suit your locale, and a margin you did not touch
+    is never rewritten by the rounding (0.75 in stays 750, not 752). Paper
+    and orientation use GTK's own paper dialog, reached from a button.
+  - **Print Preview is npad's own window**, not GTK's stock one: GTK's hands
+    a PDF to whatever viewer the desktop has - none, on a minimal install -
+    and offers neither Print nor Page Setup. Ours shows the pages as they
+    will print, with Print, Page Setup, Previous/Next, Zoom, PgUp/PgDn,
+    Ctrl+Home/End and Esc, and re-paginates after Page Setup. The print
+    dialog's own Preview button opens it too.
+  - **The preview cannot disagree with the page.** Layout is measured once,
+    in points, on a Pango context with metric hinting and glyph rounding off,
+    and the stored lines are replayed to both. Measured on GTK's own 72 dpi
+    print context instead, a 14 pt monospace face rounds each glyph to 8 pt
+    and fits five more columns than a preview at another resolution.
+  - Set `NPAD_PRINT_EXPORT=/path/file.pdf` to make Print skip its dialog and
+    write a PDF - for checking output on a machine with no printer.
+
 ## [0.34.0] - 2026-10-16
 
 ### 🆕 Features
