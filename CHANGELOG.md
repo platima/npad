@@ -5,6 +5,50 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.34.0] - 2026-10-16
+
+### 🆕 Features
+- **Linux desktop build, foundation round.** npad now builds as a native GTK 3
+  app on Linux - one binary, `npad-linux`, that runs on both X11 and Wayland
+  (GDK picks the display server at runtime). It replaces the empty X11 and
+  Wayland stubs. This round lays the groundwork rather than finishing the
+  port: the window, menus and shortcuts, editing and the clipboard,
+  undo/redo, open and save with each file's encoding and line endings
+  preserved, recent files, word wrap, monospace, zoom, the colour schemes,
+  the status bar and its pickers, and Time/Date are all in. Find/Replace,
+  Preferences, Font and printing are greyed out until the next rounds port
+  them. [LINUX_PORT.md](LINUX_PORT.md) tracks what is done, how to test it,
+  and the remaining checklist.
+  - **Every window still knows about every other.** On Windows, npad's
+    windows coordinate through a broadcast window message; Wayland lets an
+    app see nothing of other apps' windows, so on Linux the same messages go
+    over D-Bus. A preference changed in one window applies live in all of
+    them, Close All closes them all (each with its own save prompt), and view
+    sync works as on Windows. D-Bus support is part of GLib, which GTK
+    already needs, so nothing new is required to run npad. Without a session
+    bus npad still edits files; the windows just stop syncing.
+  - **Logging out keeps unsaved work.** When the session ends (or npad is
+    sent SIGTERM), npad parks unsaved changes without prompting and the next
+    launch reopens them silently - the Linux counterpart of the Windows
+    restart handling.
+  - **Crash recovery works the same way as on Windows**: a snapshot on the
+    first edit, then every 30 seconds, offered back after a crash.
+
+### 🐛 Fixed
+- **A file opened from the command line by a relative name is remembered by
+  its full path.** `npad notes.txt` stored "notes.txt" in Recent Files and in
+  crash-recovery snapshots, so reopening it later from anywhere else failed.
+  The name is now resolved against the folder npad was started in, on both
+  Windows and Linux.
+
+### 🔧 Internal
+- A platform-neutral undo history (`src/core/undo.c`, with tests) for text
+  widgets that have no undo of their own: GTK 3's, and later the terminal
+  builds'. Typing undoes a word at a time, runs of Backspace or Delete undo
+  together, and compound edits undo as one step.
+- CI builds and checks `npad-linux` instead of the two stubs. `make linux`
+  needs `pkg-config` and `libgtk-3-dev`.
+
 ## [0.33.0] - 2026-09-27
 
 ### 🆕 Features

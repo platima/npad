@@ -128,7 +128,16 @@ releases by `installer/fetch-fonts.ps1`. CI builds both via
 | Settings | `%APPDATA%\Platima\npad\settings.json` |
 | Crash-recovery snapshots | `%APPDATA%\Platima\npad\recovery\<slot>.txt` / `.meta` |
 
-Linux (when implemented): `~/.config/npad/`.
+Linux: `~/.config/npad/settings.json`, with snapshots in
+`~/.config/npad/recovery/`.
+
+## Linux
+
+The Linux desktop build (GTK 3; one binary for X11 and Wayland) is in
+progress. It shares the settings keys and behaviour described here; what is
+ported so far, and the deliberate differences (window position on Wayland,
+colour schemes against a dark GTK theme, the Text Documents filter, no Check
+for Updates), are tracked in [LINUX_PORT.md](LINUX_PORT.md).
 
 ## Settings reference
 

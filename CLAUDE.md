@@ -12,7 +12,7 @@ npad is a lightweight, cross-platform text editor inspired by classic Windows No
 - `make` - Auto-detect platform and build
 - `make all` - Build all Windows and Linux variants
 - `make windows` - Build for Windows x64 using MinGW (cross or native)
-- `make linux` - Build Linux variants (X11, Wayland, ncurses stubs)
+- `make linux` - Build Linux variants (GTK 3 desktop `npad-linux`, ncurses stub)
 - `make debug` - Build with debug symbols enabled
 - `make clean` - Clean build artifacts
 
@@ -50,7 +50,7 @@ Platform Implementation (Win32/X11/Cocoa/ncurses)
 **Key components:**
 - `src/core/` - Platform-independent editor logic, file operations, settings
 - `src/ui_interface.h/c` - UI abstraction layer defining events and window operations
-- `src/platform/` - Platform-specific UI implementations (ui_win32.c, ui_x11.c, etc.)
+- `src/platform/` - Platform-specific UI implementations (ui_win32.c, ui_gtk*.c, etc.)
 - `src/main.c` - Application entry point and initialization sequence
 
 **State management:**
@@ -81,7 +81,7 @@ something turns out to work differently than it reasonably appears to.
 
 **Platform targets:**
 - Windows: Win32 API (primary focus, most complete)
-- Linux: X11 & Wayland (planned)  
+- Linux: GTK 3 for X11 & Wayland (in progress - see LINUX_PORT.md)  
 - macOS: Cocoa (planned)
 - Terminal: ncurses (planned)
 

@@ -51,6 +51,7 @@ settings.ini
 *.dSYM/
 
 # Executables from testing
+npad-linux
 npad-linux-*
 unpad*.exe
 src/platform/npad.res

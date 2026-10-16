@@ -805,7 +805,12 @@ void editor_set_startup_file(const char *filename) {
     }
 
     if (filename) {
-        g_startup_file = duplicate_string(filename);
+        // Resolve now, while the working directory is the one the name was
+        // given relative to: Recent Files and crash recovery store this path
+        // and reopen it later from somewhere else
+        g_startup_file = file_get_absolute_path(filename);
+        if (!g_startup_file)
+            g_startup_file = duplicate_string(filename);
         if (!g_startup_file) {
             NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, filename,
                              "Failed to allocate memory for startup file path");

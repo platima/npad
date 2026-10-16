@@ -44,8 +44,8 @@ if command -v apt-get &> /dev/null; then
     sudo apt-get install -y gcc-mingw-w64 gcc-mingw-w64-x86-64
     
     # Linux GUI development
-    echo "Installing X11 development libraries..."
-    sudo apt-get install -y libx11-dev
+    echo "Installing GTK 3 development libraries..."
+    sudo apt-get install -y pkg-config libgtk-3-dev
     
     # Terminal development (ncurses)
     echo "Installing ncurses development..."
@@ -53,21 +53,21 @@ if command -v apt-get &> /dev/null; then
 
 elif command -v dnf &> /dev/null; then
     echo "Using dnf (Fedora/RHEL)..."
-    sudo dnf install -y gcc make mingw64-gcc libX11-devel ncurses-devel
+    sudo dnf install -y gcc make mingw64-gcc pkgconf-pkg-config gtk3-devel ncurses-devel
     
 elif command -v yum &> /dev/null; then
     echo "Using yum (CentOS/RHEL)..."
-    sudo yum install -y gcc make mingw64-gcc libX11-devel ncurses-devel
+    sudo yum install -y gcc make mingw64-gcc pkgconfig gtk3-devel ncurses-devel
     
 elif command -v pacman &> /dev/null; then
     echo "Using pacman (Arch Linux)..."
-    sudo pacman -S gcc make mingw-w64-gcc libx11 ncurses
+    sudo pacman -S gcc make mingw-w64-gcc pkgconf gtk3 ncurses
     
 else
     echo "Warning: Unknown package manager. Please install build dependencies manually:"
     echo "- gcc, make, build-essential"
     echo "- mingw-w64 (for Windows cross-compilation)"
-    echo "- libx11-dev (for Linux GUI)"
+    echo "- pkg-config and GTK 3 development files, e.g. libgtk-3-dev (for the Linux desktop app)"
     echo "- libncurses5-dev (for terminal UI)"
 fi
 

@@ -1213,6 +1213,44 @@ bool file_is_absolute_path(const char *path) {
 #endif
 }
 
+char *file_get_absolute_path(const char *path) {
+    if (!is_valid_path(path))
+        return NULL;
+
+#ifdef _WIN32
+    wchar_t wide[NPAD_MAX_PATH_LEN];
+    wchar_t full[NPAD_MAX_PATH_LEN];
+    if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wide, NPAD_MAX_PATH_LEN) <= 0)
+        return NULL;
+    DWORD len = GetFullPathNameW(wide, NPAD_MAX_PATH_LEN, full, NULL);
+    if (len == 0 || len >= NPAD_MAX_PATH_LEN)
+        return NULL;
+    int bytes = WideCharToMultiByte(CP_UTF8, 0, full, -1, NULL, 0, NULL, NULL);
+    if (bytes <= 0)
+        return NULL;
+    char *result = malloc((size_t) bytes);
+    if (result)
+        WideCharToMultiByte(CP_UTF8, 0, full, -1, result, bytes, NULL, NULL);
+    return result;
+#else
+    if (path[0] == '/') {
+        char *copy = malloc(strlen(path) + 1);
+        if (copy)
+            strcpy(copy, path);
+        return copy;
+    }
+    // Joined to the working directory rather than realpath()'d: the file need
+    // not exist yet, and a symlinked path should stay the path the user gave
+    char cwd[NPAD_MAX_PATH_LEN];
+    if (!getcwd(cwd, sizeof(cwd)))
+        return NULL;
+    const char *rest = path;
+    while (rest[0] == '.' && rest[1] == '/') // "./notes.txt" -> "notes.txt"
+        rest += 2;
+    return file_join_paths(cwd, rest);
+#endif
+}
+
 const char *file_get_last_error(void) {
     return g_last_error;
 }

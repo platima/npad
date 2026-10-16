@@ -361,6 +361,48 @@ honest — it is the *load* that is broken. Worse, `current_file` still points a
 the original, so typing one character and saving overwrites it. Genuine binary
 support needs length-carrying buffers throughout.
 
+## GTK / Linux
+
+**GtkTextBuffer (GTK 3) looks like RichEdit's peer, but it has no undo at
+all.** GTK 4 added one; GTK 3 never will. → npad records edits from the
+buffer's `insert-text` / `delete-range` signals into `core/undo.c` and replays
+them. Connect the handlers normally (not `_after`): they then run before the
+default handler, while the iterators still show where the edit starts.
+
+**GTK wraps every keystroke in a "user action"**, not just compound edits. So
+the obvious design - one undo step per user action - makes every character its
+own step and kills word-level coalescing. → Hold the edits seen inside a user
+action and flush at its end: one edit is recorded plainly (it can still merge
+with the previous keystroke), several become one group. A paste or typing over
+a selection is several; a keystroke is one.
+
+**`gtk_check_menu_item_set_active` emits `activate`.** Syncing a check mark
+from code therefore runs the command again - a Word Wrap check refreshed on
+menu open toggles wrap back off. Radio items also emit `activate` for the item
+being switched OFF. → Route state syncs through one helper that sets a guard
+flag, and ignore `activate` on a radio item that is not active.
+
+**`gtk_widget_remove_accelerator` warns when the accelerator is not
+installed**, so "remove both possibilities, then add the right one" (the
+Ctrl+N / Ctrl+Shift+N swap) prints GTK-CRITICAL noise. Track what is
+installed.
+
+**A CSS number built with printf breaks under a decimal-comma locale.**
+`font-size: 10,5pt` is rejected silently and the old font stays, so it looks
+like the setting did nothing - only for users in de_DE, fr_FR and friends.
+→ `g_ascii_dtostr`, never `%f`, for anything parsed as CSS.
+
+**Wayland does not let a client read or set its window position.**
+`gtk_window_get_position` returns 0,0 and `gtk_window_move` is ignored.
+Persisting what it reports would overwrite the position an X11 session saved
+with 0,0. → Remember the last requested position and report that back; only
+X11 (`GdkX11Display`) positions for real.
+
+**`g_set_prgname` must run before `gtk_init`, and must be the app id.** It
+becomes the Wayland `app_id` and the X11 `WM_CLASS`, which is how the desktop
+matches windows to the `.desktop` launcher and its icon. Get it wrong and the
+taskbar shows a generic icon however the launcher is set up.
+
 ## Installers
 
 **Inno Setup's check lists do not scale their check box offset.**
@@ -476,6 +518,43 @@ a clean review; it later completed with six, including the critical one that
 took the release down.
 
 **npad itself can be inspected the same way.** `scripts/probe-prefs.ps1` posts WM_COMMAND for Preferences / Find / Replace to a fresh npad, walks the property sheet with `PSM_SETCURSEL`, captures each page with `PrintWindow`, and closes everything with `PSM_PRESSBUTTON` / `WM_CLOSE`. Two PowerShell traps met on the way: `$pid` is a read-only automatic variable (a parameter of that name fails at call time), and a static method is `[W]::Name`, never `W::Name`.
+
+**`wsl.exe` expands `$` before your `sh -c` ever sees it.** From Git Bash,
+`wsl.exe -- sh -c 'echo $HOME; $(pgrep x)'` substitutes on the way in (empty
+variables, mangled loops), and Git Bash also rewrites `/mnt/d/...` arguments
+into Windows paths unless `MSYS_NO_PATHCONV=1` is set. → Put anything with a
+`$` in a script file and run that: `MSYS_NO_PATHCONV=1 wsl.exe -d Debian --
+sh /mnt/c/.../script.sh`.
+
+**A background process started by a `wsl.exe` call dies if that call returns
+at once.** `nohup app &` as the last line of the script, with `wsl.exe`
+exiting straight after, tears the session down and kills the job before it
+gets going - silently, with nothing in its log. It looked like npad crashing
+on launch, twice. → Keep the call alive a second or two after launching
+(`sleep 1`), or start the process with `setsid`.
+
+**GTK's Broadway backend is a non-intrusive way to look at the Linux build
+from Windows** - it renders into a browser tab, not onto the desktop - but it
+only paints while the page is visible. With Claude's browser pane hidden,
+screenshots time out, and a page reloaded while hidden comes back blank. Keys
+still arrive, but only at the window Broadway last focused, so a newly
+launched window needs a click first. Screenshots are scaled (a 1280x720
+viewport comes back as 800x450), so measure in the screenshot's frame. When
+the pane cannot paint, verify through files: Ctrl+S and read the bytes, or
+watch `~/.config/npad/recovery/`.
+
+**A user-local Xvfb (`apt-get download` + `dpkg -x`) cannot start.** It runs
+the keymap compiler from a path compiled into the binary (`/usr/bin/xkbcomp`)
+and has no option to move it, so without root it dies with "Failed to activate
+virtual core keyboard". Use Broadway, or install `xvfb` properly.
+
+**`path_traversal_protection` passes only because of where the checkout
+sits.** It expects `file_read_text("../../../etc/passwd")` to fail, and
+nothing in npad blocks traversal (by design - see `is_valid_path`). On CI the
+checkout is deep enough that the path does not exist; from a directory two
+levels below `/` it resolves to the real `/etc/passwd`, which reads fine and
+fails the test. Build mirrors at least three levels deep, and treat the test
+as asserting nothing about security.
 
 ## Method
 

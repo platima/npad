@@ -93,7 +93,8 @@ Current features (Windows build):
 
 Planned (see the [Roadmap](#roadmap)):
 
-- 🚧 macOS, Linux (X11/Wayland) and terminal builds
+- 🚧 Linux desktop build (GTK 3, X11 and Wayland) - in progress, see [LINUX_PORT.md](LINUX_PORT.md)
+- 🚧 macOS and terminal builds
 - 🚧 Optional tabbed interface
 - 🚧 Multi-language support
 - 🚧 Custom keyboard shortcuts
@@ -149,7 +150,7 @@ Settings include window position, auto-save preferences, theme selection, and ot
 |----------|--------|---------|
 | Windows  | ✅ Active Development | Win32 API |
 | macOS    | 🚧 Planned | Cocoa |
-| Linux    | 🚧 Planned | X11 & Wayland |
+| Linux    | 🚧 In progress ([status](LINUX_PORT.md)) | GTK 3 (X11 & Wayland) |
 | *nix Terminal | 🚧 Planned | ncurses |
 | Windows Terminal | 🚧 Planned | Windows Console API |
 
@@ -203,7 +204,7 @@ installer reference (tasks, features, fonts, the Windows 11 notepad alias).
 #### Prerequisites
 - **Windows**: MinGW-w64 or Visual Studio Build Tools
 - **macOS**: Xcode Command Line Tools  
-- **Linux**: GCC and development headers for X11
+- **Linux**: GCC, pkg-config and the GTK 3 development files (`libgtk-3-dev`)
 
 #### Build Instructions
 
@@ -219,7 +220,7 @@ installer reference (tasks, features, fonts, the Windows 11 notepad alias).
    ./scripts/setup-runner.sh
    
    # Or manually install
-   sudo apt-get install build-essential gcc-mingw-w64 libx11-dev
+   sudo apt-get install build-essential pkg-config gcc-mingw-w64 libgtk-3-dev
    ```
 
 3. **Build for your platform:**
@@ -227,7 +228,7 @@ installer reference (tasks, features, fonts, the Windows 11 notepad alias).
    # Windows (cross-compile from Linux)
    make windows        # Windows x64 build
    
-   # Native Linux
+   # Native Linux (./npad-linux - one binary for X11 and Wayland)
    make linux
    
    # macOS (when implemented)
@@ -275,7 +276,7 @@ Core Logic (platform-independent)
     ↓
 UI Interface Layer (abstraction)
     ↓
-Platform Implementation (Win32/Cocoa/X11/ncurses)
+Platform Implementation (Win32/GTK/Cocoa/ncurses)
 ```
 
 ## Contributing 🤝
@@ -380,7 +381,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] Appear in Windows' "Open with" list for any file type (like notepad.exe)
 - [ ] **Cross-Platform Expansion**
   - [ ] macOS Cocoa implementation
-  - [ ] Linux X11/Wayland implementation
+  - [ ] Linux GTK 3 implementation (X11 & Wayland) - foundation in v0.34.0, see [LINUX_PORT.md](LINUX_PORT.md)
   - [ ] ncurses terminal implementation
   - [ ] Windows Terminal implementation
 - [ ] **Future Considerations**

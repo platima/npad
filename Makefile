@@ -30,12 +30,12 @@ MINGW_DLLTOOL ?= x86_64-w64-mingw32-dlltool
 endif
 
 # Source files
-CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/startup_prof.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c
+CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/startup_prof.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c
 SHARED_SOURCES = src/ui_interface.c
 
 # Test sources
 TEST_FRAMEWORK_SOURCES = tests/test_framework.c
-TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c  # Core sources without UI dependencies
+TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c  # Core sources without UI dependencies
 
 # Windows GUI specific
 WINDOWS_GUI_SOURCES = src/platform/ui_win32.c src/platform/print_win32.c src/platform/assoc_win32.c
@@ -62,15 +62,14 @@ MACOS_SOURCES = src/platform/ui_cocoa.m
 MACOS_LIBS = -framework Cocoa
 MACOS_TARGET = npad-macos
 
-# Linux X11 specific
-LINUX_X11_SOURCES = src/platform/ui_x11.c
-LINUX_X11_LIBS = -lX11 -lpthread
-LINUX_X11_TARGET = npad-linux-x11
-
-# Linux Wayland specific (future)
-LINUX_WAYLAND_SOURCES = src/platform/ui_wayland.c
-LINUX_WAYLAND_LIBS = -lwayland-client -lpthread
-LINUX_WAYLAND_TARGET = npad-linux-wayland
+# Linux desktop: GTK 3, one binary for both X11 and Wayland (GDK picks the
+# display server at runtime). pkg-config is only consulted when this target
+# is actually built - these are recursively expanded.
+LINUX_GTK_SOURCES = src/platform/ui_gtk.c src/platform/ui_gtk_dialogs.c src/platform/ui_gtk_find.c src/platform/ui_gtk_instance.c
+LINUX_GTK_HEADERS = src/platform/ui_gtk.h
+LINUX_GTK_CFLAGS = $(shell pkg-config --cflags gtk+-3.0)
+LINUX_GTK_LIBS = $(shell pkg-config --libs gtk+-3.0) -lpthread
+LINUX_GTK_TARGET = npad-linux
 
 # Linux Terminal (ncurses) specific
 LINUX_TERMINAL_SOURCES = src/platform/ui_ncurses.c
@@ -168,19 +167,14 @@ $(MACOS_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(MACOS_SOURCES) src/main.c
 	$(CC) $(CFLAGS) -o $@ $^ $(MACOS_LIBS) $(LDFLAGS)
 	@echo "macOS build complete: $(MACOS_TARGET)"
 
-linux-x11: $(LINUX_X11_TARGET)
+linux-gtk: $(LINUX_GTK_TARGET)
 
-$(LINUX_X11_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_X11_SOURCES) src/main.c
-	$(CC) $(CFLAGS) -o $@ $^ $(LINUX_X11_LIBS) $(LDFLAGS)
-	@echo "Linux X11 build complete: $(LINUX_X11_TARGET)"
+$(LINUX_GTK_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_GTK_SOURCES) $(LINUX_GTK_HEADERS) src/main.c
+	@pkg-config --exists gtk+-3.0 || { echo "GTK 3 development files not found. Install with: sudo apt-get install libgtk-3-dev"; exit 1; }
+	$(CC) $(CFLAGS) $(LINUX_GTK_CFLAGS) -o $@ $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_GTK_SOURCES) src/main.c $(LINUX_GTK_LIBS) $(LDFLAGS)
+	@echo "Linux build complete: $(LINUX_GTK_TARGET)"
 
-linux-wayland: $(LINUX_WAYLAND_TARGET)
-
-$(LINUX_WAYLAND_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_WAYLAND_SOURCES) src/main.c
-	$(CC) $(CFLAGS) -o $@ $^ $(LINUX_WAYLAND_LIBS) $(LDFLAGS)
-	@echo "Linux Wayland build complete: $(LINUX_WAYLAND_TARGET)"
-
-linux: linux-x11 linux-wayland linux-terminal
+linux: linux-gtk linux-terminal
 
 windows-terminal: $(WINDOWS_TERMINAL_TARGET)
 
@@ -219,11 +213,8 @@ debug-windows-terminal:
 debug-linux-terminal:
 	$(MAKE) linux-terminal DEBUG=1
 
-debug-linux-x11:
-	$(MAKE) linux-x11 DEBUG=1
-
-debug-linux-wayland:
-	$(MAKE) linux-wayland DEBUG=1
+debug-linux-gtk:
+	$(MAKE) linux-gtk DEBUG=1
 
 # Cross-compilation targets
 windows-cross:
@@ -260,7 +251,7 @@ format-check:
 	find src/ -name "*.c" -o -name "*.h" | xargs $(CLANG_FORMAT) --dry-run --Werror
 
 # Testing targets
-test: test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md
+test: test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo
 	@echo "All tests completed"
 
 test-file-ops: tests/test_file_ops
@@ -294,6 +285,10 @@ test-settings: tests/test_settings
 test-html-md: tests/test_html_md
 	@echo "Running HTML/Markdown tests..."
 	./tests/test_html_md
+
+test-undo: tests/test_undo
+	@echo "Running undo history tests..."
+	./tests/test_undo
 
 # Windows-only: the file type association module against a registry sandbox.
 # Cross-compiled here; run tests/test_assoc_win32.exe on Windows. Not part of
@@ -333,15 +328,19 @@ tests/test_html_md: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_ht
 	@mkdir -p tests
 	$(CC) $(CFLAGS) -o $@ $^ -lpthread
 
+tests/test_undo: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_undo.c
+	@mkdir -p tests
+	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+
 # Cleanup
 clean:
-	rm -f $(WINDOWS_GUI_TARGET) $(WINDOWS_TERMINAL_TARGET) $(MACOS_TARGET) $(LINUX_X11_TARGET) $(LINUX_WAYLAND_TARGET) $(LINUX_TERMINAL_TARGET)
+	rm -f $(WINDOWS_GUI_TARGET) $(WINDOWS_TERMINAL_TARGET) $(MACOS_TARGET) $(LINUX_GTK_TARGET) $(LINUX_TERMINAL_TARGET)
 	rm -f npad-*.exe npad-*linux* npad-*win32*
 	find src tests -name '*.o' -delete 2>/dev/null || true
 	rm -f src/platform/npad.res
 	rm -rf build
-	rm -f tests/test_file_ops tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md
-	rm -f tests/test_file_ops.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe tests/test_html_md.exe
+	rm -f tests/test_file_ops tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md tests/test_undo
+	rm -f tests/test_file_ops.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe tests/test_html_md.exe tests/test_undo.exe
 
 # Installation
 install:
@@ -350,10 +349,8 @@ ifeq ($(OS),Windows_NT)
 	@echo "  mkdir %LOCALAPPDATA%\Programs\npad"
 	@echo "  copy npad.exe %LOCALAPPDATA%\Programs\npad\"
 else
-	install -D $(LINUX_X11_TARGET) $(DESTDIR)/usr/local/bin/npad-x11
-	install -D $(LINUX_WAYLAND_TARGET) $(DESTDIR)/usr/local/bin/npad-wayland
+	install -D $(LINUX_GTK_TARGET) $(DESTDIR)/usr/local/bin/npad
 	install -D $(LINUX_TERMINAL_TARGET) $(DESTDIR)/usr/local/bin/npad-terminal
-	ln -sf npad-x11 $(DESTDIR)/usr/local/bin/npad
 endif
 
 uninstall:
@@ -361,7 +358,7 @@ ifeq ($(OS),Windows_NT)
 	@echo "Remove the directory you copied npad.exe into, for example:"
 	@echo "  rmdir /s %LOCALAPPDATA%\Programs\npad"
 else
-	rm -f $(DESTDIR)/usr/local/bin/npad $(DESTDIR)/usr/local/bin/npad-x11 $(DESTDIR)/usr/local/bin/npad-wayland $(DESTDIR)/usr/local/bin/npad-terminal
+	rm -f $(DESTDIR)/usr/local/bin/npad $(DESTDIR)/usr/local/bin/npad-terminal
 endif
 
 # Help
@@ -374,9 +371,8 @@ help:
 	@echo "  windows          - Build all Windows variants (GUI + Terminal)"
 	@echo "  windows-gui      - Build Windows GUI version"
 	@echo "  windows-terminal - Build Windows Terminal version"
-	@echo "  linux            - Build all Linux variants (X11 + Wayland + Terminal)"
-	@echo "  linux-x11        - Build for Linux with X11"
-	@echo "  linux-wayland    - Build for Linux with Wayland"
+	@echo "  linux            - Build all Linux variants (desktop + Terminal)"
+	@echo "  linux-gtk        - Build the Linux desktop app (GTK 3; X11 and Wayland)"
 	@echo "  linux-terminal   - Build for Linux Terminal (ncurses)"
 	@echo "  terminal         - Build all Terminal variants (Windows + Linux)"
 	@echo "  macos            - Build for macOS"
@@ -388,6 +384,7 @@ help:
 	@echo "  test-file-ops    - Run file operations tests"
 	@echo "  test-error       - Run error system tests"
 	@echo "  test-encoding    - Run encoding/line-ending tests"
+	@echo "  test-undo        - Run undo history tests"
 	@echo "  clean            - Remove build artifacts"
 	@echo "  install          - Install to system (Linux)"
 	@echo "  uninstall        - Remove from system (Linux)"
@@ -401,4 +398,4 @@ help:
 	@echo "  DEBUG=1          - Enable debug build"
 	@echo "  VERSION          - Version string (auto-detected from git)"
 
-.PHONY: all windows windows-gui windows-terminal linux linux-x11 linux-wayland linux-terminal terminal macos debug debug-windows debug-linux clean install uninstall lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md help detect-platform
+.PHONY: all windows windows-gui windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo help detect-platform

@@ -7,6 +7,25 @@ this file is for open loops.
 
 ---
 
+## 🧪 Needs testing - v0.34.0 Linux foundation (on Mint / Debian 13)
+
+Verified only under GTK's Broadway backend in WSL (see LINUX_PORT.md). On a
+real desktop, X11 and Wayland sessions both:
+
+- [ ] Launches; menus, shortcuts and the status bar behave; the text area
+      repaints correctly while scrolling large files
+- [ ] Save As, its Encoding choice, and the portal / GTK file chooser
+- [ ] Window size and maximised state restore; position restores on X11
+      only (Wayland places windows itself - expected)
+- [ ] New Window, Close All, and a Word Wrap change reaching every window
+- [ ] The default `light` scheme inside a dark GTK theme (Mint-Y-Dark):
+      white page in dark chrome - keep, or follow the theme by default?
+- [ ] Log out with unsaved changes; log back in and launch npad - the work
+      comes back
+- [ ] HiDPI / fractional scaling
+
+The remaining port work is the checklist in [LINUX_PORT.md](LINUX_PORT.md).
+
 ## 🧪 Needs testing - v0.33.0 Associations
 
 The registry logic is covered by `tests/test_assoc_win32.c` against a
