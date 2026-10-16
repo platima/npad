@@ -9,6 +9,8 @@
 
 A lightweight, cross-platform text editor inspired by the simplicity and speed of classic Windows Notepad. Built with native APIs for maximum performance and minimal resource usage.
 
+**Website: [npad.dev](https://npad.dev)** - downloads, features and screenshots (its source is in [`site/`](site/)).
+
 <p align="center">
   <img src="Screenshot.png" alt="npad in dark mode showing the Preferences panel on the first tab with auto-save and crash recovery options" width="100%" />
 </p>

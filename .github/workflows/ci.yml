@@ -1,10 +1,22 @@
 name: CI
 
 on:
+  # A change that only touches the website, Markdown docs or the Pages
+  # workflow has nothing to build or test; pages.yml deploys the site
   push:
     branches: [ main ]
+    paths-ignore:
+      - 'site/**'
+      - '**.md'
+      - 'CNAME'
+      - '.github/workflows/pages.yml'
   pull_request:
     branches: [ main ]
+    paths-ignore:
+      - 'site/**'
+      - '**.md'
+      - 'CNAME'
+      - '.github/workflows/pages.yml'
   # Required so release.yml can run this workflow as its validation gate
   workflow_call:
 
