@@ -17,6 +17,9 @@
  *  - Highlight All is a GtkTextTag over every match (capped at 10,000). A tag
  *    is not text: it never marks the document modified or enters the undo
  *    history.
+ *  - Opening (or re-focusing) the dialog with Ctrl+F / Ctrl+H fills "Find
+ *    what" with a single-line selection, like Windows 10 notepad.exe; the
+ *    rule and the find_seed_selection preference are shared (core/find_seed).
  *  - The options persist under the same settings keys as the Win32 build and
  *    are re-read when another instance broadcasts a settings change.
  *
@@ -30,6 +33,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../core/find_seed.h"
 #include "../core/list_ops.h"
 #include "../core/settings.h"
 
@@ -711,21 +715,51 @@ static GtkWidget *add_button(GtkWidget *box, const char *label, GCallback handle
     return button;
 }
 
+// The text the current selection should seed "Find what" with, or NULL (leave
+// the last term alone). Selection bounds and the length pre-check are in
+// characters, never bytes; the rest of the rule is core/find_seed's.
+static char *selection_seed(Window *window) {
+    if (!find_seed_enabled())
+        return NULL;
+    GtkTextIter start, end;
+    if (!gtk_text_buffer_get_selection_bounds(window->buffer, &start, &end))
+        return NULL;
+    gint length = gtk_text_iter_get_offset(&end) - gtk_text_iter_get_offset(&start);
+    if (length <= 0 || length > FIND_SEED_MAX_UNITS)
+        return NULL; // Cheap: a huge selection is never copied just to be rejected
+    char *text = gtk_text_buffer_get_text(window->buffer, &start, &end, FALSE);
+    // Seeded text goes through escape interpretation like typed text, so double
+    // its backslashes while that is on
+    char *seed =
+        find_seed_text(text, g_interpret_escapes && settings_get_bool("list_tools_enabled", false));
+    g_free(text);
+    return seed; // malloc'd: g_free is free (see history_push)
+}
+
 static void show_find_replace(Window *parent, bool replace) {
     if (!parent)
         return;
     ensure_loaded();
 
+    char *seed = selection_seed(parent);
+
     if (g_dialog) {
         // Keep whatever was typed, then either reuse the dialog or switch it
         read_search_text();
         if (g_dialog_replace == replace) {
+            if (seed)
+                gtk_entry_set_text(GTK_ENTRY(g_ui.find_entry), seed);
+            g_free(seed);
             gtk_window_present(GTK_WINDOW(g_dialog));
             gtk_widget_grab_focus(g_ui.find_entry);
             gtk_editable_select_region(GTK_EDITABLE(g_ui.find_entry), 0, -1);
             return;
         }
         gtk_widget_destroy(g_dialog);
+    }
+    if (seed) {
+        g_free(g_search_text);
+        g_search_text = seed; // add_history_row shows it; read_search_text below adopts it
     }
 
     g_owner = parent;

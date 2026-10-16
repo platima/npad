@@ -26,6 +26,7 @@
 #include "../core/editor.h"
 #include "../core/error.h"
 #include "../core/file_ops.h"
+#include "../core/find_seed.h"
 #include "../core/html_md.h"
 #include "../core/list_ops.h"
 #include "../core/session.h"
@@ -3787,6 +3788,43 @@ static void find_dialog_show_escapes(HWND dialog, bool show) {
                  SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
+// Windows 10 notepad.exe fills "Find what" with the selection when Find or
+// Replace opens; the find_seed_selection preference (default on) controls it
+// here. The rule itself - non-empty, no line break, short enough - lives in
+// core/find_seed so every platform applies the same one; anything that does not
+// qualify leaves the last search term in the box. Returns true when `out` holds
+// a seed.
+static bool find_dialog_seed(Window *window, wchar_t *out, size_t cap) {
+    if (!window || !window->edit_hwnd || !find_seed_enabled())
+        return false;
+
+    // Cheap size check first: a huge selection must not be fetched and
+    // converted only to be rejected for length
+    CHARRANGE range = { 0, 0 };
+    SendMessageW(window->edit_hwnd, EM_EXGETSEL, 0, (LPARAM) &range);
+    if (range.cpMax - range.cpMin <= 0 || range.cpMax - range.cpMin > FIND_SEED_MAX_UNITS)
+        return false;
+
+    char *selected = ui_platform_get_selected_text(window);
+    // The seed is run through escape interpretation like typed text when that
+    // is active, so double backslashes to keep it matching the selection
+    char *seed = find_seed_text(selected, settings_get_bool("list_tools_enabled", false) &&
+                                              g_interpret_escapes);
+    free(selected);
+    if (!seed)
+        return false;
+
+    wchar_t *wide = utf8_to_wide(seed);
+    free(seed);
+    if (!wide)
+        return false;
+    bool fits = wcslen(wide) < cap;
+    if (fits)
+        wcscpy(out, wide);
+    free(wide);
+    return fits;
+}
+
 static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, LPARAM lparam) {
     bool has_replace = GetDlgItem(dialog, ID_REPLACE_WITH) != NULL;
     Window *window = (Window *) GetWindowLongPtrW(dialog, GWLP_USERDATA);
@@ -3796,6 +3834,10 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
             SetWindowLongPtrW(dialog, GWLP_USERDATA, lparam);
             history_load(GetDlgItem(dialog, ID_FIND_TEXT), "find_hist");
             SetDlgItemTextW(dialog, ID_FIND_TEXT, g_search_text);
+            wchar_t seed[256];
+            bool seeded = find_dialog_seed((Window *) lparam, seed, 256);
+            if (seeded)
+                SetDlgItemTextW(dialog, ID_FIND_TEXT, seed);
             if (GetDlgItem(dialog, ID_REPLACE_WITH)) {
                 history_load(GetDlgItem(dialog, ID_REPLACE_WITH), "replace_hist");
                 SetDlgItemTextW(dialog, ID_REPLACE_WITH, g_replace_text);
@@ -3835,6 +3877,12 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
 
             SendDlgItemMessageW(dialog, ID_FIND_TEXT, CB_SETEDITSEL, 0, MAKELPARAM(0, -1));
             SetFocus(GetDlgItem(dialog, ID_FIND_TEXT));
+            // Highlight-all otherwise waits for the first keystroke; a seeded
+            // term should light up straight away
+            if (seeded && g_highlight_all && !g_find_hl_pending) {
+                g_find_hl_pending = true;
+                SetTimer(dialog, 1, NPAD_COALESCE_MS, NULL);
+            }
             return FALSE; // Focus set manually
         }
 
@@ -4689,6 +4737,8 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
             CheckDlgButton(page, ID_PREF_WATCH_FILE,
                            settings_get_bool("watch_file_changes", false) ? BST_CHECKED
                                                                           : BST_UNCHECKED);
+            CheckDlgButton(page, ID_PREF_FIND_SEED,
+                           find_seed_enabled() ? BST_CHECKED : BST_UNCHECKED);
             EnableWindow(GetDlgItem(page, ID_PREF_AUTOSAVE_INTERVAL),
                          editor_is_auto_save_enabled());
             EnableWindow(GetDlgItem(page, ID_PREF_SESSION_INTERVAL),
@@ -4701,7 +4751,8 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
             // Enable Apply when a value control changes (not the action buttons)
             if ((code == BN_CLICKED &&
                  (id == ID_PREF_AUTOSAVE_ENABLED || id == ID_PREF_SESSION_ENABLED ||
-                  id == ID_PREF_CTRL_N_WINDOW || id == ID_PREF_WATCH_FILE)) ||
+                  id == ID_PREF_CTRL_N_WINDOW || id == ID_PREF_WATCH_FILE ||
+                  id == ID_PREF_FIND_SEED)) ||
                 (code == EN_CHANGE &&
                  (id == ID_PREF_AUTOSAVE_INTERVAL || id == ID_PREF_LARGE_FILE_MB ||
                   id == ID_PREF_RECENT_MAX || id == ID_PREF_SESSION_INTERVAL))) {
@@ -4773,6 +4824,9 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
 
                 settings_set_bool("watch_file_changes",
                                   IsDlgButtonChecked(page, ID_PREF_WATCH_FILE) == BST_CHECKED);
+
+                settings_set_bool(FIND_SEED_KEY,
+                                  IsDlgButtonChecked(page, ID_PREF_FIND_SEED) == BST_CHECKED);
 
                 settings_save(); // Apply button: persist + propagate immediately
                 ui_platform_notify_settings_changed();
@@ -5044,6 +5098,9 @@ static void reset_all_preferences(HWND owner) {
 
     settings_reset_except_prefixes(keep_prefixes,
                                    (int) (sizeof(keep_prefixes) / sizeof(keep_prefixes[0])));
+    // The one find_-prefixed key that IS a preference (Preferences > General),
+    // not search state: the prefix keep above would otherwise preserve it
+    settings_remove_key(FIND_SEED_KEY);
     settings_save();
 
     // Re-apply everything that can change live (same path as a cross-instance

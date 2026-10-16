@@ -30,12 +30,12 @@ MINGW_DLLTOOL ?= x86_64-w64-mingw32-dlltool
 endif
 
 # Source files
-CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/startup_prof.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c
+CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/startup_prof.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c src/core/find_seed.c
 SHARED_SOURCES = src/ui_interface.c
 
 # Test sources
 TEST_FRAMEWORK_SOURCES = tests/test_framework.c
-TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c  # Core sources without UI dependencies
+TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c src/core/find_seed.c  # Core sources without UI dependencies
 
 # Windows GUI specific
 WINDOWS_GUI_SOURCES = src/platform/ui_win32.c src/platform/print_win32.c src/platform/assoc_win32.c
@@ -251,7 +251,7 @@ format-check:
 	find src/ -name "*.c" -o -name "*.h" | xargs $(CLANG_FORMAT) --dry-run --Werror
 
 # Testing targets
-test: test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo
+test: test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed
 	@echo "All tests completed"
 
 test-file-ops: tests/test_file_ops
@@ -289,6 +289,10 @@ test-html-md: tests/test_html_md
 test-undo: tests/test_undo
 	@echo "Running undo history tests..."
 	./tests/test_undo
+
+test-find-seed: tests/test_find_seed
+	@echo "Running find seeding tests..."
+	./tests/test_find_seed
 
 # Windows-only: the file type association module against a registry sandbox.
 # Cross-compiled here; run tests/test_assoc_win32.exe on Windows. Not part of
@@ -332,6 +336,10 @@ tests/test_undo: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_undo.
 	@mkdir -p tests
 	$(CC) $(CFLAGS) -o $@ $^ -lpthread
 
+tests/test_find_seed: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_find_seed.c
+	@mkdir -p tests
+	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+
 # Cleanup
 clean:
 	rm -f $(WINDOWS_GUI_TARGET) $(WINDOWS_TERMINAL_TARGET) $(MACOS_TARGET) $(LINUX_GTK_TARGET) $(LINUX_TERMINAL_TARGET)
@@ -340,8 +348,8 @@ clean:
 	rm -f src/platform/npad.res
 	rm -rf build
 	rm -rf dist/npad_*
-	rm -f tests/test_file_ops tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md tests/test_undo
-	rm -f tests/test_file_ops.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe tests/test_html_md.exe tests/test_undo.exe
+	rm -f tests/test_file_ops tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md tests/test_undo tests/test_find_seed
+	rm -f tests/test_file_ops.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe tests/test_html_md.exe tests/test_undo.exe tests/test_find_seed.exe
 
 # Installation (Linux). PREFIX defaults to /usr/local; DESTDIR stages the tree
 # for packaging. Only the GTK desktop app is installed: the ncurses variant is

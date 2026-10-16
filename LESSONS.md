@@ -346,6 +346,15 @@ is indistinguishable from a deliberate one (UNC paths begin with two). Decide
 explicitly which you are doing, and say so — here the entries age out of Recent
 Files on their own, so freezing was the right trade.
 
+**A key that starts with a kept prefix is kept - even when it is a preference.**
+Reset All Preferences preserves everything under `find_` (search options and
+history), so `find_seed_selection`, a real Preferences checkbox, would have
+survived a reset and the checkbox would then lie about "defaults". Name a new
+preference outside the kept prefixes where you can; where the name is fixed
+(it is shared across platforms), remove it explicitly after the prefix reset
+(`reset_all_preferences` does) and say so wherever the next platform's reset
+gets written (LINUX_PORT.md batch B).
+
 ## Core: text model
 
 **Detect a limitation where you can prove it, not where you guessed it.** The
@@ -643,6 +652,19 @@ collapses a C `"\n"` (backslash-n) in a heredoc, so a `replace()` whose search
 text contained one failed its assertion and wrote nothing, and a heredoc with
 apostrophes broke the shell outright. → Write patch scripts with the file tool
 and run them, as with the existing heredoc advice.
+
+**A private npad for probing, and the traps on the way.** npad reads its
+settings through `SHGetFolderPath(CSIDL_APPDATA)`, which `APPDATA=` does not
+move - but overriding `USERPROFILE` for the child does, provided
+`%USERPROFILE%\AppData\Roaming\Platima\npad` already exists (otherwise it
+exits with "Failed to initialize settings"). That keeps a probe off the real
+settings.json, whose hash you can compare before and after. Start it with
+`WindowStyle Minimized` and `ShowWindow(SW_SHOWNOACTIVATE)` so it never takes
+focus. `PSM_PRESSBUTTON` takes `PSBTN_OK`=3, `APPLYNOW`=4, `CANCEL`=5 (0 is
+BACK, 1 is NEXT - they do nothing on a sheet). Boolean settings are stored as
+the strings `"true"`/`"false"`. And never `SendMessage` a command that can raise
+a message box (Find Next with no further match): the sender blocks forever;
+`PostMessage` it.
 
 ## Method
 
