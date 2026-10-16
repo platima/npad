@@ -390,7 +390,7 @@ endif
 DEB_VERSION = $(MAJOR).$(MINOR).$(PATCH)
 
 deb: $(LINUX_GTK_TARGET)
-	scripts/build-deb.sh $(DEB_VERSION) $(LINUX_GTK_TARGET) dist
+	sh scripts/build-deb.sh $(DEB_VERSION) $(LINUX_GTK_TARGET) dist
 
 # Help
 help:
