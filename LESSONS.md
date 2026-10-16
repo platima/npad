@@ -403,6 +403,15 @@ becomes the Wayland `app_id` and the X11 `WM_CLASS`, which is how the desktop
 matches windows to the `.desktop` launcher and its icon. Get it wrong and the
 taskbar shows a generic icon however the launcher is set up.
 
+**A .deb built on a new Ubuntu does not install on an old Debian by default.**
+`dpkg-shlibdeps` would write `libgtk-3-0t64` (the 64-bit time_t rename in
+Debian 13 / Ubuntu 24.04), which Debian 12 and Ubuntu 22.04 do not have, and
+a `libc6` floor from the build host. -> `scripts/build-deb.sh` writes
+`libgtk-3-0t64 | libgtk-3-0` by hand and takes the libc6 floor from the
+binary's highest `GLIBC_x.y` symbol; releases build the .deb on ubuntu-22.04
+to keep that floor low. A .desktop file's name must equal the app id
+(`g_set_prgname`) or the shell shows a generic icon.
+
 ## Installers
 
 **Inno Setup's check lists do not scale their check box offset.**

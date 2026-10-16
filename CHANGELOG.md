@@ -5,6 +5,21 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.35.0] - 2026-10-16
+
+### 🆕 Features
+- **Linux packaging and desktop integration.** `make install` now installs the
+  GTK app as `npad` together with its launcher (`io.github.platima.npad.desktop`,
+  registered for plain text, Markdown, JSON, XML and similar types), hicolor
+  icons (16-256 px, generated from the npad artwork) and AppStream metainfo,
+  under `PREFIX` (default `/usr/local`) and honouring `DESTDIR`; `make
+  uninstall` removes them. The empty ncurses stub is no longer installed.
+- **`make deb`** builds `npad_<version>_amd64.deb` with `dpkg-deb`. It depends
+  on `libgtk-3-0t64 | libgtk-3-0`, so one package covers Debian 12/13 and
+  Ubuntu 22.04/24.04, and its `libc6` floor is read from the binary. CI builds
+  and validates it on every push; releases attach it with a checksum, and
+  release validation now requires it.
+
 ## [0.34.0] - 2026-10-16
 
 ### 🆕 Features
