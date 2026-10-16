@@ -6,7 +6,7 @@ difference should behave exactly as it does there (see
 [DOCUMENTATION.md](DOCUMENTATION.md)). Read [LESSONS.md](LESSONS.md) first, in
 particular its **GTK / Linux** section.
 
-## Status (v0.34.0 - foundation round)
+## Status (v0.35.0 - Find / Replace / Go To)
 
 **Verified** (Broadway under WSL): the window, menu bar and status bar render;
 opening a file from the command line (UTF-8 and emoji intact, path stored
@@ -23,8 +23,15 @@ schemes, the status-bar pickers, word/char/line counts, Time/Date, New
 Window, Close All, clipboard commands, About. Worth a pass on a real desktop
 before the feature batches build on them.
 
-Greyed out until ported (see the checklist): Find / Replace / Go To,
-Preferences, Format > Font, Page Setup / Print / Print Preview, and the
+**Batch A (v0.35.0):** Find, Find Next / Previous, Replace, Replace All and Go
+To are ported (details under the checklist). Verified in Broadway: both
+dialogs, Up / Down, wrap, highlight all, whole word, Replace All undone in
+one step, Ctrl+F / H / G from inside the dialog, Go To by shortcut and by the
+Ln/Col click, and the beyond-the-end message; the search engine itself
+(non-ASCII text, case folding, whole word, escapes, history) was also run
+headless against a real GtkTextBuffer.
+
+Greyed out until ported (see the checklist): Preferences, Format > Font, Page Setup / Print / Print Preview, and the
 Markdown list tools. There is no Check for Updates on Linux by design.
 
 ## Building and running
@@ -77,6 +84,16 @@ bytes, or watch `~/.config/npad/recovery/` (the core snapshots on the first
 edit and then every 30 s). Use an isolated `HOME` so test settings stay
 throwaway.
 
+More Broadway traps: the harness's `type` action does not reach GTK entries,
+use `key` (`key c a f e`); non-ASCII text cannot be typed at all, so put the
+term in the settings history (`find_hist_0`) or the document and drive the
+engine headless (a throwaway program that `#include`s `ui_gtk_find.c`
+against a real GtkTextBuffer works); combo-box popups do not paint; the
+screenshot trails the last action by a frame (wait, then shoot twice); and
+parallel sessions share broadwayd - use your own display number
+(`broadwayd :7` is port 8087) and a renamed copy of the binaries, because a
+sibling's `pkill broadwayd` kills yours too.
+
 Broadway is neither X11 nor Wayland, so window placement and the portal file
 chooser still need a check on a real desktop.
 
@@ -87,7 +104,7 @@ src/platform/ui_gtk.h           private header: Window struct, command enum, cro
 src/platform/ui_gtk.c           main window, menus, shortcuts, commands, text, undo, view state,
                                 status bar, timers, and the ui_platform_* entry points
 src/platform/ui_gtk_dialogs.c   file choosers, message boxes, save / binary prompts, About
-src/platform/ui_gtk_find.c      Find / Replace / Go To  (stubs - batch A)
+src/platform/ui_gtk_find.c      Find / Replace / Go To
 src/platform/ui_gtk_instance.c  cross-instance messaging over D-Bus
 src/core/undo.c                 platform-neutral undo history (tests/test_undo.c)
 ```
@@ -174,6 +191,14 @@ Decisions taken in the foundation round. Each is easy to revisit.
   keeps 100,000 RichEdit actions.
 - **No Check for Updates** - Linux updates come from the package manager.
 - **The context menu** is still GTK's stock one (batch D1).
+- **Find / Replace / Go To placement.** The dialogs are transient windows
+  with no position of their own, so the window manager places them (usually
+  centred over npad); Win32 uses a fixed offset and remembers where you moved
+  it. Wayland would ignore either.
+- **Whole word** requires a word boundary only beside a term edge that is
+  itself a letter, digit or underscore, so `foo(` still matches `foo(x)`.
+- **Find's "Cannot find" box** is a GTK message dialog parented to the Find
+  dialog when it is open.
 
 ## Parity checklist
 
@@ -186,16 +211,17 @@ Broadway, update this file, CHANGELOG.md and DOCUMENTATION.md, bump the
 version.
 
 ### Batch A - Find, Replace, Go To (`ui_gtk_find.c`)
-- [ ] Modeless Find dialog: match case, whole word, up/down, wrap around,
+- [x] Modeless Find dialog: match case, whole word, up/down, wrap around,
       interpret escapes (`list_unescape`), Highlight All (a GtkTextTag)
-- [ ] Find Next / Previous (F3 / Shift+F3) without the dialog
-- [ ] Replace, Replace All (one undo step - wrap in a user action)
-- [ ] Search history, options persisted under the Win32 keys, re-read in
+- [x] Find Next / Previous (F3 / Shift+F3) without the dialog
+- [x] Replace, Replace All (one undo step - wrap in a user action)
+- [x] Search history, options persisted under the Win32 keys, re-read in
       `npad_gtk_find_reload_settings`
-- [ ] "Match n of m" / not-found messages like Win32
-- [ ] Go To Line (Ctrl+G, and clicking Ln/Col) - logical lines
-- [ ] Notepad behaviours from DOCUMENTATION.md "Behaviour notes" (selection
-      seeds the search term, etc.)
+- [x] "Match n of m" / not-found messages like Win32
+- [x] Go To Line (Ctrl+G, and clicking Ln/Col) - logical lines
+- [x] Notepad behaviours from DOCUMENTATION.md "Behaviour notes". Note the
+      Win32 dialogs do not seed the search box from the selection either, so
+      neither does this one.
 
 ### Batch B - Preferences and Font (new `ui_gtk_prefs.c`)
 - [ ] GtkNotebook dialog with the General, Appearance, Defaults, Backup and
