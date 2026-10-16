@@ -22,7 +22,10 @@ name: Installers
 on:
   workflow_dispatch:
   push:
-    branches: ["**"]   # branches only: tag pushes build via release.yml instead
+    # main only: work-in-progress branches (linux, feature branches) would
+    # otherwise build installers on every push that touches installer/.
+    # Tag pushes build via release.yml; anything else can run it by hand.
+    branches: [main]
     paths:
       - "installer/**"
       - ".github/workflows/installers.yml"
