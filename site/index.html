@@ -27,6 +27,7 @@
 <meta name="twitter:image" content="https://npad.dev/assets/og.png">
 <link rel="stylesheet" href="/style.css">
 <script src="/theme.js"></script>
+<script src="/gallery.js" defer></script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -37,7 +38,7 @@
       <picture class="for-dark"><img src="/assets/icon-dark-128.webp" width="30" height="30" alt=""></picture>
       npad
     </a>
-    <nav class="nav" aria-label="Main"><ul><li><a href="/" aria-current="page">Home</a></li><li><a href="/features/">Features</a></li><li><a href="/download/">Download</a></li><li><a href="/docs/">Docs</a></li><li><a href="https://github.com/platima/npad">Source</a></li></ul></nav>
+    <nav class="nav" aria-label="Main"><ul><li><a href="/" aria-current="page">Home</a></li><li><a href="/features/">Features</a></li><li><a href="/download/">Download</a></li><li><a href="/docs/">Docs</a></li><li><a href="https://github.com/platima/npad" target="_blank" rel="noopener noreferrer">Source</a></li></ul></nav>
     <div class="bar-end">
       <button id="theme-toggle" type="button" aria-label="Switch theme"><svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
       <a class="btn primary small" href="/download/">Download</a>
@@ -56,13 +57,10 @@
       <a class="btn big" href="/features/">See what&rsquo;s inside</a>
     </div>
     <p class="fine">Signed installer, MSI and portable .exe &middot; Windows x64 &middot; MIT licensed</p>
-    <figure class="screen">
-      <img src="/assets/shot-solarized-1600.webp"
-           srcset="/assets/shot-solarized-800.webp 800w, /assets/shot-solarized-1600.webp 1600w"
-           sizes="(min-width: 68rem) 64rem, 100vw" width="1600" height="697"
-           alt="npad editing a Markdown checklist in the Solarized Dark colour scheme, with the Markdown menu and a status bar showing word count, line and column, zoom, font, line ending and UTF-8 encoding">
-      <figcaption>npad in the Solarized Dark scheme: classic menus, a status bar you can click, and your text front and centre.</figcaption>
-    </figure>
+    <div class="gallery" data-gallery>
+<figure class="shot" data-thumb="/assets/shot-windows-thumb.webp" data-label="Windows, default"><a class="zoom" href="/assets/shot-windows-full.webp" data-group="hero"><img src="/assets/shot-windows-960.webp" width="960" height="600" alt="npad running with its default settings on Windows in light mode: File, Edit, Format, View and Help menus above a white text area holding a short meeting-notes file, with a status bar showing line and column, zoom, font, line ending and encoding" fetchpriority="high"></a><figcaption>Out of the box on Windows: the same menus and layout as Windows 10 Notepad, with a status bar you can click.</figcaption></figure><figure class="shot" data-thumb="/assets/shot-solarized-thumb.webp" data-label="Solarized Dark, extras on"><a class="zoom" href="/assets/shot-solarized-full.webp" data-group="hero"><img src="/assets/shot-solarized-960.webp" width="960" height="600" alt="npad in the Solarized Dark colour scheme editing a Markdown release checklist, with a Markdown menu and a status bar showing word, character and line counts" loading="lazy"></a><figcaption>Solarized Dark with the optional extras switched on: Markdown tools, word counts, highlight-all, auto-save and change notices.</figcaption></figure><figure class="shot" data-thumb="/assets/shot-dark-thumb.webp" data-label="Dark"><a class="zoom" href="/assets/shot-dark-full.webp" data-group="hero"><img src="/assets/shot-dark-960.webp" width="960" height="600" alt="npad in its dark colour scheme editing a small INI configuration file" loading="lazy"></a><figcaption>The plain dark scheme. Title bar, scroll bars and drop-down menus follow along.</figcaption></figure><figure class="shot" data-thumb="/assets/shot-linux-thumb.webp" data-label="Linux (GTK 3)"><a class="zoom" href="/assets/shot-linux-full.webp" data-group="hero"><img src="/assets/shot-linux-640.webp" width="640" height="386" alt="The Linux GTK 3 build of npad showing the same Markdown checklist in light colours, with the same menus and status bar" loading="lazy"></a><figcaption>The Linux GTK 3 build, still being ported, running on Debian under WSLg (this capture has no window decorations).</figcaption></figure><figure class="shot" data-thumb="/assets/shot-settings-thumb.webp" data-label="Preferences"><a class="zoom" href="/assets/shot-settings-full.webp" data-group="hero"><img src="/assets/shot-settings-960.webp" width="960" height="1147" alt="Four npad Preferences dialogs side by side, showing the General, Appearance, Defaults and Markdown tabs" loading="lazy"></a><figcaption>Four of the Preferences tabs: General, Appearance, Defaults and Markdown. Every change applies live to all open windows.</figcaption></figure>
+    </div>
+    <p class="fine">Click a screenshot to enlarge it.</p>
   </div>
 </section>
 
@@ -80,28 +78,9 @@
 <section class="alt" aria-labelledby="promise-title">
   <div class="wrap center">
     <h2 id="promise-title">Familiar on day one. Better every day after.</h2>
-    <p class="intro">npad follows one rule: out of the box it behaves like Windows 10 Notepad. Extras that can&rsquo;t hurt you are on. Anything that changes how Notepad works is off until you ask for it.</p>
-    <div class="cards" style="text-align:left">
-      <article class="card">
-        <div class="icon" aria-hidden="true">&#9998;</div>
-        <h3>Just Notepad</h3>
-        <p>The same menus, the same shortcuts, the same calm. Nothing to learn and nothing nagging you.</p>
-      </article>
-      <article class="card">
-        <div class="icon" aria-hidden="true">&#9889;</div>
-        <h3>Genuinely fast</h3>
-        <p>Written in C against the native Windows API. No framework, no runtime, no waiting.</p>
-      </article>
-      <article class="card">
-        <div class="icon" aria-hidden="true">&#128737;</div>
-        <h3>Safe by default</h3>
-        <p>Crash recovery and atomic saves are on from the start, so a bad day never costs you a file.</p>
-      </article>
-      <article class="card">
-        <div class="icon" aria-hidden="true">&#127899;</div>
-        <h3>Yours to tune</h3>
-        <p>Dark and Solarized themes, per-window zoom and fonts, optional Markdown tools. All opt-in.</p>
-      </article>
+    <p class="intro center">npad follows one rule: out of the box it behaves like Windows 10 Notepad. Extras that can&rsquo;t hurt you are enabled. Anything that changes how Notepad works stays off until you ask for it.</p>
+    <div class="cards four" style="text-align:left">
+<article class="card tint t1"><div class="icon" aria-hidden="true">&#9998;</div><h3>Just Notepad</h3><p>The same menus, the same shortcuts, the same calm. Nothing to learn and nothing nagging you.</p></article><article class="card tint t7"><div class="icon" aria-hidden="true">&#9889;</div><h3>Genuinely fast</h3><p>Written in C against the native Windows API. No framework, no runtime, no waiting.</p></article><article class="card tint t2"><div class="icon" aria-hidden="true">&#128737;</div><h3>Safe by default</h3><p>Crash recovery and atomic saves are on from the start, so a bad day never costs you a file. Add a 100,000-step undo history, where Windows 10 Notepad has a single undo.</p></article><article class="card tint t5"><div class="icon" aria-hidden="true">&#127899;</div><h3>Yours to tune</h3><p>Dark and Solarized themes, per-window zoom and fonts, optional Markdown tools. All opt-in.</p></article>
     </div>
   </div>
 </section>
@@ -151,28 +130,20 @@
         <p>Choose light, dark, follow the system, or Solarized Light and Dark. Changes apply live to every open window, including the title bar, scroll bars and drop-down menus. Even the app icon can follow your setting.</p>
         <p><a class="more" href="/features/#looks">Themes and fonts &rarr;</a></p>
       </div>
-      <figure class="visual">
-        <img src="/assets/shot-prefs-dark-800.webp"
-             srcset="/assets/shot-prefs-dark-800.webp 800w, /assets/shot-prefs-dark-1600.webp 1600w"
-             sizes="(min-width: 52rem) 34rem, calc(100vw - 2rem)" width="800" height="509" loading="lazy"
-             alt="npad in dark mode with the tabbed Preferences dialog open on General, where auto-save is off and session resume and crash recovery are on">
-        <figcaption>Tabbed Preferences (Ctrl+,). Every change applies to all open windows live.</figcaption>
-      </figure>
+      <div class="visual">
+<figure class="zoomwrap"><a class="zoom" href="/assets/shot-dark-full.webp" data-group="home"><img src="/assets/shot-dark-960.webp" width="960" height="600" loading="lazy" alt="npad in its dark colour scheme editing a small INI configuration file"></a><figcaption>Dark mode. Click to enlarge.</figcaption></figure>
+      </div>
     </div>
 
     <div class="row flip">
       <div class="row-text">
         <h2>A status bar that actually does things.</h2>
-        <p>See your position, zoom, font mode, line ending and encoding at a glance, then click any of them to change it: go to a line, reset zoom, switch to monospace, convert CRLF to LF, pick an encoding.</p>
+        <p>See your position, zoom, font mode, line ending and encoding at a glance, then click any of them to change it: go to a line, reset zoom, switch to monospace, convert CRLF to LF, pick an encoding. Optional word, character and line counts sit on the left.</p>
         <p><a class="more" href="/docs/#statusbar">Every status bar action &rarr;</a></p>
       </div>
-      <figure class="visual">
-        <img src="/assets/shot-window-light-1200.webp"
-             srcset="/assets/shot-window-light-640.webp 640w, /assets/shot-window-light-1200.webp 1200w"
-             sizes="(min-width: 52rem) 34rem, calc(100vw - 2rem)" width="1200" height="754" loading="lazy"
-             alt="A light npad window with File, Edit, Format, Markdown, View and Help menus and a status bar showing 0 words, 0 chars, 1 lines, Ln 1 Col 1, 100%, Mono, Windows (CRLF) and UTF-8">
-        <figcaption>The classic light look, with a status bar to match.</figcaption>
-      </figure>
+      <div class="visual">
+        <figure class="zoomwrap"><a class="zoom" href="/assets/shot-statusbar.webp"><img src="/assets/shot-statusbar.webp" width="1682" height="250" loading="lazy" alt="The npad status bar, left to right: 102 words, 529 chars, 20 lines; Ln 1, Col 1; 100%; Mono; Unix (LF); UTF-8"></a><figcaption>The status bar with counts switched on. Click to enlarge.</figcaption></figure>
+      </div>
     </div>
 
     <div class="row">
@@ -201,13 +172,8 @@
   <div class="wrap">
     <h2 id="more-title" class="center">And the rest of what you&rsquo;d expect</h2>
     <p class="intro center">Everything Notepad does, plus the small things it should have done years ago.</p>
-    <div class="cards">
-      <article class="card"><h3>Find &amp; Replace</h3><p>Direction, match case, whole word, wrap-around, a live match count and optional highlight-all.</p></article>
-      <article class="card"><h3>Print &amp; preview</h3><p>Page Setup, header and footer codes, and a Print Preview with paging, two-page view and zoom that wraps exactly where the page does.</p></article>
-      <article class="card"><h3>Per-window zoom and fonts</h3><p>Ctrl+Scroll to zoom, Ctrl+M for monospace. Separate monospace and proportional fonts, with an OpenDyslexic option.</p></article>
-      <article class="card"><h3>Unicode throughout</h3><p>UTF-8, UTF-8 BOM, UTF-16 LE/BE and ANSI are detected and kept as they were.</p></article>
-      <article class="card"><h3>Open it your way</h3><p>Drag and drop, Ctrl+Drop to insert, a recent files menu, <code>npad file.txt</code> from any terminal, and &ldquo;Open with&rdquo; for any file.</p></article>
-      <article class="card"><h3>Undo that goes deep</h3><p>A 100,000-step undo and redo history, so you can back out of almost anything.</p></article>
+    <div class="cards four">
+<article class="card tint t1"><div class="icon" aria-hidden="true">&#128269;</div><h3>Find &amp; Replace</h3><p>Direction, match case, whole word, wrap-around, a live match count and optional highlight-all.</p></article><article class="card tint t2"><div class="icon" aria-hidden="true">&#128424;</div><h3>Print &amp; preview</h3><p>Page Setup, header and footer codes, and a Print Preview with paging, two-page view and zoom that wraps exactly where the page does.</p></article><article class="card tint t3"><div class="icon" aria-hidden="true">&#128288;</div><h3>Per-window zoom and fonts</h3><p>Ctrl+Scroll to zoom, Ctrl+M for monospace. Separate monospace and proportional fonts, with an OpenDyslexic option.</p></article><article class="card tint t4"><div class="icon" aria-hidden="true">&#127760;</div><h3>Unicode throughout</h3><p>UTF-8, UTF-8 BOM, UTF-16 LE/BE and ANSI are detected and kept exactly as they were.</p></article><article class="card tint t5"><div class="icon" aria-hidden="true">&#128194;</div><h3>Open it your way</h3><p>Drag and drop, Ctrl+Drop to insert, a recent files menu, <code>npad file.txt</code> from any terminal, and &ldquo;Open with&rdquo; for any file.</p></article><article class="card tint t6"><div class="icon" aria-hidden="true">&#8629;</div><h3>Line endings on tap</h3><p>Convert between CRLF, LF and CR from the Format menu, with Ctrl+E, or by clicking the status bar.</p></article><article class="card tint t7"><div class="icon" aria-hidden="true">&#9201;</div><h3>The little things</h3><p>Go To Line (Ctrl+G), time and date (F5), word wrap (Alt+Z) and a context menu with everything you&rsquo;d expect.</p></article><article class="card tint t8"><div class="icon" aria-hidden="true">&#128190;</div><h3>Settings that travel</h3><p>Plain JSON settings, with export and import for backups or moving machines. Changes apply live to every open window.</p></article>
     </div>
     <p class="center" style="margin-top:2rem"><a class="btn" href="/features/">Browse every feature</a></p>
   </div>
@@ -218,10 +184,10 @@
     <h2 id="platform-title" class="center">Where npad runs</h2>
     <p class="intro center">Native on each platform, with no cross-platform framework in between.</p>
     <div class="platforms">
-      <article class="card"><h3>Windows <span class="badge ok">Available</span></h3><p>Win32 API. Installer, MSI and portable .exe, all code-signed.</p><p><a href="/download/#windows">Get npad for Windows</a></p></article>
-      <article class="card"><h3>Linux <span class="badge soon">In progress</span></h3><p>GTK&nbsp;3 on X11 and Wayland from one binary. apt and dnf repositories are on the way.</p><p><a href="/download/#linux">Linux status</a></p></article>
-      <article class="card"><h3>macOS <span class="badge">Planned</span></h3><p>A native Cocoa build is on the roadmap.</p></article>
-      <article class="card"><h3>Terminal <span class="badge">Planned</span></h3><p>ncurses and Windows Console builds are planned.</p></article>
+      <article class="card tint t2"><h3>Windows <span class="badge ok">Available</span></h3><p>Win32 API. Installer, MSI and portable .exe, all code-signed.</p><p><a href="/download/#windows">Get npad for Windows</a></p></article>
+      <article class="card tint t3"><h3>Linux <span class="badge soon">In progress</span></h3><p>GTK&nbsp;3 on X11 and Wayland from one binary. apt and dnf repositories are on the way.</p><p><a href="/download/#linux">Linux status</a></p></article>
+      <article class="card tint t8"><h3>macOS <span class="badge">Planned</span></h3><p>A native Cocoa build is on the roadmap.</p></article>
+      <article class="card tint t5"><h3>Terminal <span class="badge">Planned</span></h3><p>ncurses and Windows Console builds are planned.</p></article>
     </div>
   </div>
 </section>
@@ -229,10 +195,9 @@
 <section class="alt" aria-labelledby="not-title">
   <div class="wrap center">
     <h2 id="not-title">What npad will never be</h2>
-    <p class="intro">Simplicity is the feature. These are deliberately left out.</p>
+    <p class="intro center">Simplicity is the feature. These are deliberately left out.</p>
     <ul class="nots">
-      <li>No AI</li><li>No spellcheck</li><li>No syntax highlighting</li><li>No rich text</li>
-      <li>No frameworks</li><li>No forced or silent updates</li><li>No background services</li>
+<li class="tint t1">No AI</li><li class="tint t2">No spellcheck</li><li class="tint t3">No syntax highlighting</li><li class="tint t4">No rich text</li><li class="tint t5">No frameworks</li><li class="tint t6">No .NET</li><li class="tint t7">No forced features</li><li class="tint t8">No forced or silent updates</li><li class="tint t1">No background services</li><li class="tint t2">No telemetry</li>
     </ul>
   </div>
 </section>
@@ -242,7 +207,7 @@
     <h2 id="faq-title" class="center">Questions</h2>
     <details>
       <summary>Is npad free?</summary>
-      <p>Yes. npad is open source under the MIT licence. If it saves you time you can <a href="https://github.com/sponsors/platima">sponsor the project</a>, but you never have to.</p>
+      <p>Yes. npad is open source under the MIT licence. If it saves you time you can <a href="https://github.com/sponsors/platima" target="_blank" rel="noopener noreferrer">sponsor the project</a>, but you never have to.</p>
     </details>
     <details>
       <summary>Will it replace Windows Notepad?</summary>
@@ -282,37 +247,37 @@
   <div class="wrap">
     <div class="cols">
       <div>
-        <p><strong>npad</strong> - the Notepad you remember, minus the bloat.</p>
-        <p>Free and open source under the MIT licence. Made by <a href="https://github.com/platima">Platima</a>.</p>
+        <p><em><strong>npad</strong> - the Notepad you remember, minus the bloat.</em></p>
+        <p>Free and open source under the MIT licence. Made by <a href="https://github.com/platima" target="_blank" rel="noopener noreferrer">Platima</a>.</p>
       </div>
       <div>
         <h2>Product</h2>
         <ul>
           <li><a href="/features/">Features</a></li>
           <li><a href="/download/">Download</a></li>
-          <li><a href="https://github.com/platima/npad/blob/main/CHANGELOG.md">Changelog</a></li>
-          <li><a href="https://github.com/platima/npad/blob/main/README.md#roadmap-">Roadmap</a></li>
+          <li><a href="https://github.com/platima/npad/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer">Changelog</a></li>
+          <li><a href="https://github.com/platima/npad/blob/main/README.md#roadmap-" target="_blank" rel="noopener noreferrer">Roadmap</a></li>
         </ul>
       </div>
       <div>
         <h2>Learn</h2>
         <ul>
           <li><a href="/docs/">Docs</a></li>
-          <li><a href="https://github.com/platima/npad/blob/main/DOCUMENTATION.md">Full reference</a></li>
-          <li><a href="https://github.com/platima/npad/blob/linux/LINUX_PORT.md">Linux port</a></li>
+          <li><a href="https://github.com/platima/npad/blob/main/DOCUMENTATION.md" target="_blank" rel="noopener noreferrer">Full reference</a></li>
+          <li><a href="https://github.com/platima/npad/blob/linux/LINUX_PORT.md" target="_blank" rel="noopener noreferrer">Linux port</a></li>
         </ul>
       </div>
       <div>
         <h2>Project</h2>
         <ul>
-          <li><a href="https://github.com/platima/npad">Source on GitHub</a></li>
-          <li><a href="https://github.com/platima/npad/issues">Report an issue</a></li>
-          <li><a href="https://github.com/sponsors/platima">Sponsor</a></li>
-          <li><a href="https://github.com/platima/npad/blob/main/LICENSE">Licence</a></li>
+          <li><a href="https://github.com/platima/npad" target="_blank" rel="noopener noreferrer">Source on GitHub</a></li>
+          <li><a href="https://github.com/platima/npad/issues" target="_blank" rel="noopener noreferrer">Report an issue</a></li>
+          <li><a href="https://github.com/sponsors/platima" target="_blank" rel="noopener noreferrer">Sponsor</a></li>
+          <li><a href="https://github.com/platima/npad/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">Licence</a></li>
         </ul>
       </div>
     </div>
-    <p class="legal">This site is plain HTML and CSS with one tiny script for the theme toggle: no trackers, no cookies, no third-party fonts or CDNs. Solarized colours by <a href="https://ethanschoonover.com/solarized/">Ethan Schoonover</a>.</p>
+    <p class="legal">This site is plain HTML and CSS with two small optional scripts (theme toggle, screenshot viewer): no trackers, no cookies, no third-party fonts or CDNs. Solarized colours by <a href="https://ethanschoonover.com/solarized/" target="_blank" rel="noopener noreferrer">Ethan Schoonover</a>.</p>
   </div>
 </footer>
 </body>
