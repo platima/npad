@@ -140,12 +140,12 @@ void ui_platform_redo(Window *window) {
     (void) window;
 }
 
-bool ui_platform_can_undo(Window *window) {
+bool ui_platform_can_undo(const Window *window) {
     (void) window;
     return false;
 }
 
-bool ui_platform_can_redo(Window *window) {
+bool ui_platform_can_redo(const Window *window) {
     (void) window;
     return false;
 }
@@ -208,7 +208,7 @@ bool ui_platform_system_supports_dark_mode(void) {
     return false;
 }
 
-bool ui_platform_is_text_modified(Window *window) {
+bool ui_platform_is_text_modified(const Window *window) {
     (void) window;
     return false;
 }
@@ -285,7 +285,7 @@ void ui_platform_set_window_maximized(Window *window, bool maximized) {
     (void) maximized;
 }
 
-bool ui_platform_is_window_maximized(Window *window) {
+bool ui_platform_is_window_maximized(const Window *window) {
     (void) window;
     return false;
 }
