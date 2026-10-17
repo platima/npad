@@ -107,7 +107,9 @@ something turns out to work differently than it reasonably appears to.
 
 **Branches:**
 - `main` takes only releases and Windows fixes: every push to it runs the full
-  CI build, so it is never the place for work in progress
+  CI build, so it is never the place for work in progress. It is protected:
+  changes land only through a pull request (a direct push is rejected), so
+  even a one-line fix goes branch, then PR, then merge
 - Linux port work integrates on the `linux` branch (feature branches merge
   into `linux`, not `main`); `linux` merges into `main` when a release ships
   it. Windows fixes made on `main` are merged back into `linux`
