@@ -52,8 +52,6 @@ isolated `HOME`. Not tried: Shift+click on the menu item (the Shift check
 reads `gtk_get_current_event_state`) and `xdg-mime` on a real desktop that
 tracks its own default-app database.
 
-Greyed out until ported (see the checklist): the Markdown list tools. There
-is no Check for Updates on Linux by design.
 **Batch D1 (v0.35.0):** the context menu, file drops, external-change detection,
 Ctrl+wheel zoom and the permanent scroll bar are ported (details under the
 checklist). Verified in Broadway: the menu's items and greying, a Ctrl+drop and
@@ -63,8 +61,21 @@ and long text. Not verifiable there, so worth a pass on Mint: the context menu
 popup itself, a real drag from the file manager (and whether Ctrl is seen
 while dragging, X11 and Wayland), and real wheel and touchpad input.
 
-Greyed out until ported (see the checklist): Preferences, Format > Font and
-the Markdown list tools. There is no Check for Updates on Linux by design.
+**Batch D2 (v0.35.0):** the Markdown list tools are ported (`ui_gtk_lists.c`):
+the Markdown menu and its context-menu mirror, Tab / Shift+Tab (or Ctrl+] /
+Ctrl+[), Enter continuing a list, Ctrl+X cutting a line and the next Ctrl+V
+pasting it above, and rich-text paste. Verified with a harness compiled into the
+real process under Broadway (151 checks: every transform and its single undo
+step, the menu appearing and disappearing live, the greying, mnemonic
+uniqueness in both menus, the dialogs driven through their widgets, real key
+events for Tab / Enter / Ctrl+X / Ctrl+V, the paste modes against an HTML
+clipboard, the HTML payload decoding) and by hand in the real binary (Tab over a
+selection, one Ctrl+Z). Not verifiable there, so worth a pass on Mint: the Markdown
+menu and the popup actually opening, a real browser's `text/html` clipboard
+(Broadway does not share the clipboard between processes), Ctrl+] / Ctrl+[ on
+a layout where the brackets need AltGr.
+
+There is no Check for Updates on Linux by design.
 
 ## Building and running
 
@@ -161,6 +172,7 @@ src/platform/ui_gtk_dialogs.c   file choosers, message boxes, save / binary prom
 src/platform/ui_gtk_edit.c      context menu, file drops, external-change prompt, Ctrl+wheel zoom,
                                 inert scroll bars
 src/platform/ui_gtk_find.c      Find / Replace / Go To
+src/platform/ui_gtk_lists.c     Markdown list tools: menu, transforms, Tab / Enter, cut line, rich paste
 src/platform/ui_gtk_prefs.c     Preferences dialog and Format > Font
 src/platform/print_gtk.c        Page Setup, Print and Print Preview (GtkPrintOperation)
 src/platform/ui_gtk_instance.c  cross-instance messaging over D-Bus
@@ -265,9 +277,14 @@ Decisions taken in the foundation round. Each is easy to revisit.
   unless clicked. The page shows `xdg-mime query default text/plain`.
 - **No application-icon choice** (`icon_style` has no Linux UI): the icon
   comes from the icon theme, so nothing here switches it.
-- **The Markdown page** edits the shared keys with a note that the tools are
-  not ported yet.
-- **The context menu** is still GTK's stock one (batch D1).
+- **Cut-line paste-above** keeps the cut text and compares it with the
+  clipboard's (Win32 compares clipboard sequence numbers, which GTK lacks), so
+  the same text copied elsewhere in between would still paste above.
+- **Markdown menu items grey only while the menu is open** (like the Edit menu:
+  an insensitive item's accelerator is dead, and Ctrl+] / Ctrl+[ are real
+  accelerators on those items).
+- **A transform that changes nothing is not an edit** (no undo step, the document
+  stays unmodified); Win32 replaces the text regardless.
 - **No Check for Updates** - Linux updates come from the package manager.
 - **Ctrl+drop inserts at the drop point**, not at the caret as Win32 does
   (there the caret is all there is; here the drop has coordinates). Whether Ctrl
@@ -362,13 +379,23 @@ version.
 - [ ] On a real desktop: the popup menu, a drag from the file manager with and
       without Ctrl (X11 and Wayland), wheel and touchpad zoom (see TODO.md)
 
-### Batch D2 - Markdown list tools (`ui_gtk.c` + new `ui_gtk_lists.c`)
-- [ ] Markdown menu (sort, unique, case, convert delimiters, indent formats,
-      custom indent) and its context-menu mirror
-- [ ] Tab / Shift+Tab indent, Enter continues a list, Ctrl+X cuts the line
-- [ ] Paste as Markdown and Ctrl+Shift+V (read `text/html` from the clipboard;
-      convert with `core/html_md`)
-- [ ] Every transform is one undo step
+### Batch D2 - Markdown list tools (`ui_gtk.c` + new `ui_gtk_lists.c`) - done in v0.35.0
+- [x] Markdown menu (sort, unique, case, convert delimiters, indent formats,
+      custom indent) and its context-menu mirror. The menu is inserted after
+      Format and removed live when `list_tools_enabled` changes
+      (`npad_gtk_lists_reload_settings`, called from
+      `npad_gtk_reload_and_apply_settings`); it is rebuilt only when what it
+      shows changes, so a broadcast cannot destroy a menu that is open
+- [x] Tab / Shift+Tab indent (a `key-press-event` handler on the text view,
+      Ctrl+] / Ctrl+[ as real accelerators), Enter continues a list (the marker
+      rule is `list_marker_length` in `core/list_ops.c`, unit-tested),
+      Ctrl+X cuts the line (`ui_platform_cut` asks `npad_gtk_lists_cut_line`)
+- [x] Paste as Markdown and Ctrl+Shift+V (read `text/html` from the clipboard,
+      UTF-8 or UTF-16; convert with `core/html_md`); `ui_platform_paste` asks
+      `npad_gtk_lists_paste` first and falls back to a plain paste
+- [x] Every transform is one undo step (a user action around the edits)
+- [ ] On a real desktop: the menu and popup opening, a browser's `text/html`
+      clipboard, the bracket shortcuts on a layout that needs AltGr for them
 
 ### Batch E - Packaging (new `packaging/linux/`, Makefile, CI)
 - [x] `io.github.platima.npad.desktop` (MimeType: text/plain and friends)
@@ -392,6 +419,20 @@ version.
 - [ ] Off-screen saved position on X11 falls back to the default
 - [ ] Settings path honours `XDG_CONFIG_HOME` (core `settings_get_config_dir`)
 - [ ] App icon in the About dialog and window once Batch E installs one
+
+## Testing the Markdown tools
+
+LESSONS.md ("Test the real code by compiling a harness into the real process")
+describes the technique, which `ui_gtk_lists.c` was verified with: the harness
+`#include`s `ui_gtk_lists.c` so its statics are reachable, runs `main.c` as
+`npad_main`, presents the window and drives it with `GdkEventKey`s sent through
+`gtk_propagate_event` (Broadway drops them in `gtk_main_do_event`, and cannot
+resolve Ctrl+Shift+letter from its keymap - fire that accelerator with
+`gtk_accel_groups_activate`). Dialogs are driven by a `g_timeout` that finds the
+toplevel by title, fills its entries and calls `gtk_dialog_response`. Broadway
+does not share the clipboard between clients, so a second process cannot be the
+HTML source there; the clipboard owner is the harness itself, and the payload
+decoding is exercised directly.
 
 ## Known issues
 

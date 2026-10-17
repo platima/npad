@@ -258,6 +258,14 @@ static bool history_push(const char *prefix, const char *value) {
     return changed;
 }
 
+void npad_gtk_history_load(GtkWidget *combo, const char *prefix) {
+    history_load(combo, prefix);
+}
+
+bool npad_gtk_history_push(const char *prefix, const char *value) {
+    return history_push(prefix, value);
+}
+
 // Refill a history drop-down after history_push, keeping what is typed. It
 // is otherwise filled only when the dialog is built, so terms searched since
 // then were missing from the list until the dialog was recreated.

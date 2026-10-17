@@ -23,8 +23,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the text fits, as in Notepad, rather than appearing and disappearing.
 - **Linux: Reload / Keep editing when another program changes your file**, if
   you turn on `watch_file_changes` (off by default, as in Notepad).
+- **The Markdown list tools arrive on Linux.** Turn on Basic Markdown support
+  (Preferences > Markdown) for a Markdown menu and the same right-click items:
+  Sort, Unique, Convert Delimiters, Indent and Unindent with Tab / Shift+Tab,
+  Enter that continues a list, Ctrl+X that cuts a line, and pasting copied web
+  pages as lists or Markdown. Off by default, so npad still behaves like
+  classic Notepad until you ask; each tool is one undo step.
 
 ### 🆕 Features
+- **Linux: the Markdown list tools** (`ui_gtk_lists.c`, with the same keys and
+  rules as the Windows build). With `list_tools_enabled` on, a **Markdown**
+  menu appears between Format and View - and disappears again as soon as the
+  setting is turned off, in every open window - and its items are mirrored at
+  the end of the right-click menu, greyed while the document is empty.
+  - *Sort* (Ascending, Descending, Case Sensitive), *Unique*, *Convert
+    Delimiters...* (From / To with recent values, Swap, escapes, Selection
+    only) and *Indent* / *Unindent*, which take the selected lines, or the
+    caret's line. Sort and Unique take the whole document when no line break
+    is selected. The Indent submenu has the seven formats, with *Custom...*
+    prompting for a prefix. Every transform is a single undo step, and one
+    that changes nothing leaves the document unmodified.
+  - **Tab** indents a selection and **Shift+Tab** unindents the selection or
+    the current line (plain Tab with nothing selected still types a tab); a
+    preference moves both to **Ctrl+]** / **Ctrl+[**. **Enter** on a list line
+    starts the next line with the same indent and marker, and on an empty bullet
+    removes the marker to end the list. **Ctrl+X** with nothing selected cuts the
+    line, and the next **Ctrl+V** puts it back above the current line.
+  - **Rich-text paste.** Ctrl+V and Ctrl+Shift+V convert the clipboard's HTML
+    to lists or Markdown as chosen in Preferences (defaults: Lists, Plain), and
+    Markdown > Paste as Markdown always converts fully. The HTML may arrive as
+    UTF-8 or UTF-16, as browsers offer it. A plain-text clipboard, and every
+    paste while the tools are off, pastes plain.
+  - The Enter rule is now a unit-tested core function, `list_marker_length`.
 - **Linux Preferences dialog.** A notebook of the Windows pages minus the two
   that are Windows-only: there is no Updates page (Linux updates through apt
   or dnf), and Associations is a single *Make npad the default text editor*
@@ -34,8 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at can never write its whole state back. Export, Import and Reset All
   Preferences are on Backup (Reset keeps recent files, window position and
   Find/Replace options and history, as on Windows; Import refuses a file that
-  is not a JSON object). The Markdown page edits the shared keys even though
-  the list tools themselves are not ported yet, and says so. The Debug page
+  is not a JSON object). The Markdown page edits the keys the list tools read.
+  The Debug page
   shows Linux diagnostics (GTK and display backend, session, locale, paths,
   window count, startup profile) with a Copy Diagnostics button.
 - **Linux Format > Font.** GTK's font chooser writes the same font keys
@@ -44,7 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Linux: npad's own context menu** replaces GTK's stock text-view menu, in
   the same order as on Windows and greyed by the same rules (it shares the code
   that greys the Edit menu). It opens from the mouse and from Shift+F10 / the
-  Menu key. The Markdown list tools will join it in the next Linux round.
+  Menu key. With Basic Markdown support on, the Markdown list tools follow it.
 - **Linux: drag a file onto the window** to open it, through the usual "save
   changes?" prompt. Hold **Ctrl** while dropping and the file's text is
   inserted at the drop point instead, as one undo step (the Windows build

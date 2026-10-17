@@ -7,6 +7,24 @@ this file is for open loops.
 
 ---
 
+## 🧪 Needs testing - v0.35.0 Linux Markdown list tools (on Mint / Debian 13)
+
+Verified with a harness in Broadway only (which cannot paint popup menus or
+share a clipboard between processes). On a real desktop:
+
+- [ ] With Basic Markdown support on, the Markdown menu opens between Format
+      and View and every item works; its items also end the right-click menu,
+      with no mnemonic clashing with the edit items. Switching the setting off
+      in Preferences removes both at once, in a second open window too
+- [ ] Copy a list, a heading with bold text and a link from Firefox, Chrome and
+      LibreOffice: Ctrl+V gives list lines, Paste as Markdown gives `#`, `**`
+      and `[text](url)`, Ctrl+Shift+V pastes plain (Wayland and X11)
+- [ ] Ctrl+] / Ctrl+[ (with the bracket preference) on a US layout and on one
+      that needs AltGr for the brackets; Tab / Shift+Tab with an input method
+      active (IBus / Fcitx)
+- [ ] Ctrl+X on a line, then Ctrl+V on another: the line goes above it; copying
+      something else in between ends that mode
+
 ## 🧪 Needs testing - v0.35.0 Linux editing behaviours (on Mint / Debian 13)
 
 Verified in Broadway only (which cannot paint popup menus or take a real

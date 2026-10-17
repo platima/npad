@@ -701,11 +701,6 @@ static void add_paste_row(GtkWidget *box, const char *label_text, const char *ke
 static void build_markdown(GtkWidget *notebook) {
     GtkWidget *page = new_page(notebook, "Markdown");
 
-    add_note(page,
-             "The Markdown list tools are not in npad for Linux yet. This page edits the same "
-             "settings as the Windows build, so your choices are kept for when they arrive. "
-             "Basic Markdown support already adds \"Interpret escapes\" to Find / Replace.");
-
     add_check(page, "Basic _Markdown support", "list_tools_enabled", false);
     add_note(page, "Adds a Markdown menu and right-click tools (off by default for classic Notepad "
                    "compatibility):\n"

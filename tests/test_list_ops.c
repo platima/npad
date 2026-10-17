@@ -289,6 +289,28 @@ TEST_CASE(bullet_marker_custom) {
     ASSERT_XFORM(list_bullet_marker(LIST_INDENT_CUSTOM, ">> "), ">> ", "custom bullet preserved");
 }
 
+TEST_CASE(marker_length_builtin) {
+    TEST_ASSERT_EQ(2, (int) list_marker_length("- item", 6, NULL, false), "hyphen marker");
+    TEST_ASSERT_EQ(2, (int) list_marker_length("* item", 6, NULL, false), "asterisk marker");
+    TEST_ASSERT_EQ(0, (int) list_marker_length("-item", 5, NULL, false), "no space, no marker");
+    TEST_ASSERT_EQ(0, (int) list_marker_length("*emph*", 6, NULL, false), "emphasis is not one");
+    TEST_ASSERT_EQ(0, (int) list_marker_length("item", 4, NULL, false), "plain text");
+}
+
+TEST_CASE(marker_length_bare) {
+    TEST_ASSERT_EQ(0, (int) list_marker_length("-", 1, NULL, false), "lone hyphen is still typing");
+    TEST_ASSERT_EQ(1, (int) list_marker_length("-", 1, NULL, true), "lone hyphen, bare allowed");
+    TEST_ASSERT_EQ(0, (int) list_marker_length("-x", 2, NULL, true), "bare needs the line to end");
+}
+
+TEST_CASE(marker_length_custom) {
+    TEST_ASSERT_EQ(3, (int) list_marker_length(">> x", 4, ">> ", false), "custom body");
+    TEST_ASSERT_EQ(3, (int) list_marker_length(">> x", 4, "  >> ", false), "leading space ignored");
+    TEST_ASSERT_EQ(0, (int) list_marker_length(">>", 2, ">> ", false), "bare custom, not allowed");
+    TEST_ASSERT_EQ(2, (int) list_marker_length(">>", 2, ">> ", true), "bare custom, allowed");
+    TEST_ASSERT_EQ(2, (int) list_marker_length("- x", 3, ">> ", false), "built-ins still count");
+}
+
 int main(void) {
     TEST_INIT();
 
@@ -340,6 +362,9 @@ int main(void) {
     RUN_TEST(bullet_marker_builtin);
     RUN_TEST(bullet_marker_whitespace_fallback);
     RUN_TEST(bullet_marker_custom);
+    RUN_TEST(marker_length_builtin);
+    RUN_TEST(marker_length_bare);
+    RUN_TEST(marker_length_custom);
 
     TEST_SUMMARY();
     return 0;
