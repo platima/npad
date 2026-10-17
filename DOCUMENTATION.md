@@ -176,6 +176,32 @@ Shift+click Preferences). Differences:
   type the window is showing (monospace, proportional or OpenDyslexic) and
   the shared size, weight and italic keys, exactly as on Windows; Appearance
   has buttons for the monospace and proportional fonts directly.
+### Editing behaviours on Linux
+
+These match the Windows build; the differences are noted.
+
+- **Context menu** (right-click, Shift+F10 or the Menu key): Undo, Redo, Cut,
+  Copy, Paste, Delete, Select All, greyed exactly as in the Edit menu - Undo and
+  Redo by history, Cut / Copy / Delete without a selection, Paste with no text on
+  the clipboard. It replaces GTK's stock text menu (no emoji or input-method
+  entries).
+- **Drag & drop**: drop a file on the window to open it (after the usual save
+  prompt); hold **Ctrl** and its contents are inserted at the drop point
+  instead, as one undo step. Only the first file of a multi-file drop is used,
+  as on Windows. Dropped *text* is inserted as text. Whether Ctrl is seen
+  while dragging depends on the desktop and on the file manager you drag from.
+- **External changes** (`watch_file_changes`, off by default): when the window
+  becomes active, a file changed or deleted by another program offers *Reload
+  from disk*, *Save as a different file* or *Keep editing* (the default;
+  Esc also keeps), with a **Stop telling me about this file** box. Reload
+  discards unsaved edits, which is why it is never the default. Until
+  Preferences is ported, set the key in `settings.json`.
+- **Ctrl + mouse wheel** zooms in 10% steps, like Ctrl+Plus / Ctrl+Minus. High
+  resolution wheels and touchpads send many small steps; they are added up,
+  one zoom step per whole notch, so a swipe is not a runaway.
+- **Scroll bars** are always shown and greyed out when the text fits, as in
+  Notepad, instead of appearing and disappearing (GTK's overlay scroll bars are
+  turned off for the text area). With Word Wrap on there is no horizontal bar.
 
 ### Installing on Linux
 
