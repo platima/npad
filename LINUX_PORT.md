@@ -40,6 +40,15 @@ through `settings.json`, and the preview (opened from the menu and from the
 print dialog's Preview button, paging, Page Setup from inside it). Not tried:
 a real CUPS printer.
 
+**Batch D1 (v0.35.0):** the context menu, file drops, external-change detection,
+Ctrl+wheel zoom and the permanent scroll bar are ported (details under the
+checklist). Verified in Broadway: the menu's items and greying, a Ctrl+drop and
+a plain drop, an external edit and delete, the wheel zoom (including
+smooth-scroll deltas and the 10-500% limits) and the scroll bars with short
+and long text. Not verifiable there, so worth a pass on Mint: the context menu
+popup itself, a real drag from the file manager (and whether Ctrl is seen
+while dragging, X11 and Wayland), and real wheel and touchpad input.
+
 Greyed out until ported (see the checklist): Preferences, Format > Font and
 the Markdown list tools. There is no Check for Updates on Linux by design.
 
@@ -122,6 +131,8 @@ src/platform/ui_gtk.h           private header: Window struct, command enum, cro
 src/platform/ui_gtk.c           main window, menus, shortcuts, commands, text, undo, view state,
                                 status bar, timers, and the ui_platform_* entry points
 src/platform/ui_gtk_dialogs.c   file choosers, message boxes, save / binary prompts, About
+src/platform/ui_gtk_edit.c      context menu, file drops, external-change prompt, Ctrl+wheel zoom,
+                                inert scroll bars
 src/platform/ui_gtk_find.c      Find / Replace / Go To
 src/platform/print_gtk.c        Page Setup, Print and Print Preview (GtkPrintOperation)
 src/platform/ui_gtk_instance.c  cross-instance messaging over D-Bus
@@ -216,7 +227,19 @@ Decisions taken in the foundation round. Each is easy to revisit.
   tenths of a millimetre).
 - **Print Preview is npad's own window** (not GTK's PDF-viewer hand-off).
 - **No Check for Updates** - Linux updates come from the package manager.
-- **The context menu** is still GTK's stock one (batch D1).
+- **Ctrl+drop inserts at the drop point**, not at the caret as Win32 does
+  (there the caret is all there is; here the drop has coordinates). Whether Ctrl
+  is visible during a drag depends on the display server and on what you drag
+  from, so `ctrl_is_down()` asks both the keyboard and the pointer state and
+  remembers the value from the last motion over the window.
+- **External-change dialog** is a plain GtkDialog built like Win32's command
+  links (an action, then a dim line saying what it does) with the same wording
+  and the same "Keep editing" default. It checks on `notify::is-active` of the
+  window.
+- **Scroll bars** are `GTK_POLICY_ALWAYS` with overlay scrolling off, and a
+  bar with nothing to scroll is made insensitive (the slider is then not drawn)
+  - GTK otherwise shows a full-length slider that looks live. The horizontal
+  bar follows the same rule when Word Wrap is off, as on Win32.
 - **Find / Replace / Go To placement.** The dialogs are transient windows
   with no position of their own, so the window manager places them (usually
   centred over npad); Win32 uses a fixed offset and remembers where you moved
@@ -277,14 +300,22 @@ version.
 - [ ] On a real desktop: a CUPS printer, the print dialog's Page Setup tab,
       HiDPI preview (see TODO.md)
 
-### Batch D1 - Editing behaviours (`ui_gtk.c`)
-- [ ] Context menu with npad's items (Undo, Redo, Cut, Copy, Paste, Delete,
-      Select All) replacing GTK's stock menu (`populate-popup`)
-- [ ] Drag a file onto the window to open it; Ctrl+drop inserts its contents
-- [ ] External-change detection on focus-in (`editor_check_external_change`;
-      Win32 `prompt_external_change` has the wording and choices)
-- [ ] Ctrl+mouse wheel zoom
-- [ ] Disabled-not-hidden vertical scroll bar, like Notepad
+### Batch D1 - Editing behaviours (`ui_gtk_edit.c`) - done in v0.35.0
+- [x] Context menu with npad's items (Undo, Redo, Cut, Copy, Paste, Delete,
+      Select All) replacing GTK's stock menu (`populate-popup`). The greying
+      is `npad_gtk_edit_command_enabled()`, shared with the Edit menu.
+      `extend_context_menu()` is the hook where batch D2 appends the Markdown
+      list items
+- [x] Drag a file onto the window to open it; Ctrl+drop inserts its contents
+      at the drop point as one undo step. `text/uri-list` is added to the text
+      view's own drop targets, so dropped text still lands as text
+- [x] External-change detection on window activation
+      (`editor_check_external_change`; Win32 `prompt_external_change` has the
+      wording and choices), gated by `watch_file_changes`
+- [x] Ctrl+mouse wheel zoom (10% steps, smooth-scroll deltas accumulated)
+- [x] Disabled-not-hidden scroll bars, like Notepad
+- [ ] On a real desktop: the popup menu, a drag from the file manager with and
+      without Ctrl (X11 and Wayland), wheel and touchpad zoom (see TODO.md)
 
 ### Batch D2 - Markdown list tools (`ui_gtk.c` + new `ui_gtk_lists.c`)
 - [ ] Markdown menu (sort, unique, case, convert delimiters, indent formats,

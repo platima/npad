@@ -7,6 +7,28 @@ this file is for open loops.
 
 ---
 
+## 🧪 Needs testing - v0.35.0 Linux editing behaviours (on Mint / Debian 13)
+
+Verified in Broadway only (which cannot paint popup menus or take a real
+drag). On a real desktop, X11 and Wayland sessions both:
+
+- [ ] Right-click and Shift+F10 / the Menu key open npad's menu (Undo, Redo,
+      Cut, Copy, Paste, Delete, Select All), greyed like the Edit menu, with no
+      GTK emoji / input-method entries
+- [ ] Dragging a text file from the file manager onto the window opens it
+      (save prompt when modified); Ctrl+drag inserts its text at the drop
+      point - check that Ctrl is seen mid-drag on Wayland and on X11 and from
+      each file manager (Nemo, Nautilus, Dolphin)
+- [ ] Dragging selected text within the window still moves it; text dragged in
+      from another app is inserted as text
+- [ ] With `watch_file_changes` on, `echo >> file` from a terminal and then
+      clicking npad shows the Reload / Save as / Keep editing dialog, centred
+      over npad; Keep and Esc do not ask again until the next change
+- [ ] Ctrl+wheel steps the zoom by 10% on a mouse and does not run away on a
+      touchpad; plain wheel and Shift+wheel still scroll
+- [ ] The scroll bars are always visible and greyed out when the text fits, on
+      the Mint theme and a dark theme, with Word Wrap on and off
+
 ## 🧪 Needs testing - v0.34.0 Linux Find / Replace / Go To (on Mint / Debian 13)
 
 Verified in Broadway only. On a real desktop:

@@ -5,6 +5,52 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.35.0] - Unreleased
+
+Linux editing behaviours: npad's own context menu, dropping files onto the
+window, noticing that the open file changed on disk, Ctrl+wheel zoom and
+Notepad's always-visible scroll bar.
+
+### ✨ Highlights
+- **Linux: right-click, drag and drop, and zoom now behave like Notepad.**
+  Right-click gives npad's own menu (Undo, Redo, Cut, Copy, Paste, Delete,
+  Select All, greyed as in the Edit menu); drop a file on the window to open
+  it, or hold Ctrl to insert its text where you dropped it; Ctrl and the
+  mouse wheel zoom in 10% steps.
+- **Linux: the scroll bar stays put.** It is always on screen and greyed out
+  when the text fits, as in Notepad, rather than appearing and disappearing.
+- **Linux: Reload / Keep editing when another program changes your file**, if
+  you turn on `watch_file_changes` (off by default, as in Notepad).
+
+### 🆕 Features
+- **Linux: npad's own context menu** replaces GTK's stock text-view menu, in
+  the same order as on Windows and greyed by the same rules (it shares the code
+  that greys the Edit menu). It opens from the mouse and from Shift+F10 / the
+  Menu key. The Markdown list tools will join it in the next Linux round.
+- **Linux: drag a file onto the window** to open it, through the usual "save
+  changes?" prompt. Hold **Ctrl** while dropping and the file's text is
+  inserted at the drop point instead, as one undo step (the Windows build
+  inserts at the caret). Only the first file of a multi-file drop is used,
+  and dropped text still goes in as text.
+- **Linux: external-change detection.** With `watch_file_changes` on, bringing
+  the window forward after another program changed or deleted the open file
+  asks what to do, in Windows' wording: *Reload from disk* (discards unsaved
+  changes), *Save as a different file*, *Keep editing* - the default, which
+  Esc also chooses, because it is the only one that writes nothing - and *Stop
+  telling me about this file*. A deleted file offers no Reload. Nothing is
+  polled; the check happens on activation.
+- **Linux: Ctrl + mouse wheel zoom**, in 10% steps like Ctrl+Plus / Ctrl+Minus.
+  Smooth-scrolling wheels and touchpads are accumulated, one step per whole
+  notch, so a touchpad swipe does not run away.
+
+### 🔄 Changed
+- **Linux: the vertical scroll bar is permanent**, greyed out when the text
+  fits - like the Windows build and Notepad - instead of coming and going.
+  This also keeps the text a constant width, so wrapped lines no longer
+  reflow when a document grows past one screen. GTK's overlay scroll bars are
+  turned off for the text area, since they hide themselves whatever the
+  policy says. With Word Wrap off the horizontal bar follows the same rule.
+
 ## [0.34.0] - 2026-10-17
 
 The first release with a Linux desktop build, which installs from signed
