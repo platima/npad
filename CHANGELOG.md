@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the text fits, as in Notepad, rather than appearing and disappearing.
 - **Linux: Reload / Keep editing when another program changes your file**, if
   you turn on `watch_file_changes` (off by default, as in Notepad).
+- **Linux: a properly sized app icon, with a dark one for dark schemes.** The
+  taskbar and window-list icon no longer fills its square edge to edge, which
+  made it look big and wide beside the panel's other icons; it now has the
+  margin of a typical hicolor icon. While a dark colour scheme is active the
+  window wears the dark artwork, switching live with the scheme. The launcher
+  and software centre keep the standard icon.
 
 ### 🆕 Features
 - **Linux Preferences dialog.** A notebook of the Windows pages minus the two
@@ -69,6 +75,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reflow when a document grows past one screen. GTK's overlay scroll bars are
   turned off for the text area, since they hide themselves whatever the
   policy says. With Word Wrap off the horizontal bar follows the same rule.
+
+### 🐛 Fixed
+- **Linux: the app icon looked stretched and oversized in the panel.** The
+  hicolor PNGs were not distorted (each size is the artwork at one uniform
+  scale), but the notepad ran to the very edge of every canvas, 94% as wide as
+  it is tall, so beside the line-art icons of a MATE or Cinnamon window list it
+  read as a big, wide block. Each size is now regenerated from `assets/` with
+  a single scale factor and a transparent margin (1 px at 16, 2 at 24 and 32,
+  3 at 48, 4 at 64, 8 at 128, 16 at 256) as the Adwaita application icons
+  have, as full-colour PNGs instead of the old heavily quantised palette
+  images. `scripts/make-linux-icons.py` produces them.
+- **Linux: the window icon did not follow a dark scheme.** There is now a
+  second icon, `io.github.platima.npad-dark` (the dark artwork, same seven
+  sizes), installed beside the standard one by `make install` and both
+  packages. The main window, new dialogs and the About dialog switch to it
+  while the View > Dark Mode, Dark or Solarized Dark scheme (or a dark system
+  scheme) is active, and back when it ends. The `.desktop` launcher keeps
+  `io.github.platima.npad`, and there is still no icon preference on Linux.
+  If the dark icon is not installed (a build run from the source tree), the
+  standard icon is used.
 
 ## [0.34.0] - 2026-10-17
 

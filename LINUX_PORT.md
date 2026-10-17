@@ -264,7 +264,10 @@ Decisions taken in the foundation round. Each is easy to revisit.
   (`xdg-mime default io.github.platima.npad.desktop text/plain`), never run
   unless clicked. The page shows `xdg-mime query default text/plain`.
 - **No application-icon choice** (`icon_style` has no Linux UI): the icon
-  comes from the icon theme, so nothing here switches it.
+  comes from the icon theme. The only automatic variation is the window icon
+  following the dark scheme (`io.github.platima.npad-dark`, chosen in
+  `apply_app_icon` from `g_dark_mode`); the launcher always uses the standard
+  one and nothing is stored.
 - **The Markdown page** edits the shared keys with a note that the tools are
   not ported yet.
 - **The context menu** is still GTK's stock one (batch D1).
@@ -374,6 +377,10 @@ version.
 - [x] `io.github.platima.npad.desktop` (MimeType: text/plain and friends)
       and hicolor icons generated from `assets/`
 - [x] `make install` installs the desktop file and icons
+- [x] Icons regenerated with uniform scaling and a margin
+      (`scripts/make-linux-icons.py`), plus a `-dark` icon for the window
+      under dark schemes; `LINUX_ICON_SIZES` x `LINUX_ICON_NAMES` in the
+      Makefile and `nfpm.yaml` list the same files
 - [x] `.deb` built in CI and attached to releases
 - [x] AppStream metainfo (needed for software centres and Flathub)
 - [x] `.rpm` for Fedora (`make rpm`); `.deb` and `.rpm` both built by nfpm

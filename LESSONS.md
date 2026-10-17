@@ -547,6 +547,25 @@ accumulator fed with `-dy` is therefore reversed by `dy * accum > 0`, not
 deltas of 0.3) never reached a whole step while a mouse notch (delta 1) still
 worked - which is why it only showed in the harness, not by hand.
 
+**A square hicolor icon that fills its canvas edge to edge looks oversized and
+"stretched" in a panel.** The report was a stretched taskbar icon on Mint MATE.
+Measured against the source, no size was distorted (each file is the 512 px art
+at one uniform scale, to within antialiasing). The artwork itself is 483 x 512
+of ink, nearly square, and had been resized to the full canvas with no margin,
+while the line-art icons around it keep 1-2 px at 16-24 px; a near-square
+block with no breathing room reads as big and wide. -> Compare against the
+source before hunting an aspect-ratio bug, then give every size the
+Adwaita-style margin (`scripts/make-linux-icons.py`: crop to the ink, one scale
+factor, centre, render at 8x so the art sits on half pixels). The old files
+were also palette-quantised, which made the small sizes look rough.
+
+**Icons for light and dark are two icon *names*, not a theme.** hicolor has no
+dark variant mechanism, and the launcher's `Icon=` is read by the shell
+independent of the app. -> Install `<id>-dark` beside `<id>` and have the
+window call `gtk_window_set_icon_name` (and `gtk_window_set_default_icon_name`
+for dialogs) when `g_dark_mode` changes; GTK refreshes `_NET_WM_ICON`. The
+About dialog reads the icon name back from its owner window, so it follows.
+
 ## Installers
 
 **Inno Setup's check lists do not scale their check box offset.**

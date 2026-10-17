@@ -22,8 +22,8 @@ description: |-
 contents:
   # Files staged by `make install`. Listed one by one rather than as a tree so
   # the rpm does not claim ownership of shared directories such as
-  # /usr/share/icons/hicolor (kept in step with LINUX_ICON_SIZES in the
-  # Makefile).
+  # /usr/share/icons/hicolor (kept in step with LINUX_ICON_SIZES and
+  # LINUX_ICON_NAMES in the Makefile).
   - src: ${NPAD_STAGE}/usr/bin/npad
     dst: /usr/bin/npad
     expand: true
@@ -53,6 +53,27 @@ contents:
     expand: true
   - src: ${NPAD_STAGE}/usr/share/icons/hicolor/256x256/apps/io.github.platima.npad.png
     dst: /usr/share/icons/hicolor/256x256/apps/io.github.platima.npad.png
+    expand: true
+  - src: ${NPAD_STAGE}/usr/share/icons/hicolor/16x16/apps/io.github.platima.npad-dark.png
+    dst: /usr/share/icons/hicolor/16x16/apps/io.github.platima.npad-dark.png
+    expand: true
+  - src: ${NPAD_STAGE}/usr/share/icons/hicolor/24x24/apps/io.github.platima.npad-dark.png
+    dst: /usr/share/icons/hicolor/24x24/apps/io.github.platima.npad-dark.png
+    expand: true
+  - src: ${NPAD_STAGE}/usr/share/icons/hicolor/32x32/apps/io.github.platima.npad-dark.png
+    dst: /usr/share/icons/hicolor/32x32/apps/io.github.platima.npad-dark.png
+    expand: true
+  - src: ${NPAD_STAGE}/usr/share/icons/hicolor/48x48/apps/io.github.platima.npad-dark.png
+    dst: /usr/share/icons/hicolor/48x48/apps/io.github.platima.npad-dark.png
+    expand: true
+  - src: ${NPAD_STAGE}/usr/share/icons/hicolor/64x64/apps/io.github.platima.npad-dark.png
+    dst: /usr/share/icons/hicolor/64x64/apps/io.github.platima.npad-dark.png
+    expand: true
+  - src: ${NPAD_STAGE}/usr/share/icons/hicolor/128x128/apps/io.github.platima.npad-dark.png
+    dst: /usr/share/icons/hicolor/128x128/apps/io.github.platima.npad-dark.png
+    expand: true
+  - src: ${NPAD_STAGE}/usr/share/icons/hicolor/256x256/apps/io.github.platima.npad-dark.png
+    dst: /usr/share/icons/hicolor/256x256/apps/io.github.platima.npad-dark.png
     expand: true
 
 # libgtk-3-0t64 is the name since Debian 13 / Ubuntu 24.04 (64-bit time_t

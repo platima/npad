@@ -362,6 +362,9 @@ DATADIR ?= $(PREFIX)/share
 APP_ID = io.github.platima.npad
 LINUX_PKG_DIR = packaging/linux
 LINUX_ICON_SIZES = 16 24 32 48 64 128 256
+# The standard icon, and the dark artwork the window switches to under a dark
+# scheme (the launcher always uses the standard one)
+LINUX_ICON_NAMES = $(APP_ID) $(APP_ID)-dark
 
 # Build first (make linux-gtk); install does not, so `sudo make install` never
 # compiles as root.
@@ -375,10 +378,10 @@ else
 	install -D -m 755 $(LINUX_GTK_TARGET) $(DESTDIR)$(BINDIR)/npad
 	install -D -m 644 $(LINUX_PKG_DIR)/$(APP_ID).desktop $(DESTDIR)$(DATADIR)/applications/$(APP_ID).desktop
 	install -D -m 644 $(LINUX_PKG_DIR)/$(APP_ID).metainfo.xml $(DESTDIR)$(DATADIR)/metainfo/$(APP_ID).metainfo.xml
-	for s in $(LINUX_ICON_SIZES); do \
-		install -D -m 644 $(LINUX_PKG_DIR)/icons/hicolor/$${s}x$${s}/apps/$(APP_ID).png \
-			$(DESTDIR)$(DATADIR)/icons/hicolor/$${s}x$${s}/apps/$(APP_ID).png || exit 1; \
-	done
+	for n in $(LINUX_ICON_NAMES); do for s in $(LINUX_ICON_SIZES); do \
+		install -D -m 644 $(LINUX_PKG_DIR)/icons/hicolor/$${s}x$${s}/apps/$${n}.png \
+			$(DESTDIR)$(DATADIR)/icons/hicolor/$${s}x$${s}/apps/$${n}.png || exit 1; \
+	done; done
 endif
 
 uninstall:
@@ -389,9 +392,9 @@ else
 	rm -f $(DESTDIR)$(BINDIR)/npad $(DESTDIR)$(BINDIR)/npad-terminal
 	rm -f $(DESTDIR)$(DATADIR)/applications/$(APP_ID).desktop
 	rm -f $(DESTDIR)$(DATADIR)/metainfo/$(APP_ID).metainfo.xml
-	for s in $(LINUX_ICON_SIZES); do \
-		rm -f $(DESTDIR)$(DATADIR)/icons/hicolor/$${s}x$${s}/apps/$(APP_ID).png; \
-	done
+	for n in $(LINUX_ICON_NAMES); do for s in $(LINUX_ICON_SIZES); do \
+		rm -f $(DESTDIR)$(DATADIR)/icons/hicolor/$${s}x$${s}/apps/$${n}.png; \
+	done; done
 endif
 
 # Linux packages in dist/. Both are described once, in

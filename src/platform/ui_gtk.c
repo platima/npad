@@ -386,6 +386,26 @@ static void apply_view_css(Window *window) {
     g_string_free(family, TRUE);
 }
 
+// The window and dialog icon: npad's own hicolor icon when the package (or
+// `make install`) put it in the icon theme, the dark artwork while a dark
+// scheme is active so it does not glare from a dark panel, and otherwise a
+// stock text-editor icon so a build run from the source tree shows something.
+// Only the window icon changes: the launcher keeps the standard icon.
+static const char *app_icon_name(void) {
+    GtkIconTheme *icons = gtk_icon_theme_get_default();
+    if (g_dark_mode && gtk_icon_theme_has_icon(icons, NPAD_APP_ID "-dark"))
+        return NPAD_APP_ID "-dark";
+    return gtk_icon_theme_has_icon(icons, NPAD_APP_ID) ? NPAD_APP_ID : "accessories-text-editor";
+}
+
+// Windows and dialogs opened later, and the About dialog (which takes its logo
+// from the window it belongs to), follow the main window
+static void apply_app_icon(Window *window) {
+    const char *name = app_icon_name();
+    gtk_window_set_default_icon_name(name);
+    gtk_window_set_icon_name(GTK_WINDOW(window->window), name);
+}
+
 // Colour scheme: the text colours come from apply_view_css; the window chrome
 // follows via GTK's dark variant, so a dark scheme does not sit inside a
 // light frame
@@ -404,6 +424,7 @@ static void apply_theme(Window *window) {
     if ((current != FALSE) != dark)
         g_object_set(gtk_settings_get_default(), "gtk-application-prefer-dark-theme",
                      dark ? TRUE : FALSE, NULL);
+    apply_app_icon(window);
     apply_view_css(window);
 }
 
@@ -1446,10 +1467,7 @@ Window *ui_platform_create_main_window(void) {
 
     window->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(window->window), "npad");
-    GtkIconTheme *icons = gtk_icon_theme_get_default();
-    gtk_window_set_icon_name(GTK_WINDOW(window->window), gtk_icon_theme_has_icon(icons, NPAD_APP_ID)
-                                                             ? NPAD_APP_ID
-                                                             : "accessories-text-editor");
+    apply_app_icon(window); // Re-applied whenever the scheme changes
 
     window->accel_group = gtk_accel_group_new();
     gtk_window_add_accel_group(GTK_WINDOW(window->window), window->accel_group);
