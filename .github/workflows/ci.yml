@@ -160,9 +160,10 @@ jobs:
         retention-days: 7
 
   # .deb and .rpm: built in a Debian 12 container with nfpm and install-tested
-  # on Debian 12/13, Ubuntu 22.04/24.04 and Fedora (see packages.yml)
+  # on Debian 12/13, Ubuntu 22.04/24.04 and Fedora (see packages.yml). It does
+  # not wait for lint: it shares nothing with it, and a style finding should
+  # not hide whether the packages build.
   packages:
-    needs: lint
     uses: ./.github/workflows/packages.yml
 
   test:
