@@ -332,6 +332,35 @@ static void scheme_colors(const char *theme, const char **bg, const char **fg, b
     }
 }
 
+// Whether the GTK theme paints its own text area light. Measured on a
+// throwaway text view's style path plus its "text" node (the node that carries
+// the page colour), so npad's own provider, which sits on the real widget,
+// does not colour the answer. Unknown (a transparent node, an odd theme)
+// counts as not light: leave the theme alone.
+static bool theme_text_area_is_light(void) {
+    GtkWidget *probe = g_object_ref_sink(gtk_text_view_new());
+    GtkWidgetPath *path = gtk_widget_path_copy(gtk_widget_get_path(probe));
+    gtk_widget_path_append_type(path, GTK_TYPE_TEXT_VIEW);
+    gtk_widget_path_iter_set_object_name(path, -1, "text");
+
+    GtkStyleContext *context = gtk_style_context_new();
+    gtk_style_context_set_path(context, path);
+    gtk_widget_path_unref(path);
+
+    GdkRGBA *background = NULL;
+    gtk_style_context_get(context, GTK_STATE_FLAG_NORMAL, "background-color", &background, NULL);
+    bool light = false;
+    if (background) {
+        light =
+            background->alpha > 0.5 &&
+            0.299 * background->red + 0.587 * background->green + 0.114 * background->blue > 0.5;
+        gdk_rgba_free(background);
+    }
+    g_object_unref(context);
+    g_object_unref(probe);
+    return light;
+}
+
 // Font, zoom and colours all live in one CSS provider on the text view.
 // Zoom scales the point size, which is what RichEdit's EM_SETZOOM amounts to.
 static void apply_view_css(Window *window) {
@@ -363,6 +392,13 @@ static void apply_view_css(Window *window) {
     const char *fg = NULL;
     bool dark = false;
     scheme_colors(theme ? theme : "light", &bg, &fg, &dark);
+    // `system` is the GTK theme's own colours - but a dark desktop with a theme
+    // that keeps its text area white (BlackMATE, many others) would show a
+    // white page in dark chrome. Then the dark scheme's colours stand in.
+    if (!bg && dark && theme && strcmp(theme, "system") == 0 && theme_text_area_is_light()) {
+        bg = "#1e1e1e";
+        fg = "#dcdcdc";
+    }
     free(theme);
 
     gchar *css;

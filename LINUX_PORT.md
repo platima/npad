@@ -283,6 +283,12 @@ Decisions taken in the foundation round. Each is easy to revisit.
   Nothing is written to the desktop's settings; no sibling installed means no
   change. Found on Mint MATE, where the portal reported dark and npad stayed
   light.
+- **`system` on a dark desktop with a theme whose text area stays white**
+  (BlackMATE) uses the Dark scheme's page colours (#1e1e1e on #dcdcdc);
+  `theme_text_area_is_light()` measures the theme's own `textview text`
+  background on a throwaway text view's style path. A theme with a dark text
+  area, or a desktop that is light or has no preference, keeps the theme's
+  colours.
 - **Settings directory** is `$XDG_CONFIG_HOME/npad` when that is set and
   absolute, else `~/.config/npad` (Windows keeps `%APPDATA%\Platima\npad`).
   An existing `~/.config/npad/settings.json` is read when the new location has

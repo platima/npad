@@ -86,6 +86,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Mint-Y-Dark-Aqua`, `Arc` -> `Arc-Dark`) for a dark scheme, and back when the
   scheme turns light. Nothing is written to your desktop's settings, and if no
   sibling is installed the frame stays as it was.
+- **Linux: `system` no longer shows a white page in dark chrome.** Some dark
+  themes (BlackMATE, found on Mint MATE) keep their text areas white. When the
+  desktop prefers dark and the theme's own text area is light, `system` now
+  uses the Dark scheme's page colours instead; a theme with a genuinely dark
+  text area is left alone.
 - **Settings honour `$XDG_CONFIG_HOME` (Linux).** Settings and crash-recovery
   snapshots live in `$XDG_CONFIG_HOME/npad` when the variable is set to an
   absolute path (an empty or relative value is ignored, per the XDG spec),

@@ -590,6 +590,15 @@ replaced so a light scheme can put it back (`apply_chrome_variant`). Test it
 with fake `FakeTheme` / `FakeTheme-Dark` folders under a throwaway
 `XDG_DATA_HOME` and `gtk-theme-name` in a throwaway `gtk-3.0/settings.ini`.
 
+**To read what a GTK theme paints, build the path from a real widget.** The
+page colour lives on the text view's `text` child node. A `GtkWidgetPath` made
+by hand (`append_type` window, text view, then a `text` node) answers
+"transparent" for every theme; the same path copied from a throwaway
+`gtk_text_view_new()` with a `text` node appended answers correctly.
+Measure on a throwaway so npad's own provider (attached to the real text view)
+does not colour the answer. Some dark themes (BlackMATE) keep text areas white,
+so a dark `system` scheme must check the page, not just the chrome.
+
 **Broadway's monitor reports a 0x0 geometry**, so a placement check that asks
 whether a window overlaps a monitor says "off screen" for everything there.
 `position_is_reachable` skips zero-area monitors and, if none is measurable,
