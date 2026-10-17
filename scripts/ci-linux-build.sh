@@ -16,7 +16,7 @@ apt-get install -y -q --no-install-recommends \
 git config --global --add safe.directory "$PWD"
 
 make clean
-make linux-gtk
+make linux-gtk WERROR=1
 readelf -h npad-linux | grep -E 'Class|Machine'
 
 if [ "${NPAD_VALIDATE_METADATA:-}" = 1 ]; then

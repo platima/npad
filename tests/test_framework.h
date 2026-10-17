@@ -78,16 +78,18 @@ extern test_stats_t g_test_stats;
 } while(0)
 
 #define TEST_ASSERT_STR_EQ(expected, actual, message) do { \
+    const char *test_str_expected_ = (expected); \
+    const char *test_str_actual_ = (actual); \
     g_test_stats.assertions_run++; \
-    if (!expected || !actual || strcmp(expected, actual) != 0) { \
+    if (!test_str_expected_ || !test_str_actual_ || strcmp(test_str_expected_, test_str_actual_) != 0) { \
         g_test_stats.assertions_failed++; \
         g_test_stats.tests_failed++; \
         g_test_stats.tests_passed--; \
         printf("FAILED\n"); \
         printf("  Assertion failed: %s\n", message); \
         printf("  Expected: \"%s\", Actual: \"%s\"\n", \
-               expected ? expected : "(null)", \
-               actual ? actual : "(null)"); \
+               test_str_expected_ ? test_str_expected_ : "(null)", \
+               test_str_actual_ ? test_str_actual_ : "(null)"); \
         printf("  File: %s, Line: %d\n", __FILE__, __LINE__); \
         return; \
     } \

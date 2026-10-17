@@ -238,7 +238,7 @@ static double qpc_ms(void) {
 #define MAX_RECENT_MENU_FILES 10
 
 // Window structure
-typedef struct Window {
+struct Window {
     HWND hwnd;
     HWND edit_hwnd;
     HWND status_hwnd;
@@ -276,7 +276,7 @@ typedef struct Window {
     bool line_cut_pending;      // Last Ctrl+X was a whole-line cut (paste-above mode)
     DWORD line_cut_clip_seq;    // Clipboard sequence number right after that cut
     bool update_item_available; // Help update item currently shows "Update Available"
-} Window;
+};
 
 // Global variables
 static HINSTANCE g_hinstance = NULL;
@@ -332,7 +332,6 @@ static bool g_search_down = true;
 static bool g_wrap_around = true;
 static bool g_interpret_escapes = false;  // Interpret \n \t \\ \uXXXX in find/replace
 static bool g_highlight_all = false;      // Highlight every match while the dialog is open
-static bool g_highlights_applied = false; // Highlight overlay currently has matches
 
 // Highlight-all overlay match list, sorted ascending (drawn over the text in
 // the WM_PAINT hook; the control's plain-text mode rejects per-range
@@ -3346,7 +3345,6 @@ static void refresh_highlights(const Window *window, bool want) {
         }
     }
 
-    g_highlights_applied = g_hl_count > 0;
     if (had || g_hl_count)
         InvalidateRect(e, NULL, TRUE);
 }

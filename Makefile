@@ -4,6 +4,10 @@
 # Compiler settings
 CC ?= gcc
 CFLAGS = -Wall -Wextra -std=c99 -O2
+# WERROR=1 turns every compiler warning into an error (CI sets it)
+ifeq ($(WERROR),1)
+CFLAGS += -Werror
+endif
 LDFLAGS =
 
 # Platform detection

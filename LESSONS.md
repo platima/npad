@@ -928,6 +928,16 @@ when the window is already active, and `gtk_window_present` makes Broadway
 activate it. Never put C string literals through a shell heredoc to write the
 harness: a backslash-n in a string literal came out as a real newline twice.
 
+**Compiler warnings did not fail CI, so a use-after-free merged.** GCC
+reported `-Wuse-after-free` for PR #19's `editor_open_file`, the build stayed
+green, and nobody read the log; #25 fixed it. CI now builds with
+`make WERROR=1` (adds `-Werror`): the Windows x64/arm64, Linux, unit test and
+package builds. Local builds stay lenient. GCC and clang disagree, so a clean
+GCC build is not enough: clang (llvm-mingw, arm64) flagged an unused
+variable, a C11-only typedef redefinition and a set-but-unused global that
+GCC accepted. Check `make WERROR=1 test linux windows windows-arm64` before
+pushing, and fix the cause rather than silencing the warning.
+
 ## Method
 
 **Measure before optimising, and let the measurement kill the hypothesis.** Two

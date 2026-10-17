@@ -195,6 +195,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   amd64 and arm64 on Debian 12/13, Ubuntu 22.04/24.04 and Fedora; riscv64
   under QEMU on Debian 13, Ubuntu 24.04 and openSUSE Tumbleweed (Fedora has no
   riscv64 image).
+- **Compiler warnings now fail CI.** `make WERROR=1` adds `-Werror`, and every
+  CI build uses it (Windows x64 and arm64, Linux, the unit tests and the
+  packages), after PR #19's use-after-free merged with GCC warning about it.
+  The warnings that surfaced under GCC and clang were fixed in the code and
+  tests, with no behaviour change. Local builds are unchanged.
 - **Release dry run.** `release.yml` can be run by hand (`gh workflow run
   release.yml -f version=v0.35.0`): it builds, signs, install-tests and
   validates every asset exactly as a tag would, and publishes nothing.
