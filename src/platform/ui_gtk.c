@@ -430,7 +430,7 @@ static void set_status_bar_visible(Window *window, bool visible) {
 // A user-initiated zoom or font type change in this window. Honours the two
 // opt-in preferences: make it the default for new windows, and mirror it live
 // in the other windows.
-static void on_view_state_changed(Window *window) {
+static void on_view_state_changed(const Window *window) {
     if (settings_get_bool("auto_update_defaults", false)) {
         settings_set_bool("default_font_mono", window->monospace_current);
         settings_set_int("default_zoom", window->zoom);
@@ -627,7 +627,7 @@ static void on_popup_activate(GtkMenuItem *item, gpointer data) {
 
 // Clicks on the status segments: Ln/Col -> Go To, zoom -> reset, font mode ->
 // toggle monospace, line ending / encoding -> pickers (as on Win32)
-static gboolean on_status_click(GtkWidget *widget, GdkEventButton *event, gpointer data) {
+static gboolean on_status_click(GtkWidget *widget, const GdkEventButton *event, gpointer data) {
     if (event->type != GDK_BUTTON_PRESS || event->button != 1)
         return FALSE;
     Window *window = g_gtk_main_window;
@@ -806,10 +806,11 @@ static void apply_new_window_pref(Window *window) {
 }
 
 static void on_recent_activate(GtkMenuItem *item, gpointer data) {
-    Window *window = data;
     const char *path = g_object_get_data(G_OBJECT(item), "npad-path");
-    if (path)
+    if (path) {
+        Window *window = data;
         ui_post_event(UI_EVENT_FILE_DROPPED, window, (void *) path);
+    }
 }
 
 // Rebuild File > Recent Files from settings (every time File opens)
@@ -1283,7 +1284,7 @@ static gboolean on_configure_event(GtkWidget *widget, GdkEventConfigure *event, 
     return FALSE;
 }
 
-static gboolean on_window_state_event(GtkWidget *widget, GdkEventWindowState *event,
+static gboolean on_window_state_event(GtkWidget *widget, const GdkEventWindowState *event,
                                       gpointer data) {
     (void) widget;
     Window *window = data;
@@ -1557,7 +1558,7 @@ void ui_platform_set_window_maximized(Window *window, bool maximized) {
         gtk_window_unmaximize(GTK_WINDOW(window->window));
 }
 
-bool ui_platform_is_window_maximized(Window *window) {
+bool ui_platform_is_window_maximized(const Window *window) {
     return window && window->maximized;
 }
 
@@ -1728,11 +1729,11 @@ void ui_platform_redo(Window *window) {
     undo_apply(window, true);
 }
 
-bool ui_platform_can_undo(Window *window) {
+bool ui_platform_can_undo(const Window *window) {
     return window && undo_can_undo(window->undo);
 }
 
-bool ui_platform_can_redo(Window *window) {
+bool ui_platform_can_redo(const Window *window) {
     return window && undo_can_redo(window->undo);
 }
 
@@ -1762,7 +1763,7 @@ bool ui_platform_system_supports_dark_mode(void) {
 // ui_platform_*: status and timers
 // ---------------------------------------------------------------------------
 
-bool ui_platform_is_text_modified(Window *window) {
+bool ui_platform_is_text_modified(const Window *window) {
     return window && window->is_modified;
 }
 

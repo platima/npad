@@ -5,6 +5,18 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.35.1] - 2026-10-17
+
+### 🔧 Internal
+- **The GTK port now passes `make lint`.** The Linux branch was never linted
+  (CI only lints pull requests into `main`), so cppcheck 2.13 found ten style
+  issues in the GTK files: const-qualified the GDK event parameters of the
+  status-bar click, window-state, Find dialog and print preview key callbacks,
+  made the window parameter of the `ui_is_window_maximized` / `ui_can_undo` /
+  `ui_can_redo` / `ui_is_text_modified` queries (and their `ui_platform_*`
+  implementations on every platform) `const`, and narrowed the
+  scope of a local in the Recent Files handler. No behaviour change.
+
 ## [0.35.0] - 2026-10-16
 
 ### 🆕 Features
