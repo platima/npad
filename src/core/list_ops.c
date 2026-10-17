@@ -395,12 +395,14 @@ char *list_bullet_marker(ListIndentFormat fmt, const char *custom_prefix) {
 #define NEST "  " // Two spaces: markdown nesting step for an already-marked line
 
 // Length of the bullet marker at s (leading whitespace already skipped):
-// the custom marker body if it matches, else the built-in "* " / "- " -- or
-// their space-less forms when the line ends right after them (empty bullets,
-// pre-0.13 documents). ANY marker style counts regardless of the configured
-// format, so mixed lists still deepen/unindent instead of stacking a second
-// marker. "*emphasis*" is NOT a bullet. 0 when s does not start a bullet.
-static size_t marker_at(const char *s, size_t len, const char *custom) {
+// the custom marker body if it matches, else the built-in "* " / "- ". With
+// allow_bare the space-less forms also count when the text ends right after
+// them (empty bullets, pre-0.13 documents); without it a lone "-" the user
+// is still typing is not yet a bullet. ANY marker style counts regardless of
+// the configured format, so mixed lists still deepen/unindent instead of
+// stacking a second marker. "*emphasis*" is NOT a bullet. 0 when s does not
+// start a bullet.
+size_t list_marker_length(const char *s, size_t len, const char *custom, bool allow_bare) {
     if (custom) {
         const char *body = custom;
         while (*body == ' ' || *body == '\t')
@@ -412,15 +414,19 @@ static size_t marker_at(const char *s, size_t len, const char *custom) {
             size_t tl = bl;
             while (tl > 0 && (body[tl - 1] == ' ' || body[tl - 1] == '\t'))
                 tl--;
-            if (tl > 0 && len == tl && memcmp(s, body, tl) == 0)
+            if (allow_bare && tl > 0 && len == tl && memcmp(s, body, tl) == 0)
                 return tl;
         }
     }
     if (len >= 2 && (s[0] == '*' || s[0] == '-') && s[1] == ' ')
         return 2;
-    if (len == 1 && (s[0] == '*' || s[0] == '-'))
+    if (allow_bare && len == 1 && (s[0] == '*' || s[0] == '-'))
         return 1;
     return 0;
+}
+
+static size_t marker_at(const char *s, size_t len, const char *custom) {
+    return list_marker_length(s, len, custom, true);
 }
 
 // Does the line already carry a bullet (optionally behind nesting spaces)?
