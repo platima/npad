@@ -10,8 +10,11 @@ on:
       - '**.md'
       - 'CNAME'
       - '.github/workflows/pages.yml'
+  # PRs into linux (the Linux port's integration branch) get the full run
+  # too: it is the only place the port meets CI's cppcheck before a release.
+  # Plain pushes to linux still build nothing.
   pull_request:
-    branches: [ main ]
+    branches: [ main, linux ]
     paths-ignore:
       - 'site/**'
       - '**.md'
