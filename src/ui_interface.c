@@ -33,7 +33,7 @@ extern void ui_platform_set_window_size(Window *window, int width, int height);
 extern void ui_platform_get_window_position(Window *window, int *x, int *y);
 extern void ui_platform_set_window_position(Window *window, int x, int y);
 extern void ui_platform_set_window_maximized(Window *window, bool maximized);
-extern bool ui_platform_is_window_maximized(Window *window);
+extern bool ui_platform_is_window_maximized(const Window *window);
 extern void ui_platform_get_default_window_rect(int *x, int *y, int *width, int *height);
 
 // Platform text functions
@@ -54,8 +54,8 @@ extern void ui_platform_paste(Window *window);
 // Platform undo/redo functions
 extern void ui_platform_undo(Window *window);
 extern void ui_platform_redo(Window *window);
-extern bool ui_platform_can_undo(Window *window);
-extern bool ui_platform_can_redo(Window *window);
+extern bool ui_platform_can_undo(const Window *window);
+extern bool ui_platform_can_redo(const Window *window);
 
 // Platform dialog functions
 extern char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *params);
@@ -78,7 +78,7 @@ extern bool ui_platform_is_dark_mode(void);
 extern bool ui_platform_system_supports_dark_mode(void);
 
 // Platform status functions
-extern bool ui_platform_is_text_modified(Window *window);
+extern bool ui_platform_is_text_modified(const Window *window);
 extern void ui_platform_set_text_modified(Window *window, bool modified);
 extern int ui_platform_get_line_count(Window *window);
 extern void ui_platform_get_cursor_line_column(Window *window, int *line, int *column);
@@ -151,7 +151,7 @@ void ui_set_window_maximized(Window *window, bool maximized) {
     ui_platform_set_window_maximized(window, maximized);
 }
 
-bool ui_is_window_maximized(Window *window) {
+bool ui_is_window_maximized(const Window *window) {
     return ui_platform_is_window_maximized(window);
 }
 
@@ -216,11 +216,11 @@ void ui_redo(Window *window) {
     ui_platform_redo(window);
 }
 
-bool ui_can_undo(Window *window) {
+bool ui_can_undo(const Window *window) {
     return ui_platform_can_undo(window);
 }
 
-bool ui_can_redo(Window *window) {
+bool ui_can_redo(const Window *window) {
     return ui_platform_can_redo(window);
 }
 
@@ -288,7 +288,7 @@ bool ui_system_supports_dark_mode(void) {
     return ui_platform_system_supports_dark_mode();
 }
 
-bool ui_is_text_modified(Window *window) {
+bool ui_is_text_modified(const Window *window) {
     return ui_platform_is_text_modified(window);
 }
 

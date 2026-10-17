@@ -829,7 +829,7 @@ static void on_preview_close(GtkButton *button, gpointer data) {
     preview_close(data, PREVIEW_THEN_NOTHING);
 }
 
-static gboolean on_preview_key(GtkWidget *widget, GdkEventKey *event, gpointer data) {
+static gboolean on_preview_key(GtkWidget *widget, const GdkEventKey *event, gpointer data) {
     (void) widget;
     PreviewState *ps = data;
     bool ctrl = (event->state & GDK_CONTROL_MASK) != 0;
