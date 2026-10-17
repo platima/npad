@@ -50,7 +50,7 @@ Every change in this release: [CHANGELOG.md](https://github.com/$repo/blob/$tag/
 
 ### Downloads
 
-**Windows** (x64; code-signed)
+**Windows** (x64)
 - \`npad-$tag-setup-win-x64.exe\` - installer (per-user by default; system-wide available)
 - \`npad-$tag-msi-win-x64.msi\` - MSI for silent or managed deployment (\`msiexec /i npad-$tag-msi-win-x64.msi /qn\`)
 - \`npad-$tag-portable-win-x64.exe\` - portable, no installation
