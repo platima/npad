@@ -504,7 +504,7 @@ Window does). Not intended for direct use.
   - **Page Setup** (File menu) sets margins, orientation and paper. Margins are
     persisted in thousandths of an inch, so they mean the same thing on a
     metric and an imperial machine.
-  - **Header and footer** are set on Preferences > General, and use the same
+  - **Header and footer** are set on Preferences > Defaults, and use the same
     codes as notepad.exe:
 
     | Code | Prints |
