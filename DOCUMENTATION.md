@@ -150,9 +150,10 @@ writes the new file on the next save; the old file is never moved or deleted.
 
 ## Linux
 
-The Linux desktop build (GTK 3; one binary for X11 and Wayland) is in
-progress. It shares the settings keys and behaviour described here; what is
-ported so far, and the deliberate differences (window position on Wayland,
+The Linux desktop build (GTK 3; one binary for X11 and Wayland) has every
+feature of the Windows build and is in beta while it is tested on real
+desktops. It shares the settings keys and behaviour described here; its
+status, and the deliberate differences (window position on Wayland,
 colour schemes against a dark GTK theme, the Text Documents filter, no Check
 for Updates), are tracked in [LINUX_PORT.md](LINUX_PORT.md).
 

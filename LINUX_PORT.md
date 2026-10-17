@@ -6,7 +6,13 @@ difference should behave exactly as it does there (see
 [DOCUMENTATION.md](DOCUMENTATION.md)). Read [LESSONS.md](LESSONS.md) first, in
 particular its **GTK / Linux** section.
 
-## Status (v0.35.0 - Preferences and Font; Find, printing and packaging from v0.34.0)
+## Status (v0.35.0 - every Windows feature ported)
+
+Every command and preference of the Windows build now works here: batches
+A to F below are done, and `command_available()` in `ui_gtk.c` no longer
+withholds anything. What remains is checking each batch on a real X11 and
+Wayland desktop (the "Needs testing" lists in [TODO.md](TODO.md)), and the
+deliberate differences listed further down.
 
 **Verified** (Broadway under WSL): the window, menu bar and status bar render;
 opening a file from the command line (UTF-8 and emoji intact, path stored
@@ -347,10 +353,6 @@ Decisions taken in the foundation round. Each is easy to revisit.
   following the dark scheme (`io.github.platima.npad-dark`, chosen in
   `apply_app_icon` from `g_dark_mode`); the launcher always uses the standard
   one and nothing is stored.
-- **The Markdown page** edits the shared keys with a note that the tools are
-  not ported yet.
-- **The context menu** is still GTK's stock one (batch D1).
-  comes from the icon theme, so nothing here switches it.
 - **Cut-line paste-above** keeps the cut text and compares it with the
   clipboard's (Win32 compares clipboard sequence numbers, which GTK lacks), so
   the same text copied elsewhere in between would still paste above.
@@ -359,7 +361,6 @@ Decisions taken in the foundation round. Each is easy to revisit.
   accelerators on those items).
 - **A transform that changes nothing is not an edit** (no undo step, the document
   stays unmodified); Win32 replaces the text regardless.
-- **No Check for Updates** - Linux updates come from the package manager.
 - **Ctrl+drop inserts at the drop point**, not at the caret as Win32 does
   (there the caret is all there is; here the drop has coordinates). Whether Ctrl
   is visible during a drag depends on the display server and on what you drag
@@ -538,5 +539,8 @@ decoding is exercised directly.
 
 ## Known issues
 
-- Not yet run on a real X11 or Wayland session (only Broadway): window
-  placement, the portal file chooser and HiDPI need a check on Mint.
+- Only the foundation has been run on a real desktop (Mint and Debian 13);
+  batches A to F were verified in Broadway, and installs of every
+  architecture in CI containers. Window placement, the portal file chooser,
+  HiDPI and the rest of TODO.md's "Needs testing" lists still need a pass
+  on X11 and Wayland, and arm64 / riscv64 a launch on real hardware.

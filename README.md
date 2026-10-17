@@ -95,7 +95,6 @@ Current features (Windows build):
 
 Planned (see the [Roadmap](#roadmap)):
 
-- 🚧 Linux desktop build (GTK 3, X11 and Wayland) - in progress, see [LINUX_PORT.md](LINUX_PORT.md)
 - 🚧 macOS and terminal builds
 - 🚧 Optional tabbed interface
 - 🚧 Multi-language support
@@ -152,7 +151,7 @@ Settings include window position, auto-save preferences, theme selection, and ot
 |----------|--------|---------|---------------|
 | Windows  | ✅ Active Development | Win32 API | x64, arm64 (Windows on Arm) |
 | macOS    | 🚧 Planned | Cocoa | |
-| Linux    | 🚧 In progress ([status](LINUX_PORT.md)) | GTK 3 (X11 & Wayland) | amd64, arm64, riscv64 |
+| Linux    | 🧪 Beta: every Windows feature, real-desktop testing under way ([status](LINUX_PORT.md)) | GTK 3 (X11 & Wayland) | amd64, arm64, riscv64 |
 | *nix Terminal | 🚧 Planned | ncurses |
 | Windows Terminal | 🚧 Planned | Windows Console API |
 
@@ -417,7 +416,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] Appear in Windows' "Open with" list for any file type (like notepad.exe)
 - [ ] **Cross-Platform Expansion**
   - [ ] macOS Cocoa implementation
-  - [ ] Linux GTK 3 implementation (X11 & Wayland) - first released in v0.34.0, see [LINUX_PORT.md](LINUX_PORT.md)
+  - [ ] Linux GTK 3 implementation (X11 & Wayland) - first released in v0.34.0, every Windows feature in v0.35.0; real-desktop testing under way, see [LINUX_PORT.md](LINUX_PORT.md)
   - [ ] ncurses terminal implementation
   - [ ] Windows Terminal implementation
 - [ ] **Future Considerations**
