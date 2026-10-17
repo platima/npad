@@ -6,7 +6,7 @@ difference should behave exactly as it does there (see
 [DOCUMENTATION.md](DOCUMENTATION.md)). Read [LESSONS.md](LESSONS.md) first, in
 particular its **GTK / Linux** section.
 
-## Status (v0.34.0 - Find / Replace / Go To, printing, packaging)
+## Status (v0.35.0 - Preferences and Font; Find, printing and packaging from v0.34.0)
 
 **Verified** (Broadway under WSL): the window, menu bar and status bar render;
 opening a file from the command line (UTF-8 and emoji intact, path stored
@@ -40,6 +40,20 @@ through `settings.json`, and the preview (opened from the menu and from the
 print dialog's Preview button, paging, Page Setup from inside it). Not tried:
 a real CUPS printer.
 
+**Batch B (v0.35.0):** Preferences and Format > Font are ported (`ui_gtk_prefs.c`).
+Verified in Broadway: every page rendered and driven (checkboxes, spin
+buttons, text fields, the paste radios, the sensitivity of dependent
+controls), only the changed keys written to `settings.json`, the
+OpenDyslexic-not-installed refusal, the font chooser (from the menu and from
+Appearance), Export / Import / Reset, live propagation to a second window
+(status bar, font) and the `SettingsChanged` broadcast on `dbus-monitor`, the
+hidden Debug page from Ctrl+Shift+., and the Make-default action against an
+isolated `HOME`. Not tried: Shift+click on the menu item (the Shift check
+reads `gtk_get_current_event_state`) and `xdg-mime` on a real desktop that
+tracks its own default-app database.
+
+Greyed out until ported (see the checklist): the Markdown list tools. There
+is no Check for Updates on Linux by design.
 **Batch D1 (v0.35.0):** the context menu, file drops, external-change detection,
 Ctrl+wheel zoom and the permanent scroll bar are ported (details under the
 checklist). Verified in Broadway: the menu's items and greying, a Ctrl+drop and
@@ -121,6 +135,19 @@ parallel sessions share broadwayd - use your own display number
 (`broadwayd :7` is port 8087) and a renamed copy of the binaries, because a
 sibling's `pkill broadwayd` kills yours too.
 
+More from the Preferences round: the harness `key` action cannot deliver
+Ctrl+comma or Ctrl+Shift+period - dispatch `KeyboardEvent`s on `document`
+from the javascript tool instead (`key: ','`, `code: 'Comma'`, `keyCode: 188`,
+`ctrlKey: true`) - and keys go to whichever npad window Broadway focused last.
+With several npad windows on one display, a dialog opens partly off-screen
+(top left); drive it by keyboard: a notebook tab with focus takes Right to
+change page, Tab walks the controls, Space toggles. Menu popups paint several
+seconds late (or not at all): open the menu, then `Up Return` reaches its
+last item. `broadwayd :N` serves HTTP on port 8080+N; a second broadwayd on a
+taken port logs "Address already in use" and still hands clients a socket, so
+read its log, and never copy over a binary that is still running ("Text file
+busy") - use a new file name per run.
+
 Broadway is neither X11 nor Wayland, so window placement and the portal file
 chooser still need a check on a real desktop.
 
@@ -134,6 +161,7 @@ src/platform/ui_gtk_dialogs.c   file choosers, message boxes, save / binary prom
 src/platform/ui_gtk_edit.c      context menu, file drops, external-change prompt, Ctrl+wheel zoom,
                                 inert scroll bars
 src/platform/ui_gtk_find.c      Find / Replace / Go To
+src/platform/ui_gtk_prefs.c     Preferences dialog and Format > Font
 src/platform/print_gtk.c        Page Setup, Print and Print Preview (GtkPrintOperation)
 src/platform/ui_gtk_instance.c  cross-instance messaging over D-Bus
 src/core/undo.c                 platform-neutral undo history (tests/test_undo.c)
@@ -226,6 +254,20 @@ Decisions taken in the foundation round. Each is easy to revisit.
   Windows `DMPAPER_*` equivalent is saved as custom (256 + width/length in
   tenths of a millimetre).
 - **Print Preview is npad's own window** (not GTK's PDF-viewer hand-off).
+- **No Check for Updates** - Linux updates come from the package manager, so
+  Preferences has no Updates page either.
+- **Preferences has no OK / Apply.** Each control saves and broadcasts as it
+  changes, writing only its own key; text fields and number boxes commit on
+  Enter, on losing focus and when the dialog closes. The dialog is modal, as
+  the property sheet is.
+- **Associations is one action**, "Make npad the default text editor"
+  (`xdg-mime default io.github.platima.npad.desktop text/plain`), never run
+  unless clicked. The page shows `xdg-mime query default text/plain`.
+- **No application-icon choice** (`icon_style` has no Linux UI): the icon
+  comes from the icon theme, so nothing here switches it.
+- **The Markdown page** edits the shared keys with a note that the tools are
+  not ported yet.
+- **The context menu** is still GTK's stock one (batch D1).
 - **No Check for Updates** - Linux updates come from the package manager.
 - **Ctrl+drop inserts at the drop point**, not at the caret as Win32 does
   (there the caret is all there is; here the drop has coordinates). Whether Ctrl
@@ -273,20 +315,23 @@ version.
       (`find_seed_selection`, default on, shared rule in `core/find_seed`),
       including when the dialog is already open
 
-### Batch B - Preferences and Font (new `ui_gtk_prefs.c`)
-- [ ] GtkNotebook dialog with the General, Appearance, Defaults, Backup and
-      Markdown pages, and the hidden Debug page (Ctrl+Shift+.)
-- [ ] Every change saves immediately and calls `ui_notify_settings_changed()`
-- [ ] General page: a **Fill Find with the selected text** checkbox bound to
-      `find_seed_enabled()` / `FIND_SEED_KEY` (`core/find_seed.h`, default on;
-      the Find dialog already honours it). Reset must remove that key
+### Batch B - Preferences and Font (new `ui_gtk_prefs.c`) - done in v0.35.0
+- [x] GtkNotebook dialog with the General, Appearance, Defaults, Markdown,
+      Backup and Associations pages, and the hidden Debug page (Ctrl+Shift+.
+      or Shift+click Preferences)
+- [x] Every change saves immediately and calls `ui_notify_settings_changed()`;
+      each control writes only its own key
+- [x] General page: a **Fill Find with the selected text** checkbox bound to
+      `FIND_SEED_KEY` (`core/find_seed.h`, default on). Reset removes that key
       explicitly - it starts with `find_`, which the keep-list preserves
       (see `reset_all_preferences` in `ui_win32.c`)
-- [ ] Export / import / reset settings
-- [ ] Format > Font: GtkFontChooserDialog writing the font keys
-- [ ] Linux replacements for the Windows-only pages: Associations becomes a
-      "make npad the default text editor" action (`xdg-mime`), Updates is
-      dropped
+- [x] Export / import / reset settings
+- [x] Format > Font: GtkFontChooserDialog writing the font keys
+- [x] Linux replacements for the Windows-only pages: Associations is a "make
+      npad the default text editor" action (`xdg-mime`), Updates is dropped
+- [ ] On a real desktop: `xdg-mime` against GNOME / Cinnamon's own default-app
+      database, the portal file chooser behind Export / Import, and
+      Shift+click on the Preferences menu item
 
 ### Batch C - Printing (new `print_gtk.c`) - done in v0.34.0
 - [x] Page Setup, Print, Print Preview via GtkPrintOperation. The preview is
