@@ -82,6 +82,10 @@ static struct {
     // Changes made in the dialog and not applied yet: setting key -> Staged.
     // Nothing reaches settings.json until Apply or OK, and Cancel drops them.
     GHashTable *staged;
+    bool memory_dirty; // A failed save left applied values in memory only
+
+    GtkWidget *spins[8]; // Every number box: typed text counts before it is committed
+    int spin_count;
 
     GtkWidget *bools[16]; // Plain checkboxes bound to a bool key (see add_check)
     int bool_count;
@@ -109,11 +113,12 @@ static struct {
 
 // Persist what was written to the settings, tell the other instances and
 // re-apply it here
-static void commit(void) {
+static bool commit(void) {
     if (!settings_save())
-        return; // Reloading would throw the unsaved change away
+        return false; // Reloading would throw the unsaved change away
     ui_notify_settings_changed();
     npad_gtk_reload_and_apply_settings(P.owner);
+    return true;
 }
 
 // --- Staged changes ---------------------------------------------------------
@@ -137,10 +142,27 @@ static void free_staged(gpointer data) {
     g_free(staged);
 }
 
+static const char *bound_key(GtkWidget *widget);
+static int bound_default(GtkWidget *widget);
+
+// Typed in a number box and not committed yet (Enter or focus leaving), so not
+// staged: does its text hold a different valid number than the setting?
+static bool spin_text_differs(GtkWidget *spin) {
+    const char *text = gtk_entry_get_text(GTK_ENTRY(spin));
+    char *end = NULL;
+    gint64 typed = g_ascii_strtoll(text, &end, 10);
+    if (end == text || *end != '\0')
+        return false;
+    return typed != settings_get_int(bound_key(spin), bound_default(spin));
+}
+
 static void update_apply_button(void) {
-    if (P.dialog && P.staged)
-        gtk_dialog_set_response_sensitive(GTK_DIALOG(P.dialog), GTK_RESPONSE_APPLY,
-                                          g_hash_table_size(P.staged) > 0);
+    if (!P.dialog || !P.staged)
+        return;
+    bool pending = g_hash_table_size(P.staged) > 0;
+    for (int i = 0; i < P.spin_count && !pending; i++)
+        pending = spin_text_differs(P.spins[i]);
+    gtk_dialog_set_response_sensitive(GTK_DIALOG(P.dialog), GTK_RESPONSE_APPLY, pending);
 }
 
 // Record (or, when it equals the current setting, drop) one pending change
@@ -189,9 +211,9 @@ static void write_staged(const char *key, const Staged *entry) {
 }
 
 // Apply: write every staged change, save, broadcast, and re-apply here
-static void apply_staged(void) {
+static bool apply_staged(void) {
     if (!P.staged || g_hash_table_size(P.staged) == 0)
-        return;
+        return true;
 
     bool sync_turned_on = false;
     const Staged *session = NULL;
@@ -213,15 +235,21 @@ static void apply_staged(void) {
     if (session)
         editor_enable_session_resume(session->number != 0); // Off also drops the snapshot
 
+    // Saved or not, the values are now in memory. Only a successful save
+    // clears the staging, so Apply / OK can retry a failed one.
+    P.memory_dirty = true;
+    if (!commit())
+        return false;
+    P.memory_dirty = false;
     g_hash_table_remove_all(P.staged);
     update_apply_button();
-    commit();
 
     // Enabling sync brings the other windows into line with this one right
     // away, not only on the next zoom or font change. They turn sync on from
     // the settings broadcast above, then adopt the view state sent here.
     if (sync_turned_on && P.owner)
         npad_gtk_instance_broadcast_view_state(P.owner->zoom, P.owner->monospace_current);
+    return true;
 }
 
 static void show_message(GtkWindow *parent, GtkMessageType type, const char *text) {
@@ -321,12 +349,23 @@ static void on_int_changed(GtkSpinButton *spin, gpointer data) {
     stage_int(bound_key(widget), gtk_spin_button_get_value_as_int(spin), bound_default(widget));
 }
 
+// Typing in the box changes its text before the value is committed
+static void on_spin_text_changed(GtkEditable *editable, gpointer data) {
+    (void) editable;
+    (void) data;
+    if (!P.loading)
+        update_apply_button();
+}
+
 static GtkWidget *add_spin(GtkWidget *box, const char *mnemonic, const char *key, int fallback,
                            int min, int max) {
     GtkWidget *spin = gtk_spin_button_new_with_range(min, max, 1);
     gtk_spin_button_set_numeric(GTK_SPIN_BUTTON(spin), TRUE);
     bind_key(spin, key, fallback);
     g_signal_connect(spin, "value-changed", G_CALLBACK(on_int_changed), NULL);
+    g_signal_connect(spin, "changed", G_CALLBACK(on_spin_text_changed), NULL);
+    if (P.spin_count < (int) (sizeof(P.spins) / sizeof(P.spins[0])))
+        P.spins[P.spin_count++] = spin;
     add_row(box, mnemonic, spin);
     return spin;
 }
@@ -1146,10 +1185,8 @@ static void build_debug(GtkWidget *notebook) {
 // A spin button only reports a number when it is read (Enter, focus leaving,
 // the arrows): read the half-typed ones before applying
 static void read_pending_spins(void) {
-    GtkWidget *spins[] = { P.autosave_spin, P.large_spin, P.recent_spin, P.session_spin,
-                           P.zoom_spin };
-    for (size_t i = 0; i < sizeof(spins) / sizeof(spins[0]); i++)
-        gtk_spin_button_update(GTK_SPIN_BUTTON(spins[i]));
+    for (int i = 0; i < P.spin_count; i++)
+        gtk_spin_button_update(GTK_SPIN_BUTTON(P.spins[i]));
 }
 
 void npad_gtk_show_preferences(Window *window, bool show_debug) {
@@ -1196,14 +1233,24 @@ void npad_gtk_show_preferences(Window *window, bool show_debug) {
     // Apply keeps the dialog open; OK applies and closes; Cancel, Escape, the
     // close box and Reset drop whatever is still staged
     gint response;
-    while ((response = gtk_dialog_run(GTK_DIALOG(P.dialog))) == GTK_RESPONSE_APPLY) {
+    for (;;) {
+        response = gtk_dialog_run(GTK_DIALOG(P.dialog));
+        if (response != GTK_RESPONSE_APPLY && response != GTK_RESPONSE_OK)
+            break;
         read_pending_spins();
-        apply_staged();
+        if (apply_staged()) {
+            if (response == GTK_RESPONSE_OK)
+                break;
+            continue;
+        }
+        // The save failed: stay open with the changes still staged so the
+        // user can fix the cause and retry
+        show_message(GTK_WINDOW(P.dialog), GTK_MESSAGE_WARNING,
+                     "npad could not save the settings. Check that the settings folder is "
+                     "writable, then try again.");
     }
-    if (response == GTK_RESPONSE_OK) {
-        read_pending_spins();
-        apply_staged();
-    }
+    if (P.memory_dirty)
+        npad_gtk_reload_and_apply_settings(window); // Drop values that never reached disk
     gtk_widget_destroy(P.dialog);
     g_hash_table_destroy(P.staged);
     memset(&P, 0, sizeof(P));
