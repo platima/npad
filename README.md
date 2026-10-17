@@ -202,8 +202,29 @@ installer reference (tasks, features, fonts, the Windows 11 notepad alias).
 - 🐧 **`npad_<version>_amd64.deb`** - Linux (Debian 12/13, Ubuntu 22.04+, Mint):
   `sudo apt install ./npad_<version>_amd64.deb`. Installs the GTK 3 desktop app
   (X11 and Wayland) with its launcher entry, icons and AppStream metadata.
+- 🐧 **`npad-<version>-1.x86_64.rpm`** - Linux (Fedora):
+  `sudo dnf install ./npad-<version>-1.x86_64.rpm`.
   From source instead: `make linux-gtk && sudo make install` (honours `PREFIX`
   and `DESTDIR`; `sudo make uninstall` removes it).
+
+**Linux updates through your package manager.** Add the signed npad
+repository once and `apt upgrade` / `dnf upgrade` keep npad current
+(packages and key served from <https://pkg.npad.dev>):
+
+```bash
+# Debian, Ubuntu, Mint
+sudo install -d -m 0755 /etc/apt/keyrings
+sudo curl -fsSL https://pkg.npad.dev/npad.asc -o /etc/apt/keyrings/npad.asc
+sudo curl -fsSL https://pkg.npad.dev/npad.sources -o /etc/apt/sources.list.d/npad.sources
+sudo apt update && sudo apt install npad
+
+# Fedora
+sudo curl -fsSL https://pkg.npad.dev/npad.repo -o /etc/yum.repos.d/npad.repo
+sudo dnf install npad
+```
+
+Or run `curl -fsSL https://pkg.npad.dev/install.sh | sudo sh`, which detects
+which of the two you need. Read the script first if you prefer.
 
 **Planned:** 🎁 **Winget** - for `winget install npad`.
 

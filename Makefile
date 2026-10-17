@@ -347,7 +347,7 @@ clean:
 	find src tests -name '*.o' -delete 2>/dev/null || true
 	rm -f src/platform/npad.res
 	rm -rf build
-	rm -rf dist/npad_*
+	rm -rf dist/npad_* dist/npad-*.rpm
 	rm -f tests/test_file_ops tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md tests/test_undo tests/test_find_seed
 	rm -f tests/test_file_ops.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe tests/test_html_md.exe tests/test_undo.exe tests/test_find_seed.exe
 
@@ -392,13 +392,27 @@ else
 	done
 endif
 
-# Debian/Ubuntu package: dist/npad_<version>_<arch>.deb (needs dpkg-deb and
-# objdump). Depends on libgtk-3-0t64 | libgtk-3-0 so one package installs on
-# Debian 12/13 and Ubuntu 22.04/24.04.
+# Linux packages in dist/. Both are described once, in
+# packaging/linux/nfpm.yaml, and built by nfpm (a single static binary: CI
+# installs a pinned copy with scripts/install-nfpm.sh). Build in a Debian 12
+# container, as release CI does, so the libc floor stays low enough for
+# Debian 12 and Ubuntu 22.04.
+#   deb: npad_<version>_amd64.deb      Depends: libgtk-3-0t64 | libgtk-3-0
+#   rpm: npad-<version>-1.x86_64.rpm   Requires: gtk3
+# Without nfpm, `make deb` falls back to dpkg-deb (scripts/build-deb.sh); the
+# rpm needs nfpm.
 DEB_VERSION = $(MAJOR).$(MINOR).$(PATCH)
 
 deb: $(LINUX_GTK_TARGET)
+ifneq ($(shell command -v nfpm 2>/dev/null),)
+	sh scripts/build-package.sh deb $(DEB_VERSION) $(LINUX_GTK_TARGET) dist
+else
+	@echo "nfpm not found, using dpkg-deb (scripts/install-nfpm.sh installs nfpm)"
 	sh scripts/build-deb.sh $(DEB_VERSION) $(LINUX_GTK_TARGET) dist
+endif
+
+rpm: $(LINUX_GTK_TARGET)
+	sh scripts/build-package.sh rpm $(DEB_VERSION) $(LINUX_GTK_TARGET) dist
 
 # Help
 help:
@@ -427,7 +441,8 @@ help:
 	@echo "  clean            - Remove build artifacts"
 	@echo "  install          - Install to PREFIX (default /usr/local; honours DESTDIR)"
 	@echo "  uninstall        - Remove from PREFIX"
-	@echo "  deb              - Build dist/npad_<version>_<arch>.deb (Linux)"
+	@echo "  deb              - Build dist/npad_<version>_amd64.deb (Linux; nfpm or dpkg-deb)"
+	@echo "  rpm              - Build dist/npad-<version>-1.x86_64.rpm (Linux; needs nfpm)"
 	@echo "  help             - Show this help"
 	@echo ""
 	@echo "Variables:"
@@ -438,4 +453,4 @@ help:
 	@echo "  DEBUG=1          - Enable debug build"
 	@echo "  VERSION          - Version string (auto-detected from git)"
 
-.PHONY: all windows windows-gui windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo help detect-platform
+.PHONY: all windows windows-gui windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo help detect-platform

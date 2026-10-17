@@ -415,11 +415,29 @@ taskbar shows a generic icon however the launcher is set up.
 **A .deb built on a new Ubuntu does not install on an old Debian by default.**
 `dpkg-shlibdeps` would write `libgtk-3-0t64` (the 64-bit time_t rename in
 Debian 13 / Ubuntu 24.04), which Debian 12 and Ubuntu 22.04 do not have, and
-a `libc6` floor from the build host. -> `scripts/build-deb.sh` writes
-`libgtk-3-0t64 | libgtk-3-0` by hand and takes the libc6 floor from the
-binary's highest `GLIBC_x.y` symbol; releases build the .deb on ubuntu-22.04
-to keep that floor low. A .desktop file's name must equal the app id
+a `libc6` floor from the build host. -> `packaging/linux/nfpm.yaml` writes
+`libgtk-3-0t64 | libgtk-3-0` by hand and `scripts/build-package.sh` takes the
+libc6 floor from the binary's highest `GLIBC_x.y` symbol; releases build in a
+Debian 12 container to keep that floor low, and `packages.yml` fails if it
+rises above Ubuntu 22.04's 2.35. A .desktop file's name must equal the app id
 (`g_set_prgname`) or the shell shows a generic icon.
+
+**nfpm expands `${VAR}` in `contents` only when the entry says `expand: true`.**
+Environment variables work in `version`, `release` and the `depends` lists
+without any switch, which makes the `src:` failure ("Glob failed:
+`${STAGE}/usr/bin/npad`: no matching files") look like a bug in your path.
+Likewise `type: tree` makes the rpm *own* the directories it walks (it listed
+`/usr/share/icons/hicolor`, which belongs to hicolor-icon-theme), so
+`nfpm.yaml` lists files individually. An empty `release` gives a deb version
+without a `-1` revision; the rpm needs one.
+
+**Artifact names must be unique within a workflow run, and `release.yml` runs
+`ci.yml` first.** Both build the Linux packages through `packages.yml`, so
+that workflow takes an `artifact_name` input and the release passes its own;
+otherwise the second upload fails. Attaching to the release happens in
+`release.yml`, not in `packages.yml`, because a reusable workflow requesting
+`contents: write` makes every caller that has only read access fail at
+startup, including plain CI runs.
 
 **A `GtkComboBoxText` with an entry is not the entry's parent.** The entry sits
 inside a `GtkBox` inside the combo, so `gtk_widget_get_parent(entry)` and a
