@@ -256,10 +256,12 @@ Decisions taken in the foundation round. Each is easy to revisit.
 - **Print Preview is npad's own window** (not GTK's PDF-viewer hand-off).
 - **No Check for Updates** - Linux updates come from the package manager, so
   Preferences has no Updates page either.
-- **Preferences has no OK / Apply.** Each control saves and broadcasts as it
-  changes, writing only its own key; text fields and number boxes commit on
-  Enter, on losing focus and when the dialog closes. The dialog is modal, as
-  the property sheet is.
+- **Preferences has OK / Cancel / Apply like the property sheet.** Controls
+  stage their change (`stage_*` in `ui_gtk_prefs.c`); Apply writes only the
+  staged keys, saves, broadcasts and re-applies, OK does that and closes,
+  Cancel drops them. As on Windows the font buttons, Clear Recent Files,
+  Export / Import, the xdg-mime button and Reset act at once. The dialog is
+  modal, as the property sheet is.
 - **Associations is one action**, "Make npad the default text editor"
   (`xdg-mime default io.github.platima.npad.desktop text/plain`), never run
   unless clicked. The page shows `xdg-mime query default text/plain`.
@@ -319,8 +321,8 @@ version.
 - [x] GtkNotebook dialog with the General, Appearance, Defaults, Markdown,
       Backup and Associations pages, and the hidden Debug page (Ctrl+Shift+.
       or Shift+click Preferences)
-- [x] Every change saves immediately and calls `ui_notify_settings_changed()`;
-      each control writes only its own key
+- [x] OK / Cancel / Apply; Apply writes only the changed keys, saves and calls
+      `ui_notify_settings_changed()`
 - [x] General page: a **Fill Find with the selected text** checkbox bound to
       `FIND_SEED_KEY` (`core/find_seed.h`, default on). Reset removes that key
       explicitly - it starts with `find_`, which the keep-list preserves

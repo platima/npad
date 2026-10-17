@@ -499,8 +499,9 @@ that a change and wrote the default into `settings.json` - for every field the
 user merely tabbed through, and it stuck as the user's own value, so a later
 change of default would never reach them. -> Compare with the value the
 getter returns for the key's own default, and write only when they differ.
-The same rule is why Preferences has no Apply button: each control writes its
-one key as it changes, never the whole page.
+The same rule governs Preferences' Apply: a control stages a change only when
+it differs from the setting, and Apply writes just the staged keys, never the
+whole page.
 
 **`g_spawn_check_exit_status` is deprecated in GLib 2.70, and its replacement
 needs 2.70.** Debian 12 and Ubuntu 22.04 ship 2.74 / 2.72, but the build
@@ -512,8 +513,8 @@ WEXITSTATUS(status) == 0`.
 keeps running under it, so another instance saving settings re-runs
 `npad_gtk_reload_and_apply_settings` while Preferences is open, and the
 dialog's controls then show values older than `settings.json`. That is safe
-only because every control writes just its own key; a dialog that saved all
-its controls on close would overwrite the other instance's change.
+only because Apply writes just the keys the user changed; a dialog that saved
+all its controls would overwrite the other instance's change.
 **`GTK_POLICY_ALWAYS` alone does not give Notepad's scroll bar.** GTK 3.24
 scroll bars are overlay indicators that fade out whatever the policy says, and
 once overlay scrolling is off (`gtk_scrolled_window_set_overlay_scrolling(FALSE)`)

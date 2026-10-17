@@ -11,9 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Preferences and Format > Font arrive on Linux.** Edit > Preferences
   (Ctrl+,) opens the same General, Appearance, Defaults, Markdown and Backup
   pages as Windows, with the same settings, wording and defaults, and the
-  hidden Debug page (Ctrl+Shift+.). Each change saves and reaches your other
-  npad windows the moment you make it - there is no Apply button to forget.
-  Format > Font opens GTK's font chooser.
+  hidden Debug page (Ctrl+Shift+.), with OK, Cancel and Apply like Windows:
+  Apply (or OK) saves and reaches your other npad windows, and only the
+  settings you actually changed are written. Format > Font opens GTK's font
+  chooser.
 - **Linux: right-click, drag and drop, and zoom now behave like Notepad.**
   Right-click gives npad's own menu (Undo, Redo, Cut, Copy, Paste, Delete,
   Select All, greyed as in the Edit menu); drop a file on the window to open
@@ -29,9 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that are Windows-only: there is no Updates page (Linux updates through apt
   or dnf), and Associations is a single *Make npad the default text editor*
   button that runs `xdg-mime default io.github.platima.npad.desktop
-  text/plain` for your account - only when you click it. Every control writes
-  only its own key and tells the other windows, so a page you merely looked
-  at can never write its whole state back. Export, Import and Reset All
+  text/plain` for your account - only when you click it. Like the Windows property
+  sheet it has OK, Cancel and Apply (Apply stays greyed until you change
+  something); only the settings you changed are written, so a page you merely
+  looked at can never write its whole state back. Export, Import and Reset All
   Preferences are on Backup (Reset keeps recent files, window position and
   Find/Replace options and history, as on Windows; Import refuses a file that
   is not a JSON object). The Markdown page edits the shared keys even though
