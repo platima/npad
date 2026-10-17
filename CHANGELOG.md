@@ -8,45 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.35.0] - Unreleased
 
 ### ✨ Highlights
-- **Preferences and Format > Font arrive on Linux.** Edit > Preferences
-  (Ctrl+,) opens the same General, Appearance, Defaults, Markdown and Backup
-  pages as Windows, with the same settings, wording and defaults, and the
-  hidden Debug page (Ctrl+Shift+.), with OK, Cancel and Apply like Windows:
-  Apply (or OK) saves and reaches your other npad windows, and only the
-  settings you actually changed are written. Format > Font opens GTK's font
-  chooser.
-- **Linux: right-click, drag and drop, and zoom now behave like Notepad.**
-  Right-click gives npad's own menu (Undo, Redo, Cut, Copy, Paste, Delete,
-  Select All, greyed as in the Edit menu); drop a file on the window to open
-  it, or hold Ctrl to insert its text where you dropped it; Ctrl and the
-  mouse wheel zoom in 10% steps.
-- **Linux: the scroll bar stays put.** It is always on screen and greyed out
-  when the text fits, as in Notepad, rather than appearing and disappearing.
-- **Linux: Reload / Keep editing when another program changes your file**, if
-  you turn on `watch_file_changes` (off by default, as in Notepad).
-- **Linux: a properly sized app icon, with a dark one for dark schemes.** The
-  taskbar and window-list icon no longer fills its square edge to edge, which
-  made it look big and wide beside the panel's other icons; it now has the
-  margin of a typical hicolor icon. While a dark colour scheme is active the
-  window wears the dark artwork, switching live with the scheme. The launcher
-  and software centre keep the standard icon.
-- **Linux: the `system` colour scheme follows your desktop's light/dark
-  setting, live.** Switch the desktop to dark and an npad set to `system`
-  follows at once, without a restart. `light` is still the default.
-- **Linux: settings follow `$XDG_CONFIG_HOME`** when you set it. If the new
-  location has no settings yet, npad starts from your existing
-  `~/.config/npad` ones, and never touches that file.
-- **The Markdown list tools arrive on Linux.** Turn on Basic Markdown support
-  (Preferences > Markdown) for a Markdown menu and the same right-click items:
-  Sort, Unique, Convert Delimiters, Indent and Unindent with Tab / Shift+Tab,
-  Enter that continues a list, Ctrl+X that cuts a line, and pasting copied web
-  pages as lists or Markdown. Off by default, so npad still behaves like
-  classic Notepad until you ask; each tool is one undo step.
-- **npad now runs natively on Arm and RISC-V.** Windows on Arm gets its own
-  installer, MSI and portable exe (`-win-arm64`), and its in-app updater
-  fetches the arm64 installer. Linux packages and the apt/dnf repositories at
-  pkg.npad.dev now carry arm64 and riscv64 alongside amd64 (riscv64 needs
-  Debian 13 or Ubuntu 24.04 or newer).
+- **On Windows, this release is about Windows on Arm.** There are now native
+  arm64 builds (installer, MSI and portable) alongside x64, and the update
+  check offers each copy of npad the build for its own architecture. Nothing
+  changes in day-to-day use on an x64 PC.
+- **Linux catches up with Windows.** Preferences (with OK, Cancel and Apply),
+  Format > Font, and the optional Markdown list tools all arrive, with the
+  same settings and defaults as the Windows build.
+- **Linux behaves like Notepad.** npad's own right-click menu, drag a file
+  onto the window to open it (hold Ctrl to insert its text instead), Ctrl and
+  the mouse wheel to zoom, a scroll bar that stays put, and an optional prompt
+  when another program changes the file you have open.
+- **Linux fits your desktop.** The `system` colour scheme follows your
+  desktop's light/dark setting as it changes, including a dark window frame on
+  themes with no dark variant. npad gets a properly sized icon with a dark
+  version, settings follow `$XDG_CONFIG_HOME`, and new documents use LF line
+  endings.
+- **More Linux machines.** arm64 (Raspberry Pi and other Arm boards) and
+  riscv64 packages join amd64, in the signed apt and dnf repositories at
+  <https://pkg.npad.dev>.
 
 ### 🆕 Features
 - **Linux: the Markdown list tools** (`ui_gtk_lists.c`, with the same keys and
@@ -234,10 +214,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.34.0] - 2026-10-17
 
-The first release with a Linux desktop build, which installs from signed
-apt and dnf repositories at <https://pkg.npad.dev>. Windows users get Find
-pre-filled from the selection (as notepad.exe does), a new home page at
-<https://npad.dev>, and a fix for files opened by a relative name.
+### ✨ Highlights
+- **npad comes to Linux.** A native GTK 3 build that runs on both X11 and
+  Wayland, installed from signed apt and dnf repositories at
+  <https://pkg.npad.dev> (Debian 12/13, Ubuntu 22.04+, Mint, Fedora) so it
+  updates with the rest of your system. Editing, encodings, Find / Replace,
+  printing and crash recovery are in; Preferences, the font picker and the
+  Markdown tools are still to come.
+- **Find is filled from your selection** (Windows and Linux), as Windows 10
+  Notepad does: select a word, press Ctrl+F, and it is already in the box.
+  Turn it off under Preferences > General.
+- **npad has a home page: [npad.dev](https://npad.dev).** The About box and
+  the installers link there.
+- **Fixed:** a file opened from the command line by a relative path
+  (`npad notes.txt`) now reopens correctly from Recent Files and after a
+  crash.
 
 ### 🆕 Features
 - **Find is filled from the selection (Windows and Linux).** Since Windows 10
