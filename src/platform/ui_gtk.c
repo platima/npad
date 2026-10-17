@@ -412,9 +412,13 @@ static void set_check(Window *window, NpadCommand command, bool active) {
 static void apply_word_wrap(Window *window) {
     gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(window->text_view),
                                 window->word_wrap_enabled ? GTK_WRAP_WORD_CHAR : GTK_WRAP_NONE);
-    gtk_scrolled_window_set_policy(
-        GTK_SCROLLED_WINDOW(window->scroller),
-        window->word_wrap_enabled ? GTK_POLICY_NEVER : GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+    // Scroll bars stay on screen and go inert when the text fits, as in
+    // Notepad (ES_DISABLENOSCROLL on Win32), instead of coming and going.
+    // That also keeps the text width constant, so the wrap does not reflow as
+    // the document crosses one screen. With wrap on there is no horizontal bar.
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(window->scroller),
+                                   window->word_wrap_enabled ? GTK_POLICY_NEVER : GTK_POLICY_ALWAYS,
+                                   GTK_POLICY_ALWAYS);
     set_check(window, NPAD_CMD_FORMAT_WORD_WRAP, window->word_wrap_enabled);
 }
 
@@ -454,6 +458,14 @@ static void toggle_monospace(Window *window) {
     set_check(window, NPAD_CMD_FORMAT_MONOSPACE, window->monospace_current);
     update_status_bar(window);
     on_view_state_changed(window);
+}
+
+void npad_gtk_zoom_by(Window *window, int delta) {
+    if (!window)
+        return;
+    int target = clamp_int(window->zoom + delta, NPAD_ZOOM_MIN, NPAD_ZOOM_MAX);
+    if (target != window->zoom) // At a limit nothing changes: no broadcast either
+        set_zoom(window, target);
 }
 
 void npad_gtk_apply_synced_view_state(Window *window, int zoom, bool monospace) {
@@ -865,17 +877,15 @@ static void set_command_sensitive(Window *window, NpadCommand command, bool sens
 // while the menu is open: an insensitive item's accelerator is dead, so the
 // states are restored as soon as it closes (see on_menu_hide).
 static void apply_edit_command_states(Window *window) {
-    bool has_selection = gtk_text_buffer_get_has_selection(window->buffer);
     bool has_text = gtk_text_buffer_get_char_count(window->buffer) > 0;
-    GtkClipboard *clipboard = gtk_widget_get_clipboard(window->text_view, GDK_SELECTION_CLIPBOARD);
-    bool can_paste = gtk_clipboard_wait_is_text_available(clipboard);
 
-    set_command_sensitive(window, NPAD_CMD_EDIT_UNDO, undo_can_undo(window->undo));
-    set_command_sensitive(window, NPAD_CMD_EDIT_REDO, undo_can_redo(window->undo));
-    set_command_sensitive(window, NPAD_CMD_EDIT_CUT, has_selection);
-    set_command_sensitive(window, NPAD_CMD_EDIT_COPY, has_selection);
-    set_command_sensitive(window, NPAD_CMD_EDIT_DELETE, has_selection);
-    set_command_sensitive(window, NPAD_CMD_EDIT_PASTE, can_paste);
+    // Shared with the context menu (ui_gtk_edit.c) so the two never disagree
+    static const NpadCommand shared[] = {
+        NPAD_CMD_EDIT_UNDO, NPAD_CMD_EDIT_REDO,   NPAD_CMD_EDIT_CUT,
+        NPAD_CMD_EDIT_COPY, NPAD_CMD_EDIT_DELETE, NPAD_CMD_EDIT_PASTE,
+    };
+    for (size_t i = 0; i < G_N_ELEMENTS(shared); i++)
+        set_command_sensitive(window, shared[i], npad_gtk_edit_command_enabled(window, shared[i]));
     set_command_sensitive(window, NPAD_CMD_EDIT_FIND, has_text);
     set_command_sensitive(window, NPAD_CMD_EDIT_FIND_NEXT, has_text && npad_gtk_find_has_term());
     set_command_sensitive(window, NPAD_CMD_EDIT_FIND_PREV, has_text && npad_gtk_find_has_term());
@@ -1431,6 +1441,9 @@ Window *ui_platform_create_main_window(void) {
 
     window->scroller = gtk_scrolled_window_new(NULL, NULL);
     gtk_scrolled_window_set_shadow_type(GTK_SCROLLED_WINDOW(window->scroller), GTK_SHADOW_NONE);
+    // Overlay scroll bars hide themselves whatever the policy says; Notepad's
+    // sit in a permanent gutter
+    gtk_scrolled_window_set_overlay_scrolling(GTK_SCROLLED_WINDOW(window->scroller), FALSE);
     gtk_container_add(GTK_CONTAINER(window->scroller), window->text_view);
 
     window->status_bar = create_status_bar(window);
@@ -1451,6 +1464,8 @@ Window *ui_platform_create_main_window(void) {
     g_signal_connect(window->window, "configure-event", G_CALLBACK(on_configure_event), window);
     g_signal_connect(window->window, "window-state-event", G_CALLBACK(on_window_state_event),
                      window);
+
+    npad_gtk_edit_init(window);
 
     apply_word_wrap(window);
     apply_theme(window);
@@ -1615,26 +1630,29 @@ void *ui_platform_get_native_handle(Window *window) {
 // ui_platform_*: text
 // ---------------------------------------------------------------------------
 
+// The buffer holds '\n' only; the core restores the file's own line ending on
+// save. And GTK refuses invalid UTF-8 outright, so anything the decoder let
+// through is repaired rather than dropped.
+char *npad_gtk_normalize_text(const char *text) {
+    if (!text)
+        return NULL;
+    char *lf = file_convert_line_endings(text, NPAD_EOL_LF);
+    const char *source = lf ? lf : text;
+    char *result =
+        g_utf8_validate(source, -1, NULL) ? g_strdup(source) : g_utf8_make_valid(source, -1);
+    free(lf);
+    return result;
+}
+
 void ui_platform_set_text(Window *window, const char *text) {
     if (!window || !text)
         return;
 
-    // The buffer holds '\n' only; the core restores the file's own line
-    // ending on save. And GTK refuses invalid UTF-8 outright, so anything the
-    // decoder let through is repaired rather than dropped.
-    char *lf = file_convert_line_endings(text, NPAD_EOL_LF);
-    const char *source = lf ? lf : text;
-    gchar *valid = NULL;
-    if (!g_utf8_validate(source, -1, NULL)) {
-        valid = g_utf8_make_valid(source, -1);
-        source = valid;
-    }
-
+    char *source = npad_gtk_normalize_text(text);
     window->loading = true;
     gtk_text_buffer_set_text(window->buffer, source, -1);
     window->loading = false;
-    free(lf);
-    g_free(valid);
+    g_free(source);
 
     // New content: fresh history, caret at the top, unmodified
     undo_clear(window->undo);

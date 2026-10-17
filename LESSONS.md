@@ -492,6 +492,39 @@ fields) and which start at the printer's hardware margins. Full page gives the
 corner of the sheet, so Notepad-style margins are applied by npad alone.
 Landscape needs no rotation here: the context is already orientation-aware.
 
+**`GTK_POLICY_ALWAYS` alone does not give Notepad's scroll bar.** GTK 3.24
+scroll bars are overlay indicators that fade out whatever the policy says, and
+once overlay scrolling is off (`gtk_scrolled_window_set_overlay_scrolling(FALSE)`)
+a bar with nothing to scroll still draws a full-length slider that looks live.
+Notepad's is a greyed, empty gutter. -> Policy ALWAYS, overlay off, and make
+each scroll bar insensitive while its adjustment's `upper - lower` does not
+exceed `page_size` (connect the adjustments' `changed`).
+
+**`GtkTextView` is already a drag destination - for text, not files.** Its
+target list has no `text/uri-list`, so a file dropped on it is refused, and a
+destination set on the parent window is never asked because the text view
+covers it. -> Add `gtk_target_list_add_uri_targets` to the text view's own
+list (`gtk_drag_dest_get_target_list`), handle `drag-data-received` for that
+target id only and `g_signal_stop_emission_by_name` (the class handler would
+otherwise try to read text and fail the drop); text drops fall through to GTK
+and keep working. Finish the drag (`gtk_drag_finish`) *before* opening the
+file: the open can raise a save prompt, and a modal dialog inside a drag
+callback leaves the source's drag session hanging.
+
+**Window activation is `notify::is-active`, not `focus-in-event`.** The latter
+fires for the toplevel's widgets as focus moves inside it. And every dialog the
+prompt opens deactivates and reactivates the window on its way out, so a
+handler that prompts needs the same re-entrancy guard Win32's
+`prompt_external_change` has, plus an idle hop so the dialog is created after
+the activation finished.
+
+**The wheel's smooth-scroll delta has the opposite sign to the zoom.**
+`GDK_SCROLL_SMOOTH` reports scrolling up as a negative `delta_y`. An
+accumulator fed with `-dy` is therefore reversed by `dy * accum > 0`, not
+`< 0`; the wrong test reset it on every event, so a touchpad swipe (many
+deltas of 0.3) never reached a whole step while a mouse notch (delta 1) still
+worked - which is why it only showed in the harness, not by hand.
+
 ## Installers
 
 **Inno Setup's check lists do not scale their check box offset.**
@@ -683,6 +716,33 @@ BACK, 1 is NEXT - they do nothing on a sheet). Boolean settings are stored as
 the strings `"true"`/`"false"`. And never `SendMessage` a command that can raise
 a message box (Find Next with no further match): the sender blocks forever;
 `PostMessage` it.
+
+**Broadway cannot show GTK's popup menus, but everything else can be driven
+and looked at.** Menu bar drop-downs, the context menu and combo popups never
+paint (the log fills with "Negative content width" for the menu items), though
+the windows and dialogs do. Dialogs also tend to be placed at negative
+coordinates (in Broadway, centred on a parent that sits at 0,0), so only part shows. -> To
+look at a dialog, move its `<canvas>` with the browser's JS tool (`style.left`
+/ `top`; the next repaint puts it back); to look at a menu, populate it, move
+its items into a vertical `GtkMenuBar` inside a `GtkOffscreenWindow` and save
+`gtk_offscreen_window_get_pixbuf`; read greying from `gtk_widget_get_sensitive`.
+A fresh page load fixes the pane when it gets confused about scale.
+
+**Test the real code by compiling a harness into the real process.** Compile
+`main.c` with `-Dmain=npad_main`, link a harness whose `main` queues a
+`g_timeout_add` and calls `npad_main`, and it can reach every `static` in the
+public API it includes (`g_gtk_main_window`, the `Window` struct) and the
+actual widget tree. Synthetic input goes through the real routing:
+`gdk_event_new(GDK_SCROLL)` with a window, a device
+(`gdk_event_set_device`) and a state, then `gtk_main_do_event`; a drop is
+`g_signal_emit_by_name(view, "drag-data-received", NULL, x, y, &sd, info, 0)`
+with a struct laid out like the private `GtkSelectionData` (the NULL context
+makes `gtk_drag_finish` log one CRITICAL, expected). Use `editor_set_modified`,
+not `ui_set_text_modified`, to get past the save prompt - the core keeps its
+own flag. `g_object_notify(window, "is-active")` re-runs an activation handler
+when the window is already active, and `gtk_window_present` makes Broadway
+activate it. Never put C string literals through a shell heredoc to write the
+harness: a backslash-n in a string literal came out as a real newline twice.
 
 ## Method
 

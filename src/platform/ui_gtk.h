@@ -9,6 +9,8 @@
  *                       shortcuts, command dispatch, text access, undo, view
  *                       state (wrap, font, zoom, theme), status bar, timers
  *   ui_gtk_dialogs.c  - file choosers, message boxes and prompts, About
+ *   ui_gtk_edit.c     - context menu, file drops, external-change prompt,
+ *                       Ctrl+wheel zoom
  *   ui_gtk_find.c     - Find / Replace / Go To
  *   ui_gtk_instance.c - cross-instance messaging over D-Bus: settings sync,
  *                       view sync, Close All, instance counting
@@ -130,7 +132,9 @@ struct Window {
     bool word_wrap_enabled;
     bool status_bar_visible;
     bool monospace_current;
-    int zoom; // Percent, 10..500
+    int zoom;           // Percent, 10..500
+    double wheel_accum; // Smooth-scroll delta not yet worth a zoom step
+    bool drag_ctrl;     // Ctrl was down while a file was dragged over the window
 
     // Document state
     bool is_modified;
@@ -191,9 +195,31 @@ void npad_gtk_replace_selection(Window *window, const char *text);
 // may be NULL)
 void npad_gtk_spawn_self(const char *const *extra_args);
 
+// Change the zoom by delta percent (clamped; no-op at the limits)
+void npad_gtk_zoom_by(Window *window, int delta);
+
+// Text as the buffer wants it: '\n' line breaks and valid UTF-8 (invalid
+// sequences repaired, not dropped). g_malloc'd; NULL only for NULL input.
+char *npad_gtk_normalize_text(const char *text);
+
 // --- ui_gtk_dialogs.c --------------------------------------------------------
 
 // Nothing beyond the ui_platform_* entry points yet
+
+// --- ui_gtk_edit.c -----------------------------------------------------------
+
+// Context menu, file drops, external-change prompt, Ctrl+wheel zoom: connect
+// them to a freshly built main window
+void npad_gtk_edit_init(Window *window);
+
+// Whether an edit command (Undo, Redo, Cut, Copy, Delete, Paste) can act right
+// now - drives the greying of both the Edit menu and the context menu
+bool npad_gtk_edit_command_enabled(Window *window, NpadCommand command);
+
+// A file dropped on the window at (x, y), in text view widget coordinates:
+// open it (with the save prompt), or with insert set put its text at that
+// point as one undo step
+void npad_gtk_edit_drop_file(Window *window, const char *path, bool insert, int x, int y);
 
 // --- ui_gtk_find.c -----------------------------------------------------------
 
