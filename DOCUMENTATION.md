@@ -194,8 +194,8 @@ These match the Windows build; the differences are noted.
   becomes active, a file changed or deleted by another program offers *Reload
   from disk*, *Save as a different file* or *Keep editing* (the default;
   Esc also keeps), with a **Stop telling me about this file** box. Reload
-  discards unsaved edits, which is why it is never the default. Until
-  Preferences is ported, set the key in `settings.json`.
+  discards unsaved edits, which is why it is never the default. The switch is under Preferences >
+  General (*Tell me when an open file is changed by another program*).
 - **Ctrl + mouse wheel** zooms in 10% steps, like Ctrl+Plus / Ctrl+Minus. High
   resolution wheels and touchpads send many small steps; they are added up,
   one zoom step per whole notch, so a swipe is not a runaway.
