@@ -238,6 +238,7 @@ TEST_CASE(oversized_file_is_salvaged_not_discarded) {
 // untouched: the resolvers are pure string functions and Windows never calls
 // them.
 
+#ifndef _WIN32 // file_join_paths uses backslashes on Windows
 TEST_CASE(config_dir_prefers_absolute_xdg) {
     char *dir = settings_resolve_config_dir("/xdg/conf", "/home/u");
     TEST_ASSERT_STR_EQ("/xdg/conf/npad", dir, "an absolute XDG_CONFIG_HOME wins");
@@ -262,6 +263,7 @@ TEST_CASE(config_dir_prefers_absolute_xdg) {
     TEST_ASSERT_STR_EQ("/home/u/.config/npad", dir, "legacy dir ignores XDG_CONFIG_HOME");
     free(dir);
 }
+#endif
 
 #ifndef _WIN32
 static void write_text_file(const char *path, const char *text) {
@@ -295,11 +297,21 @@ TEST_CASE(init_reads_old_settings_when_xdg_location_is_empty) {
     char expect_buf[1200];
     const char *expect = expect_buf;
     snprintf(expect_buf, sizeof expect_buf, "%s/npad/settings.json", xdg);
+    char expect_dir[1200];
+    snprintf(expect_dir, sizeof expect_dir, "%s/npad", xdg);
     TEST_ASSERT_STR_EQ(expect, settings_get_file_path(), "new settings live under XDG_CONFIG_HOME");
     char *theme = settings_get_string("theme", "");
     TEST_ASSERT_STR_EQ("dark", theme, "the old ~/.config/npad settings are read");
     free(theme);
     TEST_ASSERT_EQ(1234, settings_get_int("window_width", 0), "all of them");
+
+    // The new directory exists before any settings save, so recovery
+    // snapshots (<dir>/recovery, which creates only its own level) can be
+    // written from the first edit
+    struct stat st;
+    TEST_ASSERT(stat(expect_dir, &st) == 0 && S_ISDIR(st.st_mode),
+                "the XDG config directory is created at init");
+    TEST_ASSERT(!file_exists(expect), "and no settings file is written until a save");
 
     // Saving writes the NEW location and leaves the old file exactly as it was
     TEST_ASSERT(settings_save(), "save succeeds");
@@ -349,8 +361,8 @@ int main(void) {
     RUN_TEST(roundtrip_preserves_quotes_and_tabs);
     RUN_TEST(oversized_value_is_dropped_on_load);
     RUN_TEST(oversized_file_is_salvaged_not_discarded);
-    RUN_TEST(config_dir_prefers_absolute_xdg);
 #ifndef _WIN32
+    RUN_TEST(config_dir_prefers_absolute_xdg);
     RUN_TEST(init_reads_old_settings_when_xdg_location_is_empty);
 #endif
 

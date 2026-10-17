@@ -44,6 +44,7 @@ static char *g_settings_file_path = NULL;
 // Helper functions
 static char *get_settings_directory(void);
 static bool load_settings_from(const char *path, bool may_move_aside);
+static void create_directory_recursive(const char *path);
 #ifndef _WIN32
 static char *settings_legacy_file_path(void);
 #endif
@@ -108,6 +109,16 @@ bool settings_init(void) {
         return false;
 
 #ifndef _WIN32
+    // The config directory must exist before anything else writes under it:
+    // crash-recovery snapshots go in <dir>/recovery and only create that last
+    // level, and a first run (or a newly set $XDG_CONFIG_HOME) reaches here
+    // before any settings save has made the parents
+    char *config_dir = file_get_directory(g_settings_file_path);
+    if (config_dir) {
+        create_directory_recursive(config_dir);
+        free(config_dir);
+    }
+
     if (!file_exists(g_settings_file_path)) {
         // Nothing at the new location. An npad that predates $XDG_CONFIG_HOME
         // support kept its settings in ~/.config/npad, so read those instead of
