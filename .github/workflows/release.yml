@@ -31,52 +31,28 @@ jobs:
       id: get_version
       run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
+    - uses: actions/checkout@v7
+
+    # The notes lead with this version's "### ✨ Highlights" from CHANGELOG.md.
+    # Generated before the release exists, so a missing entry or highlights
+    # section stops the run while nothing is published yet.
+    - name: Write the release notes
+      run: |
+        sh scripts/release-notes.sh "${{ steps.get_version.outputs.version }}" \
+          "${{ github.repository }}" "${{ github.sha }}" \
+          "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+          > release-notes.md
+        cat release-notes.md
+
     - name: Create Release
       id: create_release
       uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ github.ref }}
         name: npad ${{ steps.get_version.outputs.version }}
-        body: |
-          ## npad ${{ steps.get_version.outputs.version }}
-
-          🎉 **New Release Available!**
-
-          ### Downloads
-
-          **Windows Builds:**
-          - `npad-${{ steps.get_version.outputs.version }}-setup-win-x64.exe` - Windows installer (per-user by default; system-wide available)
-          - `npad-${{ steps.get_version.outputs.version }}-msi-win-x64.msi` - Windows MSI for silent/managed deployment (`msiexec /i ... /qn`)
-          - `npad-${{ steps.get_version.outputs.version }}-portable-win-x64.exe` - Portable GUI version for Windows (no install needed)
-
-          **Linux (GTK 3 desktop app, X11 and Wayland):**
-          - `npad_<version>_amd64.deb` - Debian, Ubuntu, Mint (`sudo apt install ./npad_<version>_amd64.deb`)
-          - `npad-<version>-1.x86_64.rpm` - Fedora (`sudo dnf install ./npad-<version>-1.x86_64.rpm`)
-          - For automatic updates through `apt` or `dnf`, use the signed repositories at https://pkg.npad.dev instead
-
-          **Verification:**
-          - `CHECKSUMS.txt` - SHA256 checksums for all files
-          - Verify with: `sha256sum -c CHECKSUMS.txt` (Linux/macOS) or `Get-FileHash` (Windows)
-
-          ### Installation
-          1. Download the appropriate file for your system from the Assets below
-          2. **Windows**: Run `npad-v*-setup-win-x64.exe` to install (or `msiexec /i npad-v*-msi-win-x64.msi /qn` for silent), or run the portable exe directly
-          3. **Verification**: Check the file integrity using the provided checksums
-
-          > **SmartScreen warning?** Check the file's Properties → Digital Signatures tab. A signed release names the publisher there; SmartScreen can still warn while a publisher's reputation is new. Verify the SHA256 against `CHECKSUMS.txt` if unsure, then "More info" → "Run anyway".
-
-          ### Changes
-          See the [commit history](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}) for detailed changes in this release.
-
-          ---
-
-          **Build Info:**
-          - Commit: `${{ github.sha }}`
-          - Built: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          - [CI Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+        body_path: release-notes.md
         draft: false
         prerelease: ${{ contains(steps.get_version.outputs.version, '-') }}
-        generate_release_notes: true
 
   # Every published binary comes from the Windows job in installers.yml: the
   # installers, and the portable exe, which is the very same npad.exe the
@@ -285,49 +261,20 @@ jobs:
     runs-on: ubuntu-latest
     needs: [create-release, build-installers, attach-packages, validate-release, create-checksums]
     steps:
+    - uses: actions/checkout@v7
+
+    - name: Write the release notes
+      run: |
+        sh scripts/release-notes.sh "${{ needs.create-release.outputs.version }}" \
+          "${{ github.repository }}" "${{ github.sha }}" \
+          "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+          > release-notes.md
+
     - name: Update release with final info
       uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ needs.create-release.outputs.version }}
-        body: |
-          ## npad ${{ needs.create-release.outputs.version }}
-
-          🎉 **New Release Available!**
-
-          ### Downloads
-
-          **Windows Builds:**
-          - `npad-${{ needs.create-release.outputs.version }}-setup-win-x64.exe` - Windows installer (per-user by default; system-wide available)
-          - `npad-${{ needs.create-release.outputs.version }}-msi-win-x64.msi` - Windows MSI for silent/managed deployment (`msiexec /i ... /qn`)
-          - `npad-${{ needs.create-release.outputs.version }}-portable-win-x64.exe` - Portable GUI version for Windows (no install needed)
-
-          **Linux (GTK 3 desktop app, X11 and Wayland):**
-          - `npad_<version>_amd64.deb` - Debian, Ubuntu, Mint (`sudo apt install ./npad_<version>_amd64.deb`)
-          - `npad-<version>-1.x86_64.rpm` - Fedora (`sudo dnf install ./npad-<version>-1.x86_64.rpm`)
-          - For automatic updates through `apt` or `dnf`, use the signed repositories at https://pkg.npad.dev instead
-
-          **Verification:**
-          - `CHECKSUMS.txt` - SHA256 checksums for all files
-          - Individual `.sha256` files for each binary
-          - Verify with: `sha256sum -c CHECKSUMS.txt` (Linux/macOS) or `Get-FileHash` (Windows)
-
-          ### Installation
-          1. Download the appropriate file from the Assets below
-          2. **Windows**: Run `npad-v*-setup-win-x64.exe` to install (or `msiexec /i npad-v*-msi-win-x64.msi /qn` for silent), or run the portable exe directly
-          3. **Verification**: Check the file integrity using the provided checksums
-
-          > **SmartScreen warning?** Check the file's Properties → Digital Signatures tab. A signed release names the publisher there; SmartScreen can still warn while a publisher's reputation is new. Verify the SHA256 against `CHECKSUMS.txt` if unsure, then "More info" → "Run anyway".
-
-          ### Changes
-          See the [commit history](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}) for detailed changes in this release.
-
-          ---
-
-          **Build Info:**
-          - Commit: `${{ github.sha }}`
-          - Built: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          - [CI Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          - All builds passed CI validation before release
+        body_path: release-notes.md
 
   # Tell npad-packages a release is ready so it rebuilds the signed apt/dnf
   # repositories at pkg.npad.dev. Runs last, once every asset is attached and
