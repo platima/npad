@@ -586,7 +586,7 @@ static bool handle_return(Window *window) {
     return handled;
 }
 
-static gboolean on_key_press(GtkWidget *widget, GdkEventKey *event, gpointer data) {
+static gboolean on_key_press(GtkWidget *widget, const GdkEventKey *event, gpointer data) {
     (void) widget;
     Window *window = data;
     if (!list_tools_enabled())
