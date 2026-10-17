@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the text fits, as in Notepad, rather than appearing and disappearing.
 - **Linux: Reload / Keep editing when another program changes your file**, if
   you turn on `watch_file_changes` (off by default, as in Notepad).
+- **Linux: the `system` colour scheme follows your desktop's light/dark
+  setting, live.** Switch the desktop to dark and an npad set to `system`
+  follows at once, without a restart. `light` is still the default.
+- **Linux: settings follow `$XDG_CONFIG_HOME`** when you set it. If the new
+  location has no settings yet, npad starts from your existing
+  `~/.config/npad` ones, and never touches that file.
 
 ### 🆕 Features
 - **Linux Preferences dialog.** A notebook of the Windows pages minus the two
@@ -60,6 +66,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Linux: Ctrl + mouse wheel zoom**, in 10% steps like Ctrl+Plus / Ctrl+Minus.
   Smooth-scrolling wheels and touchpads are accumulated, one step per whole
   notch, so a touchpad swipe does not run away.
+
+- **Linux: the `system` colour scheme follows the desktop's light/dark
+  preference.** It reads `org.freedesktop.appearance color-scheme` from the
+  xdg-desktop-portal Settings interface and follows its `SettingChanged`
+  signal, so switching the desktop between light and dark re-themes every
+  open npad window immediately. Without a portal (or when it expresses no
+  preference) it falls back to GTK's own `gtk-application-prefer-dark-theme`
+  as before. The portal is only asked when the scheme is `system`, and a
+  repeat of the same value, or any other portal setting changing, does
+  nothing, so idle windows are not re-themed.
+- **Settings honour `$XDG_CONFIG_HOME` (Linux).** Settings and crash-recovery
+  snapshots live in `$XDG_CONFIG_HOME/npad` when the variable is set to an
+  absolute path (an empty or relative value is ignored, per the XDG spec),
+  otherwise `~/.config/npad` as before. When the new location has no
+  `settings.json` yet but `~/.config/npad/settings.json` exists, npad reads
+  that one - the old file is only read, never moved or deleted, and the next
+  save writes the new location. Windows is unaffected.
+- **Linux: a saved window position that is off every monitor is replaced.**
+  On X11, a position left over from an unplugged monitor or a changed layout
+  opens the window centred on the primary monitor instead of out of reach;
+  the corrected position is what gets saved. (Wayland ignores positions.)
+- **Linux: every npad window and dialog uses npad's icon.** The installed
+  `io.github.platima.npad` hicolor icon is the window icon, the default icon
+  of Preferences, Find and the other dialogs, and the logo in About; a build
+  run from the source tree, with no icon installed, keeps the stock
+  text-editor icon.
 
 ### 🔄 Changed
 - Linux: Edit > Preferences and Format > Font are no longer greyed out.

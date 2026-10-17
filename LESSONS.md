@@ -355,6 +355,17 @@ preference outside the kept prefixes where you can; where the name is fixed
 (`reset_all_preferences` does) and say so wherever the next platform's reset
 gets written (LINUX_PORT.md batch B).
 
+**Moving where settings live is a migration, and the old file is the only
+copy.** `settings_get_config_dir` now honours `$XDG_CONFIG_HOME`, so a user who
+exports it after months of `~/.config/npad` would open npad to defaults - and
+because npad rewrites settings on exit, the defaults would then be saved
+(the same shape as the v0.28.7 loss above). → `settings_init` reads the old
+file when the new location has none, in memory only: it never renames or
+deletes it (even an oversized one is salvaged without the `.corrupt` rename,
+`load_settings_from(path, may_move_aside)`), and the next save writes the new
+file. An empty or relative `$XDG_CONFIG_HOME` is ignored, as the spec says.
+Not carried over: recovery snapshots under the old directory.
+
 ## Core: text model
 
 **Detect a limitation where you can prove it, not where you guessed it.** The
@@ -546,6 +557,32 @@ accumulator fed with `-dy` is therefore reversed by `dy * accum > 0`, not
 `< 0`; the wrong test reset it on every event, so a touchpad swipe (many
 deltas of 0.3) never reached a whole step while a mouse notch (delta 1) still
 worked - which is why it only showed in the harness, not by hand.
+
+**A GDBus signal subscription filtered by a well-known sender never matches
+`gdbus emit`.** The portal's `SettingChanged` is subscribed with sender
+`org.freedesktop.portal.Desktop`, which GDBus resolves to the unique name that
+owns it; a test that fires the signal with `gdbus emit` comes from the
+`gdbus` process's own unique name and is silently dropped. → To exercise the
+`system` colour scheme, stand in for the portal: a small GDBus program that
+owns `org.freedesktop.portal.Desktop`, answers `Settings.Read`
+and emits `SettingChanged` itself, inside `dbus-run-session` (so the real
+session bus is untouched). `Read` returns the value wrapped in a *second*
+variant (`(v)` holding a `v` holding the `u`), `SettingChanged` carries it in
+one - unwrap in a loop. The signal also fires for every other portal setting,
+so filter on namespace and key and report only a *different* value, or every
+unrelated change re-themes an idle window (see "Idle windows are not idle").
+
+**Ask the portal lazily.** The first `Read` can start the portal service, so
+only a window whose scheme is `system` asks (synchronously, 1 s timeout, so it
+opens in the right colours rather than flashing the wrong ones); `light`, the
+default, never touches it. Value 0 means "no preference" - fall back to GTK's
+own `gtk-application-prefer-dark-theme` as it stood at startup.
+
+**Broadway's monitor reports a 0x0 geometry**, so a placement check that asks
+whether a window overlaps a monitor says "off screen" for everything there.
+`position_is_reachable` skips zero-area monitors and, if none is measurable,
+declines to judge. To test the overlap logic anyway, compile the function into
+a harness with `#define gdk_monitor_get_geometry` pointing at a fake.
 
 ## Installers
 

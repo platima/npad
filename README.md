@@ -140,7 +140,7 @@ These items may or may not be added, and are essentially subject to my whim, but
 ## Configuration 🔧
 
 npad stores its settings in JSON format in standard system locations:
-- **Linux**: `~/.config/npad/settings.json`
+- **Linux**: `~/.config/npad/settings.json` (or `$XDG_CONFIG_HOME/npad/settings.json` when set)
 - **Windows**: `%APPDATA%\Platima\npad\settings.json`
 - **macOS**: `~/Library/Application Support/npad/settings.json` (when implemented)
 

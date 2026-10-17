@@ -221,11 +221,10 @@ size_t ui_platform_system_memory_mb(void) {
 void ui_platform_show_about_dialog(Window *parent) {
     const char *authors[] = { "Platima", NULL };
     GtkWindow *owner = parent_window(parent);
-    const char *icon = owner ? gtk_window_get_icon_name(owner) : NULL;
     gtk_show_about_dialog(owner, "program-name", "npad", "version", NPAD_VERSION, "comments",
                           "A lightweight, cross-platform text editor\n"
                           "inspired by classic Windows Notepad.",
                           "website", "https://npad.dev", "website-label", "npad.dev", "authors",
-                          authors, "logo-icon-name", icon ? icon : "accessories-text-editor",
-                          "title", "About npad", NULL);
+                          authors, "logo-icon-name", npad_gtk_app_icon_name(), "title",
+                          "About npad", NULL);
 }

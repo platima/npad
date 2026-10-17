@@ -251,6 +251,9 @@ void npad_gtk_show_preferences(Window *window, bool show_debug);
 // this window is showing
 void npad_gtk_show_font_dialog(Window *window);
 
+// The icon name for windows and the About dialog (ui_gtk.c)
+const char *npad_gtk_app_icon_name(void);
+
 // --- ui_gtk_instance.c -------------------------------------------------------
 
 // Connect to the session bus, claim this instance's name and listen for the
@@ -269,5 +272,13 @@ int npad_gtk_instance_count_others(void);
 
 // Whether pid is a running npad instance (bus first, /proc as fallback)
 bool npad_gtk_instance_pid_is_npad(long pid);
+
+// The desktop's colour preference from the xdg-desktop-portal Settings
+// interface (org.freedesktop.appearance color-scheme): 0 = none / no portal,
+// 1 = dark, 2 = light. Asked once on first use, then kept current by the
+// portal's SettingChanged signal, which calls npad_gtk_system_scheme_changed()
+// (ui_gtk.c) when the value differs.
+int npad_gtk_portal_color_scheme(void);
+void npad_gtk_system_scheme_changed(void);
 
 #endif // UI_GTK_H

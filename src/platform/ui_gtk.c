@@ -322,7 +322,10 @@ static void scheme_colors(const char *theme, const char **bg, const char **fg, b
         *fg = "#839496";
         *dark = true;
     } else if (strcmp(theme, "system") == 0) {
-        *dark = g_initial_prefer_dark != FALSE;
+        // The desktop's own preference, live from the portal; without one,
+        // GTK's setting as it stood at startup
+        int portal = npad_gtk_portal_color_scheme();
+        *dark = portal == 1 ? true : portal == 2 ? false : g_initial_prefer_dark != FALSE;
     } else { // "light", the default: classic Notepad has no schemes
         *bg = "#ffffff";
         *fg = "#000000";
@@ -405,6 +408,28 @@ static void apply_theme(Window *window) {
         g_object_set(gtk_settings_get_default(), "gtk-application-prefer-dark-theme",
                      dark ? TRUE : FALSE, NULL);
     apply_view_css(window);
+}
+
+// The desktop's light/dark preference changed (the portal's SettingChanged,
+// already filtered to a different value). Only the `system` scheme follows it;
+// the others are the user's explicit choice.
+void npad_gtk_system_scheme_changed(void) {
+    if (!g_gtk_main_window)
+        return;
+    char *theme = settings_get_string("theme", "light");
+    bool follows = theme && strcmp(theme, "system") == 0;
+    free(theme);
+    if (follows)
+        apply_theme(g_gtk_main_window);
+}
+
+// The icon for windows and the About dialog: npad's own hicolor icon when the
+// package (or `make install`) put it in the icon theme, otherwise a stock
+// text-editor icon so a build run from the source tree still shows something
+const char *npad_gtk_app_icon_name(void) {
+    return gtk_icon_theme_has_icon(gtk_icon_theme_get_default(), NPAD_APP_ID)
+               ? NPAD_APP_ID
+               : "accessories-text-editor";
 }
 
 static void set_check(Window *window, NpadCommand command, bool active) {
@@ -1392,6 +1417,10 @@ bool ui_platform_init(void) {
     g_object_get(gtk_settings_get_default(), "gtk-application-prefer-dark-theme",
                  &g_initial_prefer_dark, NULL);
 
+    // Every window and dialog npad opens (Preferences, Find, ...) wears the
+    // app icon, not just the main window
+    gtk_window_set_default_icon_name(npad_gtk_app_icon_name());
+
     npad_gtk_instance_init(); // Optional: npad runs without a session bus
     g_unix_signal_add(SIGTERM, on_terminate_signal, NULL);
     return true;
@@ -1446,10 +1475,7 @@ Window *ui_platform_create_main_window(void) {
 
     window->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(window->window), "npad");
-    GtkIconTheme *icons = gtk_icon_theme_get_default();
-    gtk_window_set_icon_name(GTK_WINDOW(window->window), gtk_icon_theme_has_icon(icons, NPAD_APP_ID)
-                                                             ? NPAD_APP_ID
-                                                             : "accessories-text-editor");
+    gtk_window_set_icon_name(GTK_WINDOW(window->window), npad_gtk_app_icon_name());
 
     window->accel_group = gtk_accel_group_new();
     gtk_window_add_accel_group(GTK_WINDOW(window->window), window->accel_group);
@@ -1582,9 +1608,64 @@ void ui_platform_get_window_position(Window *window, int *x, int *y) {
     }
 }
 
+// The monitor first-run placement is centred on (Wayland has no "primary")
+static GdkMonitor *placement_monitor(void) {
+    GdkDisplay *display = gdk_display_get_default();
+    GdkMonitor *monitor = display ? gdk_display_get_primary_monitor(display) : NULL;
+    if (!monitor && display && gdk_display_get_n_monitors(display) > 0)
+        monitor = gdk_display_get_monitor(display, 0);
+    return monitor;
+}
+
+// Whether a window at (x, y) with this size would have a usable stretch of its
+// title bar on some monitor. A saved position goes stale when a monitor is
+// unplugged or the layout changes, and a window that opens entirely off every
+// screen cannot be grabbed to bring it back.
+static bool position_is_reachable(int x, int y, int width, int height) {
+    GdkDisplay *display = gdk_display_get_default();
+    if (!display)
+        return true; // Nothing to judge against
+    int monitors = gdk_display_get_n_monitors(display);
+    if (monitors <= 0)
+        return true;
+
+    // The strip a user would drag: the window's top edge, about a title bar tall
+    GdkRectangle strip = { x, y, width, height < 40 ? height : 40 };
+    bool measured = false; // A display that reports no real monitor cannot judge
+    for (int i = 0; i < monitors; i++) {
+        GdkRectangle geometry, shared;
+        gdk_monitor_get_geometry(gdk_display_get_monitor(display, i), &geometry);
+        if (geometry.width <= 0 || geometry.height <= 0)
+            continue;
+        measured = true;
+        if (gdk_rectangle_intersect(&strip, &geometry, &shared) && shared.width >= 100 &&
+            shared.height >= 20)
+            return true;
+    }
+    return !measured;
+}
+
 void ui_platform_set_window_position(Window *window, int x, int y) {
     if (!window)
         return;
+    if (display_allows_positioning()) {
+        int width = window->normal_width;
+        int height = window->normal_height;
+        if (width <= 0 || height <= 0)
+            gtk_window_get_size(GTK_WINDOW(window->window), &width, &height);
+
+        // Off every monitor: use the default placement (centred on the primary
+        // monitor, as on first run), and remember that rather than the stale
+        // position so the next save repairs it
+        if (!position_is_reachable(x, y, width, height)) {
+            GdkRectangle work = { 0, 0, 1280, 800 };
+            GdkMonitor *monitor = placement_monitor();
+            if (monitor)
+                gdk_monitor_get_workarea(monitor, &work);
+            x = work.x + (work.width > width ? (work.width - width) / 2 : 0);
+            y = work.y + (work.height > height ? (work.height - height) / 2 : 0);
+        }
+    }
     window->requested_x = x;
     window->requested_y = y;
     if (display_allows_positioning())
@@ -1606,10 +1687,7 @@ bool ui_platform_is_window_maximized(const Window *window) {
 
 void ui_platform_get_default_window_rect(int *x, int *y, int *width, int *height) {
     GdkRectangle work = { 0, 0, 1280, 800 };
-    GdkDisplay *display = gdk_display_get_default();
-    GdkMonitor *monitor = display ? gdk_display_get_primary_monitor(display) : NULL;
-    if (!monitor && display && gdk_display_get_n_monitors(display) > 0)
-        monitor = gdk_display_get_monitor(display, 0); // Wayland has no "primary"
+    GdkMonitor *monitor = placement_monitor();
     if (monitor)
         gdk_monitor_get_workarea(monitor, &work);
 

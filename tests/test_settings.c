@@ -10,6 +10,9 @@
  * https://npad.dev
  */
 
+// setenv/unsetenv/mkdir for the XDG tests (c99 mode hides them otherwise)
+#define _POSIX_C_SOURCE 200809L
+
 #include "test_framework.h"
 #include "../src/core/settings.h"
 #include "../src/core/file_ops.h"
@@ -17,6 +20,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 // The exact preserve list used by reset_all_preferences (kept in sync here so
 // the test pins the real contract).
@@ -224,6 +231,112 @@ TEST_CASE(oversized_file_is_salvaged_not_discarded) {
     remove(ROUNDTRIP_FILE ".corrupt");
 }
 
+// --- Config directory: $XDG_CONFIG_HOME ------------------------------------
+//
+// Settings live in $XDG_CONFIG_HOME/npad when that is set and absolute, else
+// ~/.config/npad. Core code, so Windows (which uses %APPDATA%) must be
+// untouched: the resolvers are pure string functions and Windows never calls
+// them.
+
+TEST_CASE(config_dir_prefers_absolute_xdg) {
+    char *dir = settings_resolve_config_dir("/xdg/conf", "/home/u");
+    TEST_ASSERT_STR_EQ("/xdg/conf/npad", dir, "an absolute XDG_CONFIG_HOME wins");
+    free(dir);
+
+    dir = settings_resolve_config_dir(NULL, "/home/u");
+    TEST_ASSERT_STR_EQ("/home/u/.config/npad", dir, "unset falls back to ~/.config");
+    free(dir);
+
+    dir = settings_resolve_config_dir("", "/home/u");
+    TEST_ASSERT_STR_EQ("/home/u/.config/npad", dir, "empty falls back to ~/.config");
+    free(dir);
+
+    dir = settings_resolve_config_dir("relative/conf", "/home/u");
+    TEST_ASSERT_STR_EQ("/home/u/.config/npad", dir, "a relative value is ignored (XDG spec)");
+    free(dir);
+
+    dir = settings_resolve_config_dir(NULL, NULL);
+    TEST_ASSERT_NULL(dir, "no XDG and no home: no directory");
+
+    dir = settings_resolve_legacy_dir("/home/u");
+    TEST_ASSERT_STR_EQ("/home/u/.config/npad", dir, "legacy dir ignores XDG_CONFIG_HOME");
+    free(dir);
+}
+
+#ifndef _WIN32
+static void write_text_file(const char *path, const char *text) {
+    FILE *f = fopen(path, "wb");
+    if (f) {
+        fputs(text, f);
+        fclose(f);
+    }
+}
+
+TEST_CASE(init_reads_old_settings_when_xdg_location_is_empty) {
+    // A throwaway HOME and XDG_CONFIG_HOME under the working directory
+    mkdir("test_xdg_home", 0755);
+    mkdir("test_xdg_home/.config", 0755);
+    mkdir("test_xdg_home/.config/npad", 0755);
+    mkdir("test_xdg_conf", 0755);
+    char cwd[1024];
+    TEST_ASSERT_NOT_NULL(getcwd(cwd, sizeof cwd), "cwd");
+    char home[1100], xdg[1100];
+    snprintf(home, sizeof home, "%s/test_xdg_home", cwd);
+    snprintf(xdg, sizeof xdg, "%s/test_xdg_conf", cwd);
+
+    const char *old_json = "test_xdg_home/.config/npad/settings.json";
+    write_text_file(old_json, "{\n  \"theme\": \"dark\",\n  \"window_width\": \"1234\"\n}\n");
+
+    setenv("HOME", home, 1);
+    setenv("XDG_CONFIG_HOME", xdg, 1);
+
+    settings_cleanup();
+    TEST_ASSERT(settings_init(), "init succeeds");
+    char expect_buf[1200];
+    const char *expect = expect_buf;
+    snprintf(expect_buf, sizeof expect_buf, "%s/npad/settings.json", xdg);
+    TEST_ASSERT_STR_EQ(expect, settings_get_file_path(), "new settings live under XDG_CONFIG_HOME");
+    char *theme = settings_get_string("theme", "");
+    TEST_ASSERT_STR_EQ("dark", theme, "the old ~/.config/npad settings are read");
+    free(theme);
+    TEST_ASSERT_EQ(1234, settings_get_int("window_width", 0), "all of them");
+
+    // Saving writes the NEW location and leaves the old file exactly as it was
+    TEST_ASSERT(settings_save(), "save succeeds");
+    TEST_ASSERT(file_exists(expect), "the new file is written");
+    TEST_ASSERT(file_exists(old_json), "the old file is neither moved nor deleted");
+
+    // With the new file in place it is the one read, even though the old differs
+    write_text_file(old_json, "{\n  \"theme\": \"light\"\n}\n");
+    settings_set_string("theme", "solarized-dark");
+    settings_save();
+    settings_cleanup();
+    settings_init();
+    theme = settings_get_string("theme", "");
+    TEST_ASSERT_STR_EQ("solarized-dark", theme, "once it exists, the XDG file wins");
+    free(theme);
+
+    // XDG unset: back to ~/.config/npad
+    settings_cleanup();
+    unsetenv("XDG_CONFIG_HOME");
+    settings_init();
+    snprintf(expect_buf, sizeof expect_buf, "%s/.config/npad/settings.json", home);
+    TEST_ASSERT_STR_EQ(expect, settings_get_file_path(), "unset XDG keeps the classic path");
+    theme = settings_get_string("theme", "");
+    TEST_ASSERT_STR_EQ("light", theme, "and reads the file there");
+    free(theme);
+
+    settings_cleanup();
+    remove("test_xdg_conf/npad/settings.json");
+    remove("test_xdg_conf/npad");
+    remove("test_xdg_conf");
+    remove(old_json);
+    remove("test_xdg_home/.config/npad");
+    remove("test_xdg_home/.config");
+    remove("test_xdg_home");
+}
+#endif
+
 int main(void) {
     thread_safety_init();
     TEST_INIT();
@@ -236,6 +349,10 @@ int main(void) {
     RUN_TEST(roundtrip_preserves_quotes_and_tabs);
     RUN_TEST(oversized_value_is_dropped_on_load);
     RUN_TEST(oversized_file_is_salvaged_not_discarded);
+    RUN_TEST(config_dir_prefers_absolute_xdg);
+#ifndef _WIN32
+    RUN_TEST(init_reads_old_settings_when_xdg_location_is_empty);
+#endif
 
     TEST_SUMMARY();
     thread_safety_cleanup();
