@@ -478,9 +478,10 @@ static void load_widgets(void) {
     int enc = settings_get_int("default_encoding", 0);
     gtk_combo_box_set_active(GTK_COMBO_BOX(P.enc_combo),
                              (enc >= 0 && enc <= (int) NPAD_ENC_ANSI) ? enc : 0);
-    int eol = settings_get_int("default_line_ending", 0);
-    gtk_combo_box_set_active(GTK_COMBO_BOX(P.eol_combo),
-                             (eol >= 0 && eol <= (int) NPAD_EOL_CR) ? eol : 0);
+    int eol = settings_get_int("default_line_ending", (int) NPAD_DEFAULT_LINE_ENDING);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(P.eol_combo), (eol >= 0 && eol <= (int) NPAD_EOL_CR)
+                                                             ? eol
+                                                             : (int) NPAD_DEFAULT_LINE_ENDING);
     // Falls back to the pre-0.7 monospace_enabled so the shown default equals
     // the effective one (see the Win32 page)
     gtk_combo_box_set_active(
@@ -746,8 +747,9 @@ static void build_defaults(GtkWidget *notebook) {
     char *eol_labels[NPAD_EOL_CR + 1];
     for (int i = 0; i <= (int) NPAD_EOL_CR; i++)
         eol_labels[i] = g_strdup(file_line_ending_name((LineEnding) i));
-    P.eol_combo = new_combo(page, "Default _line endings for new files:", "default_line_ending", 0,
-                            (const char *const *) eol_labels, (int) NPAD_EOL_CR + 1);
+    P.eol_combo = new_combo(page, "Default _line endings for new files:", "default_line_ending",
+                            (int) NPAD_DEFAULT_LINE_ENDING, (const char *const *) eol_labels,
+                            (int) NPAD_EOL_CR + 1);
     for (int i = 0; i <= (int) NPAD_ENC_ANSI; i++)
         g_free(enc_labels[i]);
     for (int i = 0; i <= (int) NPAD_EOL_CR; i++)
@@ -810,11 +812,6 @@ static void add_paste_row(GtkWidget *box, const char *label_text, const char *ke
 
 static void build_markdown(GtkWidget *notebook) {
     GtkWidget *page = new_page(notebook, "Markdown");
-
-    add_note(page,
-             "The Markdown list tools are not in npad for Linux yet. This page edits the same "
-             "settings as the Windows build, so your choices are kept for when they arrive. "
-             "Basic Markdown support already adds \"Interpret escapes\" to Find / Replace.");
 
     P.md_check = add_check(page, "Basic _Markdown support", "list_tools_enabled", false);
     add_note(page, "Adds a Markdown menu and right-click tools (off by default for classic Notepad "
