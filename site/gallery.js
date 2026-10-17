@@ -24,6 +24,7 @@
     document.body.appendChild(dlg);
     img = dlg.querySelector('img');
     cap = dlg.querySelector('p');
+    cap.setAttribute('aria-live', 'polite');
     prev = dlg.querySelector('.lb-prev');
     next = dlg.querySelector('.lb-next');
     dlg.querySelector('.lb-close').addEventListener('click', function () { dlg.close(); });
@@ -107,8 +108,8 @@
       b.querySelector('span').textContent = s.getAttribute('data-label');
       b.addEventListener('click', function () { select(i); });
       b.addEventListener('keydown', function (e) {
-        if (e.key === 'ArrowRight') { select((cur + 1) % shots.length, true); e.preventDefault(); }
-        if (e.key === 'ArrowLeft') { select((cur + shots.length - 1) % shots.length, true); e.preventDefault(); }
+        if (e.key === 'ArrowRight') { select((i + 1) % shots.length, true); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { select((i + shots.length - 1) % shots.length, true); e.preventDefault(); }
       });
       bar.appendChild(b); thumbs.push(b);
     });

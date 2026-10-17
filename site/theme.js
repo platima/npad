@@ -20,8 +20,17 @@
     }
     b.addEventListener('click', function () {
       var next = current() === 'dark' ? 'light' : 'dark';
-      d.setAttribute('data-theme', next);
-      try { localStorage.setItem(key, next); } catch (e) {}
+      var system = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      if (next === system) {
+        /* back to the system setting: forget the override */
+        d.removeAttribute('data-theme');
+        try { localStorage.removeItem(key); } catch (e) {}
+      } else {
+        d.setAttribute('data-theme', next);
+        try { localStorage.setItem(key, next); } catch (e) {}
+      }
+      var metas = document.querySelectorAll('meta[name="theme-color"]');
+      for (var i = 0; i < metas.length; i++) metas[i].setAttribute('content', next === 'dark' ? '#17181b' : '#ffffff');
       label();
     });
     label();
