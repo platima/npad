@@ -5,6 +5,37 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.35.0] - Unreleased
+
+### ✨ Highlights
+- **Preferences and Format > Font arrive on Linux.** Edit > Preferences
+  (Ctrl+,) opens the same General, Appearance, Defaults, Markdown and Backup
+  pages as Windows, with the same settings, wording and defaults, and the
+  hidden Debug page (Ctrl+Shift+.). Each change saves and reaches your other
+  npad windows the moment you make it - there is no Apply button to forget.
+  Format > Font opens GTK's font chooser.
+
+### 🆕 Features
+- **Linux Preferences dialog.** A notebook of the Windows pages minus the two
+  that are Windows-only: there is no Updates page (Linux updates through apt
+  or dnf), and Associations is a single *Make npad the default text editor*
+  button that runs `xdg-mime default io.github.platima.npad.desktop
+  text/plain` for your account - only when you click it. Every control writes
+  only its own key and tells the other windows, so a page you merely looked
+  at can never write its whole state back. Export, Import and Reset All
+  Preferences are on Backup (Reset keeps recent files, window position and
+  Find/Replace options and history, as on Windows; Import refuses a file that
+  is not a JSON object). The Markdown page edits the shared keys even though
+  the list tools themselves are not ported yet, and says so. The Debug page
+  shows Linux diagnostics (GTK and display backend, session, locale, paths,
+  window count, startup profile) with a Copy Diagnostics button.
+- **Linux Format > Font.** GTK's font chooser writes the same font keys
+  (face, size, weight, italic) as the Windows dialog, for the font type the
+  window is showing, and updates every open window live.
+
+### 🔧 Changed
+- Linux: Edit > Preferences and Format > Font are no longer greyed out.
+
 ## [0.34.0] - 2026-10-17
 
 The first release with a Linux desktop build, which installs from signed

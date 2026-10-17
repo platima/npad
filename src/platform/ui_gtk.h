@@ -10,6 +10,7 @@
  *                       state (wrap, font, zoom, theme), status bar, timers
  *   ui_gtk_dialogs.c  - file choosers, message boxes and prompts, About
  *   ui_gtk_find.c     - Find / Replace / Go To
+ *   ui_gtk_prefs.c    - Preferences and Format > Font
  *   ui_gtk_instance.c - cross-instance messaging over D-Bus: settings sync,
  *                       view sync, Close All, instance counting
  *
@@ -85,6 +86,7 @@ typedef enum {
     NPAD_CMD_EDIT_SELECT_ALL,
     NPAD_CMD_EDIT_TIME_DATE,
     NPAD_CMD_EDIT_PREFERENCES,
+    NPAD_CMD_EDIT_PREFERENCES_DEBUG, // Ctrl+Shift+. : Preferences on the hidden Debug page
     NPAD_CMD_FORMAT_WORD_WRAP,
     NPAD_CMD_FORMAT_MONOSPACE,
     NPAD_CMD_FORMAT_EOL_CRLF,
@@ -191,6 +193,13 @@ void npad_gtk_replace_selection(Window *window, const char *text);
 // may be NULL)
 void npad_gtk_spawn_self(const char *const *extra_args);
 
+// The settings key (and fallback face) of the font the editor is showing:
+// monospace_font, proportional_font or opendyslexic_font
+const char *npad_gtk_active_font_key(const Window *window, const char **default_face);
+
+// Whether fontconfig knows a font family by this name
+bool npad_gtk_font_is_installed(const char *family);
+
 // --- ui_gtk_dialogs.c --------------------------------------------------------
 
 // Nothing beyond the ui_platform_* entry points yet
@@ -207,6 +216,15 @@ void npad_gtk_show_goto_dialog(Window *window);
 void npad_gtk_find_reload_settings(void);
 // Close any open find/replace dialog (shutdown)
 void npad_gtk_find_cleanup(void);
+
+// --- ui_gtk_prefs.c ----------------------------------------------------------
+
+// The modal Preferences dialog; show_debug adds the hidden Debug page and
+// opens on it. Every control saves and broadcasts as it changes.
+void npad_gtk_show_preferences(Window *window, bool show_debug);
+// Format > Font: GtkFontChooserDialog writing the font keys for the font type
+// this window is showing
+void npad_gtk_show_font_dialog(Window *window);
 
 // --- ui_gtk_instance.c -------------------------------------------------------
 

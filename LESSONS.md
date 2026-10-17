@@ -492,6 +492,29 @@ fields) and which start at the printer's hardware margins. Full page gives the
 corner of the sheet, so Notepad-style margins are applied by npad alone.
 Landscape needs no rotation here: the context is already orientation-aware.
 
+**A text field that compares itself with `settings_get_string(key, NULL)`
+writes a setting nobody changed.** A GTK entry shows the default ("&f",
+"Page &p") for an unset key; on focus-out it found the key missing, called
+that a change and wrote the default into `settings.json` - for every field the
+user merely tabbed through, and it stuck as the user's own value, so a later
+change of default would never reach them. -> Compare with the value the
+getter returns for the key's own default, and write only when they differ.
+The same rule is why Preferences has no Apply button: each control writes its
+one key as it changes, never the whole page.
+
+**`g_spawn_check_exit_status` is deprecated in GLib 2.70, and its replacement
+needs 2.70.** Debian 12 and Ubuntu 22.04 ship 2.74 / 2.72, but the build
+warns on both names depending on the minimum you target. -> `g_spawn_sync`'s
+status is a plain wait status on Unix: `WIFEXITED(status) &&
+WEXITSTATUS(status) == 0`.
+
+**A modal `gtk_dialog_run` does not stop settings broadcasts.** The main loop
+keeps running under it, so another instance saving settings re-runs
+`npad_gtk_reload_and_apply_settings` while Preferences is open, and the
+dialog's controls then show values older than `settings.json`. That is safe
+only because every control writes just its own key; a dialog that saved all
+its controls on close would overwrite the other instance's change.
+
 ## Installers
 
 **Inno Setup's check lists do not scale their check box offset.**
