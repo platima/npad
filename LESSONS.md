@@ -431,6 +431,24 @@ Likewise `type: tree` makes the rpm *own* the directories it walks (it listed
 `nfpm.yaml` lists files individually. An empty `release` gives a deb version
 without a `-1` revision; the rpm needs one.
 
+**nfpm has no riscv64 binary, but it packages for any architecture.** Its
+releases carry x86_64 and arm64 (and others), not riscv64, so a riscv64
+container cannot run it. -> Compile inside the emulated container, package on
+the host: `nfpm.yaml` says `arch: ${NPAD_ARCH}` (nfpm expands variables in
+`arch` without `expand: true`, as in `version`) and writes the rpm's own
+spelling (`aarch64`, `x86_64`) from the Debian name. The architecture comes
+from the binary's ELF header, read with `readelf`: an amd64 host's `objdump`
+may not recognise a riscv64 file at all, where `readelf` reads any ELF.
+`build-package.sh` refuses a binary whose header disagrees with `PKG_ARCH`,
+because a mislabelled package installs and then cannot execute.
+
+**Fedora publishes no riscv64 container image; openSUSE Tumbleweed does.**
+Debian (trixie) and Ubuntu (24.04) have riscv64 images, Debian 12 does not
+(no official port, which is also why riscv64's floor is Debian 13 / Ubuntu
+24.04). openSUSE has no package named `gtk3`, but `libgtk-3-0` provides it,
+so the rpm's `Requires: gtk3 >= 3.24` resolves there; zypper refuses an
+unsigned local rpm without `--allow-unsigned-rpm`.
+
 **Artifact names must be unique within a workflow run, and `release.yml` runs
 `ci.yml` first.** Both build the Linux packages through `packages.yml`, so
 that workflow takes an `artifact_name` input and the release passes its own;
@@ -674,7 +692,46 @@ So an installer build failure leaves a published, half-complete release — and
 after. v0.28.0 shipped with no installers this way. CI now resolves every
 `SourceFile` reference in `npad.wxs` at lint time.
 
+## Windows on Arm (arm64)
+
+**MinGW GCC has no arm64 Windows target; llvm-mingw (clang + lld) does - and
+its dlltool has no `-y`.** The x64 build delay-loads winhttp, bcrypt, comdlg32
+and msimg32 through GNU `dlltool -y` delay-import libraries plus
+`-ldelayimp`. `llvm-dlltool` rejects `-y` outright. lld delay-loads natively
+instead: `-Wl,--delayload=<dll>` against an ordinary import library (built
+from the same `.def` with `llvm-dlltool -l`, so the `.def` files still declare
+every entry point used), with `__delayLoadHelper2` taken from libmingwex -
+`-ldelayimp` is not needed there. The Makefile switches on `WIN_LINKER=lld`.
+
+**The two linkers leave different evidence.** lld fills the PE delay-import
+directory (`llvm-readobj --coff-imports` lists `DelayImport { Name: winhttp.dll }`);
+GNU ld's `-y` stubs do not (`objdump -p` shows the Delay Import Directory as
+0) and simply leave the DLL out of the import table. So "is it delay-loaded"
+is checked as "listed under DelayImport" for arm64, but only as "not bound"
+for x64.
+
+**clang warns where GCC is silent.** The same sources under clang 23 warn
+about a C11 typedef redefinition (`Window` in ui_win32.c and ui_interface.h)
+and a set-but-unused global. Warnings only; they do not fail the build.
+
+**An arm64 exe cannot be tested by running it** on the x64 runners or an x64
+PC, and an arm64 Inno setup refuses to start there. Check the file instead:
+the PE machine field (0xAA64; `validate-release-assets.sh` reads it with
+`od`), the import tables, and the MSI's summary Template (`Arm64;0`).
+
 ## Tooling and process
+
+**A source-reading guard can match its own documentation.** Release
+validation reads the updater's asset suffixes as every quoted string starting
+`-setup-win-` in `update_check.c`; a comment there quoting the pattern
+became a "suffix" that no asset ends with, and failed the dry run. Keep such
+strings out of comments in the file a guard parses, and say so beside them.
+
+**`workflow_dispatch` only appears for a workflow whose default-branch copy
+declares it.** A dry-run trigger added on a feature branch cannot be run until
+the file reaches `main`; until then use workflows that already have one there
+(`installers.yml`, `packages.yml`) with `--ref <branch>` - the run then uses
+the branch's copy of the file.
 
 **CI's cppcheck (2.13) is stricter than a typical distro's (2.10).** Worse, an
 inline suppression that 2.13 needs becomes an *unmatched suppression* error on
@@ -758,7 +815,9 @@ add `-lm` deliberately.
 collapses a C `"\n"` (backslash-n) in a heredoc, so a `replace()` whose search
 text contained one failed its assertion and wrote nothing, and a heredoc with
 apostrophes broke the shell outright. → Write patch scripts with the file tool
-and run them, as with the existing heredoc advice.
+and run them, as with the existing heredoc advice. A Makefile line continuation
+(backslash, newline) in such a patch dies the same way, even in a quoted
+`<<'EOF'` heredoc: the recipe came out as one long line.
 
 **A private npad for probing, and the traps on the way.** npad reads its
 settings through `SHGetFolderPath(CSIDL_APPDATA)`, which `APPDATA=` does not

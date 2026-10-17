@@ -1,14 +1,21 @@
 name: Linux packages
 
-# Builds npad_<v>_amd64.deb and npad-<v>-1.x86_64.rpm with nfpm
-# (packaging/linux/nfpm.yaml), proves both install on the distros they claim to
-# support. release.yml calls it with the release tag (which must match the
-# version in src/main.h) and attaches the artifact to the release; it is
-# attached there, not here, so a plain CI run never needs write access. The signed apt/dnf repositories at pkg.npad.dev are
-# built from those release assets by platima/npad-packages.
+# Builds the .deb and .rpm for every Linux architecture npad ships - amd64,
+# arm64 and riscv64 (the rpm names them x86_64, aarch64, riscv64) - with nfpm
+# (packaging/linux/nfpm.yaml), and proves each installs on the distros it is
+# meant for. release.yml calls it with the release tag (which must match the
+# version in src/main.h) and attaches the artifacts to the release; it is
+# attached there, not here, so a plain CI run never needs write access. The
+# signed apt/dnf repositories at pkg.npad.dev are built from those release
+# assets by platima/npad-packages.
 #
-# The binary is built in a Debian 12 container so its glibc floor is low enough
-# for Debian 12 and Ubuntu 22.04; newer distros only need >=.
+# The binary is compiled inside a distro container (scripts/ci-linux-build.sh)
+# and packaged on the host, where nfpm runs:
+#   amd64    Debian 12, native            glibc floor <= 2.35 (Ubuntu 22.04)
+#   arm64    Debian 12, native arm runner glibc floor <= 2.35 (Ubuntu 22.04)
+#   riscv64  Debian 13 under QEMU         glibc floor <= 2.39 (Ubuntu 24.04)
+# There are no hosted riscv64 runners, and Debian 12 has no official riscv64
+# port, so riscv64 needs Debian 13 / Ubuntu 24.04 or newer.
 
 on:
   # The inputs are declared for both triggers: a manual run otherwise gets an
@@ -22,7 +29,7 @@ on:
         required: false
         default: ""
       artifact_name:
-        description: "Artifact name"
+        description: "Artifact name prefix (one artifact per architecture: <name>-<arch>)"
         type: string
         required: false
         default: "npad-linux-packages"
@@ -34,7 +41,7 @@ on:
         required: false
         default: ""
       artifact_name:
-        description: "Artifact name; unique per run, so release.yml's call differs from CI's"
+        description: "Artifact name prefix, <name>-<arch>; unique per run, so release.yml's call differs from CI's"
         type: string
         required: false
         default: "npad-linux-packages"
@@ -44,32 +51,50 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    container: debian:12
+    name: build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - { arch: amd64,   rpm_arch: x86_64,  runner: ubuntu-latest,    image: "debian:12",     glibc_max: "2.35", qemu: false }
+        - { arch: arm64,   rpm_arch: aarch64, runner: ubuntu-24.04-arm, image: "debian:12",     glibc_max: "2.35", qemu: false }
+        - { arch: riscv64, rpm_arch: riscv64, runner: ubuntu-latest,    image: "debian:trixie", glibc_max: "2.39", qemu: true }
     steps:
-    - name: Install build dependencies
-      run: |
-        apt-get update -q
-        apt-get install -y -q build-essential pkg-config libgtk-3-dev libncurses-dev \
-          git ca-certificates curl binutils desktop-file-utils appstream
-
     - uses: actions/checkout@v7
 
+    - name: Set up QEMU
+      if: matrix.qemu
+      uses: docker/setup-qemu-action@v4
+      with:
+        platforms: ${{ matrix.arch }}
+
+    - name: Compile npad-linux in ${{ matrix.image }} (linux/${{ matrix.arch }})
+      run: |
+        # The .desktop/AppStream validation needs doing once, not per arch
+        validate=0
+        [ "${{ matrix.arch }}" = amd64 ] && validate=1
+        docker run --rm --platform "linux/${{ matrix.arch }}" \
+          -e NPAD_VALIDATE_METADATA=$validate \
+          -v "$PWD:/src" -w /src "${{ matrix.image }}" sh scripts/ci-linux-build.sh
+
     - name: Install nfpm (pinned, checksum-verified)
-      run: sh scripts/install-nfpm.sh
+      run: sudo sh scripts/install-nfpm.sh
 
     - name: Build the packages
       env:
         RELEASE_TAG: ${{ inputs.release_tag }}
+        ARCH: ${{ matrix.arch }}
+        RPM_ARCH: ${{ matrix.rpm_arch }}
       run: |
-        git config --global --add safe.directory "$GITHUB_WORKSPACE"
-        make clean
         # A release builds the tag's version, including a pre-release suffix
         # (v0.34.0-rc1 -> 0.34.0-rc1). nfpm turns the suffix into 0.34.0~rc1
         # inside both packages, so an rc sorts before the final release in dpkg
         # and rpm, while the file names keep the tag's spelling, which is what
         # release.yml validates and attaches. The tag's base version must
         # still match src/main.h.
+        # npad-linux came out of the container above; build-package.sh reads
+        # its ELF header and refuses to label it as any other architecture.
         if [ -n "$RELEASE_TAG" ]; then
           version=${RELEASE_TAG#v}
           header=$(sed -n 's/^#define NPAD_VERSION_\(MAJOR\|MINOR\|PATCH\) \([0-9]*\).*/\2/p' src/main.h | paste -sd. -)
@@ -77,104 +102,115 @@ jobs:
             echo "ERROR: tag $RELEASE_TAG does not match src/main.h ($header) - bump src/main.h?"
             exit 1
           fi
-          make deb DEB_VERSION="$version"
-          make rpm DEB_VERSION="$version"
+          make deb DEB_VERSION="$version" PKG_ARCH="$ARCH"
+          make rpm DEB_VERSION="$version" PKG_ARCH="$ARCH"
         else
-          make deb
-          make rpm
+          make deb PKG_ARCH="$ARCH"
+          make rpm PKG_ARCH="$ARCH"
         fi
         ls -la dist/
-        deb=$(ls dist/npad_*_amd64.deb)
-        rpm=$(ls dist/npad-*-1.x86_64.rpm)
-        if [ -n "$RELEASE_TAG" ] && [ "$(basename "$deb")" != "npad_${RELEASE_TAG#v}_amd64.deb" ]; then
+        deb=$(ls dist/npad_*_"$ARCH".deb)
+        rpm=$(ls dist/npad-*-1."$RPM_ARCH".rpm)
+        if [ -n "$RELEASE_TAG" ] && [ "$(basename "$deb")" != "npad_${RELEASE_TAG#v}_${ARCH}.deb" ]; then
           echo "ERROR: built $(basename "$deb") but the tag is $RELEASE_TAG"
           exit 1
         fi
+        [ "$(dpkg-deb -f "$deb" Architecture)" = "$ARCH" ] || { echo "ERROR: $deb is not Architecture: $ARCH"; exit 1; }
         dpkg-deb --info "$deb"
         dpkg-deb --contents "$deb"
 
     - name: Check the libc floor
+      env:
+        ARCH: ${{ matrix.arch }}
+        MAX: ${{ matrix.glibc_max }}
       run: |
-        # Ubuntu 22.04 ships glibc 2.35, the oldest distro we claim. A newer
-        # floor means the build image drifted or the code started using a
-        # newer libc symbol; either way 22.04 users would lose the update.
-        floor=$(dpkg-deb -f dist/npad_*_amd64.deb Depends | grep -o 'libc6 (>= [0-9.]*' | grep -o '[0-9.]*$')
-        echo "libc6 floor: $floor"
-        if [ "$(printf '%s\n%s\n' "$floor" 2.35 | sort -V | tail -n1)" != "2.35" ]; then
-          echo "ERROR: libc floor $floor is above 2.35 (Ubuntu 22.04)"
+        # amd64/arm64: Ubuntu 22.04 ships glibc 2.35, the oldest distro we
+        # claim. riscv64: Ubuntu 24.04's 2.39 (it is built on Debian 13, and
+        # nothing older has an official riscv64 port). A newer floor means the
+        # build image drifted or the code started using a newer libc symbol;
+        # either way those users would lose the update.
+        floor=$(dpkg-deb -f dist/npad_*_"$ARCH".deb Depends | grep -o 'libc6 (>= [0-9.]*' | grep -o '[0-9.]*$')
+        echo "libc6 floor ($ARCH): $floor, allowed up to $MAX"
+        if [ "$(printf '%s\n%s\n' "$floor" "$MAX" | sort -V | tail -n1)" != "$MAX" ]; then
+          echo "ERROR: libc floor $floor is above $MAX"
           exit 1
         fi
 
     - name: Check the dpkg-deb fallback still agrees with nfpm.yaml
+      env:
+        ARCH: ${{ matrix.arch }}
       run: |
         # `make deb` falls back to scripts/build-deb.sh when nfpm is missing.
         # It carries its own Depends line; fail if the two ever drift.
-        sh scripts/build-deb.sh "$(ls dist/npad_*_amd64.deb | sed 's/.*npad_//; s/_amd64.deb//')" npad-linux fallback
-        want=$(dpkg-deb -f dist/npad_*_amd64.deb Depends)
-        have=$(dpkg-deb -f fallback/npad_*_amd64.deb Depends)
+        sh scripts/build-deb.sh "$(ls dist/npad_*_"$ARCH".deb | sed "s/.*npad_//; s/_$ARCH.deb//")" npad-linux fallback "$ARCH"
+        want=$(dpkg-deb -f dist/npad_*_"$ARCH".deb Depends)
+        have=$(dpkg-deb -f fallback/npad_*_"$ARCH".deb Depends)
         echo "nfpm:     $want"
         echo "fallback: $have"
         [ "$want" = "$have" ] || { echo "ERROR: Depends differ"; exit 1; }
         rm -rf fallback
 
-    - name: Validate the desktop file and AppStream metainfo
-      run: |
-        desktop-file-validate packaging/linux/io.github.platima.npad.desktop
-        appstreamcli validate --no-net packaging/linux/io.github.platima.npad.metainfo.xml
-
     - name: Checksums
+      env:
+        ARCH: ${{ matrix.arch }}
+        RPM_ARCH: ${{ matrix.rpm_arch }}
       run: |
         cd dist
-        for f in npad_*_amd64.deb npad-*.x86_64.rpm; do sha256sum "$f" > "$f.sha256"; done
+        for f in npad_*_"$ARCH".deb npad-*."$RPM_ARCH".rpm; do sha256sum "$f" > "$f.sha256"; done
         cat *.sha256
 
     - uses: actions/upload-artifact@v7
       with:
-        name: ${{ inputs.artifact_name }}
+        name: ${{ inputs.artifact_name }}-${{ matrix.arch }}
         path: |
-          dist/npad_*_amd64.deb
-          dist/npad-*.x86_64.rpm
+          dist/npad_*_${{ matrix.arch }}.deb
+          dist/npad-*.${{ matrix.rpm_arch }}.rpm
           dist/*.sha256
         retention-days: 7
 
   # Install each package on the distros it is meant for and check that every
   # shared library resolves. Mint 21+/LMDE are Ubuntu 22.04 / Debian based, so
-  # these cover them.
+  # these cover them. arm64 runs natively on an arm runner; riscv64 runs under
+  # QEMU, on the distros that publish riscv64 images and are new enough for
+  # its glibc floor (Fedora publishes none, so openSUSE Tumbleweed tests the
+  # riscv64 rpm).
   install-test:
+    name: install-test (${{ matrix.arch }}, ${{ matrix.image }})
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-        - { image: "debian:12", kind: deb }
-        - { image: "debian:trixie", kind: deb }
-        - { image: "ubuntu:22.04", kind: deb }
-        - { image: "ubuntu:24.04", kind: deb }
-        - { image: "fedora:latest", kind: rpm }
-    container: ${{ matrix.image }}
+        - { arch: amd64,   runner: ubuntu-latest,    image: "debian:12",           kind: deb }
+        - { arch: amd64,   runner: ubuntu-latest,    image: "debian:trixie",       kind: deb }
+        - { arch: amd64,   runner: ubuntu-latest,    image: "ubuntu:22.04",        kind: deb }
+        - { arch: amd64,   runner: ubuntu-latest,    image: "ubuntu:24.04",        kind: deb }
+        - { arch: amd64,   runner: ubuntu-latest,    image: "fedora:latest",       kind: dnf }
+        - { arch: arm64,   runner: ubuntu-24.04-arm, image: "debian:12",           kind: deb }
+        - { arch: arm64,   runner: ubuntu-24.04-arm, image: "debian:trixie",       kind: deb }
+        - { arch: arm64,   runner: ubuntu-24.04-arm, image: "ubuntu:22.04",        kind: deb }
+        - { arch: arm64,   runner: ubuntu-24.04-arm, image: "ubuntu:24.04",        kind: deb }
+        - { arch: arm64,   runner: ubuntu-24.04-arm, image: "fedora:latest",       kind: dnf }
+        - { arch: riscv64, runner: ubuntu-latest,    image: "debian:trixie",       kind: deb,    qemu: true }
+        - { arch: riscv64, runner: ubuntu-latest,    image: "ubuntu:24.04",        kind: deb,    qemu: true }
+        - { arch: riscv64, runner: ubuntu-latest,    image: "opensuse/tumbleweed", kind: zypper, qemu: true }
     steps:
+    - uses: actions/checkout@v7
+
     - uses: actions/download-artifact@v8
       with:
-        name: ${{ inputs.artifact_name }}
+        name: ${{ inputs.artifact_name }}-${{ matrix.arch }}
         path: pkgs
 
-    - name: Install the deb
-      if: matrix.kind == 'deb'
-      run: |
-        apt-get update -q
-        apt-get install -y -q ./pkgs/npad_*_amd64.deb
+    - name: Set up QEMU
+      if: matrix.qemu
+      uses: docker/setup-qemu-action@v4
+      with:
+        platforms: ${{ matrix.arch }}
 
-    - name: Install the rpm
-      if: matrix.kind == 'rpm'
-      run: dnf install -y ./pkgs/npad-*.x86_64.rpm
-
-    - name: Check the install
+    - name: Install and check
       run: |
-        test -x /usr/bin/npad
-        test -f /usr/share/applications/io.github.platima.npad.desktop
-        if ldd /usr/bin/npad | grep 'not found'; then
-          echo "ERROR: unresolved libraries"
-          exit 1
-        fi
-        echo "OK on ${{ matrix.image }}"
+        ls -la pkgs
+        docker run --rm --platform "linux/${{ matrix.arch }}" \
+          -v "$PWD:/w" -w /w "${{ matrix.image }}" sh scripts/ci-linux-install-test.sh "${{ matrix.kind }}"

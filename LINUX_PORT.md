@@ -416,8 +416,25 @@ version.
       separate `platima/npad-packages` repo from the release assets (the GPG
       key lives only there). Install instructions: DOCUMENTATION.md >
       Installing on Linux. Release notifies it via `NPAD_PACKAGES_TOKEN`.
+- [x] Three architectures (v0.35.0): amd64, arm64 and riscv64 (rpm: x86_64,
+      aarch64, riscv64). amd64 and arm64 compile in Debian 12 (arm64 natively
+      on GitHub's `ubuntu-24.04-arm` runners), riscv64 under QEMU in Debian 13
+      because Debian 12 has no official riscv64; so riscv64's floor is Debian
+      13 / Ubuntu 24.04 (glibc <= 2.39, checked) where the others' is Debian
+      12 / Ubuntu 22.04 (<= 2.35). The binary is compiled in the container
+      (`scripts/ci-linux-build.sh`) and packaged on the host, since nfpm has
+      no riscv64 build; `scripts/build-package.sh` reads the architecture
+      from the ELF header with readelf, which reads foreign ELF files where
+      an amd64 objdump may not. Install-tested per architecture: arm64 on
+      the same five distros as amd64, riscv64 under QEMU on Debian 13, Ubuntu
+      24.04 and openSUSE Tumbleweed (Fedora has no riscv64 image). The
+      pkg.npad.dev apt repository publishes `binary-amd64`, `binary-arm64`
+      and `binary-riscv64`, and the dnf repository all three rpm
+      architectures.
 - [ ] Not verified on real Fedora / Mint hardware: installs are only tested in
-      CI containers (no display), so launching the app from the .rpm is unseen
+      CI containers (no display), so launching the app from the .rpm is unseen.
+      Likewise arm64 and riscv64 have only been installed in containers, not
+      launched on real hardware
 
 ### Batch F - Polish
 - [ ] `system` scheme follows the desktop's light/dark preference live

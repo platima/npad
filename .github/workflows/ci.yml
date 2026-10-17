@@ -114,6 +114,61 @@ jobs:
           npad-terminal.exe.sha256
         retention-days: 7
 
+  # Windows on Arm: cross-compiled with a pinned llvm-mingw (clang + lld);
+  # MinGW GCC has no arm64 Windows target. Nothing here can execute an arm64
+  # exe, so the checks are on the file: an ARM64 PE that delay-loads the four
+  # DLLs the x64 build delay-loads, rather than binding them at startup (lld
+  # does this with --delayload, not GNU dlltool's -y; see the Makefile).
+  build-windows-arm64:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Install llvm-mingw (pinned, checksum-verified)
+      run: |
+        sudo sh scripts/install-llvm-mingw.sh /opt/llvm-mingw
+        echo /opt/llvm-mingw/bin >> "$GITHUB_PATH"
+
+    - name: Build npad-arm64.exe
+      run: |
+        make clean
+        make windows-arm64
+
+    - name: Verify the arm64 build
+      run: |
+        ls -la npad-arm64.exe
+        llvm-readobj --file-headers npad-arm64.exe | grep -q 'IMAGE_FILE_MACHINE_ARM64' \
+          || { echo "ERROR: npad-arm64.exe is not an ARM64 executable"; exit 1; }
+        imports=$(llvm-readobj --coff-imports npad-arm64.exe)
+        bound=$(echo "$imports" | grep -A1 '^Import {' | sed -n 's/^ *Name: //p')
+        delayed=$(echo "$imports" | grep -A1 '^DelayImport {' | sed -n 's/^ *Name: //p')
+        echo "Bound at load: $(echo $bound)"
+        echo "Delay-loaded:  $(echo $delayed)"
+        for dll in winhttp bcrypt comdlg32 msimg32; do
+          if echo "$bound" | grep -qix "$dll.dll"; then
+            echo "ERROR: $dll.dll is bound at load time; it should be delay-loaded"
+            exit 1
+          fi
+          echo "$delayed" | grep -qix "$dll.dll" || { echo "ERROR: $dll.dll is not delay-loaded"; exit 1; }
+        done
+        size=$(stat -c%s npad-arm64.exe)
+        if [ "$size" -le 40000 ] || [ "$size" -ge 5000000 ]; then
+          echo "ERROR: npad-arm64.exe is $size bytes, expected 40000-5000000"
+          exit 1
+        fi
+        sha256sum npad-arm64.exe > npad-arm64.exe.sha256
+        cat npad-arm64.exe.sha256
+
+    - name: Upload Windows arm64 GUI artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: npad-windows-gui-arm64
+        path: |
+          npad-arm64.exe
+          npad-arm64.exe.sha256
+        retention-days: 7
+
   build-linux:
     runs-on: ubuntu-latest
     needs: lint
@@ -162,8 +217,9 @@ jobs:
           npad-linux-terminal.sha256
         retention-days: 7
 
-  # .deb and .rpm: built in a Debian 12 container with nfpm and install-tested
-  # on Debian 12/13, Ubuntu 22.04/24.04 and Fedora (see packages.yml). Gated
+  # .deb and .rpm for amd64, arm64 and riscv64: compiled in Debian containers
+  # (riscv64 under QEMU), packaged with nfpm and install-tested on Debian
+  # 12/13, Ubuntu 22.04/24.04, Fedora and openSUSE (see packages.yml). Gated
   # on lint like every other build job: lint is the cheap first check, and a
   # red lint must stop the whole run rather than be worked around.
   packages:
@@ -172,7 +228,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    needs: [build-windows, build-linux]
+    needs: [build-windows, build-windows-arm64, build-linux]
     steps:
     - uses: actions/checkout@v7
 

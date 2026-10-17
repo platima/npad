@@ -1,11 +1,13 @@
 # nfpm configuration: one description for both the .deb and the .rpm.
 # Driven by scripts/build-package.sh, which stages `make install` into
 # NPAD_STAGE and exports NPAD_VERSION, NPAD_RELEASE (empty for the .deb, which
-# has no packaging revision; 1 for the .rpm) and NPAD_GLIBC. nfpm is a single
-# static binary used by CI and by anyone building the rpm; it is not a build
-# dependency of npad itself.
+# has no packaging revision; 1 for the .rpm), NPAD_GLIBC and NPAD_ARCH. nfpm
+# is a single static binary used by CI and by anyone building the rpm; it is
+# not a build dependency of npad itself.
 name: npad
-arch: amd64
+# The Debian name - amd64, arm64 or riscv64, read from the binary by the build
+# script. nfpm writes the rpm's own spelling (x86_64, aarch64, riscv64).
+arch: ${NPAD_ARCH}
 platform: linux
 version: ${NPAD_VERSION}
 release: ${NPAD_RELEASE}

@@ -17,9 +17,18 @@ rights:
 
 | Artifact | Use |
 |----------|-----|
-| `npad-v<v>-setup-win-x64.exe` | Interactive installer (Inno Setup) |
-| `npad-v<v>-msi-win-x64.msi` | Silent/managed deployment (`msiexec`) |
-| `npad-v<v>-portable-win-x64.exe` | Portable - run from anywhere, no install |
+| `npad-v<v>-setup-win-<arch>.exe` | Interactive installer (Inno Setup) |
+| `npad-v<v>-msi-win-<arch>.msi` | Silent/managed deployment (`msiexec`) |
+| `npad-v<v>-portable-win-<arch>.exe` | Portable - run from anywhere, no install |
+
+`<arch>` is **`x64`** for ordinary Intel/AMD PCs and **`arm64`** for Windows
+on Arm (Snapdragon and other Arm laptops). The arm64 builds are native and
+install only on Windows on Arm; the x64 ones also run there, under emulation.
+Both architectures install to the same place under the same identity, so
+installing one over the other replaces it. The in-app updater downloads the
+installer for the architecture npad was built for, so an arm64 npad stays
+arm64 (and an x64 npad under emulation stays x64 until you install the arm64
+one).
 
 **SmartScreen / Defender**: releases from v0.32.4 are code-signed (Azure
 Artifact Signing; check Properties > Digital Signatures). A publisher's
@@ -118,7 +127,11 @@ installed fonts.
 **Building the installers** (repo checkout, Windows): `pwsh
 installer/build-installers.ps1` - needs Inno Setup 6, the WiX dotnet tool
 and a built `npad.exe`; fonts are downloaded from SHA256-pinned upstream
-releases by `installer/fetch-fonts.ps1`. CI builds both via
+releases by `installer/fetch-fonts.ps1`. Add `-Arch arm64` for the Windows on
+Arm set, from `npad-arm64.exe` (`make windows-arm64`, which needs
+[llvm-mingw](https://github.com/mstorsjo/llvm-mingw) on `PATH`;
+`scripts/install-llvm-mingw.sh` fetches the pinned release CI uses). Both
+architectures build on an x64 PC. CI builds all six deliverables via
 `.github/workflows/installers.yml`.
 
 ## File locations
@@ -239,14 +252,28 @@ Ctrl+X and the paste shortcuts change behaviour. Linux specifics:
 
 ### Installing on Linux
 
+Packages are built for three architectures. The .deb and .rpm spell them
+differently:
+
+| Architecture | .deb | .rpm | Oldest supported |
+|--------------|------|------|------------------|
+| x86-64 (Intel/AMD) | `amd64` | `x86_64` | Debian 12, Ubuntu 22.04 |
+| 64-bit Arm (Raspberry Pi 4/5 on a 64-bit OS, Arm laptops and servers) | `arm64` | `aarch64` | Debian 12, Ubuntu 22.04 |
+| 64-bit RISC-V | `riscv64` | `riscv64` | Debian 13, Ubuntu 24.04 |
+
+riscv64 starts later because no older Debian or Ubuntu has an official
+riscv64 port. `dpkg --print-architecture` (or `uname -m`) tells you which one
+you have; the apt and dnf repositories pick the right one by themselves.
+
 - **.deb** (Debian 12/13, Ubuntu 22.04+, Mint): `sudo apt install
-  ./npad_<version>_amd64.deb`. It depends only on GTK 3 (`libgtk-3-0` or
+  ./npad_<version>_amd64.deb` (or `_arm64` / `_riscv64`). It depends only on GTK 3 (`libgtk-3-0` or
   `libgtk-3-0t64`) and installs `/usr/bin/npad`, the launcher
   (`io.github.platima.npad.desktop`, offered for text, Markdown, JSON, XML and
   similar files in "Open with"), hicolor icons from 16 to 256 px and the
   AppStream metainfo for software centres.
-- **.rpm** (Fedora): `sudo dnf install ./npad-<version>-1.x86_64.rpm`. It
-  requires `gtk3` and installs the same files as the .deb.
+- **.rpm** (Fedora, openSUSE): `sudo dnf install ./npad-<version>-1.x86_64.rpm`
+  (or `.aarch64` / `.riscv64`). It requires `gtk3` and installs the same files
+  as the .deb.
 - **apt / dnf repository (recommended; updates arrive with the rest of the
   system).** The repositories at <https://pkg.npad.dev> are rebuilt from the
   GitHub releases and signed with the npad packaging key
@@ -278,7 +305,11 @@ Ctrl+X and the paste shortcuts change behaviour. Linux specifics:
   it. `make deb` and `make rpm` build the packages into `dist/`; both use
   [nfpm](https://nfpm.goreleaser.com) (`scripts/install-nfpm.sh` fetches the
   pinned release), and `make deb` falls back to `dpkg-deb` without it. Build
-  in a Debian 12 container for packages that run on every supported distro.
+  in a Debian 12 container for packages that run on every supported distro
+  (Debian 13 for riscv64). The package architecture is read from the binary,
+  so a binary compiled elsewhere (CI compiles riscv64 under QEMU) packages on
+  any host with nfpm; `PKG_ARCH=arm64` makes it an error if the binary is
+  anything else.
 - The desktop file name, icon name and window class are all the application
   id `io.github.platima.npad`; the shell matches windows to the launcher and
   icon through it.
@@ -392,6 +423,9 @@ Installing an update runs the downloaded, checksum-verified installer and
 closes npad through the normal save-changes prompt; a fully seamless
 no-close update is not possible because Inno/MSI must replace the running
 `npad.exe`. Portable-exe users get the same verified installer download.
+The installer is the one for the architecture npad was compiled for
+(`-setup-win-x64.exe` or `-setup-win-arm64.exe`); an arm64 npad is never
+offered the x64 installer, and reports an error if a release has none for it.
 
 ### Associations (Preferences > Associations)
 
