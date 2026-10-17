@@ -56,8 +56,10 @@ TEST_CASE(detect_line_ending_cr) {
 }
 
 TEST_CASE(detect_line_ending_no_breaks) {
-    TEST_ASSERT_EQ(NPAD_EOL_CRLF, file_detect_line_ending("no line breaks"),
-                   "Text without line breaks should default to CRLF");
+    TEST_ASSERT_EQ(NPAD_DEFAULT_LINE_ENDING, file_detect_line_ending("no line breaks"),
+                   "Text without line breaks should get the platform's line ending");
+    TEST_ASSERT_EQ(NPAD_DEFAULT_LINE_ENDING, file_detect_line_ending(""),
+                   "Empty text should get the platform's line ending");
 }
 
 TEST_CASE(detect_line_ending_mixed_majority) {

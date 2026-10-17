@@ -1176,6 +1176,9 @@ static void create_menu(Window *window) {
     add_hidden_accel(window, GDK_KEY_KP_Add, C, NPAD_CMD_VIEW_ZOOM_IN);
     add_hidden_accel(window, GDK_KEY_KP_Subtract, C, NPAD_CMD_VIEW_ZOOM_OUT);
     add_hidden_accel(window, GDK_KEY_KP_0, C, NPAD_CMD_VIEW_ZOOM_RESET);
+    // The alternate rich-text paste; a plain paste while the Markdown tools are
+    // off, so it is inert rather than surprising
+    add_hidden_accel(window, GDK_KEY_v, CS, NPAD_CMD_EDIT_PASTE_ALT);
 
     set_check(window, NPAD_CMD_FORMAT_WORD_WRAP, window->word_wrap_enabled);
     set_check(window, NPAD_CMD_FORMAT_MONOSPACE, window->monospace_current);
@@ -1421,6 +1424,8 @@ void npad_gtk_handle_command(Window *window, NpadCommand command) {
             ui_show_about_dialog(window);
             break;
         default:
+            // The Markdown list tools and the alternate paste
+            npad_gtk_lists_command(window, command);
             break;
     }
 }
@@ -1434,6 +1439,7 @@ void npad_gtk_reload_and_apply_settings(Window *window) {
     npad_gtk_find_reload_settings();
     apply_theme(window); // Also re-applies font and zoom
     apply_new_window_pref(window);
+    npad_gtk_lists_reload_settings(window); // The Markdown menu appears and goes live
 
     // Shared window options follow; per-window view state (font type, zoom)
     // deliberately does not
@@ -1645,6 +1651,7 @@ Window *ui_platform_create_main_window(void) {
                      window);
 
     npad_gtk_edit_init(window);
+    npad_gtk_lists_init(window);
 
     apply_word_wrap(window);
     apply_theme(window);
@@ -1954,8 +1961,12 @@ static GtkClipboard *clipboard_for(Window *window) {
 }
 
 void ui_platform_cut(Window *window) {
-    if (window)
-        gtk_text_buffer_cut_clipboard(window->buffer, clipboard_for(window), TRUE);
+    if (!window)
+        return;
+    // With the Markdown tools on, Ctrl+X without a selection cuts the line
+    if (npad_gtk_lists_cut_line(window))
+        return;
+    gtk_text_buffer_cut_clipboard(window->buffer, clipboard_for(window), TRUE);
 }
 
 void ui_platform_copy(Window *window) {
@@ -1963,11 +1974,20 @@ void ui_platform_copy(Window *window) {
         gtk_text_buffer_copy_clipboard(window->buffer, clipboard_for(window));
 }
 
-void ui_platform_paste(Window *window) {
+void npad_gtk_paste_plain(Window *window) {
     if (!window)
         return;
     gtk_text_buffer_paste_clipboard(window->buffer, clipboard_for(window), NULL, TRUE);
     scroll_to_cursor(window);
+}
+
+void ui_platform_paste(Window *window) {
+    if (!window)
+        return;
+    // With the Markdown tools on: a pending cut line goes back above the
+    // caret's, and rich text converts per markdown_paste_primary
+    if (!npad_gtk_lists_paste(window, NPAD_PASTE_PRIMARY))
+        npad_gtk_paste_plain(window);
 }
 
 void ui_platform_undo(Window *window) {

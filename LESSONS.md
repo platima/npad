@@ -605,6 +605,39 @@ whether a window overlaps a monitor says "off screen" for everything there.
 declines to judge. To test the overlap logic anyway, compile the function into
 a harness with `#define gdk_monitor_get_geometry` pointing at a fake.
 
+**A dialog's entry takes the PRIMARY selection, and that collapses the text
+buffer's selection.** `gtk_widget_grab_focus` on a GtkEntry selects its text,
+which makes the entry the PRIMARY owner; a GtkTextBuffer whose selection loses
+PRIMARY moves its selection bound onto the caret. So a tool that opens a dialog
+and then acts on "the selection" (Custom Indent, Convert Delimiters'
+"Selection only") finds none: the selected lines were indented as one line, or
+the conversion ran over the whole document, with the dialog showing "Selection
+only" ticked a moment earlier. -> Note the selection (offsets, and which end is
+the caret) before the dialog runs and put it back once it is destroyed.
+
+**`gtk_text_iter_forward_to_line_end` skips a whole line when it is already
+there.** Called on an iterator at the end of its line (an empty line, or a
+caret after the last character) it moves to the end of the *next* line. -> Test
+`gtk_text_iter_ends_line` first; "the end of this line" is "this iterator, or
+forward_to_line_end if it does not end the line".
+
+**Browsers offer `text/html` on the X11 clipboard as UTF-16 with a BOM, other
+sources as UTF-8, and nothing says which.** Reading it as UTF-8 gives a string
+that is empty at the first NUL, so a rich paste silently falls back to plain
+text. -> Sniff: FF FE / FE FF is UTF-16 with a BOM, an ASCII byte next to a NUL is
+UTF-16 without one, otherwise UTF-8 (minus an EF BB BF BOM). `html_cf_extract_fragment`
+then takes the fragment from the markers or the whole text.
+
+**Broadway cannot test the clipboard between processes, and drops synthetic key
+events.** A second GTK client on the same Broadway display does not see the
+first one's clipboard (no targets, no text), so "set `text/html` from another
+process" is not possible there; make the harness the owner and test the payload
+decoder directly. Keys sent with `gtk_main_do_event` never reach the window,
+while `gtk_propagate_event(text_view, ev)` does. Broadway's keymap has
+keycode == keyval, so Ctrl+Shift+letter does not resolve to the accelerator
+GTK would match on a real keymap; call `gtk_accel_groups_activate(window,
+lowercase_key, state)` for those.
+
 ## Installers
 
 **Inno Setup's check lists do not scale their check box offset.**

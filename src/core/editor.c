@@ -319,17 +319,28 @@ static void editor_check_session_recovery(void) {
 // Encoding/line endings for new documents, from user preferences
 static void load_default_file_info(TextFileInfo *info) {
     int encoding = settings_get_int("default_encoding", (int) NPAD_ENC_UTF8);
-    int line_ending = settings_get_int("default_line_ending", (int) NPAD_EOL_CRLF);
+    int line_ending = settings_get_int("default_line_ending", (int) NPAD_DEFAULT_LINE_ENDING);
 
     if (encoding < 0 || encoding > (int) NPAD_ENC_ANSI) {
         encoding = (int) NPAD_ENC_UTF8;
     }
     if (line_ending < 0 || line_ending > (int) NPAD_EOL_CR) {
-        line_ending = (int) NPAD_EOL_CRLF;
+        line_ending = (int) NPAD_DEFAULT_LINE_ENDING;
     }
 
     info->encoding = (TextEncoding) encoding;
     info->line_ending = (LineEnding) line_ending;
+}
+
+// A file with no line breaks has nothing to detect, so it takes the user's
+// default line ending (not a hard-coded one): the first Enter they type is
+// then saved the way their preference says
+static void apply_default_eol_if_no_breaks(TextFileInfo *info, const char *content) {
+    if (!content || strpbrk(content, "\r\n"))
+        return;
+    TextFileInfo defaults;
+    load_default_file_info(&defaults);
+    info->line_ending = defaults.line_ending;
 }
 
 bool editor_init(void) {
@@ -507,6 +518,7 @@ bool editor_open_file(const char *filename) {
         free(g_editor.current_file);
     }
     g_editor.current_file = new_path;
+    apply_default_eol_if_no_breaks(&info, content);
     g_editor.file_info = info;
 
     settings_add_recent_file(filename);
@@ -576,6 +588,7 @@ bool editor_reload_from_disk(void) {
     char *content = file_read_text_ex(g_editor.current_file, &info);
     if (!content)
         return false;
+    apply_default_eol_if_no_breaks(&info, content);
 
     ui_set_text(g_editor.main_window, content);
     free(content);
