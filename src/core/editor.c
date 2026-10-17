@@ -507,6 +507,8 @@ bool editor_open_file(const char *filename) {
     if (g_editor.main_window) {
         ui_set_text(g_editor.main_window, content);
     }
+    // Needs the text, so before it is freed
+    apply_default_eol_if_no_breaks(&info, content);
     free(content);
 
     // Baseline for external-change detection, and a fresh slate for the
@@ -518,7 +520,6 @@ bool editor_open_file(const char *filename) {
         free(g_editor.current_file);
     }
     g_editor.current_file = new_path;
-    apply_default_eol_if_no_breaks(&info, content);
     g_editor.file_info = info;
 
     settings_add_recent_file(filename);
