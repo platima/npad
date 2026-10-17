@@ -18,22 +18,7 @@ arch=${5:-}
 # The architecture the binary was actually built for. Packaging an x86_64
 # binary as riscv64 would install and then fail to execute, so never trust a
 # file name or a variable over the ELF header.
-machine=$(readelf -h "$binary" | sed -n 's/^ *Machine: *//p')
-case $machine in
-*X86-64*) elf_arch=amd64 ;;
-AArch64) elf_arch=arm64 ;;
-RISC-V) elf_arch=riscv64 ;;
-*)
-	echo "unsupported ELF machine '$machine' in $binary" >&2
-	exit 2
-	;;
-esac
-if [ -z "$arch" ]; then
-	arch=$elf_arch
-elif [ "$arch" != "$elf_arch" ]; then
-	echo "$binary is $elf_arch ($machine), not $arch" >&2
-	exit 2
-fi
+arch=$(sh "$(dirname "$0")/elf-arch.sh" "$binary" "$arch")
 # rpm spells the same architectures differently; nfpm maps them, the file
 # name is ours
 case $arch in

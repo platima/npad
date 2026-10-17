@@ -33,10 +33,21 @@ check() {
 	else
 		echo "OK: $name ($size bytes)"
 	fi
+	# Hash the asset itself and compare with the companion's digest. Not
+	# `sha256sum -c`: that checks whichever file the companion NAMES, so a
+	# companion carrying another asset's line would vouch for a corrupt file.
 	if [ ! -f "$f.sha256" ]; then
 		fail "missing checksum $name.sha256"
-	elif ! (cd "$dir" && sha256sum -c --quiet "$name.sha256"); then
-		fail "$name does not match $name.sha256"
+		return 0
+	fi
+	read -r want listed <"$f.sha256" || true
+	listed=${listed#\*} # sha256sum's binary-mode marker
+	got=$(sha256sum "$f" | cut -d' ' -f1)
+	if [ "$listed" != "$name" ]; then
+		fail "$name.sha256 names '$listed', not $name"
+	fi
+	if [ "$(printf '%s' "$want" | tr 'A-F' 'a-f')" != "$got" ]; then
+		fail "$name does not match $name.sha256 (expected $want, got $got)"
 	fi
 }
 

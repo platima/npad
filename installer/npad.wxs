@@ -33,7 +33,13 @@
            InstallerVersion="500">
 
     <SummaryInformation Description="npad - lightweight cross-platform text editor" />
-    <MajorUpgrade DowngradeErrorMessage="A newer version of npad is already installed." />
+    <!-- AllowSameVersionUpgrades: the x64 and arm64 MSIs of one release share
+         a version, and without it FindRelatedProducts skips an equal-version
+         product, so switching architecture would install a second copy rather
+         than replace the first. ProductCode is new per build, so a same-version
+         reinstall of the same architecture becomes a major upgrade too. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of npad is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <!-- Add/Remove Programs entry. npad.ico became npad-light.ico in v0.28.0

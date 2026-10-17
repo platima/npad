@@ -1,12 +1,13 @@
 #!/bin/sh
 # Build npad_<version>_<arch>.deb from an installed staging tree.
 # Usage: scripts/build-deb.sh <version> <binary> <outdir> [arch]
-# arch defaults to dpkg's own (the dpkg-deb fallback builds for the host).
+# arch defaults to the binary's own ELF machine, as in build-package.sh; given
+# explicitly, the binary must match it.
 set -eu
 version=$1
 binary=$2
 outdir=$3
-arch=${4:-$(dpkg --print-architecture 2>/dev/null || echo amd64)}
+arch=$(sh "$(dirname "$0")/elf-arch.sh" "$binary" "${4:-}")
 pkg=npad_${version}_${arch}
 root=$outdir/$pkg
 
