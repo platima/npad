@@ -4,7 +4,7 @@
  * hidden Debug page in Preferences (Ctrl+Shift+. or Shift+click the menu).
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #ifndef STARTUP_PROF_H

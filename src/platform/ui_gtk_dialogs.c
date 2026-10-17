@@ -7,7 +7,7 @@
  * which portals support too.
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #define _DEFAULT_SOURCE // sysconf(_SC_PHYS_PAGES)
@@ -225,7 +225,7 @@ void ui_platform_show_about_dialog(Window *parent) {
     gtk_show_about_dialog(owner, "program-name", "npad", "version", NPAD_VERSION, "comments",
                           "A lightweight, cross-platform text editor\n"
                           "inspired by classic Windows Notepad.",
-                          "website", "https://github.com/platima/npad", "website-label",
-                          "github.com/platima/npad", "authors", authors, "logo-icon-name",
-                          icon ? icon : "accessories-text-editor", "title", "About npad", NULL);
+                          "website", "https://npad.dev", "website-label", "npad.dev", "authors",
+                          authors, "logo-icon-name", icon ? icon : "accessories-text-editor",
+                          "title", "About npad", NULL);
 }

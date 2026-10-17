@@ -4,7 +4,7 @@
  * digest parsing used by Help > Check for Updates
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #include "test_framework.h"

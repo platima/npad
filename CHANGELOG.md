@@ -41,6 +41,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Ubuntu 22.04/24.04, and its `libc6` floor is read from the binary. CI builds
   and validates it on every push; releases attach it with a checksum, and
   release validation now requires it.
+- **Linux: Find, Replace and Go To Line.** The Edit menu's Find, Find Next /
+  Previous (F3 / Shift+F3), Replace and Go To (Ctrl+G, or click Ln/Col in the
+  status bar) now work in the GTK build, with the same options, settings keys
+  and wording as the Windows build: Match case, Match whole word only, Wrap
+  around, Highlight all matches, Up / Down (Find only), the optional
+  "Interpret escapes" row (shown with Basic Markdown support), search history,
+  and "Match n of m" / "Wrapped around" / "Replaced n occurrences" messages.
+  - **Replace All is a single undo step**, however many occurrences it
+    changed, and Highlight All is a text tag, so it never marks the document
+    modified or enters the undo history.
+  - Searching works in characters, not bytes: accented and non-Latin text
+    matches, folds case correctly (Café finds CAFÉ) and counts as one column
+    per character.
+  - F3, Shift+F3, Ctrl+F, Ctrl+H and Ctrl+G keep working while the Find /
+    Replace dialog has the focus.
+  - The dialog is placed by the window manager (centred over the npad window
+    by most desktops) rather than at a fixed offset, because Wayland does not
+    let an application position its own windows.
+- **Linux: Page Setup, Print and Print Preview.** File > Page Setup, Print
+  (Ctrl+P) and Print Preview (Ctrl+Shift+P) work in the GTK build, with the
+  same behaviour as Windows: they print the *document* rather than the
+  window, in the font that window is showing, at the same point size, with
+  the Notepad header and footer codes (`&f` `&p` `&d` `&t` `&l` `&c` `&r`
+  `&&`) from Preferences > Defaults, and lines too long for the page are
+  re-wrapped at a space.
+  - **Page Setup** sets paper, orientation and the four margins. Margins are
+    stored in thousandths of an inch under the same `print_*` keys as
+    Windows, so a settings file means the same on both; the dialog shows
+    inches or millimetres to suit your locale, and a margin you did not touch
+    is never rewritten by the rounding (0.75 in stays 750, not 752). Paper
+    and orientation use GTK's own paper dialog, reached from a button.
+  - **Print Preview is npad's own window**, not GTK's stock one: GTK's hands
+    a PDF to whatever viewer the desktop has - none, on a minimal install -
+    and offers neither Print nor Page Setup. Ours shows the pages as they
+    will print, with Print, Page Setup, Previous/Next, Zoom, PgUp/PgDn,
+    Ctrl+Home/End and Esc, and re-paginates after Page Setup. The print
+    dialog's own Preview button opens it too.
+  - **The preview cannot disagree with the page.** Layout is measured once,
+    in points, on a Pango context with metric hinting and glyph rounding off,
+    and the stored lines are replayed to both. Measured on GTK's own 72 dpi
+    print context instead, a 14 pt monospace face rounds each glyph to 8 pt
+    and fits five more columns than a preview at another resolution.
+  - Set `NPAD_PRINT_EXPORT=/path/file.pdf` to make Print skip its dialog and
+    write a PDF - for checking output on a machine with no printer.
+
+### 🔄 Changed
+- **npad has a home page: [npad.dev](https://npad.dev).** The About box
+  (Windows and Linux), `npad --version`, the Windows installers' "more
+  information" link in Apps & features, and the Linux package and AppStream
+  metadata now point there. Issues, releases and the update check stay on
+  GitHub.
 
 ## [0.34.0] - 2026-10-16
 

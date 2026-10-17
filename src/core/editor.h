@@ -3,7 +3,7 @@
  * Core editor functionality and state management
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #ifndef EDITOR_H

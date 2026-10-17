@@ -4,6 +4,11 @@
 # builds lose their clean version string.
 * text=auto
 
+# Shell scripts run under sh on Linux/WSL even when checked out on Windows,
+# where autocrlf would give them CRLF and sh fails on line 1 ("set: Illegal
+# option -"). Always LF.
+*.sh text eol=lf
+
 # Explicit binaries
 *.ico binary
 *.png binary
@@ -11,6 +16,3 @@
 *.otf binary
 *.exe binary
 *.msi binary
-
-# Shell scripts run on Linux; a CRLF checkout on Windows breaks them under WSL
-*.sh text eol=lf

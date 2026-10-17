@@ -6,7 +6,7 @@ difference should behave exactly as it does there (see
 [DOCUMENTATION.md](DOCUMENTATION.md)). Read [LESSONS.md](LESSONS.md) first, in
 particular its **GTK / Linux** section.
 
-## Status (v0.34.0 - foundation round)
+## Status (v0.35.0 - Find / Replace / Go To, printing, packaging)
 
 **Verified** (Broadway under WSL): the window, menu bar and status bar render;
 opening a file from the command line (UTF-8 and emoji intact, path stored
@@ -23,9 +23,25 @@ schemes, the status-bar pickers, word/char/line counts, Time/Date, New
 Window, Close All, clipboard commands, About. Worth a pass on a real desktop
 before the feature batches build on them.
 
-Greyed out until ported (see the checklist): Find / Replace / Go To,
-Preferences, Format > Font, Page Setup / Print / Print Preview, and the
-Markdown list tools. There is no Check for Updates on Linux by design.
+**Batch A (v0.35.0):** Find, Find Next / Previous, Replace, Replace All and Go
+To are ported (details under the checklist). Verified in Broadway: both
+dialogs, Up / Down, wrap, highlight all, whole word, Replace All undone in
+one step, Ctrl+F / H / G from inside the dialog, Go To by shortcut and by the
+Ln/Col click, and the beyond-the-end message; the search engine itself
+(non-ASCII text, case folding, whole word, escapes, history) was also run
+headless against a real GtkTextBuffer.
+
+**Printing (v0.35.0)** is verified under Broadway with GTK's Print to File
+backend: a multi-page document, a long wrapped line, a 40,000-word single
+line (every word present and in order across the 64 KB layout chunks),
+header/footer codes in all three positions, landscape A4 with custom margins,
+the default Letter/A4 setup, an empty document, Page Setup round-tripping
+through `settings.json`, and the preview (opened from the menu and from the
+print dialog's Preview button, paging, Page Setup from inside it). Not tried:
+a real CUPS printer.
+
+Greyed out until ported (see the checklist): Preferences, Format > Font and
+the Markdown list tools. There is no Check for Updates on Linux by design.
 
 ## Building and running
 
@@ -68,6 +84,15 @@ GDK_BACKEND=broadway BROADWAY_DISPLAY=:5 ./npad-linux somefile.txt &
 # then open http://localhost:8085 in Claude's browser pane
 ```
 
+Several sessions may share one WSL: Broadway display `:5` (page on port 8085)
+and `:7` (8087) have been taken by others - pick an unused number (`:23` is
+port 8103), keep your own PID files, and never `pkill broadwayd` / `pkill npad*`.
+
+To print without a printer, set `NPAD_PRINT_EXPORT=/path/out.pdf` before
+launching: Ctrl+P then writes a PDF with no dialog. Inspect it with
+`gs -sDEVICE=txtwrite -sOutputFile=- out.pdf` (text and pagination) or
+`gs -sDEVICE=png16m -r70 -sOutputFile=p%d.png out.pdf` (look at the pages).
+
 Broadway tips (all learned the hard way - see LESSONS.md): the page only
 paints while the browser pane is visible; keystrokes reach whichever npad
 window Broadway last focused, so click into a new window first; and
@@ -76,6 +101,16 @@ When the pane cannot paint, verify through files instead - Ctrl+S and read the
 bytes, or watch `~/.config/npad/recovery/` (the core snapshots on the first
 edit and then every 30 s). Use an isolated `HOME` so test settings stay
 throwaway.
+
+More Broadway traps: the harness's `type` action does not reach GTK entries,
+use `key` (`key c a f e`); non-ASCII text cannot be typed at all, so put the
+term in the settings history (`find_hist_0`) or the document and drive the
+engine headless (a throwaway program that `#include`s `ui_gtk_find.c`
+against a real GtkTextBuffer works); combo-box popups do not paint; the
+screenshot trails the last action by a frame (wait, then shoot twice); and
+parallel sessions share broadwayd - use your own display number
+(`broadwayd :7` is port 8087) and a renamed copy of the binaries, because a
+sibling's `pkill broadwayd` kills yours too.
 
 Broadway is neither X11 nor Wayland, so window placement and the portal file
 chooser still need a check on a real desktop.
@@ -87,7 +122,8 @@ src/platform/ui_gtk.h           private header: Window struct, command enum, cro
 src/platform/ui_gtk.c           main window, menus, shortcuts, commands, text, undo, view state,
                                 status bar, timers, and the ui_platform_* entry points
 src/platform/ui_gtk_dialogs.c   file choosers, message boxes, save / binary prompts, About
-src/platform/ui_gtk_find.c      Find / Replace / Go To  (stubs - batch A)
+src/platform/ui_gtk_find.c      Find / Replace / Go To
+src/platform/print_gtk.c        Page Setup, Print and Print Preview (GtkPrintOperation)
 src/platform/ui_gtk_instance.c  cross-instance messaging over D-Bus
 src/core/undo.c                 platform-neutral undo history (tests/test_undo.c)
 ```
@@ -172,8 +208,23 @@ Decisions taken in the foundation round. Each is easy to revisit.
   first character, then the rest of the word); RichEdit does one.
 - **Undo history** keeps 10,000 steps (typing coalesces per word); Windows
   keeps 100,000 RichEdit actions.
+- **Print dialog and Page Setup are GTK's.** Margins have no field in GTK's
+  paper dialog, so npad's Page Setup is its own small dialog (margins) that
+  opens GTK's for paper and orientation. Orientation saves as portrait (1) or
+  landscape (2); the reverse variants fold into those. A paper size with no
+  Windows `DMPAPER_*` equivalent is saved as custom (256 + width/length in
+  tenths of a millimetre).
+- **Print Preview is npad's own window** (not GTK's PDF-viewer hand-off).
 - **No Check for Updates** - Linux updates come from the package manager.
 - **The context menu** is still GTK's stock one (batch D1).
+- **Find / Replace / Go To placement.** The dialogs are transient windows
+  with no position of their own, so the window manager places them (usually
+  centred over npad); Win32 uses a fixed offset and remembers where you moved
+  it. Wayland would ignore either.
+- **Whole word** requires a word boundary only beside a term edge that is
+  itself a letter, digit or underscore, so `foo(` still matches `foo(x)`.
+- **Find's "Cannot find" box** is a GTK message dialog parented to the Find
+  dialog when it is open.
 
 ## Parity checklist
 
@@ -186,16 +237,17 @@ Broadway, update this file, CHANGELOG.md and DOCUMENTATION.md, bump the
 version.
 
 ### Batch A - Find, Replace, Go To (`ui_gtk_find.c`)
-- [ ] Modeless Find dialog: match case, whole word, up/down, wrap around,
+- [x] Modeless Find dialog: match case, whole word, up/down, wrap around,
       interpret escapes (`list_unescape`), Highlight All (a GtkTextTag)
-- [ ] Find Next / Previous (F3 / Shift+F3) without the dialog
-- [ ] Replace, Replace All (one undo step - wrap in a user action)
-- [ ] Search history, options persisted under the Win32 keys, re-read in
+- [x] Find Next / Previous (F3 / Shift+F3) without the dialog
+- [x] Replace, Replace All (one undo step - wrap in a user action)
+- [x] Search history, options persisted under the Win32 keys, re-read in
       `npad_gtk_find_reload_settings`
-- [ ] "Match n of m" / not-found messages like Win32
-- [ ] Go To Line (Ctrl+G, and clicking Ln/Col) - logical lines
-- [ ] Notepad behaviours from DOCUMENTATION.md "Behaviour notes" (selection
-      seeds the search term, etc.)
+- [x] "Match n of m" / not-found messages like Win32
+- [x] Go To Line (Ctrl+G, and clicking Ln/Col) - logical lines
+- [x] Notepad behaviours from DOCUMENTATION.md "Behaviour notes". Note the
+      Win32 dialogs do not seed the search box from the selection either, so
+      neither does this one.
 
 ### Batch B - Preferences and Font (new `ui_gtk_prefs.c`)
 - [ ] GtkNotebook dialog with the General, Appearance, Defaults, Backup and
@@ -207,12 +259,17 @@ version.
       "make npad the default text editor" action (`xdg-mime`), Updates is
       dropped
 
-### Batch C - Printing (new `print_gtk.c`)
-- [ ] Page Setup, Print, Print Preview via GtkPrintOperation (its preview is
-      built in)
-- [ ] Notepad header/footer codes from the Defaults settings
-- [ ] Measure pagination with Pango on the print context, never on screen
-      (LESSONS.md "Measure the layout on the printer")
+### Batch C - Printing (new `print_gtk.c`) - done in v0.35.0
+- [x] Page Setup, Print, Print Preview via GtkPrintOperation. The preview is
+      npad's own window fed by the operation's `preview` signal, because
+      GTK's built-in one launches an external PDF viewer
+- [x] Notepad header/footer codes from the Defaults settings
+- [x] Measure pagination once, in points, on a Pango context with hinting and
+      glyph rounding off (LESSONS.md "Measure the layout on the printer" and
+      the GTK printing entries), and replay the stored runs to both preview
+      and printer
+- [ ] On a real desktop: a CUPS printer, the print dialog's Page Setup tab,
+      HiDPI preview (see TODO.md)
 
 ### Batch D1 - Editing behaviours (`ui_gtk.c`)
 - [ ] Context menu with npad's items (Undo, Redo, Cut, Copy, Paste, Delete,

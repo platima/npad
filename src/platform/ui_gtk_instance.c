@@ -25,7 +25,7 @@
  * call degrades to a no-op: no live sync, and a count of zero.
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #define _DEFAULT_SOURCE // kill()

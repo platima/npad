@@ -2,7 +2,7 @@
  * npad - Printing and Print Preview (Win32)
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #include "print_win32.h"

@@ -3,7 +3,7 @@
  * Resource ID definitions for Windows resources
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #ifndef RESOURCE_H

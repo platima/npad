@@ -25,12 +25,12 @@ cat > "$root/DEBIAN/control" <<CONTROL
 Package: npad
 Version: $version
 Architecture: $arch
-Maintainer: Platima <noreply@users.noreply.github.com>
+Maintainer: Platima <13729856+platima@users.noreply.github.com>
 Section: editors
 Priority: optional
 Installed-Size: $size
 Depends: libc6 (>= $glibc), libgtk-3-0t64 (>= 3.24) | libgtk-3-0 (>= 3.24)
-Homepage: https://github.com/platima/npad
+Homepage: https://npad.dev
 Description: Lightweight Notepad-style text editor
  npad is a small, fast text editor inspired by classic Windows Notepad.
  It preserves each file's encoding and line endings and saves atomically.

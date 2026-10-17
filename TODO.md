@@ -7,6 +7,31 @@ this file is for open loops.
 
 ---
 
+## 🧪 Needs testing - v0.35.0 Linux Find / Replace / Go To (on Mint / Debian 13)
+
+Verified in Broadway only. On a real desktop:
+
+- [ ] Ctrl+F / Ctrl+H open the dialog centred over (or near) the npad window
+      on X11 and Wayland, and it stays above the main window
+- [ ] The history drop-down lists recent terms and picking one fills the box
+      (combo popups do not paint in Broadway)
+- [ ] Typing accented / CJK text into the Find box and searching for it
+- [ ] Highlight all stays right while editing a large file
+
+## 🧪 Needs testing - v0.35.0 Linux printing (on Mint / Debian 13)
+
+Verified only with Print to File under Broadway in WSL. On a real desktop:
+
+- [ ] Print to a real CUPS printer: orientation, paper and margins as set in
+      Page Setup; a long line wraps at a space; header and footer on every page
+- [ ] The print dialog's *Page Setup* tab: a paper or orientation change made
+      there applies to that job (and Print Preview from the dialog shows it)
+- [ ] Print Preview on HiDPI / fractional scaling: sharp, correctly sized
+- [ ] Page Setup in a metric locale shows millimetres, and accepting it
+      untouched leaves the margins exactly as they were
+- [ ] The preview's line breaks match the printed page on the real printer
+      (they are measured in points, independent of the printer's dpi)
+
 ## 🧪 Needs testing - v0.34.0 Linux foundation (on Mint / Debian 13)
 
 Verified only under GTK's Broadway backend in WSL (see LINUX_PORT.md). On a

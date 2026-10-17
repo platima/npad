@@ -35,7 +35,7 @@
     <Icon Id="npadIcon" SourceFile="..\src\platform\npad-light.ico" />
     <Property Id="ARPPRODUCTICON" Value="npadIcon" />
     <Property Id="ARPNOMODIFY" Value="1" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/platima/npad" />
+    <Property Id="ARPURLINFOABOUT" Value="https://npad.dev" />
 
     <!-- ============================ Files ============================ -->
     <StandardDirectory Id="ProgramFiles64Folder">
