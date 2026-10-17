@@ -90,6 +90,20 @@ static char *get_custom_indent(void) {
     return unescaped;
 }
 
+// One tool is one undo step. A GTK user action alone is not enough: ui_gtk.c
+// flushes an action holding a single edit as a plain edit, which can merge with
+// the typing or deletion next to it (a one-character line cut, a paste of "x"
+// after "abc"). A group around the action keeps it a step of its own.
+static void begin_step(Window *window) {
+    undo_begin_group(window->undo);
+    gtk_text_buffer_begin_user_action(window->buffer);
+}
+
+static void end_step(Window *window) {
+    gtk_text_buffer_end_user_action(window->buffer);
+    undo_end_group(window->undo);
+}
+
 // ---------------------------------------------------------------------------
 // Ranges, extraction and replacement
 // ---------------------------------------------------------------------------
@@ -172,13 +186,13 @@ static void replace_range(Window *window, int from, int to, const char *old_text
     if (strcmp(text, old_text) != 0) {
         GtkTextBuffer *buffer = window->buffer;
         GtkTextIter a, b;
-        gtk_text_buffer_begin_user_action(buffer);
+        begin_step(window);
         gtk_text_buffer_get_iter_at_offset(buffer, &a, from);
         gtk_text_buffer_get_iter_at_offset(buffer, &b, to);
         gtk_text_buffer_delete(buffer, &a, &b);
         gtk_text_buffer_get_iter_at_offset(buffer, &a, from);
         gtk_text_buffer_insert(buffer, &a, text, -1);
-        gtk_text_buffer_end_user_action(buffer);
+        end_step(window);
         to = from + (int) g_utf8_strlen(text, -1);
     }
     select_offsets(window, from, to);
@@ -538,14 +552,14 @@ static bool handle_return(Window *window) {
     bool handled = true;
     if (end - start == prefix_chars) {
         // Empty bullet: end the list - drop the marker, keep the newline
-        gtk_text_buffer_begin_user_action(buffer);
+        begin_step(window);
         GtkTextIter a, b;
         gtk_text_buffer_get_iter_at_offset(buffer, &a, start);
         gtk_text_buffer_get_iter_at_offset(buffer, &b, caret);
         gtk_text_buffer_delete(buffer, &a, &b);
         gtk_text_buffer_get_iter_at_offset(buffer, &a, start);
         gtk_text_buffer_insert(buffer, &a, "\n", 1);
-        gtk_text_buffer_end_user_action(buffer);
+        end_step(window);
         GtkTextIter after;
         gtk_text_buffer_get_iter_at_offset(buffer, &after, start + 1);
         gtk_text_buffer_place_cursor(buffer, &after);
@@ -573,9 +587,9 @@ static bool handle_return(Window *window) {
             char *prefix = g_strndup(head, prefix_bytes);
             char *insert = g_strconcat("\n", prefix, NULL);
             g_free(prefix);
-            gtk_text_buffer_begin_user_action(buffer);
+            begin_step(window);
             gtk_text_buffer_insert_at_cursor(buffer, insert, -1);
-            gtk_text_buffer_end_user_action(buffer);
+            end_step(window);
             g_free(insert);
         }
     }
@@ -633,12 +647,12 @@ bool npad_gtk_lists_cut_line(Window *window) {
 
     char *text = extract(window, start, end);
     GtkTextIter a, b;
-    gtk_text_buffer_begin_user_action(window->buffer);
+    begin_step(window);
     gtk_clipboard_set_text(clipboard_for(window), text, -1);
     gtk_text_buffer_get_iter_at_offset(window->buffer, &a, start);
     gtk_text_buffer_get_iter_at_offset(window->buffer, &b, end);
     gtk_text_buffer_delete(window->buffer, &a, &b);
-    gtk_text_buffer_end_user_action(window->buffer);
+    end_step(window);
     scroll_to_cursor(window);
     g_cut_line = text;
     return true;
@@ -669,9 +683,9 @@ static bool paste_line_above(Window *window) {
     line_bounds(window->buffer, caret, &line_start, &line_end);
     GtkTextIter at;
     gtk_text_buffer_get_iter_at_offset(window->buffer, &at, line_start);
-    gtk_text_buffer_begin_user_action(window->buffer);
+    begin_step(window);
     gtk_text_buffer_insert(window->buffer, &at, insert, -1);
-    gtk_text_buffer_end_user_action(window->buffer);
+    end_step(window);
     int fin = line_start + (int) g_utf8_strlen(insert, -1) + (caret - line_start);
     gtk_text_buffer_get_iter_at_offset(window->buffer, &at, fin);
     gtk_text_buffer_place_cursor(window->buffer, &at);
@@ -772,7 +786,9 @@ static bool do_paste(Window *window, int mode) {
     if (md && md[0]) {
         char *text = npad_gtk_normalize_text(md); // Guard against a stray CR (&#13;)
         if (text) {
-            npad_gtk_replace_selection(window, text); // One undo step
+            undo_begin_group(window->undo); // A one-character paste must not merge with typing
+            npad_gtk_replace_selection(window, text);
+            undo_end_group(window->undo);
             g_free(text);
             done = true;
         }
@@ -1086,6 +1102,9 @@ static void apply_menu(Window *window) {
     populate_list_menu(window, menu, false);
     if (brackets_shortcut())
         bind_bracket_accels(window, menu);
+    // Built live, with the document possibly still empty: leave everything
+    // sensitive so Ctrl+] / Ctrl+[ work until the menu is first opened
+    refresh_states(window, menu, true);
     g_signal_connect(menu, "show", G_CALLBACK(on_list_menu_show), NULL);
     g_signal_connect(menu, "hide", G_CALLBACK(on_list_menu_hide), NULL);
     // After Format, before View (Win32 puts it at the same position)
