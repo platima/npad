@@ -77,6 +77,18 @@ a layout where the brackets need AltGr.
 
 There is no Check for Updates on Linux by design.
 
+**Batch F (v0.35.0):** the `system` colour scheme follows the desktop live, the
+settings directory honours `$XDG_CONFIG_HOME`, an off-screen saved position is
+repaired on X11, and the installed icon is used everywhere. Verified: the
+scheme switching in Broadway against a portal stub (light, dark, light again;
+a repeat of the same value and an unrelated key ignored; no portal falls back
+to GTK's `gtk-application-prefer-dark-theme`), the XDG directory and its
+fall-back to the old file against a throwaway `HOME` (old file byte-identical
+afterwards) plus unit tests, and the position test in a harness with a faked
+1920x1080 monitor. Not verifiable here, so worth a pass on Mint: the real
+Cinnamon / GNOME portal values, the position repair on a real X11 session
+with a monitor removed, and the icon from an installed package.
+
 ## Building and running
 
 ```bash
@@ -159,8 +171,25 @@ taken port logs "Address already in use" and still hands clients a socket, so
 read its log, and never copy over a binary that is still running ("Text file
 busy") - use a new file name per run.
 
+To test the `system` colour scheme, stand in for the portal: a few lines of
+GDBus that own `org.freedesktop.portal.Desktop` on a throwaway
+`dbus-run-session` bus, answer `Settings.Read` (reply `(v)` holding a `v`
+holding the `u`: 0 none, 1 dark, 2 light) and emit `SettingChanged`
+`(ssv)` for `org.freedesktop.appearance` / `color-scheme` themselves. `gdbus
+emit` cannot do it: npad subscribes to the portal's own bus name, and a signal
+from `gdbus`'s unique name is not from that sender (LESSONS.md). Set
+`"theme": "system"` in the isolated `HOME`'s settings, run `broadwayd` under
+`timeout` so nothing needs killing, and watch the window chrome in the browser
+pane; `G_MESSAGES_DEBUG=all` logs each change of value.
+
+For the settings directory, run with a throwaway `HOME` holding
+`.config/npad/settings.json` and `XDG_CONFIG_HOME` pointing at an empty
+directory: the new `npad/settings.json` appears with the old content, and the
+old file's checksum is unchanged.
+
 Broadway is neither X11 nor Wayland, so window placement and the portal file
-chooser still need a check on a real desktop.
+chooser still need a check on a real desktop (and its monitor geometry reads
+0x0, so the off-screen check declines to judge there).
 
 ## Architecture
 
@@ -175,7 +204,8 @@ src/platform/ui_gtk_find.c      Find / Replace / Go To
 src/platform/ui_gtk_lists.c     Markdown list tools: menu, transforms, Tab / Enter, cut line, rich paste
 src/platform/ui_gtk_prefs.c     Preferences dialog and Format > Font
 src/platform/print_gtk.c        Page Setup, Print and Print Preview (GtkPrintOperation)
-src/platform/ui_gtk_instance.c  cross-instance messaging over D-Bus
+src/platform/ui_gtk_instance.c  cross-instance messaging over D-Bus, and the desktop
+                                light/dark preference from the xdg-desktop-portal
 src/core/undo.c                 platform-neutral undo history (tests/test_undo.c)
 ```
 
@@ -243,12 +273,43 @@ Decisions taken in the foundation round. Each is easy to revisit.
 - **Window position** is not restored on Wayland, which reserves placement
   for the compositor. The last position is remembered and written back
   unchanged, so an X11 session's saved position survives. Size and maximised
-  state persist everywhere.
+  state persist everywhere. On X11 a saved position whose top edge (about a
+  title bar, at least 100 x 20 px) is on no monitor - an unplugged screen, a
+  changed layout - is replaced by the window's size centred on the primary
+  monitor, and that is what gets saved. Windows has no such check.
 - **Colour schemes.** `light` (the default) and `dark` / Solarized paint the
   text area with the same colours as Windows, whatever the GTK theme; the
   window chrome follows via GTK's dark variant. `system` uses the GTK theme's
-  own colours. So on Mint-Y-Dark, a default npad shows a white page inside
+  own colours, and follows the desktop's light/dark preference live: the
+  portal's `org.freedesktop.appearance color-scheme` (1 dark, 2 light), then
+  its `SettingChanged` signal; with no portal, or "no preference" (0), GTK's
+  `gtk-application-prefer-dark-theme` as it was at startup, which is not
+  tracked live. So on Mint-Y-Dark, a default npad shows a white page inside
   dark chrome - Notepad-faithful, but worth a look.
+- **Dark chrome on themes without a dark variant.** `gtk-application-prefer-dark-theme`
+  is ignored by themes with no `gtk-3.0/gtk-dark.css` (Mint-Y, Arc, ...), where
+  dark is a sibling theme instead. For a dark scheme, `apply_chrome_variant`
+  sets this process's `gtk-theme-name` to the installed sibling (`Name-Dark`,
+  `Name-dark`, `Mint-Y-Aqua` -> `Mint-Y-Dark-Aqua`) and restores the original
+  when the scheme turns light, only if the theme is still the one it set.
+  Nothing is written to the desktop's settings. With no sibling installed, a
+  *light* theme (its window background measured on a window that is never shown)
+  falls back to GTK's built-in Adwaita, whose dark variant the prefer-dark hint
+  selects - that is what Cinnamon's TraditionalOk gets - while a theme that is
+  already dark (BlackMATE) is left alone. Found on Linux Mint, where the portal
+  reported dark and npad stayed light; the Debug page (Ctrl+Shift+.) lists what
+  the colour code sees.
+- **`system` on a dark desktop with a theme whose text area stays white**
+  (BlackMATE) uses the Dark scheme's page colours (#1e1e1e on #dcdcdc);
+  `theme_text_area_is_light()` measures the theme's own `textview text`
+  background on a throwaway text view's style path. A theme with a dark text
+  area, or a desktop that is light or has no preference, keeps the theme's
+  colours.
+- **Settings directory** is `$XDG_CONFIG_HOME/npad` when that is set and
+  absolute, else `~/.config/npad` (Windows keeps `%APPDATA%\Platima\npad`).
+  An existing `~/.config/npad/settings.json` is read when the new location has
+  none, never moved or deleted. Recovery snapshots under the old directory are
+  not carried over.
 - **"Text Documents" filter** matches by type (`text/plain` and every subtype,
   plus `*.txt`) rather than by extension: most Linux text files have no
   `.txt`. Save As does not append `.txt`.
@@ -436,12 +497,19 @@ version.
       Likewise arm64 and riscv64 have only been installed in containers, not
       launched on real hardware
 
-### Batch F - Polish
-- [ ] `system` scheme follows the desktop's light/dark preference live
-      (`org.freedesktop.appearance color-scheme` through the Settings portal)
-- [ ] Off-screen saved position on X11 falls back to the default
-- [ ] Settings path honours `XDG_CONFIG_HOME` (core `settings_get_config_dir`)
-- [ ] App icon in the About dialog and window once Batch E installs one
+### Batch F - Polish - done in v0.35.0
+- [x] `system` scheme follows the desktop's light/dark preference live
+      (`org.freedesktop.appearance color-scheme` through the Settings portal,
+      `ui_gtk_instance.c`; GTK's own setting when there is no portal)
+- [x] Off-screen saved position on X11 falls back to the default
+      (`position_is_reachable` in `ui_gtk.c`)
+- [x] Settings path honours `XDG_CONFIG_HOME` (core `settings_init`, with a
+      read-only fall-back to `~/.config/npad`; unit-tested)
+- [x] App icon in the About dialog and window: `npad_gtk_app_icon_name()`,
+      also the default icon of every dialog
+- [ ] On a real desktop: the portal on Cinnamon and GNOME (does Mint report a
+      colour scheme at all?), the position repair with a monitor unplugged,
+      and the icon from an installed package
 
 ## Testing the Markdown tools
 

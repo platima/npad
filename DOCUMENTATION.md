@@ -142,7 +142,11 @@ architectures build on an x64 PC. CI builds all six deliverables via
 | Crash-recovery snapshots | `%APPDATA%\Platima\npad\recovery\<slot>.txt` / `.meta` |
 
 Linux: `~/.config/npad/settings.json`, with snapshots in
-`~/.config/npad/recovery/`.
+`~/.config/npad/recovery/`. If `$XDG_CONFIG_HOME` is set to an absolute path,
+the directory is `$XDG_CONFIG_HOME/npad` instead (an empty or relative value
+is ignored). When that directory has no `settings.json` yet and
+`~/.config/npad/settings.json` exists, npad starts from the old settings and
+writes the new file on the next save; the old file is never moved or deleted.
 
 ## Linux
 
@@ -361,7 +365,7 @@ File handling: saving, opening, recent files, recovery, and what happens when a 
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `theme` | string | `light` | Colour scheme: `light`, `dark`, `system` (follow OS), `solarized-light`, `solarized-dark`. |
+| `theme` | string | `light` | Colour scheme: `light`, `dark`, `system` (follow OS), `solarized-light`, `solarized-dark`. On Linux, `system` follows the desktop's light/dark preference live (the xdg-desktop-portal `color-scheme` setting, or GTK's own when there is no portal). |
 | `monospace_font` | string | `Consolas` | Face used in monospace mode (picker button). |
 | `proportional_font` | string | `Segoe UI` | Face used in proportional mode (picker button). |
 | `font_size` / `font_weight` / `font_italic` | int/int/bool | `11`/`400`/`false` | Shared font metrics, set via the font pickers or Format > Font. |

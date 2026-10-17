@@ -355,6 +355,17 @@ preference outside the kept prefixes where you can; where the name is fixed
 (`reset_all_preferences` does) and say so wherever the next platform's reset
 gets written (LINUX_PORT.md batch B).
 
+**Moving where settings live is a migration, and the old file is the only
+copy.** `settings_get_config_dir` now honours `$XDG_CONFIG_HOME`, so a user who
+exports it after months of `~/.config/npad` would open npad to defaults - and
+because npad rewrites settings on exit, the defaults would then be saved
+(the same shape as the v0.28.7 loss above). → `settings_init` reads the old
+file when the new location has none, in memory only: it never renames or
+deletes it (even an oversized one is salvaged without the `.corrupt` rename,
+`load_settings_from(path, may_move_aside)`), and the next save writes the new
+file. An empty or relative `$XDG_CONFIG_HOME` is ignored, as the spec says.
+Not carried over: recovery snapshots under the old directory.
+
 ## Core: text model
 
 **Detect a limitation where you can prove it, not where you guessed it.** The
@@ -565,6 +576,64 @@ accumulator fed with `-dy` is therefore reversed by `dy * accum > 0`, not
 `< 0`; the wrong test reset it on every event, so a touchpad swipe (many
 deltas of 0.3) never reached a whole step while a mouse notch (delta 1) still
 worked - which is why it only showed in the harness, not by hand.
+
+**A GDBus signal subscription filtered by a well-known sender never matches
+`gdbus emit`.** The portal's `SettingChanged` is subscribed with sender
+`org.freedesktop.portal.Desktop`, which GDBus resolves to the unique name that
+owns it; a test that fires the signal with `gdbus emit` comes from the
+`gdbus` process's own unique name and is silently dropped. → To exercise the
+`system` colour scheme, stand in for the portal: a small GDBus program that
+owns `org.freedesktop.portal.Desktop`, answers `Settings.Read`
+and emits `SettingChanged` itself, inside `dbus-run-session` (so the real
+session bus is untouched). `Read` returns the value wrapped in a *second*
+variant (`(v)` holding a `v` holding the `u`), `SettingChanged` carries it in
+one - unwrap in a loop. The signal also fires for every other portal setting,
+so filter on namespace and key and report only a *different* value, or every
+unrelated change re-themes an idle window (see "Idle windows are not idle").
+
+**Ask the portal lazily.** The first `Read` can start the portal service, so
+only a window whose scheme is `system` asks (synchronously, 1 s timeout, so it
+opens in the right colours rather than flashing the wrong ones); `light`, the
+default, never touches it. Value 0 means "no preference" - fall back to GTK's
+own `gtk-application-prefer-dark-theme` as it stood at startup.
+
+**`gtk-application-prefer-dark-theme` does nothing for most themes.** It
+selects the `gtk-dark.css` variant inside a theme, which Adwaita and Yaru have.
+Mint-Y, Arc, Materia and most others ship dark as a *separate* theme
+(`Mint-Y-Dark`), so on Linux Mint the property was silently ignored: the
+`dark` scheme gave a dark page in a light frame, and `system` could not follow
+a dark portal (the maintainer's MATE session reported `color-scheme` 1 and
+npad stayed light). Broadway, with Adwaita, hid it. → For a dark scheme also
+set the process's `gtk-theme-name` to the installed sibling, remembering what it
+replaced so a light scheme can put it back (`apply_chrome_variant`). Test it
+with fake `FakeTheme` / `FakeTheme-Dark` folders under a throwaway
+`XDG_DATA_HOME` and `gtk-theme-name` in a throwaway `gtk-3.0/settings.ini`.
+
+**GNOME Terminal going dark proves nothing about what npad can do.** On Mint
+(Cinnamon, TraditionalOk) the Terminal's menu bar and preferences turned dark
+with the desktop while npad's stayed light: the Terminal has its own theme-variant
+setting, whereas npad only has GTK's prefer-dark hint, which TraditionalOk
+(no `gtk-dark.css`, no dark sibling) ignores. A user's screenshot of another app
+is not a reference for what a theme can do - ask for the Debug page output
+(`Theme has a dark variant`, `desktop colour-scheme via portal`) first. For a
+light theme with no way to go dark, npad swaps to the built-in Adwaita (always
+present, has a dark variant); a theme whose window background is already dark
+(BlackMATE) must be left alone, so measure it (`theme_chrome_is_light`).
+
+**To read what a GTK theme paints, build the path from a real widget.** The
+page colour lives on the text view's `text` child node. A `GtkWidgetPath` made
+by hand (`append_type` window, text view, then a `text` node) answers
+"transparent" for every theme; the same path copied from a throwaway
+`gtk_text_view_new()` with a `text` node appended answers correctly.
+Measure on a throwaway so npad's own provider (attached to the real text view)
+does not colour the answer. Some dark themes (BlackMATE) keep text areas white,
+so a dark `system` scheme must check the page, not just the chrome.
+
+**Broadway's monitor reports a 0x0 geometry**, so a placement check that asks
+whether a window overlaps a monitor says "off screen" for everything there.
+`position_is_reachable` skips zero-area monitors and, if none is measurable,
+declines to judge. To test the overlap logic anyway, compile the function into
+a harness with `#define gdk_monitor_get_geometry` pointing at a fake.
 
 **A dialog's entry takes the PRIMARY selection, and that collapses the text
 buffer's selection.** `gtk_widget_grab_focus` on a GtkEntry selects its text,

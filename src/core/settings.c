@@ -43,6 +43,11 @@ static char *g_settings_file_path = NULL;
 
 // Helper functions
 static char *get_settings_directory(void);
+static bool load_settings_from(const char *path, bool may_move_aside);
+static void create_directory_recursive(const char *path);
+#ifndef _WIN32
+static char *settings_legacy_file_path(void);
+#endif
 static SettingEntry *find_setting(const char *key);
 static SettingEntry *create_setting(const char *key, const char *value);
 static void free_settings_list(void);
@@ -102,6 +107,34 @@ bool settings_init(void) {
 
     if (!g_settings_file_path)
         return false;
+
+#ifndef _WIN32
+    // The config directory must exist before anything else writes under it:
+    // crash-recovery snapshots go in <dir>/recovery and only create that last
+    // level, and a first run (or a newly set $XDG_CONFIG_HOME) reaches here
+    // before any settings save has made the parents
+    char *config_dir = file_get_directory(g_settings_file_path);
+    if (config_dir) {
+        create_directory_recursive(config_dir);
+        free(config_dir);
+    }
+
+    if (!file_exists(g_settings_file_path)) {
+        // Nothing at the new location. An npad that predates $XDG_CONFIG_HOME
+        // support kept its settings in ~/.config/npad, so read those instead of
+        // starting from defaults. READ only: the old file is neither moved nor
+        // deleted (it is the user's only copy until the next save writes the
+        // new one), and a runaway oversized one is salvaged in memory without
+        // being renamed.
+        char *legacy = settings_legacy_file_path();
+        if (legacy && strcmp(legacy, g_settings_file_path) != 0 && file_exists(legacy)) {
+            load_settings_from(legacy, false);
+            free(legacy);
+            return true;
+        }
+        free(legacy);
+    }
+#endif
 
     // Load existing settings
     settings_load();
@@ -379,7 +412,13 @@ bool settings_save(void) {
 }
 
 bool settings_load(void) {
-    if (!g_settings_file_path || !file_exists(g_settings_file_path)) {
+    return load_settings_from(g_settings_file_path, true);
+}
+
+// Load `path` into the settings list. may_move_aside is false for a fallback
+// file we do not own the right to rename (see settings_init).
+static bool load_settings_from(const char *path, bool may_move_aside) {
+    if (!path || !file_exists(path)) {
         return true; // No file to load, that's OK
     }
 
@@ -393,30 +432,33 @@ bool settings_load(void) {
     // runaway value is a single entry, and everything written before it is
     // intact), then move the original aside so it is recoverable by hand and is
     // not read again.
-    size_t size = file_get_size(g_settings_file_path);
+    size_t size = file_get_size(path);
     if (size > SETTINGS_MAX_FILE_BYTES) {
-        char *prefix = file_read_text_limited(g_settings_file_path, SETTINGS_MAX_FILE_BYTES);
+        char *prefix = file_read_text_limited(path, SETTINGS_MAX_FILE_BYTES);
         if (prefix) {
             parse_settings_file(prefix); // Truncated final entry is simply not stored
             free(prefix);
         }
 
-        size_t path_len = strlen(g_settings_file_path);
-        char *aside = malloc(path_len + 9); // ".corrupt" + NUL
+        size_t path_len = strlen(path);
+        char *aside = may_move_aside ? malloc(path_len + 9) : NULL; // ".corrupt" + NUL
         if (aside) {
-            memcpy(aside, g_settings_file_path, path_len);
+            memcpy(aside, path, path_len);
             memcpy(aside + path_len, ".corrupt", 9);
-            file_rename(g_settings_file_path, aside);
+            file_rename(path, aside);
             free(aside);
         }
 
         NPAD_ERROR_WARNING(NPAD_ERROR_FILE_IO, 0, "Settings",
-                           "settings.json was implausibly large; recoverable settings were "
-                           "salvaged and the original moved to settings.json.corrupt");
+                           may_move_aside
+                               ? "settings.json was implausibly large; recoverable settings were "
+                                 "salvaged and the original moved to settings.json.corrupt"
+                               : "the old settings.json was implausibly large; recoverable "
+                                 "settings were salvaged and the original left untouched");
         return true; // Not fatal
     }
 
-    char *content = file_read_text(g_settings_file_path);
+    char *content = file_read_text(path);
     if (!content)
         return false;
 
@@ -617,6 +659,50 @@ bool settings_clear_recent_files(void) {
 
 // Helper function implementations
 
+char *settings_resolve_config_dir(const char *xdg_config_home, const char *home) {
+    // $XDG_CONFIG_HOME counts only when set and absolute: the XDG spec says a
+    // relative value is invalid and must be ignored
+    if (xdg_config_home && xdg_config_home[0] == '/')
+        return file_join_paths(xdg_config_home, "npad");
+    return settings_resolve_legacy_dir(home);
+}
+
+char *settings_resolve_legacy_dir(const char *home) {
+    if (!home || !home[0])
+        return NULL;
+    char *config_dir = file_join_paths(home, ".config");
+    if (!config_dir)
+        return NULL;
+    char *npad_dir = file_join_paths(config_dir, "npad");
+    free(config_dir);
+    return npad_dir;
+}
+
+#ifndef _WIN32
+static const char *settings_home_dir(void) {
+    const char *home = getenv("HOME");
+    if (!home || !home[0]) {
+        const struct passwd *pw = getpwuid(getuid());
+        if (pw)
+            home = pw->pw_dir;
+    }
+    return home;
+}
+#endif
+
+#ifndef _WIN32
+// ~/.config/npad/settings.json, where npad kept settings before it honoured
+// $XDG_CONFIG_HOME. NULL without a home directory.
+static char *settings_legacy_file_path(void) {
+    char *dir = settings_resolve_legacy_dir(settings_home_dir());
+    if (!dir)
+        return NULL;
+    char *path = file_join_paths(dir, "settings.json");
+    free(dir);
+    return path;
+}
+#endif
+
 static char *get_settings_directory(void) {
 #ifdef _WIN32
     char path[MAX_PATH];
@@ -628,22 +714,7 @@ static char *get_settings_directory(void) {
     }
     return NULL;
 #else
-    const char *home = getenv("HOME");
-    if (!home) {
-        const struct passwd *pw = getpwuid(getuid());
-        if (pw) {
-            home = pw->pw_dir;
-        }
-    }
-
-    if (home) {
-        char *config_dir = file_join_paths(home, ".config");
-        char *npad_dir = file_join_paths(config_dir, "npad");
-        free(config_dir);
-        return npad_dir;
-    }
-
-    return NULL;
+    return settings_resolve_config_dir(getenv("XDG_CONFIG_HOME"), settings_home_dir());
 #endif
 }
 

@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the text fits, as in Notepad, rather than appearing and disappearing.
 - **Linux: Reload / Keep editing when another program changes your file**, if
   you turn on `watch_file_changes` (off by default, as in Notepad).
+- **Linux: the `system` colour scheme follows your desktop's light/dark
+  setting, live.** Switch the desktop to dark and an npad set to `system`
+  follows at once, without a restart. `light` is still the default.
+- **Linux: settings follow `$XDG_CONFIG_HOME`** when you set it. If the new
+  location has no settings yet, npad starts from your existing
+  `~/.config/npad` ones, and never touches that file.
 - **The Markdown list tools arrive on Linux.** Turn on Basic Markdown support
   (Preferences > Markdown) for a Markdown menu and the same right-click items:
   Sort, Unique, Convert Delimiters, Indent and Unindent with Tab / Shift+Tab,
@@ -115,6 +121,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as amd64 (Debian 12, Ubuntu 22.04); riscv64 needs Debian 13 / Ubuntu 24.04
   or newer, since nothing older has an official riscv64 port. The apt and dnf
   repositories at pkg.npad.dev serve all three.
+
+- **Linux: the `system` colour scheme follows the desktop's light/dark
+  preference.** It reads `org.freedesktop.appearance color-scheme` from the
+  xdg-desktop-portal Settings interface and follows its `SettingChanged`
+  signal, so switching the desktop between light and dark re-themes every
+  open npad window immediately. Without a portal (or when it expresses no
+  preference) it falls back to GTK's own `gtk-application-prefer-dark-theme`
+  as before. The portal is only asked when the scheme is `system`, and a
+  repeat of the same value, or any other portal setting changing, does
+  nothing, so idle windows are not re-themed.
+- **Linux: dark schemes now darken the window frame on themes that have no
+  dark variant.** GTK's "prefer dark" hint only works for themes that ship one
+  (Adwaita, Yaru); the Mint-Y family, Arc and others make dark a separate
+  theme, so on Linux Mint (MATE, Cinnamon) the `dark` and Solarized Dark
+  schemes left a light frame around a dark page and `system` could not follow
+  a dark desktop at all. npad now switches its own windows to the installed
+  dark sibling theme (`Mint-Y` -> `Mint-Y-Dark`, `Mint-Y-Aqua` ->
+  `Mint-Y-Dark-Aqua`, `Arc` -> `Arc-Dark`) for a dark scheme, and back when the
+  scheme turns light. A light theme with no dark sibling at all (Cinnamon's
+  TraditionalOk) falls back to GTK's built-in Adwaita in its dark variant; a
+  theme that is already dark (BlackMATE) is left alone. Nothing is written to
+  your desktop's settings.
+- **Linux: `system` no longer shows a white page in dark chrome.** Some dark
+  themes (BlackMATE, found on Mint MATE) keep their text areas white. When the
+  desktop prefers dark and the theme's own text area is light, `system` now
+  uses the Dark scheme's page colours instead; a theme with a genuinely dark
+  text area is left alone.
+- **Settings honour `$XDG_CONFIG_HOME` (Linux).** Settings and crash-recovery
+  snapshots live in `$XDG_CONFIG_HOME/npad` when the variable is set to an
+  absolute path (an empty or relative value is ignored, per the XDG spec),
+  otherwise `~/.config/npad` as before. When the new location has no
+  `settings.json` yet but `~/.config/npad/settings.json` exists, npad reads
+  that one - the old file is only read, never moved or deleted, and the next
+  save writes the new location. Windows is unaffected.
+- **Linux: a saved window position that is off every monitor is replaced.**
+  On X11, a position left over from an unplugged monitor or a changed layout
+  opens the window centred on the primary monitor instead of out of reach;
+  the corrected position is what gets saved. (Wayland ignores positions.)
+- **Linux: every npad window and dialog uses npad's icon.** The installed
+  `io.github.platima.npad` hicolor icon is the window icon, the default icon
+  of Preferences, Find and the other dialogs, and the logo in About; a build
+  run from the source tree, with no icon installed, keeps the stock
+  text-editor icon.
 
 ### 🔄 Changed
 - Linux: Edit > Preferences and Format > Font are no longer greyed out.
