@@ -76,6 +76,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as before. The portal is only asked when the scheme is `system`, and a
   repeat of the same value, or any other portal setting changing, does
   nothing, so idle windows are not re-themed.
+- **Linux: dark schemes now darken the window frame on themes that have no
+  dark variant.** GTK's "prefer dark" hint only works for themes that ship one
+  (Adwaita, Yaru); the Mint-Y family, Arc and others make dark a separate
+  theme, so on Linux Mint (MATE, Cinnamon) the `dark` and Solarized Dark
+  schemes left a light frame around a dark page and `system` could not follow
+  a dark desktop at all. npad now switches its own windows to the installed
+  dark sibling theme (`Mint-Y` -> `Mint-Y-Dark`, `Mint-Y-Aqua` ->
+  `Mint-Y-Dark-Aqua`, `Arc` -> `Arc-Dark`) for a dark scheme, and back when the
+  scheme turns light. Nothing is written to your desktop's settings, and if no
+  sibling is installed the frame stays as it was.
 - **Settings honour `$XDG_CONFIG_HOME` (Linux).** Settings and crash-recovery
   snapshots live in `$XDG_CONFIG_HOME/npad` when the variable is set to an
   absolute path (an empty or relative value is ignored, per the XDG spec),

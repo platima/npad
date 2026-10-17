@@ -389,9 +389,98 @@ static void apply_view_css(Window *window) {
     g_string_free(family, TRUE);
 }
 
+// --- Dark chrome for themes with no dark variant ---------------------------
+//
+// gtk-application-prefer-dark-theme only does anything when the GTK theme ships
+// a gtk-3.0/gtk-dark.css (Adwaita, Yaru). The Mint-Y family, Arc and most
+// others make "dark" a separate sibling theme instead (Mint-Y -> Mint-Y-Dark),
+// so on those the property is silently ignored and a dark scheme sat inside a
+// light frame. For a dark scheme we therefore switch this process to the
+// sibling theme, and switch back (only if nobody changed it meanwhile) when
+// the scheme turns light. Nothing is written to the desktop's settings.
+
+static char *g_dark_sibling_theme = NULL; // The sibling we switched to, or NULL
+static char *g_original_gtk_theme = NULL; // What it replaced
+
+// Whether <data dir>/themes/<name>/gtk-3.0/<file> exists in any theme folder
+static bool gtk_theme_has_file(const char *name, const char *file) {
+    GPtrArray *dirs = g_ptr_array_new_with_free_func(g_free);
+    g_ptr_array_add(dirs, g_build_filename(g_get_home_dir(), ".themes", NULL));
+    g_ptr_array_add(dirs, g_build_filename(g_get_user_data_dir(), "themes", NULL));
+    for (const gchar *const *sys = g_get_system_data_dirs(); *sys; sys++)
+        g_ptr_array_add(dirs, g_build_filename(*sys, "themes", NULL));
+
+    bool found = false;
+    for (guint i = 0; i < dirs->len && !found; i++) {
+        char *path = g_build_filename(g_ptr_array_index(dirs, i), name, "gtk-3.0", file, NULL);
+        found = g_file_test(path, G_FILE_TEST_IS_REGULAR);
+        g_free(path);
+    }
+    g_ptr_array_free(dirs, TRUE);
+    return found;
+}
+
+static bool theme_name_is_dark(const char *name) {
+    char *lower = g_ascii_strdown(name, -1);
+    bool dark = strstr(lower, "dark") != NULL;
+    g_free(lower);
+    return dark;
+}
+
+// The installed dark sibling of a GTK theme, or NULL: Name-Dark, Name-dark, and
+// Mint-Y-Aqua -> Mint-Y-Dark-Aqua (the colour is the last segment)
+static char *find_dark_sibling_theme(const char *name) {
+    GPtrArray *candidates = g_ptr_array_new_with_free_func(g_free);
+    g_ptr_array_add(candidates, g_strconcat(name, "-Dark", NULL));
+    g_ptr_array_add(candidates, g_strconcat(name, "-dark", NULL));
+    const char *last_dash = strrchr(name, '-');
+    if (last_dash && last_dash != name) {
+        char *base = g_strndup(name, (gsize) (last_dash - name));
+        g_ptr_array_add(candidates, g_strconcat(base, "-Dark", last_dash, NULL));
+        g_free(base);
+    }
+
+    char *found = NULL;
+    for (guint i = 0; i < candidates->len && !found; i++) {
+        const char *candidate = g_ptr_array_index(candidates, i);
+        if (gtk_theme_has_file(candidate, "gtk.css"))
+            found = g_strdup(candidate);
+    }
+    g_ptr_array_free(candidates, TRUE);
+    return found;
+}
+
+// Bring the GTK theme in line with a dark / light scheme. Both directions only
+// act on a change: setting gtk-theme-name restyles every widget.
+static void apply_chrome_variant(bool dark) {
+    GtkSettings *settings = gtk_settings_get_default();
+    char *name = NULL;
+    g_object_get(settings, "gtk-theme-name", &name, NULL);
+
+    if (dark) {
+        if (!g_dark_sibling_theme && name && !theme_name_is_dark(name) &&
+            !gtk_theme_has_file(name, "gtk-dark.css")) {
+            char *sibling = find_dark_sibling_theme(name);
+            if (sibling) {
+                g_original_gtk_theme = g_strdup(name);
+                g_dark_sibling_theme = sibling;
+                g_object_set(settings, "gtk-theme-name", sibling, NULL);
+            }
+        }
+    } else if (g_dark_sibling_theme) {
+        // Restore only if the theme is still the one we set: a desktop theme
+        // change in between is the user's newer choice
+        if (g_strcmp0(name, g_dark_sibling_theme) == 0)
+            g_object_set(settings, "gtk-theme-name", g_original_gtk_theme, NULL);
+        g_clear_pointer(&g_dark_sibling_theme, g_free);
+        g_clear_pointer(&g_original_gtk_theme, g_free);
+    }
+    g_free(name);
+}
+
 // Colour scheme: the text colours come from apply_view_css; the window chrome
-// follows via GTK's dark variant, so a dark scheme does not sit inside a
-// light frame
+// follows via GTK's dark variant (or the dark sibling theme), so a dark scheme
+// does not sit inside a light frame
 static void apply_theme(Window *window) {
     char *theme = settings_get_string("theme", "light");
     const char *bg = NULL;
@@ -407,6 +496,7 @@ static void apply_theme(Window *window) {
     if ((current != FALSE) != dark)
         g_object_set(gtk_settings_get_default(), "gtk-application-prefer-dark-theme",
                      dark ? TRUE : FALSE, NULL);
+    apply_chrome_variant(dark);
     apply_view_css(window);
 }
 

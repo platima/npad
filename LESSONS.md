@@ -578,6 +578,18 @@ opens in the right colours rather than flashing the wrong ones); `light`, the
 default, never touches it. Value 0 means "no preference" - fall back to GTK's
 own `gtk-application-prefer-dark-theme` as it stood at startup.
 
+**`gtk-application-prefer-dark-theme` does nothing for most themes.** It
+selects the `gtk-dark.css` variant inside a theme, which Adwaita and Yaru have.
+Mint-Y, Arc, Materia and most others ship dark as a *separate* theme
+(`Mint-Y-Dark`), so on Linux Mint the property was silently ignored: the
+`dark` scheme gave a dark page in a light frame, and `system` could not follow
+a dark portal (the maintainer's MATE session reported `color-scheme` 1 and
+npad stayed light). Broadway, with Adwaita, hid it. → For a dark scheme also
+set the process's `gtk-theme-name` to the installed sibling, remembering what it
+replaced so a light scheme can put it back (`apply_chrome_variant`). Test it
+with fake `FakeTheme` / `FakeTheme-Dark` folders under a throwaway
+`XDG_DATA_HOME` and `gtk-theme-name` in a throwaway `gtk-3.0/settings.ini`.
+
 **Broadway's monitor reports a 0x0 geometry**, so a placement check that asks
 whether a window overlaps a monitor says "off screen" for everything there.
 `position_is_reachable` skips zero-area monitors and, if none is measurable,

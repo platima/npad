@@ -274,6 +274,15 @@ Decisions taken in the foundation round. Each is easy to revisit.
   `gtk-application-prefer-dark-theme` as it was at startup, which is not
   tracked live. So on Mint-Y-Dark, a default npad shows a white page inside
   dark chrome - Notepad-faithful, but worth a look.
+- **Dark chrome on themes without a dark variant.** `gtk-application-prefer-dark-theme`
+  is ignored by themes with no `gtk-3.0/gtk-dark.css` (Mint-Y, Arc, ...), where
+  dark is a sibling theme instead. For a dark scheme, `apply_chrome_variant`
+  sets this process's `gtk-theme-name` to the installed sibling (`Name-Dark`,
+  `Name-dark`, `Mint-Y-Aqua` -> `Mint-Y-Dark-Aqua`) and restores the original
+  when the scheme turns light, only if the theme is still the one it set.
+  Nothing is written to the desktop's settings; no sibling installed means no
+  change. Found on Mint MATE, where the portal reported dark and npad stayed
+  light.
 - **Settings directory** is `$XDG_CONFIG_HOME/npad` when that is set and
   absolute, else `~/.config/npad` (Windows keeps `%APPDATA%\Platima\npad`).
   An existing `~/.config/npad/settings.json` is read when the new location has
