@@ -504,6 +504,7 @@ bool editor_open_file(const char *filename) {
         return false;
     }
 
+    apply_default_eol_if_no_breaks(&info, content); // Before content is freed
     if (g_editor.main_window) {
         ui_set_text(g_editor.main_window, content);
     }

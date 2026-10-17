@@ -153,12 +153,15 @@ settings keys and defaults as the Windows build: General, Appearance,
 Defaults, Markdown and Backup, plus the hidden Debug page (Ctrl+Shift+., or
 Shift+click Preferences). Differences:
 
-- **No OK / Apply.** Every control saves the moment it changes, writing only
-  its own key, and every other open npad window picks the change up live.
-  Number boxes and text fields (print header / footer, custom indent prefix)
-  commit when you press Enter or leave the field, and when the dialog closes.
-  Reset All Preferences keeps the same things as on Windows and closes the
-  dialog; Import Settings refuses a file that is not a JSON object.
+- **OK / Cancel / Apply, as on Windows.** Changes are held until you press
+  Apply (the dialog stays open) or OK (apply and close); Cancel, Esc or the
+  close box drops them. Apply stays greyed until something has changed, and it
+  writes only the settings you changed - a page you only looked at is never
+  written - then saves and every other open npad window picks the change up
+  live. As on Windows, the font buttons, Clear Recent Files Now, Export /
+  Import, the xdg-mime button and Reset All Preferences act immediately.
+  Reset keeps the same things as on Windows and closes the dialog; Import
+  Settings refuses a file that is not a JSON object.
 - **No Updates page.** Linux installs update through apt or dnf.
 - **Associations** is one explicit action, *Make npad the default text
   editor*, which runs `xdg-mime default io.github.platima.npad.desktop
