@@ -185,6 +185,13 @@ Shift+click Preferences). Differences:
   text/plain` for your account. Nothing runs until you click it, and the page
   shows which application currently handles plain text.
 - **No application-icon choice** on Appearance: the icon comes from the icon
+  theme. The window and taskbar icon is the standard one under the Light and
+  Solarized Light schemes and a dark one (`io.github.platima.npad-dark`) under
+  Dark, Solarized Dark and a dark System scheme, switching live; the launcher
+  keeps the standard icon.
+- **Markdown** edits the shared keys, but the Markdown list tools themselves
+  have not been ported yet (the page says so). Turning Basic Markdown support
+  on already adds "Interpret escapes" to Find / Replace.
   theme.
 - **Markdown** edits the shared keys the list tools read (see
   [Markdown list tools on Linux](#markdown-list-tools-on-linux)). Turning Basic
@@ -273,6 +280,10 @@ you have; the apt and dnf repositories pick the right one by themselves.
   ./npad_<version>_amd64.deb` (or `_arm64` / `_riscv64`). It depends only on GTK 3 (`libgtk-3-0` or
   `libgtk-3-0t64`) and installs `/usr/bin/npad`, the launcher
   (`io.github.platima.npad.desktop`, offered for text, Markdown, JSON, XML and
+  similar files in "Open with"), hicolor icons from 16 to 256 px (standard
+  and dark) and the AppStream metainfo for software centres.
+- **.rpm** (Fedora): `sudo dnf install ./npad-<version>-1.x86_64.rpm`. It
+  requires `gtk3` and installs the same files as the .deb.
   similar files in "Open with"), hicolor icons from 16 to 256 px and the
   AppStream metainfo for software centres.
 - **.rpm** (Fedora, openSUSE): `sudo dnf install ./npad-<version>-1.x86_64.rpm`

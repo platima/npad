@@ -218,13 +218,29 @@ size_t ui_platform_system_memory_mb(void) {
                      (1024ULL * 1024ULL));
 }
 
+static void on_about_response(GtkDialog *dialog, gint response, gpointer data) {
+    (void) response;
+    (void) data;
+    gtk_widget_destroy(GTK_WIDGET(dialog));
+}
+
+// A fresh dialog every time rather than gtk_show_about_dialog(), which caches
+// the first one on its parent and re-presents it unchanged: after a colour
+// scheme change it would keep showing the logo of the old scheme
 void ui_platform_show_about_dialog(Window *parent) {
     const char *authors[] = { "Platima", NULL };
     GtkWindow *owner = parent_window(parent);
-    gtk_show_about_dialog(owner, "program-name", "npad", "version", NPAD_VERSION, "comments",
-                          "A lightweight, cross-platform text editor\n"
-                          "inspired by classic Windows Notepad.",
-                          "website", "https://npad.dev", "website-label", "npad.dev", "authors",
-                          authors, "logo-icon-name", npad_gtk_app_icon_name(), "title",
-                          "About npad", NULL);
+    GtkWidget *dialog = gtk_about_dialog_new();
+    g_object_set(dialog, "program-name", "npad", "version", NPAD_VERSION, "comments",
+                 "A lightweight, cross-platform text editor\n"
+                 "inspired by classic Windows Notepad.",
+                 "website", "https://npad.dev", "website-label", "npad.dev", "authors", authors,
+                 "logo-icon-name", npad_gtk_app_icon_name(), "title", "About npad", NULL);
+    if (owner) {
+        gtk_window_set_transient_for(GTK_WINDOW(dialog), owner);
+        gtk_window_set_destroy_with_parent(GTK_WINDOW(dialog), TRUE);
+    }
+    gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
+    g_signal_connect(dialog, "response", G_CALLBACK(on_about_response), NULL);
+    gtk_widget_show(dialog);
 }
