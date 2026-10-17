@@ -134,7 +134,7 @@ BEGIN
 END
 
 // Preferences: General page
-IDD_PREFS_GENERAL DIALOGEX 0, 0, 240, 200
+IDD_PREFS_GENERAL DIALOGEX 0, 0, 240, 218
 STYLE DS_SETFONT | DS_FIXEDSYS | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "General"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
@@ -152,6 +152,7 @@ BEGIN
     EDITTEXT        ID_PREF_SESSION_INTERVAL, 150, 136, 44, 13, ES_AUTOHSCROLL | ES_NUMBER
     CONTROL         "Ctrl+N opens a new win&dow (Ctrl+Shift+N clears the current one)", ID_PREF_CTRL_N_WINDOW, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 160, 220, 20
     CONTROL         "Tell me when an open file is changed by another program", ID_PREF_WATCH_FILE, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 180, 220, 14
+    CONTROL         "&Fill Find with the selected text", ID_PREF_FIND_SEED, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 198, 220, 14
 END
 
 // Preferences: Appearance page

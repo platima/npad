@@ -202,6 +202,7 @@ File handling: saving, opening, recent files, recovery, and what happens when a 
 | `session_resume_enabled` | bool | `true` | Crash recovery: snapshot unsaved work on the first edit and then on a timer; offer to restore after an unclean exit. On by default: snapshots never touch the user's file. All windows are restored, extras in their own cascaded windows. Does **not** gate handoff snapshots taken when an update or a Windows restart closes npad - those would otherwise be silently discarded. |
 | `session_interval` | int | `30` | Snapshot period in seconds (minimum 5). |
 | `ctrl_n_new_window` | bool | `false` | Swap Ctrl+N / Ctrl+Shift+N between "New" (clear this window) and "New Window" (open another instance). |
+| `find_seed_selection` | bool | `true` | **Fill Find with the selected text.** Opening (or re-focusing) Find or Replace with Ctrl+F / Ctrl+H puts the current selection in "Find what", selected so typing replaces it. On by default because Windows 10 notepad.exe (1809+) does exactly this, so it is the behaviour a Notepad user expects. Only a non-empty selection that contains no line break and is at most 255 characters seeds the box; anything else leaves the last search term as it was. The same key and rule apply on every platform. Unlike the other `find_` keys it is a preference, so Reset All Preferences resets it. |
 
 ### Appearance (Preferences > Appearance)
 
@@ -418,6 +419,13 @@ Window does). Not intended for direct use.
 
 ## Behaviour notes
 
+- **Find is filled from the selection**: with text selected, Ctrl+F / Ctrl+H
+  open the dialog with that text in "Find what" (selected, so typing replaces
+  it), as Windows 10 notepad.exe does. A selection that spans lines, is empty
+  or is longer than 255 characters is not used; the last search term stays.
+  With "Interpret escapes" on, backslashes in the seeded text are doubled so it
+  still matches the selection literally. Preferences > General > **Fill Find
+  with the selected text** (`find_seed_selection`, on by default) turns it off.
 - **Atomic saves**: files are written to a temp file, verified, then renamed
   over the original. A failed save never destroys the existing file.
 - **Unsaved-changes prompt**: closing or replacing a modified document asks

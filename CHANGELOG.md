@@ -63,6 +63,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     and fits five more columns than a preview at another resolution.
   - Set `NPAD_PRINT_EXPORT=/path/file.pdf` to make Print skip its dialog and
     write a PDF - for checking output on a machine with no printer.
+- **Find is filled from the selection (Windows and Linux).** Since Windows 10
+  1809, notepad.exe puts the selected text in "Find what" when Find or Replace
+  is opened; npad did not. Ctrl+F / Ctrl+H now do, on by default for that
+  reason, with the text selected so typing replaces it. Only a non-empty,
+  single-line selection of at most 255 characters seeds the box - anything
+  else leaves the last search term as before. One preference, **Fill Find
+  with the selected text** (Preferences > General, key `find_seed_selection`),
+  turns it off, and the same key and rule apply on every platform; the rule
+  lives in a unit-tested core module (`find_seed`) so the terminal and macOS
+  builds will share it. With "Interpret escapes" on, a selected `C:\new` is
+  seeded as `C:\\new` so it still finds itself. Reset All Preferences resets
+  it even though its key starts with `find_`.
 
 ### 🔄 Changed
 - **npad has a home page: [npad.dev](https://npad.dev).** The About box

@@ -245,14 +245,20 @@ version.
       `npad_gtk_find_reload_settings`
 - [x] "Match n of m" / not-found messages like Win32
 - [x] Go To Line (Ctrl+G, and clicking Ln/Col) - logical lines
-- [x] Notepad behaviours from DOCUMENTATION.md "Behaviour notes". Note the
-      Win32 dialogs do not seed the search box from the selection either, so
-      neither does this one.
+- [x] Notepad behaviours from DOCUMENTATION.md "Behaviour notes"
+- [x] Ctrl+F / Ctrl+H fill "Find what" from a single-line selection
+      (`find_seed_selection`, default on, shared rule in `core/find_seed`),
+      including when the dialog is already open
 
 ### Batch B - Preferences and Font (new `ui_gtk_prefs.c`)
 - [ ] GtkNotebook dialog with the General, Appearance, Defaults, Backup and
       Markdown pages, and the hidden Debug page (Ctrl+Shift+.)
 - [ ] Every change saves immediately and calls `ui_notify_settings_changed()`
+- [ ] General page: a **Fill Find with the selected text** checkbox bound to
+      `find_seed_enabled()` / `FIND_SEED_KEY` (`core/find_seed.h`, default on;
+      the Find dialog already honours it). Reset must remove that key
+      explicitly - it starts with `find_`, which the keep-list preserves
+      (see `reset_all_preferences` in `ui_win32.c`)
 - [ ] Export / import / reset settings
 - [ ] Format > Font: GtkFontChooserDialog writing the font keys
 - [ ] Linux replacements for the Windows-only pages: Associations becomes a
