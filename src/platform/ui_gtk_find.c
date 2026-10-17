@@ -618,7 +618,7 @@ static void on_cancel_clicked(GtkButton *button, gpointer data) {
         gtk_widget_destroy(g_dialog);
 }
 
-static gboolean on_dialog_key(GtkWidget *widget, GdkEventKey *event, gpointer data) {
+static gboolean on_dialog_key(GtkWidget *widget, const GdkEventKey *event, gpointer data) {
     (void) widget;
     (void) data;
     if (event->keyval == GDK_KEY_Escape) {

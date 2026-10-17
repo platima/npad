@@ -6,7 +6,7 @@ difference should behave exactly as it does there (see
 [DOCUMENTATION.md](DOCUMENTATION.md)). Read [LESSONS.md](LESSONS.md) first, in
 particular its **GTK / Linux** section.
 
-## Status (v0.35.0 - Find / Replace / Go To, printing, packaging)
+## Status (v0.36.0 - Find / Replace / Go To, printing, packaging)
 
 **Verified** (Broadway under WSL): the window, menu bar and status bar render;
 opening a file from the command line (UTF-8 and emoji intact, path stored
@@ -23,7 +23,7 @@ schemes, the status-bar pickers, word/char/line counts, Time/Date, New
 Window, Close All, clipboard commands, About. Worth a pass on a real desktop
 before the feature batches build on them.
 
-**Batch A (v0.35.0):** Find, Find Next / Previous, Replace, Replace All and Go
+**Batch A (v0.36.0):** Find, Find Next / Previous, Replace, Replace All and Go
 To are ported (details under the checklist). Verified in Broadway: both
 dialogs, Up / Down, wrap, highlight all, whole word, Replace All undone in
 one step, Ctrl+F / H / G from inside the dialog, Go To by shortcut and by the
@@ -31,7 +31,7 @@ Ln/Col click, and the beyond-the-end message; the search engine itself
 (non-ASCII text, case folding, whole word, escapes, history) was also run
 headless against a real GtkTextBuffer.
 
-**Printing (v0.35.0)** is verified under Broadway with GTK's Print to File
+**Printing (v0.36.0)** is verified under Broadway with GTK's Print to File
 backend: a multi-page document, a long wrapped line, a 40,000-word single
 line (every word present and in order across the 64 KB layout chunks),
 header/footer codes in all three positions, landscape A4 with custom margins,
@@ -265,7 +265,7 @@ version.
       "make npad the default text editor" action (`xdg-mime`), Updates is
       dropped
 
-### Batch C - Printing (new `print_gtk.c`) - done in v0.35.0
+### Batch C - Printing (new `print_gtk.c`) - done in v0.36.0
 - [x] Page Setup, Print, Print Preview via GtkPrintOperation. The preview is
       npad's own window fed by the operation's `preview` signal, because
       GTK's built-in one launches an external PDF viewer

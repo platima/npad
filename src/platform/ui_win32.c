@@ -1621,7 +1621,7 @@ void ui_platform_set_window_maximized(Window *window, bool maximized) {
     }
 }
 
-bool ui_platform_is_window_maximized(Window *window) {
+bool ui_platform_is_window_maximized(const Window *window) {
     if (!window || !window->hwnd)
         return false;
     return IsZoomed(window->hwnd) != 0;
@@ -2076,13 +2076,13 @@ void ui_platform_redo(Window *window) {
     }
 }
 
-bool ui_platform_can_undo(Window *window) {
+bool ui_platform_can_undo(const Window *window) {
     if (!window || !window->edit_hwnd)
         return false;
     return SendMessageW(window->edit_hwnd, EM_CANUNDO, 0, 0) != 0;
 }
 
-bool ui_platform_can_redo(Window *window) {
+bool ui_platform_can_redo(const Window *window) {
     if (!window || !window->edit_hwnd)
         return false;
     return SendMessageW(window->edit_hwnd, EM_CANREDO, 0, 0) != 0;
@@ -4179,7 +4179,7 @@ bool ui_platform_system_supports_dark_mode(void) {
 // Status bar and state queries
 // ---------------------------------------------------------------------------
 
-bool ui_platform_is_text_modified(Window *window) {
+bool ui_platform_is_text_modified(const Window *window) {
     return window ? window->is_modified : false;
 }
 
