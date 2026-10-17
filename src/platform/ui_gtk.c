@@ -337,6 +337,19 @@ static void scheme_colors(const char *theme, const char **bg, const char **fg, b
 // the page colour), so npad's own provider, which sits on the real widget,
 // does not colour the answer. Unknown (a transparent node, an odd theme)
 // counts as not light: leave the theme alone.
+static bool context_background_is_light(GtkStyleContext *context) {
+    GdkRGBA *background = NULL;
+    gtk_style_context_get(context, GTK_STATE_FLAG_NORMAL, "background-color", &background, NULL);
+    bool light = false;
+    if (background) {
+        light =
+            background->alpha > 0.5 &&
+            0.299 * background->red + 0.587 * background->green + 0.114 * background->blue > 0.5;
+        gdk_rgba_free(background);
+    }
+    return light;
+}
+
 static bool theme_text_area_is_light(void) {
     GtkWidget *probe = g_object_ref_sink(gtk_text_view_new());
     GtkWidgetPath *path = gtk_widget_path_copy(gtk_widget_get_path(probe));
@@ -347,16 +360,18 @@ static bool theme_text_area_is_light(void) {
     gtk_style_context_set_path(context, path);
     gtk_widget_path_unref(path);
 
-    GdkRGBA *background = NULL;
-    gtk_style_context_get(context, GTK_STATE_FLAG_NORMAL, "background-color", &background, NULL);
-    bool light = false;
-    if (background) {
-        light =
-            background->alpha > 0.5 &&
-            0.299 * background->red + 0.587 * background->green + 0.114 * background->blue > 0.5;
-        gdk_rgba_free(background);
-    }
+    bool light = context_background_is_light(context);
     g_object_unref(context);
+    g_object_unref(probe);
+    return light;
+}
+
+// Whether the GTK theme's window background is light, measured on a window
+// that is never shown
+static bool theme_chrome_is_light(void) {
+    GtkWidget *probe = g_object_ref_sink(gtk_window_new(GTK_WINDOW_TOPLEVEL));
+    bool light = context_background_is_light(gtk_widget_get_style_context(probe));
+    gtk_widget_destroy(probe);
     g_object_unref(probe);
     return light;
 }
@@ -433,7 +448,9 @@ static void apply_view_css(Window *window) {
 // so on those the property is silently ignored and a dark scheme sat inside a
 // light frame. For a dark scheme we therefore switch this process to the
 // sibling theme, and switch back (only if nobody changed it meanwhile) when
-// the scheme turns light. Nothing is written to the desktop's settings.
+// the scheme turns light. Nothing is written to the desktop's settings. A light
+// theme with no sibling at all (Cinnamon's TraditionalOk) falls back to
+// Adwaita, which ships a dark variant inside GTK itself.
 
 static char *g_dark_sibling_theme = NULL; // The sibling we switched to, or NULL
 static char *g_original_gtk_theme = NULL; // What it replaced
@@ -497,6 +514,11 @@ static void apply_chrome_variant(bool dark) {
         if (!g_dark_sibling_theme && name && !theme_name_is_dark(name) &&
             !gtk_theme_has_file(name, "gtk-dark.css")) {
             char *sibling = find_dark_sibling_theme(name);
+            // No dark sibling, and the theme is light (BlackMATE is already
+            // dark, so it is left alone): Adwaita is built into GTK, always
+            // there, and has a dark variant that the prefer-dark hint selects
+            if (!sibling && theme_chrome_is_light())
+                sibling = g_strdup("Adwaita");
             if (sibling) {
                 g_original_gtk_theme = g_strdup(name);
                 g_dark_sibling_theme = sibling;

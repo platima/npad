@@ -292,9 +292,13 @@ Decisions taken in the foundation round. Each is easy to revisit.
   sets this process's `gtk-theme-name` to the installed sibling (`Name-Dark`,
   `Name-dark`, `Mint-Y-Aqua` -> `Mint-Y-Dark-Aqua`) and restores the original
   when the scheme turns light, only if the theme is still the one it set.
-  Nothing is written to the desktop's settings; no sibling installed means no
-  change. Found on Mint MATE, where the portal reported dark and npad stayed
-  light.
+  Nothing is written to the desktop's settings. With no sibling installed, a
+  *light* theme (its window background measured on a window that is never shown)
+  falls back to GTK's built-in Adwaita, whose dark variant the prefer-dark hint
+  selects - that is what Cinnamon's TraditionalOk gets - while a theme that is
+  already dark (BlackMATE) is left alone. Found on Linux Mint, where the portal
+  reported dark and npad stayed light; the Debug page (Ctrl+Shift+.) lists what
+  the colour code sees.
 - **`system` on a dark desktop with a theme whose text area stays white**
   (BlackMATE) uses the Dark scheme's page colours (#1e1e1e on #dcdcdc);
   `theme_text_area_is_light()` measures the theme's own `textview text`

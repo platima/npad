@@ -114,8 +114,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a dark desktop at all. npad now switches its own windows to the installed
   dark sibling theme (`Mint-Y` -> `Mint-Y-Dark`, `Mint-Y-Aqua` ->
   `Mint-Y-Dark-Aqua`, `Arc` -> `Arc-Dark`) for a dark scheme, and back when the
-  scheme turns light. Nothing is written to your desktop's settings, and if no
-  sibling is installed the frame stays as it was.
+  scheme turns light. A light theme with no dark sibling at all (Cinnamon's
+  TraditionalOk) falls back to GTK's built-in Adwaita in its dark variant; a
+  theme that is already dark (BlackMATE) is left alone. Nothing is written to
+  your desktop's settings.
 - **Linux: `system` no longer shows a white page in dark chrome.** Some dark
   themes (BlackMATE, found on Mint MATE) keep their text areas white. When the
   desktop prefers dark and the theme's own text area is light, `system` now

@@ -590,6 +590,17 @@ replaced so a light scheme can put it back (`apply_chrome_variant`). Test it
 with fake `FakeTheme` / `FakeTheme-Dark` folders under a throwaway
 `XDG_DATA_HOME` and `gtk-theme-name` in a throwaway `gtk-3.0/settings.ini`.
 
+**GNOME Terminal going dark proves nothing about what npad can do.** On Mint
+(Cinnamon, TraditionalOk) the Terminal's menu bar and preferences turned dark
+with the desktop while npad's stayed light: the Terminal has its own theme-variant
+setting, whereas npad only has GTK's prefer-dark hint, which TraditionalOk
+(no `gtk-dark.css`, no dark sibling) ignores. A user's screenshot of another app
+is not a reference for what a theme can do - ask for the Debug page output
+(`Theme has a dark variant`, `desktop colour-scheme via portal`) first. For a
+light theme with no way to go dark, npad swaps to the built-in Adwaita (always
+present, has a dark variant); a theme whose window background is already dark
+(BlackMATE) must be left alone, so measure it (`theme_chrome_is_light`).
+
 **To read what a GTK theme paints, build the path from a real widget.** The
 page colour lives on the text view's `text` child node. A `GtkWidgetPath` made
 by hand (`append_type` window, text view, then a `text` node) answers
