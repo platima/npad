@@ -135,8 +135,26 @@ static bool ctrl_is_down(Window *window) {
     return ((keys | pointer) & GDK_CONTROL_MASK) != 0;
 }
 
-// Insert a file's text at (x, y) - widget coordinates, the drop point - as a
-// single undo step. A failure is reported the way opening a file reports it.
+// Insert text at (x, y) - widget coordinates, the drop point - as a single
+// undo step
+static void insert_text_at(Window *window, const char *text, int x, int y) {
+    GtkTextView *view = GTK_TEXT_VIEW(window->text_view);
+    gint bx = 0, by = 0;
+    GtkTextIter where;
+    gtk_text_view_window_to_buffer_coords(view, GTK_TEXT_WINDOW_WIDGET, x, y, &bx, &by);
+    gtk_text_view_get_iter_at_location(view, &where, bx, by);
+
+    // The caret goes to the drop point first (which also ends the typing run
+    // in the undo history); the whole insert is one user action
+    gtk_text_buffer_place_cursor(window->buffer, &where);
+    gtk_text_buffer_begin_user_action(window->buffer);
+    gtk_text_buffer_insert_at_cursor(window->buffer, text, -1);
+    gtk_text_buffer_end_user_action(window->buffer);
+    gtk_text_view_scroll_mark_onscreen(view, gtk_text_buffer_get_insert(window->buffer));
+}
+
+// Insert a file's text at the drop point. A failure is reported the way opening
+// a file reports it.
 static void insert_file_at(Window *window, const char *path, int x, int y) {
     TextFileInfo info;
     char *content = file_read_text_ex(path, &info);
@@ -152,21 +170,8 @@ static void insert_file_at(Window *window, const char *path, int x, int y) {
     if (!text)
         return;
 
-    if (text[0]) {
-        GtkTextView *view = GTK_TEXT_VIEW(window->text_view);
-        gint bx = 0, by = 0;
-        GtkTextIter where;
-        gtk_text_view_window_to_buffer_coords(view, GTK_TEXT_WINDOW_WIDGET, x, y, &bx, &by);
-        gtk_text_view_get_iter_at_location(view, &where, bx, by);
-
-        // The caret goes to the drop point first (which also ends the typing
-        // run in the undo history); the whole insert is one user action
-        gtk_text_buffer_place_cursor(window->buffer, &where);
-        gtk_text_buffer_begin_user_action(window->buffer);
-        gtk_text_buffer_insert_at_cursor(window->buffer, text, -1);
-        gtk_text_buffer_end_user_action(window->buffer);
-        gtk_text_view_scroll_mark_onscreen(view, gtk_text_buffer_get_insert(window->buffer));
-    }
+    if (text[0])
+        insert_text_at(window, text, x, y);
     g_free(text);
 }
 
@@ -201,8 +206,28 @@ static gboolean on_drag_motion(GtkWidget *widget, GdkDragContext *context, gint 
     return FALSE; // Let the text view draw its own drop caret
 }
 
-// Only files are taken here. Dropped text carries no uri-list target and is
-// inserted by GtkTextView itself, at the drop point, as always.
+// File managers offer text/plain (the path as text) as well as text/uri-list,
+// and GTK takes the first target the source lists that the text view accepts -
+// so without this a dropped file arrives as its URI in the text. When the
+// source offers a uri-list, ask for that one; anything else (text from another
+// application, a drag inside the window) is left to GtkTextView.
+static gboolean on_drag_drop(GtkWidget *widget, GdkDragContext *context, gint x, gint y, guint time,
+                             gpointer data) {
+    (void) x;
+    (void) y;
+    Window *window = data;
+    GdkAtom uri_list = gdk_atom_intern_static_string("text/uri-list");
+    if (!g_list_find(gdk_drag_context_list_targets(context), uri_list))
+        return FALSE;
+    window->drag_ctrl = window->drag_ctrl || ctrl_is_down(window);
+    g_signal_stop_emission_by_name(widget, "drag-drop");
+    gtk_drag_get_data(widget, context, uri_list, time);
+    return TRUE;
+}
+
+// The uri-list arrives here. Files are opened or inserted; a link that is not
+// a local file (dragged from a browser, say) goes in as text, as it would have
+// before files were handled at all.
 static void on_drag_data_received(GtkWidget *widget, GdkDragContext *context, gint x, gint y,
                                   GtkSelectionData *selection, guint info, guint time,
                                   gpointer data) {
@@ -216,15 +241,22 @@ static void on_drag_data_received(GtkWidget *widget, GdkDragContext *context, gi
     // The first local file, as Win32 takes only the first dropped file
     for (int i = 0; uris && uris[i] && !path; i++)
         path = g_filename_from_uri(uris[i], NULL, NULL);
-    g_strfreev(uris);
 
-    gtk_drag_finish(context, path != NULL, FALSE, time);
+    bool insert = window->drag_ctrl || ctrl_is_down(window);
+    window->drag_ctrl = false;
     if (path) {
-        bool insert = window->drag_ctrl || ctrl_is_down(window);
+        gtk_drag_finish(context, TRUE, FALSE, time);
         npad_gtk_edit_drop_file(window, path, insert, x, y);
         g_free(path);
+        g_strfreev(uris);
+        return;
     }
-    window->drag_ctrl = false;
+    gchar *text = (uris && uris[0]) ? g_strdup(uris[0]) : NULL;
+    gtk_drag_finish(context, text != NULL, FALSE, time);
+    if (text)
+        insert_text_at(window, text, x, y);
+    g_free(text);
+    g_strfreev(uris);
 }
 
 static void setup_file_drop(Window *window) {
@@ -238,6 +270,7 @@ static void setup_file_drop(Window *window) {
     gtk_target_list_add_uri_targets(targets, NPAD_DND_URI_LIST);
     gtk_drag_dest_set_target_list(view, targets);
     g_signal_connect(view, "drag-motion", G_CALLBACK(on_drag_motion), window);
+    g_signal_connect(view, "drag-drop", G_CALLBACK(on_drag_drop), window);
     g_signal_connect(view, "drag-data-received", G_CALLBACK(on_drag_data_received), window);
 }
 

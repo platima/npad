@@ -511,6 +511,16 @@ and keep working. Finish the drag (`gtk_drag_finish`) *before* opening the
 file: the open can raise a save prompt, and a modal dialog inside a drag
 callback leaves the source's drag session hanging.
 
+**...and the target it asks for is the *source's* first choice.** File managers
+(Nemo) offer `text/plain` - the path or URI as text - before `text/uri-list`,
+and `gtk_drag_dest_find_target` walks the source's list in order, so with
+both in the dest list the text won and the file's URI was typed into the
+document, Ctrl or not. -> Handle `drag-drop` on the text view: if the context's
+`gdk_drag_context_list_targets` has `text/uri-list`, stop the emission and
+`gtk_drag_get_data` for it yourself. Feeding `drag-data-received` directly
+(as the Broadway harness did) skips this negotiation and cannot catch it; only
+a real drag from a file manager can.
+
 **Window activation is `notify::is-active`, not `focus-in-event`.** The latter
 fires for the toplevel's widgets as focus moves inside it. And every dialog the
 prompt opens deactivates and reactivates the window on its way out, so a
