@@ -46,9 +46,30 @@ struct UndoStack {
     size_t max_steps;
     int group_depth;
     bool group_has_step; // The outermost open group already started its step
+    bool group_failed;   // A record inside the open group failed: drop the rest
     UndoMerge merge;
     bool applying;
 };
+
+// Allocation failure injection for tests/test_undo.c (built with
+// -DUNDO_FAULT_INJECTION): the Nth allocation from now fails. Compiled out of
+// npad itself.
+#ifdef UNDO_FAULT_INJECTION
+static int g_fail_countdown = 0;
+
+void undo_test_fail_allocation(int nth) {
+    g_fail_countdown = nth;
+}
+
+static bool injected_failure(void) {
+    return g_fail_countdown > 0 && --g_fail_countdown == 0;
+}
+#define UNDO_MALLOC(n) (injected_failure() ? NULL : malloc(n))
+#define UNDO_REALLOC(p, n) (injected_failure() ? NULL : realloc((p), (n)))
+#else
+#define UNDO_MALLOC(n) malloc(n)
+#define UNDO_REALLOC(p, n) realloc((p), (n))
+#endif
 
 long undo_utf8_length(const char *text, size_t len) {
     long count = 0;
@@ -119,7 +140,7 @@ static UndoStep *push_step(UndoStack *stack) {
     }
     if (stack->count == stack->capacity) {
         size_t capacity = stack->capacity ? stack->capacity * 2 : 64;
-        UndoStep *grown = realloc(stack->steps, capacity * sizeof(UndoStep));
+        UndoStep *grown = UNDO_REALLOC(stack->steps, capacity * sizeof(UndoStep));
         if (!grown)
             return NULL;
         stack->steps = grown;
@@ -135,13 +156,13 @@ static bool step_append(UndoStep *step, UndoOpKind kind, long pos, long count, c
                         size_t len) {
     if (step->count == step->capacity) {
         size_t capacity = step->capacity ? step->capacity * 2 : 4;
-        UndoOp *grown = realloc(step->ops, capacity * sizeof(UndoOp));
+        UndoOp *grown = UNDO_REALLOC(step->ops, capacity * sizeof(UndoOp));
         if (!grown)
             return false;
         step->ops = grown;
         step->capacity = capacity;
     }
-    char *copy = malloc(len + 1);
+    char *copy = UNDO_MALLOC(len + 1);
     if (!copy)
         return false;
     memcpy(copy, text, len);
@@ -158,7 +179,7 @@ static bool step_append(UndoStep *step, UndoOpKind kind, long pos, long count, c
 
 // Grow op's text by len bytes, at the front or the back
 static bool op_extend(UndoOp *op, const char *text, size_t len, long count, bool at_front) {
-    char *grown = malloc(op->len + len + 1);
+    char *grown = UNDO_MALLOC(op->len + len + 1);
     if (!grown)
         return false;
     if (at_front) {
@@ -217,6 +238,17 @@ static bool try_merge(UndoStack *stack, UndoOpKind kind, long pos, long count, c
     return false;
 }
 
+// The document has changed but the history could not record it. Every older
+// step's positions now describe a document that no longer exists, so replaying
+// any of them would corrupt the text: losing undo is the safe direction, a
+// wrong undo is not. Forget the history, and ignore the rest of an open group
+// so a half-recorded compound edit can never be replayed either.
+static void record_failed(UndoStack *stack) {
+    undo_clear(stack);
+    if (stack->group_depth > 0)
+        stack->group_failed = true;
+}
+
 static void record(UndoStack *stack, UndoOpKind kind, long pos, const char *text, size_t len) {
     if (!stack || stack->applying || !text || len == 0 || pos < 0)
         return;
@@ -225,26 +257,29 @@ static void record(UndoStack *stack, UndoOpKind kind, long pos, const char *text
     long count = undo_utf8_length(text, len);
 
     if (stack->group_depth > 0) {
+        if (stack->group_failed)
+            return;
         if (!stack->group_has_step) {
-            if (!push_step(stack))
+            if (!push_step(stack)) {
+                record_failed(stack);
                 return;
+            }
             stack->group_has_step = true;
         }
-        step_append(&stack->steps[stack->current - 1], kind, pos, count, text, len);
+        if (!step_append(&stack->steps[stack->current - 1], kind, pos, count, text, len))
+            record_failed(stack);
         stack->merge = UNDO_MERGE_NONE;
         return;
     }
 
+    // A failed merge leaves the step untouched, so falling through to a step of
+    // its own is still a faithful record
     if (try_merge(stack, kind, pos, count, text, len))
         return;
 
     UndoStep *step = push_step(stack);
-    if (!step)
-        return;
-    if (!step_append(step, kind, pos, count, text, len)) {
-        stack->count--; // Leave no empty step behind
-        stack->current = stack->count;
-        stack->merge = UNDO_MERGE_NONE;
+    if (!step || !step_append(step, kind, pos, count, text, len)) {
+        record_failed(stack); // Also frees the empty step a failed append left
         return;
     }
     if (count == 1)
@@ -269,8 +304,10 @@ void undo_break(UndoStack *stack) {
 void undo_begin_group(UndoStack *stack) {
     if (!stack)
         return;
-    if (stack->group_depth == 0)
+    if (stack->group_depth == 0) {
         stack->group_has_step = false;
+        stack->group_failed = false;
+    }
     stack->group_depth++;
 }
 
@@ -280,6 +317,7 @@ void undo_end_group(UndoStack *stack) {
     stack->group_depth--;
     if (stack->group_depth == 0) {
         stack->group_has_step = false;
+        stack->group_failed = false;
         stack->merge = UNDO_MERGE_NONE; // The next edit never joins a group
     }
 }

@@ -258,6 +258,22 @@ static bool history_push(const char *prefix, const char *value) {
     return changed;
 }
 
+// Refill a history drop-down after history_push, keeping what is typed. It
+// is otherwise filled only when the dialog is built, so terms searched since
+// then were missing from the list until the dialog was recreated.
+static void history_reload(GtkWidget *entry, const char *prefix) {
+    GtkWidget *combo = entry ? gtk_widget_get_parent(entry) : NULL;
+    if (!combo || !GTK_IS_COMBO_BOX_TEXT(combo))
+        return;
+    char *text = g_strdup(gtk_entry_get_text(GTK_ENTRY(entry)));
+    g_syncing = true; // Not the user typing: no highlight refresh
+    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(combo));
+    history_load(combo, prefix);
+    gtk_entry_set_text(GTK_ENTRY(entry), text);
+    g_syncing = false;
+    g_free(text);
+}
+
 // Read the fields, persist the options and record the history
 static void read_search_fields(void) {
     read_search_text();
@@ -265,8 +281,11 @@ static void read_search_fields(void) {
     bool changed = history_push("find_hist", g_search_text);
     if (g_ui.replace_entry)
         changed = history_push("replace_hist", g_replace_text) || changed;
-    if (changed)
+    if (changed) {
         settings_save();
+        history_reload(g_ui.find_entry, "find_hist");
+        history_reload(g_ui.replace_entry, "replace_hist");
+    }
     if (g_owner)
         refresh_highlights(g_owner, g_highlight_all);
 }
@@ -747,8 +766,12 @@ static void show_find_replace(Window *parent, bool replace) {
         // Keep whatever was typed, then either reuse the dialog or switch it
         read_search_text();
         if (g_dialog_replace == replace) {
-            if (seed)
+            if (seed) {
                 gtk_entry_set_text(GTK_ENTRY(g_ui.find_entry), seed);
+                // The seed is the search from now on: F3 back in the editor
+                // must find it, not the term read a moment ago
+                read_search_text();
+            }
             g_free(seed);
             gtk_window_present(GTK_WINDOW(g_dialog));
             gtk_widget_grab_focus(g_ui.find_entry);
@@ -870,6 +893,9 @@ void npad_gtk_find_next(Window *window, bool down) {
 void npad_gtk_find_reload_settings(void) {
     ensure_loaded();
     load_options();
+    // The effective strings depend on the options (escape interpretation), and
+    // Find Next uses them with the dialog closed too
+    recompute_effective();
     if (!g_dialog)
         return;
     // Keep what is typed; take the options from settings and show them

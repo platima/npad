@@ -332,9 +332,11 @@ tests/test_html_md: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_ht
 	@mkdir -p tests
 	$(CC) $(CFLAGS) -o $@ $^ -lpthread
 
+# Built with allocation failure injection compiled into undo.c, so the test can
+# prove a failed record never leaves a history that would corrupt the text
 tests/test_undo: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_undo.c
 	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+	$(CC) $(CFLAGS) -DUNDO_FAULT_INJECTION -o $@ $^ -lpthread
 
 tests/test_find_seed: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_find_seed.c
 	@mkdir -p tests

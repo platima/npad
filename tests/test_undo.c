@@ -339,6 +339,48 @@ TEST_CASE(replay_is_not_recorded) {
     undo_destroy(r.u);
 }
 
+// From undo.c, compiled in for this test only (-DUNDO_FAULT_INJECTION): the
+// Nth allocation from now fails
+void undo_test_fail_allocation(int nth);
+
+TEST_CASE(failed_group_record_drops_history) {
+    UndoStack *u = undo_create(100);
+    Doc doc = { "" };
+    type_text(&doc, u, 0, "abc");
+    // Replace "a" with "X" as one group, but the insertion cannot be recorded
+    undo_begin_group(u);
+    delete_text(&doc, u, 0, 1);
+    undo_test_fail_allocation(1); // The insertion's text copy
+    type_text(&doc, u, 0, "X");
+    TEST_ASSERT(!undo_can_undo(u), "history dropped, not left describing a lost edit");
+    type_text(&doc, u, 1, "Y"); // Later in the same group: ignored, not half-recorded
+    undo_end_group(u);
+    TEST_ASSERT_STR_EQ("XYbc", doc.text, "document as edited");
+    TEST_ASSERT(!undo_undo(u, &k_target, &doc, NULL, NULL), "nothing to replay");
+    TEST_ASSERT_STR_EQ("XYbc", doc.text, "undo did not corrupt the text (was aXbc-style)");
+
+    // The next edit after the group records normally again
+    type_text(&doc, u, 4, "!");
+    TEST_ASSERT(undo_undo(u, &k_target, &doc, NULL, NULL), "fresh history works");
+    TEST_ASSERT_STR_EQ("XYbc", doc.text, "and undoes correctly");
+    undo_destroy(u);
+}
+
+TEST_CASE(failed_record_outside_group_drops_history) {
+    UndoStack *u = undo_create(100);
+    Doc doc = { "" };
+    type_text(&doc, u, 0, "ab");
+    undo_break(u);
+    undo_test_fail_allocation(1); // The new step's op array
+    type_text(&doc, u, 2, "cd");
+    TEST_ASSERT(!undo_can_undo(u), "older steps dropped: their positions no longer hold");
+    type_text(&doc, u, 4, "ef");
+    TEST_ASSERT(undo_undo(u, &k_target, &doc, NULL, NULL), "recording resumes");
+    TEST_ASSERT_STR_EQ("abcd", doc.text, "only the edit after the failure undone");
+    TEST_ASSERT(!undo_can_undo(u), "nothing older survives");
+    undo_destroy(u);
+}
+
 TEST_CASE(clear_forgets_everything) {
     UndoStack *u = undo_create(100);
     Doc doc = { "" };
@@ -368,6 +410,8 @@ int main(void) {
     RUN_TEST(multibyte_positions);
     RUN_TEST(history_limit_drops_oldest);
     RUN_TEST(replay_is_not_recorded);
+    RUN_TEST(failed_group_record_drops_history);
+    RUN_TEST(failed_record_outside_group_drops_history);
     RUN_TEST(clear_forgets_everything);
     TEST_SUMMARY();
 }

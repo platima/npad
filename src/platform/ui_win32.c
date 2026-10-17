@@ -3563,6 +3563,18 @@ static void history_load(HWND combo, const char *prefix) {
     }
 }
 
+// Refill a history drop-down after history_push, keeping what is typed in it.
+// It is otherwise filled only when the dialog opens, so terms searched since
+// then were missing from the list until it was reopened. CB_RESETCONTENT
+// clears the edit field too, hence the text is put back.
+static void history_reload(HWND combo, const char *prefix, const wchar_t *text) {
+    if (!combo)
+        return;
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    history_load(combo, prefix);
+    SetWindowTextW(combo, text);
+}
+
 static void history_push(const char *prefix, const wchar_t *value) {
     if (!value || value[0] == L'\0')
         return;
@@ -3682,8 +3694,10 @@ static void read_search_fields(HWND dialog, bool has_replace) {
     settings_set_bool("find_highlight_all", g_highlight_all);
 
     history_push("find_hist", g_search_text);
+    history_reload(GetDlgItem(dialog, ID_FIND_TEXT), "find_hist", g_search_text);
     if (has_replace) {
         history_push("replace_hist", g_replace_text);
+        history_reload(GetDlgItem(dialog, ID_REPLACE_WITH), "replace_hist", g_replace_text);
     }
 
     const Window *window = (const Window *) GetWindowLongPtrW(dialog, GWLP_USERDATA);
@@ -3877,6 +3891,11 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
 
             SendDlgItemMessageW(dialog, ID_FIND_TEXT, CB_SETEDITSEL, 0, MAKELPARAM(0, -1));
             SetFocus(GetDlgItem(dialog, ID_FIND_TEXT));
+            // A seeded term is the search from now on, not only once a button
+            // is pressed: F3 back in the editor must find it, not the old term.
+            // Read after every control above is set, since this reads them all.
+            if (seeded)
+                read_search_text(dialog, has_replace);
             // Highlight-all otherwise waits for the first keystroke; a seeded
             // term should light up straight away
             if (seeded && g_highlight_all && !g_find_hl_pending) {

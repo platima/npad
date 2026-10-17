@@ -11,8 +11,8 @@ version: ${NPAD_VERSION}
 release: ${NPAD_RELEASE}
 section: editors
 priority: optional
-maintainer: Platima <noreply@users.noreply.github.com>
-homepage: https://github.com/platima/npad
+maintainer: Platima <13729856+platima@users.noreply.github.com>
+homepage: https://npad.dev
 license: MIT
 description: |-
   Lightweight Notepad-style text editor

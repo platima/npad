@@ -11,7 +11,21 @@ name: Linux packages
 # for Debian 12 and Ubuntu 22.04; newer distros only need >=.
 
 on:
+  # The inputs are declared for both triggers: a manual run otherwise gets an
+  # empty artifact_name, uploads and downloads under different names, and the
+  # install jobs find no packages
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag the version must match (empty = no check)"
+        type: string
+        required: false
+        default: ""
+      artifact_name:
+        description: "Artifact name"
+        type: string
+        required: false
+        default: "npad-linux-packages"
   workflow_call:
     inputs:
       release_tag:
@@ -50,17 +64,31 @@ jobs:
       run: |
         git config --global --add safe.directory "$GITHUB_WORKSPACE"
         make clean
-        make deb
-        make rpm
+        # A release builds the tag's version, including a pre-release suffix
+        # (v0.36.0-rc1 -> 0.36.0-rc1). nfpm turns the suffix into 0.36.0~rc1
+        # inside both packages, so an rc sorts before the final release in dpkg
+        # and rpm, while the file names keep the tag's spelling, which is what
+        # release.yml validates and attaches. The tag's base version must
+        # still match src/main.h.
+        if [ -n "$RELEASE_TAG" ]; then
+          version=${RELEASE_TAG#v}
+          header=$(sed -n 's/^#define NPAD_VERSION_\(MAJOR\|MINOR\|PATCH\) \([0-9]*\).*/\2/p' src/main.h | paste -sd. -)
+          if [ "${version%%-*}" != "$header" ]; then
+            echo "ERROR: tag $RELEASE_TAG does not match src/main.h ($header) - bump src/main.h?"
+            exit 1
+          fi
+          make deb DEB_VERSION="$version"
+          make rpm DEB_VERSION="$version"
+        else
+          make deb
+          make rpm
+        fi
         ls -la dist/
         deb=$(ls dist/npad_*_amd64.deb)
         rpm=$(ls dist/npad-*-1.x86_64.rpm)
-        # The package version comes from src/main.h; a release tag must agree
-        if [ -n "$RELEASE_TAG" ]; then
-          if [ "$(basename "$deb")" != "npad_${RELEASE_TAG#v}_amd64.deb" ]; then
-            echo "ERROR: built $(basename "$deb") but the tag is $RELEASE_TAG (bump src/main.h?)"
-            exit 1
-          fi
+        if [ -n "$RELEASE_TAG" ] && [ "$(basename "$deb")" != "npad_${RELEASE_TAG#v}_amd64.deb" ]; then
+          echo "ERROR: built $(basename "$deb") but the tag is $RELEASE_TAG"
+          exit 1
         fi
         dpkg-deb --info "$deb"
         dpkg-deb --contents "$deb"
