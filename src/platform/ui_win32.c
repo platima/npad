@@ -238,7 +238,7 @@ static double qpc_ms(void) {
 #define MAX_RECENT_MENU_FILES 10
 
 // Window structure
-typedef struct Window {
+struct Window {
     HWND hwnd;
     HWND edit_hwnd;
     HWND status_hwnd;
@@ -276,7 +276,7 @@ typedef struct Window {
     bool line_cut_pending;      // Last Ctrl+X was a whole-line cut (paste-above mode)
     DWORD line_cut_clip_seq;    // Clipboard sequence number right after that cut
     bool update_item_available; // Help update item currently shows "Update Available"
-} Window;
+};
 
 // Global variables
 static HINSTANCE g_hinstance = NULL;
@@ -330,9 +330,8 @@ static bool g_match_case = false;
 static bool g_whole_word = false;
 static bool g_search_down = true;
 static bool g_wrap_around = true;
-static bool g_interpret_escapes = false;  // Interpret \n \t \\ \uXXXX in find/replace
-static bool g_highlight_all = false;      // Highlight every match while the dialog is open
-static bool g_highlights_applied = false; // Highlight overlay currently has matches
+static bool g_interpret_escapes = false; // Interpret \n \t \\ \uXXXX in find/replace
+static bool g_highlight_all = false;     // Highlight every match while the dialog is open
 
 // Highlight-all overlay match list, sorted ascending (drawn over the text in
 // the WM_PAINT hook; the control's plain-text mode rejects per-range
@@ -2873,6 +2872,20 @@ static DWORD WINAPI update_download_thread(LPVOID param) {
     size_t exe_len = 0, sum_len = 0;
     char *exe = NULL, *sum = NULL;
 
+    // The installer for the architecture this npad was built for: an arm64
+    // build must never be handed the x64 installer, and a build of any other
+    // architecture has no installer to offer at all
+    const char *exe_sfx = update_installer_suffix(update_build_arch(), false);
+    const char *sum_sfx = update_installer_suffix(update_build_arch(), true);
+    if (!exe_sfx || !sum_sfx) {
+        snprintf(r->error, sizeof(r->error),
+                 "npad %s has no installer for this build's processor architecture.", job->tag);
+        HWND hwnd = job->hwnd;
+        free(job);
+        PostMessageW(hwnd, NPAD_WM_UPDATE_DOWNLOADED, 0, (LPARAM) r);
+        return 0;
+    }
+
     // Prefer the download URLs the release itself advertises: rebuilding the
     // file name from the tag means any future change to asset naming strands
     // every npad already in the field, which is exactly what happened once
@@ -2884,21 +2897,20 @@ static DWORD WINAPI update_download_thread(LPVOID param) {
     char *rel = http_get_alloc(L"api.github.com", api_path, (size_t) 1024 * 1024, NULL, NULL);
     if (rel) {
         char url[512];
-        if (update_find_asset_url(rel, "-setup-win-x64.exe", url, sizeof(url)))
+        if (update_find_asset_url(rel, exe_sfx, url, sizeof(url)))
             have_exe = github_url_to_path(url, exe_path, 512);
-        if (update_find_asset_url(rel, "-setup-win-x64.exe.sha256", url, sizeof(url)))
+        if (update_find_asset_url(rel, sum_sfx, url, sizeof(url)))
             have_sum = github_url_to_path(url, sum_path, 512);
         free(rel);
     }
     if (!have_exe) {
-        _snwprintf(exe_path, 511, L"/platima/npad/releases/download/%s/npad-%s-setup-win-x64.exe",
-                   wtag, wtag);
+        _snwprintf(exe_path, 511, L"/platima/npad/releases/download/%s/npad-%s%hs", wtag, wtag,
+                   exe_sfx);
         exe_path[511] = L'\0';
     }
     if (!have_sum) {
-        _snwprintf(sum_path, 511,
-                   L"/platima/npad/releases/download/%s/npad-%s-setup-win-x64.exe.sha256", wtag,
-                   wtag);
+        _snwprintf(sum_path, 511, L"/platima/npad/releases/download/%s/npad-%s%hs", wtag, wtag,
+                   sum_sfx);
         sum_path[511] = L'\0';
     }
 
@@ -3333,7 +3345,6 @@ static void refresh_highlights(const Window *window, bool want) {
         }
     }
 
-    g_highlights_applied = g_hl_count > 0;
     if (had || g_hl_count)
         InvalidateRect(e, NULL, TRUE);
 }

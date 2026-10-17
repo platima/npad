@@ -355,6 +355,17 @@ preference outside the kept prefixes where you can; where the name is fixed
 (`reset_all_preferences` does) and say so wherever the next platform's reset
 gets written (LINUX_PORT.md batch B).
 
+**Moving where settings live is a migration, and the old file is the only
+copy.** `settings_get_config_dir` now honours `$XDG_CONFIG_HOME`, so a user who
+exports it after months of `~/.config/npad` would open npad to defaults - and
+because npad rewrites settings on exit, the defaults would then be saved
+(the same shape as the v0.28.7 loss above). → `settings_init` reads the old
+file when the new location has none, in memory only: it never renames or
+deletes it (even an oversized one is salvaged without the `.corrupt` rename,
+`load_settings_from(path, may_move_aside)`), and the next save writes the new
+file. An empty or relative `$XDG_CONFIG_HOME` is ignored, as the spec says.
+Not carried over: recovery snapshots under the old directory.
+
 ## Core: text model
 
 **Detect a limitation where you can prove it, not where you guessed it.** The
@@ -431,6 +442,24 @@ Likewise `type: tree` makes the rpm *own* the directories it walks (it listed
 `nfpm.yaml` lists files individually. An empty `release` gives a deb version
 without a `-1` revision; the rpm needs one.
 
+**nfpm has no riscv64 binary, but it packages for any architecture.** Its
+releases carry x86_64 and arm64 (and others), not riscv64, so a riscv64
+container cannot run it. -> Compile inside the emulated container, package on
+the host: `nfpm.yaml` says `arch: ${NPAD_ARCH}` (nfpm expands variables in
+`arch` without `expand: true`, as in `version`) and writes the rpm's own
+spelling (`aarch64`, `x86_64`) from the Debian name. The architecture comes
+from the binary's ELF header, read with `readelf`: an amd64 host's `objdump`
+may not recognise a riscv64 file at all, where `readelf` reads any ELF.
+`build-package.sh` refuses a binary whose header disagrees with `PKG_ARCH`,
+because a mislabelled package installs and then cannot execute.
+
+**Fedora publishes no riscv64 container image; openSUSE Tumbleweed does.**
+Debian (trixie) and Ubuntu (24.04) have riscv64 images, Debian 12 does not
+(no official port, which is also why riscv64's floor is Debian 13 / Ubuntu
+24.04). openSUSE has no package named `gtk3`, but `libgtk-3-0` provides it,
+so the rpm's `Requires: gtk3 >= 3.24` resolves there; zypper refuses an
+unsigned local rpm without `--allow-unsigned-rpm`.
+
 **Artifact names must be unique within a workflow run, and `release.yml` runs
 `ci.yml` first.** Both build the Linux packages through `packages.yml`, so
 that workflow takes an `artifact_name` input and the release passes its own;
@@ -499,8 +528,9 @@ that a change and wrote the default into `settings.json` - for every field the
 user merely tabbed through, and it stuck as the user's own value, so a later
 change of default would never reach them. -> Compare with the value the
 getter returns for the key's own default, and write only when they differ.
-The same rule is why Preferences has no Apply button: each control writes its
-one key as it changes, never the whole page.
+The same rule governs Preferences' Apply: a control stages a change only when
+it differs from the setting, and Apply writes just the staged keys, never the
+whole page.
 
 **`g_spawn_check_exit_status` is deprecated in GLib 2.70, and its replacement
 needs 2.70.** Debian 12 and Ubuntu 22.04 ship 2.74 / 2.72, but the build
@@ -512,8 +542,8 @@ WEXITSTATUS(status) == 0`.
 keeps running under it, so another instance saving settings re-runs
 `npad_gtk_reload_and_apply_settings` while Preferences is open, and the
 dialog's controls then show values older than `settings.json`. That is safe
-only because every control writes just its own key; a dialog that saved all
-its controls on close would overwrite the other instance's change.
+only because Apply writes just the keys the user changed; a dialog that saved
+all its controls would overwrite the other instance's change.
 **`GTK_POLICY_ALWAYS` alone does not give Notepad's scroll bar.** GTK 3.24
 scroll bars are overlay indicators that fade out whatever the policy says, and
 once overlay scrolling is off (`gtk_scrolled_window_set_overlay_scrolling(FALSE)`)
@@ -565,6 +595,96 @@ independent of the app. -> Install `<id>-dark` beside `<id>` and have the
 window call `gtk_window_set_icon_name` (and `gtk_window_set_default_icon_name`
 for dialogs) when `g_dark_mode` changes; GTK refreshes `_NET_WM_ICON`. The
 About dialog reads the icon name back from its owner window, so it follows.
+**A GDBus signal subscription filtered by a well-known sender never matches
+`gdbus emit`.** The portal's `SettingChanged` is subscribed with sender
+`org.freedesktop.portal.Desktop`, which GDBus resolves to the unique name that
+owns it; a test that fires the signal with `gdbus emit` comes from the
+`gdbus` process's own unique name and is silently dropped. → To exercise the
+`system` colour scheme, stand in for the portal: a small GDBus program that
+owns `org.freedesktop.portal.Desktop`, answers `Settings.Read`
+and emits `SettingChanged` itself, inside `dbus-run-session` (so the real
+session bus is untouched). `Read` returns the value wrapped in a *second*
+variant (`(v)` holding a `v` holding the `u`), `SettingChanged` carries it in
+one - unwrap in a loop. The signal also fires for every other portal setting,
+so filter on namespace and key and report only a *different* value, or every
+unrelated change re-themes an idle window (see "Idle windows are not idle").
+
+**Ask the portal lazily.** The first `Read` can start the portal service, so
+only a window whose scheme is `system` asks (synchronously, 1 s timeout, so it
+opens in the right colours rather than flashing the wrong ones); `light`, the
+default, never touches it. Value 0 means "no preference" - fall back to GTK's
+own `gtk-application-prefer-dark-theme` as it stood at startup.
+
+**`gtk-application-prefer-dark-theme` does nothing for most themes.** It
+selects the `gtk-dark.css` variant inside a theme, which Adwaita and Yaru have.
+Mint-Y, Arc, Materia and most others ship dark as a *separate* theme
+(`Mint-Y-Dark`), so on Linux Mint the property was silently ignored: the
+`dark` scheme gave a dark page in a light frame, and `system` could not follow
+a dark portal (the maintainer's MATE session reported `color-scheme` 1 and
+npad stayed light). Broadway, with Adwaita, hid it. → For a dark scheme also
+set the process's `gtk-theme-name` to the installed sibling, remembering what it
+replaced so a light scheme can put it back (`apply_chrome_variant`). Test it
+with fake `FakeTheme` / `FakeTheme-Dark` folders under a throwaway
+`XDG_DATA_HOME` and `gtk-theme-name` in a throwaway `gtk-3.0/settings.ini`.
+
+**Another app going dark does not mean the theme can.** On Mint (Cinnamon,
+TraditionalOk) GNOME Terminal's menu bar and preferences followed the desktop's
+dark preference while npad's stayed light. npad only had GTK's prefer-dark
+hint, which TraditionalOk (no `gtk-dark.css`, no dark sibling) ignores; how
+Terminal darkens itself on that theme was not established (it may use its own
+fallback). Ask for the Debug page output (`Theme has a dark variant`, `desktop
+colour-scheme via portal`) rather than inferring from a screenshot. For a light
+theme with no way to go dark, npad swaps to the built-in Adwaita (always
+present, has a dark variant); a theme whose window background is already dark
+(BlackMATE) must be left alone, so measure it (`theme_chrome_is_light`).
+
+**To read what a GTK theme paints, build the path from a real widget.** The
+page colour lives on the text view's `text` child node. A `GtkWidgetPath` made
+by hand (`append_type` window, text view, then a `text` node) answers
+"transparent" for every theme; the same path copied from a throwaway
+`gtk_text_view_new()` with a `text` node appended answers correctly.
+Measure on a throwaway so npad's own provider (attached to the real text view)
+does not colour the answer. Some dark themes (BlackMATE) keep text areas white,
+so a dark `system` scheme must check the page, not just the chrome.
+
+**Broadway's monitor reports a 0x0 geometry**, so a placement check that asks
+whether a window overlaps a monitor says "off screen" for everything there.
+`position_is_reachable` skips zero-area monitors and, if none is measurable,
+declines to judge. To test the overlap logic anyway, compile the function into
+a harness with `#define gdk_monitor_get_geometry` pointing at a fake.
+
+**A dialog's entry takes the PRIMARY selection, and that collapses the text
+buffer's selection.** `gtk_widget_grab_focus` on a GtkEntry selects its text,
+which makes the entry the PRIMARY owner; a GtkTextBuffer whose selection loses
+PRIMARY moves its selection bound onto the caret. So a tool that opens a dialog
+and then acts on "the selection" (Custom Indent, Convert Delimiters'
+"Selection only") finds none: the selected lines were indented as one line, or
+the conversion ran over the whole document, with the dialog showing "Selection
+only" ticked a moment earlier. -> Note the selection (offsets, and which end is
+the caret) before the dialog runs and put it back once it is destroyed.
+
+**`gtk_text_iter_forward_to_line_end` skips a whole line when it is already
+there.** Called on an iterator at the end of its line (an empty line, or a
+caret after the last character) it moves to the end of the *next* line. -> Test
+`gtk_text_iter_ends_line` first; "the end of this line" is "this iterator, or
+forward_to_line_end if it does not end the line".
+
+**Browsers offer `text/html` on the X11 clipboard as UTF-16 with a BOM, other
+sources as UTF-8, and nothing says which.** Reading it as UTF-8 gives a string
+that is empty at the first NUL, so a rich paste silently falls back to plain
+text. -> Sniff: FF FE / FE FF is UTF-16 with a BOM, an ASCII byte next to a NUL is
+UTF-16 without one, otherwise UTF-8 (minus an EF BB BF BOM). `html_cf_extract_fragment`
+then takes the fragment from the markers or the whole text.
+
+**Broadway cannot test the clipboard between processes, and drops synthetic key
+events.** A second GTK client on the same Broadway display does not see the
+first one's clipboard (no targets, no text), so "set `text/html` from another
+process" is not possible there; make the harness the owner and test the payload
+decoder directly. Keys sent with `gtk_main_do_event` never reach the window,
+while `gtk_propagate_event(text_view, ev)` does. Broadway's keymap has
+keycode == keyval, so Ctrl+Shift+letter does not resolve to the accelerator
+GTK would match on a real keymap; call `gtk_accel_groups_activate(window,
+lowercase_key, state)` for those.
 
 ## Installers
 
@@ -659,7 +779,46 @@ So an installer build failure leaves a published, half-complete release — and
 after. v0.28.0 shipped with no installers this way. CI now resolves every
 `SourceFile` reference in `npad.wxs` at lint time.
 
+## Windows on Arm (arm64)
+
+**MinGW GCC has no arm64 Windows target; llvm-mingw (clang + lld) does - and
+its dlltool has no `-y`.** The x64 build delay-loads winhttp, bcrypt, comdlg32
+and msimg32 through GNU `dlltool -y` delay-import libraries plus
+`-ldelayimp`. `llvm-dlltool` rejects `-y` outright. lld delay-loads natively
+instead: `-Wl,--delayload=<dll>` against an ordinary import library (built
+from the same `.def` with `llvm-dlltool -l`, so the `.def` files still declare
+every entry point used), with `__delayLoadHelper2` taken from libmingwex -
+`-ldelayimp` is not needed there. The Makefile switches on `WIN_LINKER=lld`.
+
+**The two linkers leave different evidence.** lld fills the PE delay-import
+directory (`llvm-readobj --coff-imports` lists `DelayImport { Name: winhttp.dll }`);
+GNU ld's `-y` stubs do not (`objdump -p` shows the Delay Import Directory as
+0) and simply leave the DLL out of the import table. So "is it delay-loaded"
+is checked as "listed under DelayImport" for arm64, but only as "not bound"
+for x64.
+
+**clang warns where GCC is silent.** The same sources under clang 23 warn
+about a C11 typedef redefinition (`Window` in ui_win32.c and ui_interface.h)
+and a set-but-unused global. Warnings only; they do not fail the build.
+
+**An arm64 exe cannot be tested by running it** on the x64 runners or an x64
+PC, and an arm64 Inno setup refuses to start there. Check the file instead:
+the PE machine field (0xAA64; `validate-release-assets.sh` reads it with
+`od`), the import tables, and the MSI's summary Template (`Arm64;0`).
+
 ## Tooling and process
+
+**A source-reading guard can match its own documentation.** Release
+validation reads the updater's asset suffixes as every quoted string starting
+`-setup-win-` in `update_check.c`; a comment there quoting the pattern
+became a "suffix" that no asset ends with, and failed the dry run. Keep such
+strings out of comments in the file a guard parses, and say so beside them.
+
+**`workflow_dispatch` only appears for a workflow whose default-branch copy
+declares it.** A dry-run trigger added on a feature branch cannot be run until
+the file reaches `main`; until then use workflows that already have one there
+(`installers.yml`, `packages.yml`) with `--ref <branch>` - the run then uses
+the branch's copy of the file.
 
 **CI's cppcheck (2.13) is stricter than a typical distro's (2.10).** Worse, an
 inline suppression that 2.13 needs becomes an *unmatched suppression* error on
@@ -743,7 +902,9 @@ add `-lm` deliberately.
 collapses a C `"\n"` (backslash-n) in a heredoc, so a `replace()` whose search
 text contained one failed its assertion and wrote nothing, and a heredoc with
 apostrophes broke the shell outright. → Write patch scripts with the file tool
-and run them, as with the existing heredoc advice.
+and run them, as with the existing heredoc advice. A Makefile line continuation
+(backslash, newline) in such a patch dies the same way, even in a quoted
+`<<'EOF'` heredoc: the recipe came out as one long line.
 
 **A private npad for probing, and the traps on the way.** npad reads its
 settings through `SHGetFolderPath(CSIDL_APPDATA)`, which `APPDATA=` does not
@@ -784,6 +945,16 @@ own flag. `g_object_notify(window, "is-active")` re-runs an activation handler
 when the window is already active, and `gtk_window_present` makes Broadway
 activate it. Never put C string literals through a shell heredoc to write the
 harness: a backslash-n in a string literal came out as a real newline twice.
+
+**Compiler warnings did not fail CI, so a use-after-free merged.** GCC
+reported `-Wuse-after-free` for PR #19's `editor_open_file`, the build stayed
+green, and nobody read the log; #25 fixed it. CI now builds with
+`make WERROR=1` (adds `-Werror`): the Windows x64/arm64, Linux, unit test and
+package builds. Local builds stay lenient. GCC and clang disagree, so a clean
+GCC build is not enough: clang (llvm-mingw, arm64) flagged an unused
+variable, a C11-only typedef redefinition and a set-but-unused global that
+GCC accepted. Check `make WERROR=1 test linux windows windows-arm64` before
+pushing, and fix the cause rather than silencing the warning.
 
 ## Method
 

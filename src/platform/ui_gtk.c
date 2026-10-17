@@ -322,11 +322,58 @@ static void scheme_colors(const char *theme, const char **bg, const char **fg, b
         *fg = "#839496";
         *dark = true;
     } else if (strcmp(theme, "system") == 0) {
-        *dark = g_initial_prefer_dark != FALSE;
+        // The desktop's own preference, live from the portal; without one,
+        // GTK's setting as it stood at startup
+        int portal = npad_gtk_portal_color_scheme();
+        *dark = portal == 1 ? true : portal == 2 ? false : g_initial_prefer_dark != FALSE;
     } else { // "light", the default: classic Notepad has no schemes
         *bg = "#ffffff";
         *fg = "#000000";
     }
+}
+
+// Whether the GTK theme paints its own text area light. Measured on a
+// throwaway text view's style path plus its "text" node (the node that carries
+// the page colour), so npad's own provider, which sits on the real widget,
+// does not colour the answer. Unknown (a transparent node, an odd theme)
+// counts as not light: leave the theme alone.
+static bool context_background_is_light(GtkStyleContext *context) {
+    GdkRGBA *background = NULL;
+    gtk_style_context_get(context, GTK_STATE_FLAG_NORMAL, "background-color", &background, NULL);
+    bool light = false;
+    if (background) {
+        light =
+            background->alpha > 0.5 &&
+            0.299 * background->red + 0.587 * background->green + 0.114 * background->blue > 0.5;
+        gdk_rgba_free(background);
+    }
+    return light;
+}
+
+static bool theme_text_area_is_light(void) {
+    GtkWidget *probe = g_object_ref_sink(gtk_text_view_new());
+    GtkWidgetPath *path = gtk_widget_path_copy(gtk_widget_get_path(probe));
+    gtk_widget_path_append_type(path, GTK_TYPE_TEXT_VIEW);
+    gtk_widget_path_iter_set_object_name(path, -1, "text");
+
+    GtkStyleContext *context = gtk_style_context_new();
+    gtk_style_context_set_path(context, path);
+    gtk_widget_path_unref(path);
+
+    bool light = context_background_is_light(context);
+    g_object_unref(context);
+    g_object_unref(probe);
+    return light;
+}
+
+// Whether the GTK theme's window background is light, measured on a window
+// that is never shown
+static bool theme_chrome_is_light(void) {
+    GtkWidget *probe = g_object_ref_sink(gtk_window_new(GTK_WINDOW_TOPLEVEL));
+    bool light = context_background_is_light(gtk_widget_get_style_context(probe));
+    gtk_widget_destroy(probe);
+    g_object_unref(probe);
+    return light;
 }
 
 // Font, zoom and colours all live in one CSS provider on the text view.
@@ -360,6 +407,13 @@ static void apply_view_css(Window *window) {
     const char *fg = NULL;
     bool dark = false;
     scheme_colors(theme ? theme : "light", &bg, &fg, &dark);
+    // `system` is the GTK theme's own colours - but a dark desktop with a theme
+    // that keeps its text area white (BlackMATE, many others) would show a
+    // white page in dark chrome. Then the dark scheme's colours stand in.
+    if (!bg && dark && theme && strcmp(theme, "system") == 0 && theme_text_area_is_light()) {
+        bg = "#1e1e1e";
+        fg = "#dcdcdc";
+    }
     free(theme);
 
     gchar *css;
@@ -386,29 +440,139 @@ static void apply_view_css(Window *window) {
     g_string_free(family, TRUE);
 }
 
-// The window and dialog icon: npad's own hicolor icon when the package (or
-// `make install`) put it in the icon theme, the dark artwork while a dark
-// scheme is active so it does not glare from a dark panel, and otherwise a
-// stock text-editor icon so a build run from the source tree shows something.
-// Only the window icon changes: the launcher keeps the standard icon.
-static const char *app_icon_name(void) {
-    GtkIconTheme *icons = gtk_icon_theme_get_default();
-    if (g_dark_mode && gtk_icon_theme_has_icon(icons, NPAD_APP_ID "-dark"))
-        return NPAD_APP_ID "-dark";
-    return gtk_icon_theme_has_icon(icons, NPAD_APP_ID) ? NPAD_APP_ID : "accessories-text-editor";
-}
-
-// Windows and dialogs opened later, and the About dialog (which takes its logo
-// from the window it belongs to), follow the main window
+// Windows and dialogs opened later follow the main window's icon, which is
+// re-applied whenever the colour scheme changes (see npad_gtk_app_icon_name)
 static void apply_app_icon(Window *window) {
-    const char *name = app_icon_name();
+    const char *name = npad_gtk_app_icon_name();
     gtk_window_set_default_icon_name(name);
     gtk_window_set_icon_name(GTK_WINDOW(window->window), name);
 }
 
+// --- Dark chrome for themes with no dark variant ---------------------------
+//
+// gtk-application-prefer-dark-theme only does anything when the GTK theme ships
+// a gtk-3.0/gtk-dark.css (Adwaita, Yaru). The Mint-Y family, Arc and most
+// others make "dark" a separate sibling theme instead (Mint-Y -> Mint-Y-Dark),
+// so on those the property is silently ignored and a dark scheme sat inside a
+// light frame. For a dark scheme we therefore switch this process to the
+// sibling theme, and switch back (only if nobody changed it meanwhile) when
+// the scheme turns light. Nothing is written to the desktop's settings. A light
+// theme with no sibling at all (Cinnamon's TraditionalOk) falls back to
+// Adwaita, which ships a dark variant inside GTK itself.
+
+static char *g_dark_sibling_theme = NULL; // The sibling we switched to, or NULL
+static char *g_original_gtk_theme = NULL; // What it replaced
+
+// Whether <data dir>/themes/<name>/gtk-3.0/<file> exists in any theme folder
+static bool gtk_theme_has_file(const char *name, const char *file) {
+    GPtrArray *dirs = g_ptr_array_new_with_free_func(g_free);
+    g_ptr_array_add(dirs, g_build_filename(g_get_home_dir(), ".themes", NULL));
+    g_ptr_array_add(dirs, g_build_filename(g_get_user_data_dir(), "themes", NULL));
+    for (const gchar *const *sys = g_get_system_data_dirs(); *sys; sys++)
+        g_ptr_array_add(dirs, g_build_filename(*sys, "themes", NULL));
+
+    bool found = false;
+    for (guint i = 0; i < dirs->len && !found; i++) {
+        char *path = g_build_filename(g_ptr_array_index(dirs, i), name, "gtk-3.0", file, NULL);
+        found = g_file_test(path, G_FILE_TEST_IS_REGULAR);
+        g_free(path);
+    }
+    g_ptr_array_free(dirs, TRUE);
+    return found;
+}
+
+static bool theme_name_is_dark(const char *name) {
+    char *lower = g_ascii_strdown(name, -1);
+    bool dark = strstr(lower, "dark") != NULL;
+    g_free(lower);
+    return dark;
+}
+
+// The installed dark sibling of a GTK theme, or NULL: Name-Dark, Name-dark, and
+// Mint-Y-Aqua -> Mint-Y-Dark-Aqua (the colour is the last segment)
+static char *find_dark_sibling_theme(const char *name) {
+    GPtrArray *candidates = g_ptr_array_new_with_free_func(g_free);
+    g_ptr_array_add(candidates, g_strconcat(name, "-Dark", NULL));
+    g_ptr_array_add(candidates, g_strconcat(name, "-dark", NULL));
+    const char *last_dash = strrchr(name, '-');
+    if (last_dash && last_dash != name) {
+        char *base = g_strndup(name, (gsize) (last_dash - name));
+        g_ptr_array_add(candidates, g_strconcat(base, "-Dark", last_dash, NULL));
+        g_free(base);
+    }
+
+    char *found = NULL;
+    for (guint i = 0; i < candidates->len && !found; i++) {
+        const char *candidate = g_ptr_array_index(candidates, i);
+        if (gtk_theme_has_file(candidate, "gtk.css"))
+            found = g_strdup(candidate);
+    }
+    g_ptr_array_free(candidates, TRUE);
+    return found;
+}
+
+// Bring the GTK theme in line with a dark / light scheme. Both directions only
+// act on a change: setting gtk-theme-name restyles every widget.
+static void apply_chrome_variant(bool dark) {
+    GtkSettings *settings = gtk_settings_get_default();
+    char *name = NULL;
+    g_object_get(settings, "gtk-theme-name", &name, NULL);
+
+    if (dark) {
+        if (!g_dark_sibling_theme && name && !theme_name_is_dark(name) &&
+            !gtk_theme_has_file(name, "gtk-dark.css")) {
+            char *sibling = find_dark_sibling_theme(name);
+            // No dark sibling, and the theme is light (BlackMATE is already
+            // dark, so it is left alone): Adwaita is built into GTK, always
+            // there, and has a dark variant that the prefer-dark hint selects
+            if (!sibling && theme_chrome_is_light())
+                sibling = g_strdup("Adwaita");
+            if (sibling) {
+                g_original_gtk_theme = g_strdup(name);
+                g_dark_sibling_theme = sibling;
+                g_object_set(settings, "gtk-theme-name", sibling, NULL);
+            }
+        }
+    } else if (g_dark_sibling_theme) {
+        // Restore only if the theme is still the one we set: a desktop theme
+        // change in between is the user's newer choice
+        if (g_strcmp0(name, g_dark_sibling_theme) == 0)
+            g_object_set(settings, "gtk-theme-name", g_original_gtk_theme, NULL);
+        g_clear_pointer(&g_dark_sibling_theme, g_free);
+        g_clear_pointer(&g_original_gtk_theme, g_free);
+    }
+    g_free(name);
+}
+
+// What the colour-scheme code sees, for the Debug page: why a dark desktop does
+// or does not darken the window. Caller g_free()s.
+char *npad_gtk_theme_diagnostics(void) {
+    char *name = NULL;
+    gboolean prefer_dark = FALSE;
+    g_object_get(gtk_settings_get_default(), "gtk-theme-name", &name,
+                 "gtk-application-prefer-dark-theme", &prefer_dark, NULL);
+    char *scheme = settings_get_string("theme", "light");
+    int portal = npad_gtk_portal_color_scheme();
+    const char *portal_text = portal == 1 ? "dark" : portal == 2 ? "light" : "none";
+    bool has_dark_variant = name && gtk_theme_has_file(name, "gtk-dark.css");
+
+    GString *out = g_string_new(NULL);
+    g_string_append_printf(out, "Colour scheme: %s (desktop colour-scheme via portal: %s)\n",
+                           scheme ? scheme : "light", portal_text);
+    g_string_append_printf(out, "GTK prefer-dark: %s at startup, %s now\n",
+                           g_initial_prefer_dark ? "on" : "off", prefer_dark ? "on" : "off");
+    g_string_append_printf(out, "Theme has a dark variant (gtk-dark.css): %s\n",
+                           has_dark_variant ? "yes" : "no");
+    g_string_append_printf(out, "Switched to dark sibling theme: %s\n",
+                           g_dark_sibling_theme ? g_dark_sibling_theme : "no");
+    g_free(scheme);
+    g_free(name);
+    return g_string_free(out, FALSE);
+}
+
 // Colour scheme: the text colours come from apply_view_css; the window chrome
-// follows via GTK's dark variant, so a dark scheme does not sit inside a
-// light frame
+// follows via GTK's dark variant (or the dark sibling theme), so a dark scheme
+// does not sit inside a light frame
 static void apply_theme(Window *window) {
     char *theme = settings_get_string("theme", "light");
     const char *bg = NULL;
@@ -424,8 +588,37 @@ static void apply_theme(Window *window) {
     if ((current != FALSE) != dark)
         g_object_set(gtk_settings_get_default(), "gtk-application-prefer-dark-theme",
                      dark ? TRUE : FALSE, NULL);
+    apply_chrome_variant(dark);
     apply_app_icon(window);
     apply_view_css(window);
+}
+
+// The desktop's light/dark preference changed (the portal's SettingChanged,
+// already filtered to a different value). Only the `system` scheme follows it;
+// the others are the user's explicit choice.
+void npad_gtk_system_scheme_changed(void) {
+    if (!g_gtk_main_window)
+        return;
+    char *theme = settings_get_string("theme", "light");
+    bool follows = theme && strcmp(theme, "system") == 0;
+    free(theme);
+    if (follows)
+        apply_theme(g_gtk_main_window);
+}
+
+// The icon for windows and the About dialog: npad's own hicolor icon when the
+// package (or `make install`) put it in the icon theme, otherwise a stock
+// text-editor icon so a build run from the source tree still shows something
+// npad's own hicolor icon when the package (or `make install`) put it in the
+// icon theme - its dark artwork while a dark scheme is active, so it does not
+// glare from a dark panel - and otherwise a stock text-editor icon, so a build
+// run from the source tree shows something. Only the window icon follows the
+// scheme: the launcher keeps the standard icon.
+const char *npad_gtk_app_icon_name(void) {
+    GtkIconTheme *icons = gtk_icon_theme_get_default();
+    if (g_dark_mode && gtk_icon_theme_has_icon(icons, NPAD_APP_ID "-dark"))
+        return NPAD_APP_ID "-dark";
+    return gtk_icon_theme_has_icon(icons, NPAD_APP_ID) ? NPAD_APP_ID : "accessories-text-editor";
 }
 
 static void set_check(Window *window, NpadCommand command, bool active) {
@@ -1046,6 +1239,9 @@ static void create_menu(Window *window) {
     add_hidden_accel(window, GDK_KEY_KP_Add, C, NPAD_CMD_VIEW_ZOOM_IN);
     add_hidden_accel(window, GDK_KEY_KP_Subtract, C, NPAD_CMD_VIEW_ZOOM_OUT);
     add_hidden_accel(window, GDK_KEY_KP_0, C, NPAD_CMD_VIEW_ZOOM_RESET);
+    // The alternate rich-text paste; a plain paste while the Markdown tools are
+    // off, so it is inert rather than surprising
+    add_hidden_accel(window, GDK_KEY_v, CS, NPAD_CMD_EDIT_PASTE_ALT);
 
     set_check(window, NPAD_CMD_FORMAT_WORD_WRAP, window->word_wrap_enabled);
     set_check(window, NPAD_CMD_FORMAT_MONOSPACE, window->monospace_current);
@@ -1291,6 +1487,8 @@ void npad_gtk_handle_command(Window *window, NpadCommand command) {
             ui_show_about_dialog(window);
             break;
         default:
+            // The Markdown list tools and the alternate paste
+            npad_gtk_lists_command(window, command);
             break;
     }
 }
@@ -1304,6 +1502,7 @@ void npad_gtk_reload_and_apply_settings(Window *window) {
     npad_gtk_find_reload_settings();
     apply_theme(window); // Also re-applies font and zoom
     apply_new_window_pref(window);
+    npad_gtk_lists_reload_settings(window); // The Markdown menu appears and goes live
 
     // Shared window options follow; per-window view state (font type, zoom)
     // deliberately does not
@@ -1413,6 +1612,10 @@ bool ui_platform_init(void) {
     g_object_get(gtk_settings_get_default(), "gtk-application-prefer-dark-theme",
                  &g_initial_prefer_dark, NULL);
 
+    // Every window and dialog npad opens (Preferences, Find, ...) wears the
+    // app icon, not just the main window
+    gtk_window_set_default_icon_name(npad_gtk_app_icon_name());
+
     npad_gtk_instance_init(); // Optional: npad runs without a session bus
     g_unix_signal_add(SIGTERM, on_terminate_signal, NULL);
     return true;
@@ -1511,6 +1714,7 @@ Window *ui_platform_create_main_window(void) {
                      window);
 
     npad_gtk_edit_init(window);
+    npad_gtk_lists_init(window);
 
     apply_word_wrap(window);
     apply_theme(window);
@@ -1600,9 +1804,64 @@ void ui_platform_get_window_position(Window *window, int *x, int *y) {
     }
 }
 
+// The monitor first-run placement is centred on (Wayland has no "primary")
+static GdkMonitor *placement_monitor(void) {
+    GdkDisplay *display = gdk_display_get_default();
+    GdkMonitor *monitor = display ? gdk_display_get_primary_monitor(display) : NULL;
+    if (!monitor && display && gdk_display_get_n_monitors(display) > 0)
+        monitor = gdk_display_get_monitor(display, 0);
+    return monitor;
+}
+
+// Whether a window at (x, y) with this size would have a usable stretch of its
+// title bar on some monitor. A saved position goes stale when a monitor is
+// unplugged or the layout changes, and a window that opens entirely off every
+// screen cannot be grabbed to bring it back.
+static bool position_is_reachable(int x, int y, int width, int height) {
+    GdkDisplay *display = gdk_display_get_default();
+    if (!display)
+        return true; // Nothing to judge against
+    int monitors = gdk_display_get_n_monitors(display);
+    if (monitors <= 0)
+        return true;
+
+    // The strip a user would drag: the window's top edge, about a title bar tall
+    GdkRectangle strip = { x, y, width, height < 40 ? height : 40 };
+    bool measured = false; // A display that reports no real monitor cannot judge
+    for (int i = 0; i < monitors; i++) {
+        GdkRectangle geometry, shared;
+        gdk_monitor_get_geometry(gdk_display_get_monitor(display, i), &geometry);
+        if (geometry.width <= 0 || geometry.height <= 0)
+            continue;
+        measured = true;
+        if (gdk_rectangle_intersect(&strip, &geometry, &shared) && shared.width >= 100 &&
+            shared.height >= 20)
+            return true;
+    }
+    return !measured;
+}
+
 void ui_platform_set_window_position(Window *window, int x, int y) {
     if (!window)
         return;
+    if (display_allows_positioning()) {
+        int width = window->normal_width;
+        int height = window->normal_height;
+        if (width <= 0 || height <= 0)
+            gtk_window_get_size(GTK_WINDOW(window->window), &width, &height);
+
+        // Off every monitor: use the default placement (centred on the primary
+        // monitor, as on first run), and remember that rather than the stale
+        // position so the next save repairs it
+        if (!position_is_reachable(x, y, width, height)) {
+            GdkRectangle work = { 0, 0, 1280, 800 };
+            GdkMonitor *monitor = placement_monitor();
+            if (monitor)
+                gdk_monitor_get_workarea(monitor, &work);
+            x = work.x + (work.width > width ? (work.width - width) / 2 : 0);
+            y = work.y + (work.height > height ? (work.height - height) / 2 : 0);
+        }
+    }
     window->requested_x = x;
     window->requested_y = y;
     if (display_allows_positioning())
@@ -1624,10 +1883,7 @@ bool ui_platform_is_window_maximized(const Window *window) {
 
 void ui_platform_get_default_window_rect(int *x, int *y, int *width, int *height) {
     GdkRectangle work = { 0, 0, 1280, 800 };
-    GdkDisplay *display = gdk_display_get_default();
-    GdkMonitor *monitor = display ? gdk_display_get_primary_monitor(display) : NULL;
-    if (!monitor && display && gdk_display_get_n_monitors(display) > 0)
-        monitor = gdk_display_get_monitor(display, 0); // Wayland has no "primary"
+    GdkMonitor *monitor = placement_monitor();
     if (monitor)
         gdk_monitor_get_workarea(monitor, &work);
 
@@ -1768,8 +2024,12 @@ static GtkClipboard *clipboard_for(Window *window) {
 }
 
 void ui_platform_cut(Window *window) {
-    if (window)
-        gtk_text_buffer_cut_clipboard(window->buffer, clipboard_for(window), TRUE);
+    if (!window)
+        return;
+    // With the Markdown tools on, Ctrl+X without a selection cuts the line
+    if (npad_gtk_lists_cut_line(window))
+        return;
+    gtk_text_buffer_cut_clipboard(window->buffer, clipboard_for(window), TRUE);
 }
 
 void ui_platform_copy(Window *window) {
@@ -1777,11 +2037,20 @@ void ui_platform_copy(Window *window) {
         gtk_text_buffer_copy_clipboard(window->buffer, clipboard_for(window));
 }
 
-void ui_platform_paste(Window *window) {
+void npad_gtk_paste_plain(Window *window) {
     if (!window)
         return;
     gtk_text_buffer_paste_clipboard(window->buffer, clipboard_for(window), NULL, TRUE);
     scroll_to_cursor(window);
+}
+
+void ui_platform_paste(Window *window) {
+    if (!window)
+        return;
+    // With the Markdown tools on: a pending cut line goes back above the
+    // caret's, and rich text converts per markdown_paste_primary
+    if (!npad_gtk_lists_paste(window, NPAD_PASTE_PRIMARY))
+        npad_gtk_paste_plain(window);
 }
 
 void ui_platform_undo(Window *window) {

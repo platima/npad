@@ -155,6 +155,88 @@ TEST_CASE(find_asset_out_too_small) {
                 "does not overflow a small buffer");
 }
 
+TEST_CASE(installer_suffix_per_arch) {
+    TEST_ASSERT_STR_EQ("-setup-win-x64.exe", update_installer_suffix("x64", false),
+                       "x64 installer");
+    TEST_ASSERT_STR_EQ("-setup-win-x64.exe.sha256", update_installer_suffix("x64", true),
+                       "x64 digest");
+    TEST_ASSERT_STR_EQ("-setup-win-arm64.exe", update_installer_suffix("arm64", false),
+                       "arm64 installer");
+    TEST_ASSERT_STR_EQ("-setup-win-arm64.exe.sha256", update_installer_suffix("arm64", true),
+                       "arm64 digest");
+    // Anything else gets nothing - never a fallback to the x64 installer
+    TEST_ASSERT(update_installer_suffix(NULL, false) == NULL, "NULL arch");
+    TEST_ASSERT(update_installer_suffix("x86", false) == NULL, "32-bit x86 is not shipped");
+    TEST_ASSERT(update_installer_suffix("ARM64", false) == NULL, "arch names are exact");
+}
+
+TEST_CASE(build_arch_matches_compiler_target) {
+    const char *arch = update_build_arch();
+#if defined(_M_ARM64) || defined(__aarch64__)
+    TEST_ASSERT_STR_EQ("arm64", arch, "an arm64 build reports arm64");
+#elif defined(_M_X64) || defined(__x86_64__)
+    TEST_ASSERT_STR_EQ("x64", arch, "an x64 build reports x64");
+#else
+    TEST_ASSERT(arch == NULL, "any other target reports no architecture");
+#endif
+    // Whatever it is, it must pair with an installer or with none at all
+    if (arch)
+        TEST_ASSERT(update_installer_suffix(arch, false) != NULL, "build arch has an installer");
+}
+
+// Both architectures on one release, x64 first and each digest before its
+// installer: every suffix must still resolve to its own asset
+static const char *MULTIARCH_RELEASE =
+    "{\"tag_name\":\"v0.35.0\",\"assets\":["
+    "{\"name\":\"npad-v0.35.0-setup-win-x64.exe.sha256\",\"browser_download_url\":"
+    "\"https://github.com/platima/npad/releases/download/v0.35.0/"
+    "npad-v0.35.0-setup-win-x64.exe.sha256\"},"
+    "{\"name\":\"npad-v0.35.0-setup-win-x64.exe\",\"browser_download_url\":"
+    "\"https://github.com/platima/npad/releases/download/v0.35.0/"
+    "npad-v0.35.0-setup-win-x64.exe\"},"
+    "{\"name\":\"npad-v0.35.0-setup-win-arm64.exe.sha256\",\"browser_download_url\":"
+    "\"https://github.com/platima/npad/releases/download/v0.35.0/"
+    "npad-v0.35.0-setup-win-arm64.exe.sha256\"},"
+    "{\"name\":\"npad-v0.35.0-setup-win-arm64.exe\",\"browser_download_url\":"
+    "\"https://github.com/platima/npad/releases/download/v0.35.0/"
+    "npad-v0.35.0-setup-win-arm64.exe\"}"
+    "]}";
+
+TEST_CASE(find_asset_picks_the_builds_architecture) {
+    char url[512];
+    TEST_ASSERT(update_find_asset_url(MULTIARCH_RELEASE, update_installer_suffix("arm64", false),
+                                      url, sizeof(url)),
+                "arm64 installer found");
+    TEST_ASSERT_STR_EQ("https://github.com/platima/npad/releases/download/v0.35.0/"
+                       "npad-v0.35.0-setup-win-arm64.exe",
+                       url, "arm64 build gets the arm64 installer, not the x64 one listed first");
+    TEST_ASSERT(update_find_asset_url(MULTIARCH_RELEASE, update_installer_suffix("arm64", true),
+                                      url, sizeof(url)),
+                "arm64 digest found");
+    TEST_ASSERT_STR_EQ("https://github.com/platima/npad/releases/download/v0.35.0/"
+                       "npad-v0.35.0-setup-win-arm64.exe.sha256",
+                       url, "arm64 digest URL");
+    TEST_ASSERT(update_find_asset_url(MULTIARCH_RELEASE, update_installer_suffix("x64", false),
+                                      url, sizeof(url)),
+                "x64 installer found");
+    TEST_ASSERT_STR_EQ("https://github.com/platima/npad/releases/download/v0.35.0/"
+                       "npad-v0.35.0-setup-win-x64.exe",
+                       url, "x64 build still gets the x64 installer");
+}
+
+TEST_CASE(find_asset_arm64_never_falls_back_to_x64) {
+    // A release from before arm64 builds existed carries only x64 assets: the
+    // arm64 updater must find nothing rather than the x64 installer
+    char json[4096], url[512];
+    build_release(json, sizeof(json));
+    TEST_ASSERT(!update_find_asset_url(json, update_installer_suffix("arm64", false), url,
+                                       sizeof(url)),
+                "no arm64 installer on an x64-only release");
+    TEST_ASSERT(!update_find_asset_url(json, update_installer_suffix("arm64", true), url,
+                                       sizeof(url)),
+                "no arm64 digest on an x64-only release");
+}
+
 int main(void) {
     TEST_INIT();
 
@@ -169,6 +251,10 @@ int main(void) {
     RUN_TEST(find_asset_survives_renaming);
     RUN_TEST(find_asset_missing);
     RUN_TEST(find_asset_out_too_small);
+    RUN_TEST(installer_suffix_per_arch);
+    RUN_TEST(build_arch_matches_compiler_target);
+    RUN_TEST(find_asset_picks_the_builds_architecture);
+    RUN_TEST(find_asset_arm64_never_falls_back_to_x64);
 
     TEST_SUMMARY();
     return 0;

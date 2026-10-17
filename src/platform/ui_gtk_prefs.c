@@ -8,13 +8,15 @@
  * Updates page (Linux updates through apt / dnf) and Associations becomes a
  * single "Make npad the default text editor" action.
  *
- * There is no Apply button. Every control saves the moment it changes, writes
- * only its own key, and tells the other instances; so a page that was merely
- * looked at can never write its whole state back (the property sheet's
- * PSN_APPLY lesson in LESSONS.md). Because the dialog's own controls are the
- * only thing that changed, the local window re-reads settings.json through
+ * OK, Cancel and Apply work as in the property sheet. A control only stages
+ * its change; Apply writes the staged keys, saves, tells the other instances
+ * and re-applies here, OK does that and closes, Cancel drops them. Only what
+ * the user changed is staged (a value put back is un-staged), so a page that
+ * was merely looked at can never write its whole state back - the property
+ * sheet's PSN_APPLY lesson in LESSONS.md. The local window re-applies through
  * npad_gtk_reload_and_apply_settings, the same path a broadcast from another
- * instance takes.
+ * instance takes. As on Windows the font buttons, Clear Recent Files, Export,
+ * Import, the xdg-mime button and Reset act at once.
  *
  * Author: Platima
  * https://npad.dev
@@ -76,8 +78,14 @@ enum {
 static struct {
     GtkWidget *dialog;
     Window *owner;
-    bool loading;    // Controls are being filled from settings: not a user change
-    bool reset_done; // Settings were just reset: the controls are stale, write nothing
+    bool loading; // Controls are being filled from settings: not a user change
+    // Changes made in the dialog and not applied yet: setting key -> Staged.
+    // Nothing reaches settings.json until Apply or OK, and Cancel drops them.
+    GHashTable *staged;
+    bool memory_dirty; // A failed save left applied values in memory only
+
+    GtkWidget *spins[8]; // Every number box: typed text counts before it is committed
+    int spin_count;
 
     GtkWidget *bools[16]; // Plain checkboxes bound to a bool key (see add_check)
     int bool_count;
@@ -91,7 +99,7 @@ static struct {
     GtkWidget *enc_combo, *eol_combo, *fonttype_combo, *zoom_spin;
     GtkWidget *header_entry, *footer_entry;
     // Markdown
-    GtkWidget *indent_combo, *custom_entry, *brackets_check;
+    GtkWidget *md_check, *indent_combo, *custom_entry, *brackets_check;
     GtkWidget *paste_primary[3], *paste_alt[3];
     // Associations
     GtkWidget *assoc_status;
@@ -103,13 +111,145 @@ static struct {
 // Saving
 // ---------------------------------------------------------------------------
 
-// A setting changed: persist it, tell the other instances and re-apply it
-// here. Every handler calls this after writing its one key.
-static void commit(void) {
+// Persist what was written to the settings, tell the other instances and
+// re-apply it here
+static bool commit(void) {
     if (!settings_save())
-        return; // Reloading would throw the unsaved change away
+        return false; // Reloading would throw the unsaved change away
     ui_notify_settings_changed();
     npad_gtk_reload_and_apply_settings(P.owner);
+    return true;
+}
+
+// --- Staged changes ---------------------------------------------------------
+//
+// Like the Windows property sheet, a control only stages its change; Apply (or
+// OK) writes it. Only what the user actually changed is staged - a value put
+// back to what the setting already holds is un-staged - so Apply never writes
+// a page's whole state back (the PSN_APPLY lesson in LESSONS.md).
+
+typedef enum { STAGED_BOOL, STAGED_INT, STAGED_STRING } StagedType;
+
+typedef struct {
+    StagedType type;
+    int number; // The bool (0 / 1) or the int
+    char *text;
+} Staged;
+
+static void free_staged(gpointer data) {
+    Staged *staged = data;
+    g_free(staged->text);
+    g_free(staged);
+}
+
+static const char *bound_key(GtkWidget *widget);
+static int bound_default(GtkWidget *widget);
+
+// Typed in a number box and not committed yet (Enter or focus leaving), so not
+// staged: does its text hold a different valid number than the setting?
+static bool spin_text_differs(GtkWidget *spin) {
+    const char *text = gtk_entry_get_text(GTK_ENTRY(spin));
+    char *end = NULL;
+    gint64 typed = g_ascii_strtoll(text, &end, 10);
+    if (end == text || *end != '\0')
+        return false;
+    return typed != settings_get_int(bound_key(spin), bound_default(spin));
+}
+
+static void update_apply_button(void) {
+    if (!P.dialog || !P.staged)
+        return;
+    bool pending = g_hash_table_size(P.staged) > 0;
+    for (int i = 0; i < P.spin_count && !pending; i++)
+        pending = spin_text_differs(P.spins[i]);
+    gtk_dialog_set_response_sensitive(GTK_DIALOG(P.dialog), GTK_RESPONSE_APPLY, pending);
+}
+
+// Record (or, when it equals the current setting, drop) one pending change
+static void stage(const char *key, StagedType type, int number, const char *text, bool unchanged) {
+    if (P.loading || !P.staged)
+        return;
+    if (unchanged) {
+        g_hash_table_remove(P.staged, key);
+    } else {
+        Staged *entry = g_new0(Staged, 1);
+        entry->type = type;
+        entry->number = number;
+        entry->text = g_strdup(text);
+        g_hash_table_replace(P.staged, (gpointer) key, entry);
+    }
+    update_apply_button();
+}
+
+static void stage_bool(const char *key, bool value, bool fallback) {
+    stage(key, STAGED_BOOL, value ? 1 : 0, NULL, settings_get_bool(key, fallback) == value);
+}
+
+static void stage_int(const char *key, int value, int fallback) {
+    stage(key, STAGED_INT, value, NULL, settings_get_int(key, fallback) == value);
+}
+
+static void stage_string(const char *key, const char *value, const char *fallback) {
+    char *current = settings_get_string(key, fallback);
+    bool same = current && strcmp(current, value) == 0;
+    free(current);
+    stage(key, STAGED_STRING, 0, value, same);
+}
+
+static void write_staged(const char *key, const Staged *entry) {
+    switch (entry->type) {
+        case STAGED_BOOL:
+            settings_set_bool(key, entry->number != 0);
+            break;
+        case STAGED_INT:
+            settings_set_int(key, entry->number);
+            break;
+        case STAGED_STRING:
+            settings_set_string(key, entry->text ? entry->text : "");
+            break;
+    }
+}
+
+// Apply: write every staged change, save, broadcast, and re-apply here
+static bool apply_staged(void) {
+    if (!P.staged || g_hash_table_size(P.staged) == 0)
+        return true;
+
+    bool sync_turned_on = false;
+    const Staged *session = NULL;
+    GHashTableIter iter;
+    gpointer key, value;
+    g_hash_table_iter_init(&iter, P.staged);
+    while (g_hash_table_iter_next(&iter, &key, &value)) {
+        const Staged *entry = value;
+        if (strcmp(key, "auto_save_enabled") == 0) {
+            editor_enable_auto_save(entry->number != 0); // Also arms or stops the timer
+        } else if (strcmp(key, "session_resume_enabled") == 0) {
+            session = entry; // After the interval below, which it reads
+        } else {
+            write_staged(key, entry);
+        }
+        if (strcmp(key, "sync_view_state") == 0 && entry->number != 0)
+            sync_turned_on = true;
+    }
+    if (session)
+        editor_enable_session_resume(session->number != 0); // Off also drops the snapshot
+
+    // Saved or not, the values are now in memory. Only a successful save
+    // clears the staging, so Apply / OK can retry a failed one.
+    P.memory_dirty = true;
+    if (!commit())
+        return false;
+    P.memory_dirty = false;
+    g_hash_table_remove_all(P.staged);
+    update_apply_button();
+
+    // Enabling sync brings the other windows into line with this one right
+    // away, not only on the next zoom or font change. They turn sync on from
+    // the settings broadcast above, then adopt the view state sent here.
+    if (sync_turned_on && P.owner)
+        npad_gtk_instance_broadcast_view_state(P.owner->zoom, P.owner->monospace_current);
+    return true;
 }
 
 static void show_message(GtkWindow *parent, GtkMessageType type, const char *text) {
@@ -181,8 +321,8 @@ static void on_bool_toggled(GtkToggleButton *button, gpointer data) {
     (void) data;
     if (P.loading)
         return;
-    settings_set_bool(bound_key(GTK_WIDGET(button)), gtk_toggle_button_get_active(button));
-    commit();
+    GtkWidget *widget = GTK_WIDGET(button);
+    stage_bool(bound_key(widget), gtk_toggle_button_get_active(button), bound_default(widget) != 0);
     sync_sensitivity();
 }
 
@@ -205,10 +345,16 @@ static GtkWidget *add_check(GtkWidget *box, const char *mnemonic, const char *ke
 
 static void on_int_changed(GtkSpinButton *spin, gpointer data) {
     (void) data;
-    if (P.loading)
-        return;
-    settings_set_int(bound_key(GTK_WIDGET(spin)), gtk_spin_button_get_value_as_int(spin));
-    commit();
+    GtkWidget *widget = GTK_WIDGET(spin);
+    stage_int(bound_key(widget), gtk_spin_button_get_value_as_int(spin), bound_default(widget));
+}
+
+// Typing in the box changes its text before the value is committed
+static void on_spin_text_changed(GtkEditable *editable, gpointer data) {
+    (void) editable;
+    (void) data;
+    if (!P.loading)
+        update_apply_button();
 }
 
 static GtkWidget *add_spin(GtkWidget *box, const char *mnemonic, const char *key, int fallback,
@@ -217,6 +363,9 @@ static GtkWidget *add_spin(GtkWidget *box, const char *mnemonic, const char *key
     gtk_spin_button_set_numeric(GTK_SPIN_BUTTON(spin), TRUE);
     bind_key(spin, key, fallback);
     g_signal_connect(spin, "value-changed", G_CALLBACK(on_int_changed), NULL);
+    g_signal_connect(spin, "changed", G_CALLBACK(on_spin_text_changed), NULL);
+    if (P.spin_count < (int) (sizeof(P.spins) / sizeof(P.spins[0])))
+        P.spins[P.spin_count++] = spin;
     add_row(box, mnemonic, spin);
     return spin;
 }
@@ -226,8 +375,8 @@ static void on_int_combo_changed(GtkComboBox *combo, gpointer data) {
     int index = gtk_combo_box_get_active(combo);
     if (P.loading || index < 0)
         return;
-    settings_set_int(bound_key(GTK_WIDGET(combo)), index);
-    commit();
+    GtkWidget *widget = GTK_WIDGET(combo);
+    stage_int(bound_key(widget), index, bound_default(widget));
     sync_sensitivity();
 }
 
@@ -244,36 +393,11 @@ static GtkWidget *new_combo(GtkWidget *box, const char *mnemonic, const char *ke
     return combo;
 }
 
-// Text entries commit on Enter and when focus leaves, not on every keystroke
-// (a save and a broadcast per character would be silly); closing the dialog
-// commits the one that still has focus.
-static void commit_entry(GtkWidget *entry) {
-    if (P.loading)
-        return;
-    const char *key = bound_key(entry);
-    const char *text = gtk_entry_get_text(GTK_ENTRY(entry));
-    // Compared with what the setting reads as, default included: an unset key
-    // showing its default is not a change, and must not be written
-    char *current =
-        settings_get_string(key, g_object_get_data(G_OBJECT(entry), "npad-default-str"));
-    bool changed = !current || strcmp(current, text) != 0;
-    free(current);
-    if (!changed)
-        return;
-    settings_set_string(key, text);
-    commit();
-}
-
-static void on_entry_activate(GtkEntry *entry, gpointer data) {
+static void on_entry_changed(GtkEditable *editable, gpointer data) {
     (void) data;
-    commit_entry(GTK_WIDGET(entry));
-}
-
-static gboolean on_entry_focus_out(GtkWidget *entry, GdkEvent *event, gpointer data) {
-    (void) event;
-    (void) data;
-    commit_entry(entry);
-    return FALSE;
+    GtkWidget *entry = GTK_WIDGET(editable);
+    stage_string(bound_key(entry), gtk_entry_get_text(GTK_ENTRY(entry)),
+                 g_object_get_data(G_OBJECT(entry), "npad-default-str"));
 }
 
 static GtkWidget *add_entry(GtkWidget *box, const char *mnemonic, const char *key,
@@ -282,8 +406,7 @@ static GtkWidget *add_entry(GtkWidget *box, const char *mnemonic, const char *ke
     gtk_entry_set_max_length(GTK_ENTRY(entry), max_len);
     bind_key(entry, key, 0);
     g_object_set_data(G_OBJECT(entry), "npad-default-str", (gpointer) fallback);
-    g_signal_connect(entry, "activate", G_CALLBACK(on_entry_activate), NULL);
-    g_signal_connect(entry, "focus-out-event", G_CALLBACK(on_entry_focus_out), NULL);
+    g_signal_connect(entry, "changed", G_CALLBACK(on_entry_changed), NULL);
     add_row(box, mnemonic, entry);
     return entry;
 }
@@ -298,7 +421,7 @@ static void sync_sensitivity(void) {
     gtk_widget_set_sensitive(P.session_spin,
                              gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(P.session_check)));
 
-    bool md_on = settings_get_bool("list_tools_enabled", false);
+    bool md_on = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(P.md_check));
     gtk_widget_set_sensitive(P.custom_entry, gtk_combo_box_get_active(GTK_COMBO_BOX(
                                                  P.indent_combo)) == INDENT_FORMAT_CUSTOM);
     gtk_widget_set_sensitive(P.brackets_check, md_on);
@@ -355,9 +478,10 @@ static void load_widgets(void) {
     int enc = settings_get_int("default_encoding", 0);
     gtk_combo_box_set_active(GTK_COMBO_BOX(P.enc_combo),
                              (enc >= 0 && enc <= (int) NPAD_ENC_ANSI) ? enc : 0);
-    int eol = settings_get_int("default_line_ending", 0);
-    gtk_combo_box_set_active(GTK_COMBO_BOX(P.eol_combo),
-                             (eol >= 0 && eol <= (int) NPAD_EOL_CR) ? eol : 0);
+    int eol = settings_get_int("default_line_ending", (int) NPAD_DEFAULT_LINE_ENDING);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(P.eol_combo), (eol >= 0 && eol <= (int) NPAD_EOL_CR)
+                                                             ? eol
+                                                             : (int) NPAD_DEFAULT_LINE_ENDING);
     // Falls back to the pre-0.7 monospace_enabled so the shown default equals
     // the effective one (see the Win32 page)
     gtk_combo_box_set_active(
@@ -466,9 +590,7 @@ static void on_autosave_toggled(GtkToggleButton *button, gpointer data) {
     (void) data;
     if (P.loading)
         return;
-    // The editor owns the timer as well as the key
-    editor_enable_auto_save(gtk_toggle_button_get_active(button));
-    commit();
+    stage_bool("auto_save_enabled", gtk_toggle_button_get_active(button), false);
     sync_sensitivity();
 }
 
@@ -476,9 +598,7 @@ static void on_session_toggled(GtkToggleButton *button, gpointer data) {
     (void) data;
     if (P.loading)
         return;
-    // Turning it off also drops the current snapshot
-    editor_enable_session_resume(gtk_toggle_button_get_active(button));
-    commit();
+    stage_bool("session_resume_enabled", gtk_toggle_button_get_active(button), true);
     sync_sensitivity();
 }
 
@@ -499,7 +619,7 @@ static void build_general(GtkWidget *notebook) {
         add_spin(page, "Auto-save _interval (seconds):", "auto_save_interval", 300, 10, 86400);
 
     P.large_spin = add_spin(page, "_Large file warning threshold (MB):", "large_file_warning_mb",
-                            100, 0, 1048576);
+                            editor_default_large_file_mb(), 0, 1048576);
     P.recent_spin = add_spin(page, "Ma_x recent files (0-10):", "recent_files_max", MAX_RECENT_PREF,
                              0, MAX_RECENT_PREF);
     add_button(page, "_Clear Recent Files Now", G_CALLBACK(on_clear_recent_clicked));
@@ -526,8 +646,7 @@ static void on_scheme_changed(GtkComboBox *combo, gpointer data) {
     int index = gtk_combo_box_get_active(combo);
     if (P.loading || index < 0 || index >= SCHEME_COUNT)
         return;
-    settings_set_string("theme", SCHEME_KEYS[index]);
-    commit();
+    stage_string("theme", SCHEME_KEYS[index], "light");
 }
 
 static void on_dyslexic_toggled(GtkToggleButton *button, gpointer data) {
@@ -547,22 +666,14 @@ static void on_dyslexic_toggled(GtkToggleButton *button, gpointer data) {
         P.loading = false;
         return;
     }
-    settings_set_bool("opendyslexic_enabled", on);
-    commit();
+    stage_bool("opendyslexic_enabled", on, false);
 }
 
 static void on_sync_toggled(GtkToggleButton *button, gpointer data) {
     (void) data;
     if (P.loading)
         return;
-    bool on = gtk_toggle_button_get_active(button);
-    settings_set_bool("sync_view_state", on);
-    commit();
-    // Enabling sync brings the other windows into line with this one right
-    // away, not only on the next zoom or font change. They turn sync on from
-    // the settings broadcast above, then adopt the view state sent here.
-    if (on && P.owner)
-        npad_gtk_instance_broadcast_view_state(P.owner->zoom, P.owner->monospace_current);
+    stage_bool("sync_view_state", gtk_toggle_button_get_active(button), false);
 }
 
 static void build_appearance(GtkWidget *notebook) {
@@ -611,14 +722,14 @@ static void on_fonttype_changed(GtkComboBox *combo, gpointer data) {
     int index = gtk_combo_box_get_active(combo);
     if (P.loading || index < 0)
         return;
-    settings_set_bool("default_font_mono", index == 0);
-    commit();
+    // Falls back to the pre-0.7 monospace_enabled, as the page's loading does
+    stage_bool("default_font_mono", index == 0, settings_get_bool("monospace_enabled", true));
 }
 
 static void on_use_current_clicked(GtkButton *button, gpointer data) {
     (void) button;
     (void) data;
-    // Copy this window's font type and zoom into the fields (which saves them)
+    // Copy this window's font type and zoom into the fields (which stages them)
     if (!P.owner)
         return;
     gtk_combo_box_set_active(GTK_COMBO_BOX(P.fonttype_combo), P.owner->monospace_current ? 0 : 1);
@@ -636,8 +747,9 @@ static void build_defaults(GtkWidget *notebook) {
     char *eol_labels[NPAD_EOL_CR + 1];
     for (int i = 0; i <= (int) NPAD_EOL_CR; i++)
         eol_labels[i] = g_strdup(file_line_ending_name((LineEnding) i));
-    P.eol_combo = new_combo(page, "Default _line endings for new files:", "default_line_ending", 0,
-                            (const char *const *) eol_labels, (int) NPAD_EOL_CR + 1);
+    P.eol_combo = new_combo(page, "Default _line endings for new files:", "default_line_ending",
+                            (int) NPAD_DEFAULT_LINE_ENDING, (const char *const *) eol_labels,
+                            (int) NPAD_EOL_CR + 1);
     for (int i = 0; i <= (int) NPAD_ENC_ANSI; i++)
         g_free(enc_labels[i]);
     for (int i = 0; i <= (int) NPAD_EOL_CR; i++)
@@ -672,12 +784,12 @@ static void on_paste_toggled(GtkToggleButton *button, gpointer data) {
     // The radio being switched off also signals; only the new choice counts
     if (P.loading || !gtk_toggle_button_get_active(button))
         return;
-    settings_set_int(bound_key(GTK_WIDGET(button)), GPOINTER_TO_INT(data));
-    commit();
+    GtkWidget *widget = GTK_WIDGET(button);
+    stage_int(bound_key(widget), GPOINTER_TO_INT(data), bound_default(widget));
 }
 
 // "Ctrl+V pastes: (o) Plain ( ) Lists ( ) Markdown"
-static void add_paste_row(GtkWidget *box, const char *label_text, const char *key,
+static void add_paste_row(GtkWidget *box, const char *label_text, const char *key, int fallback,
                           GtkWidget *radios[3]) {
     static const char *const names[3] = { "Plain", "Lists", "Markdown" };
     GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
@@ -691,7 +803,7 @@ static void add_paste_row(GtkWidget *box, const char *label_text, const char *ke
                   : gtk_radio_button_new_with_label(NULL, names[i]);
         if (!first)
             first = radios[i];
-        bind_key(radios[i], key, 0);
+        bind_key(radios[i], key, fallback);
         g_signal_connect(radios[i], "toggled", G_CALLBACK(on_paste_toggled), GINT_TO_POINTER(i));
         gtk_box_pack_start(GTK_BOX(row), radios[i], FALSE, FALSE, 0);
     }
@@ -701,12 +813,7 @@ static void add_paste_row(GtkWidget *box, const char *label_text, const char *ke
 static void build_markdown(GtkWidget *notebook) {
     GtkWidget *page = new_page(notebook, "Markdown");
 
-    add_note(page,
-             "The Markdown list tools are not in npad for Linux yet. This page edits the same "
-             "settings as the Windows build, so your choices are kept for when they arrive. "
-             "Basic Markdown support already adds \"Interpret escapes\" to Find / Replace.");
-
-    add_check(page, "Basic _Markdown support", "list_tools_enabled", false);
+    P.md_check = add_check(page, "Basic _Markdown support", "list_tools_enabled", false);
     add_note(page, "Adds a Markdown menu and right-click tools (off by default for classic Notepad "
                    "compatibility):\n"
                    "-  Lists: formatting, continuation, sorting, indentation, unique filtering\n"
@@ -728,8 +835,8 @@ static void build_markdown(GtkWidget *notebook) {
     GtkWidget *pbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
     gtk_container_set_border_width(GTK_CONTAINER(pbox), 8);
     gtk_container_add(GTK_CONTAINER(paste), pbox);
-    add_paste_row(pbox, "Ctrl+V pastes:", "markdown_paste_primary", P.paste_primary);
-    add_paste_row(pbox, "Ctrl+Shift+V:", "markdown_paste_alt", P.paste_alt);
+    add_paste_row(pbox, "Ctrl+V pastes:", "markdown_paste_primary", 1, P.paste_primary);
+    add_paste_row(pbox, "Ctrl+Shift+V:", "markdown_paste_alt", 0, P.paste_alt);
     gtk_box_pack_start(GTK_BOX(page), paste, FALSE, FALSE, 0);
 }
 
@@ -820,6 +927,8 @@ static void on_import_clicked(GtkButton *button, gpointer data) {
     // then show the imported values
     npad_gtk_reload_and_apply_settings(P.owner);
     ui_notify_settings_changed();
+    g_hash_table_remove_all(P.staged); // The imported file replaces pending edits
+    update_apply_button();
     load_widgets();
     show_message(GTK_WINDOW(P.dialog), GTK_MESSAGE_INFO,
                  "Settings imported. A few options (window size, default encoding) "
@@ -863,9 +972,8 @@ static void on_reset_clicked(GtkButton *button, gpointer data) {
     commit();
 
     // The controls still show pre-reset values; close rather than leave stale
-    // state on screen (and do not let closing write those values back)
-    P.reset_done = true;
-    gtk_dialog_response(GTK_DIALOG(P.dialog), GTK_RESPONSE_CLOSE);
+    // state on screen. Cancel, so nothing staged is written back over the reset.
+    gtk_dialog_response(GTK_DIALOG(P.dialog), GTK_RESPONSE_CANCEL);
 }
 
 static void build_backup(GtkWidget *notebook) {
@@ -1006,6 +1114,9 @@ static char *build_diagnostics_text(void) {
     g_object_get(gtk_settings_get_default(), "gtk-theme-name", &theme, NULL);
     g_string_append_printf(out, "GTK theme: %s\n", theme ? theme : "?");
     g_free(theme);
+    char *colours = npad_gtk_theme_diagnostics();
+    g_string_append(out, colours);
+    g_free(colours);
     const char *locale = setlocale(LC_ALL, NULL);
     g_string_append_printf(out, "Locale: %s\n", locale ? locale : "?");
 
@@ -1071,17 +1182,11 @@ static void build_debug(GtkWidget *notebook) {
 // The dialog
 // ---------------------------------------------------------------------------
 
-// Fields still holding a half-typed value commit as the dialog closes: a spin
-// button only reports a number when it is read, and an entry when it loses
-// focus or Enter is pressed
-static void commit_pending(void) {
-    GtkWidget *spins[] = { P.autosave_spin, P.large_spin, P.recent_spin, P.session_spin,
-                           P.zoom_spin };
-    for (size_t i = 0; i < sizeof(spins) / sizeof(spins[0]); i++)
-        gtk_spin_button_update(GTK_SPIN_BUTTON(spins[i]));
-    commit_entry(P.header_entry);
-    commit_entry(P.footer_entry);
-    commit_entry(P.custom_entry);
+// A spin button only reports a number when it is read (Enter, focus leaving,
+// the arrows): read the half-typed ones before applying
+static void read_pending_spins(void) {
+    for (int i = 0; i < P.spin_count; i++)
+        gtk_spin_button_update(GTK_SPIN_BUTTON(P.spins[i]));
 }
 
 void npad_gtk_show_preferences(Window *window, bool show_debug) {
@@ -1095,9 +1200,11 @@ void npad_gtk_show_preferences(Window *window, bool show_debug) {
     P.owner = window;
 
     P.dialog = gtk_dialog_new_with_buttons("Preferences", GTK_WINDOW(window->window),
-                                           GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
-                                           "_Close", GTK_RESPONSE_CLOSE, NULL);
-    gtk_dialog_set_default_response(GTK_DIALOG(P.dialog), GTK_RESPONSE_CLOSE);
+                                           GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, "_OK",
+                                           GTK_RESPONSE_OK, "_Cancel", GTK_RESPONSE_CANCEL,
+                                           "_Apply", GTK_RESPONSE_APPLY, NULL);
+    gtk_dialog_set_default_response(GTK_DIALOG(P.dialog), GTK_RESPONSE_OK);
+    P.staged = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, free_staged);
 
     GtkWidget *notebook = gtk_notebook_new();
     gtk_container_set_border_width(GTK_CONTAINER(notebook), 6);
@@ -1121,9 +1228,30 @@ void npad_gtk_show_preferences(Window *window, bool show_debug) {
     gtk_widget_show_all(P.dialog);
     gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), show_debug ? PAGE_DEBUG : PAGE_GENERAL);
 
-    gtk_dialog_run(GTK_DIALOG(P.dialog));
-    if (!P.reset_done)
-        commit_pending();
+    update_apply_button(); // Nothing to apply yet
+
+    // Apply keeps the dialog open; OK applies and closes; Cancel, Escape, the
+    // close box and Reset drop whatever is still staged
+    gint response;
+    for (;;) {
+        response = gtk_dialog_run(GTK_DIALOG(P.dialog));
+        if (response != GTK_RESPONSE_APPLY && response != GTK_RESPONSE_OK)
+            break;
+        read_pending_spins();
+        if (apply_staged()) {
+            if (response == GTK_RESPONSE_OK)
+                break;
+            continue;
+        }
+        // The save failed: stay open with the changes still staged so the
+        // user can fix the cause and retry
+        show_message(GTK_WINDOW(P.dialog), GTK_MESSAGE_WARNING,
+                     "npad could not save the settings. Check that the settings folder is "
+                     "writable, then try again.");
+    }
+    if (P.memory_dirty)
+        npad_gtk_reload_and_apply_settings(window); // Drop values that never reached disk
     gtk_widget_destroy(P.dialog);
+    g_hash_table_destroy(P.staged);
     memset(&P, 0, sizeof(P));
 }

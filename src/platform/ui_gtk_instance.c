@@ -24,6 +24,11 @@
  * Without a session bus (a bare SSH session, a minimal window manager) every
  * call degrades to a no-op: no live sync, and a count of zero.
  *
+ * The same connection also carries the desktop's light/dark preference: the
+ * `system` colour scheme asks the xdg-desktop-portal Settings interface for
+ * org.freedesktop.appearance color-scheme and follows its SettingChanged
+ * signal (see "Desktop colour scheme" below).
+ *
  * Author: Platima
  * https://npad.dev
  */
@@ -55,6 +60,7 @@
 
 static GDBusConnection *g_bus = NULL;
 static guint g_subscription = 0;
+static guint g_portal_subscription = 0;
 static char g_own_name[96] = "";
 
 static void instance_name_for_pid(long pid, char *out, size_t size) {
@@ -130,6 +136,108 @@ static bool request_own_name(void) {
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Desktop colour scheme (xdg-desktop-portal)
+// ---------------------------------------------------------------------------
+//
+// org.freedesktop.appearance color-scheme: 0 = no preference, 1 = prefer dark,
+// 2 = prefer light. The value is read once, lazily - only a window whose scheme
+// is `system` ever asks, so the default light scheme never touches the portal
+// (which may need starting) - and then kept current by SettingChanged. The
+// signal fires for every portal setting, so a change is only reported when the
+// number differs (re-theming an idle window reflows its whole document:
+// LESSONS.md, "Idle windows are not idle").
+
+#define PORTAL_NAME "org.freedesktop.portal.Desktop"
+#define PORTAL_PATH "/org/freedesktop/portal/desktop"
+#define PORTAL_SETTINGS_INTERFACE "org.freedesktop.portal.Settings"
+#define PORTAL_APPEARANCE_NS "org.freedesktop.appearance"
+#define PORTAL_COLOR_SCHEME_KEY "color-scheme"
+
+#define PORTAL_UNKNOWN (-1)
+static int g_portal_scheme = PORTAL_UNKNOWN;
+
+// The value arrives in a variant; the older Read() method wraps it in a second
+// one. Unwrap to the uint32 and fold anything unexpected to "no preference".
+static int portal_scheme_from_variant(GVariant *value) {
+    GVariant *inner = value ? g_variant_ref(value) : NULL;
+    while (inner && g_variant_is_of_type(inner, G_VARIANT_TYPE_VARIANT)) {
+        GVariant *next = g_variant_get_variant(inner);
+        g_variant_unref(inner);
+        inner = next;
+    }
+    int scheme = 0;
+    if (inner && g_variant_is_of_type(inner, G_VARIANT_TYPE_UINT32)) {
+        guint32 raw = g_variant_get_uint32(inner);
+        scheme = raw == 1 ? 1 : raw == 2 ? 2 : 0;
+    }
+    if (inner)
+        g_variant_unref(inner);
+    return scheme;
+}
+
+static void on_portal_setting_changed(GDBusConnection *connection, const gchar *sender_name,
+                                      const gchar *object_path, const gchar *interface_name,
+                                      const gchar *signal_name, GVariant *parameters,
+                                      gpointer user_data) {
+    (void) connection;
+    (void) sender_name;
+    (void) object_path;
+    (void) interface_name;
+    (void) signal_name;
+    (void) user_data;
+
+    if (!g_variant_is_of_type(parameters, G_VARIANT_TYPE("(ssv)")))
+        return;
+    const gchar *ns = NULL;
+    const gchar *key = NULL;
+    GVariant *value = NULL;
+    g_variant_get(parameters, "(&s&sv)", &ns, &key, &value);
+    if (g_strcmp0(ns, PORTAL_APPEARANCE_NS) == 0 && g_strcmp0(key, PORTAL_COLOR_SCHEME_KEY) == 0) {
+        int scheme = portal_scheme_from_variant(value);
+        if (scheme != g_portal_scheme) {
+            g_debug("npad: desktop colour scheme is now %d", scheme);
+            g_portal_scheme = scheme;
+            npad_gtk_system_scheme_changed();
+        }
+    }
+    if (value)
+        g_variant_unref(value);
+}
+
+static void portal_subscribe(void) {
+    g_portal_subscription = g_dbus_connection_signal_subscribe(
+        g_bus, PORTAL_NAME, PORTAL_SETTINGS_INTERFACE, "SettingChanged", PORTAL_PATH,
+        PORTAL_APPEARANCE_NS, G_DBUS_SIGNAL_FLAGS_NONE, on_portal_setting_changed, NULL, NULL);
+}
+
+int npad_gtk_portal_color_scheme(void) {
+    if (g_portal_scheme != PORTAL_UNKNOWN)
+        return g_portal_scheme;
+
+    g_portal_scheme = 0; // No portal, no bus or no answer: no preference
+    if (!g_bus)
+        return g_portal_scheme;
+
+    // Synchronous so the window opens in the right colours instead of
+    // flashing the wrong ones; a missing portal fails at once, a slow one is
+    // cut off by the timeout
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_sync(
+        g_bus, PORTAL_NAME, PORTAL_PATH, PORTAL_SETTINGS_INTERFACE, "Read",
+        g_variant_new("(ss)", PORTAL_APPEARANCE_NS, PORTAL_COLOR_SCHEME_KEY), G_VARIANT_TYPE("(v)"),
+        G_DBUS_CALL_FLAGS_NONE, DBUS_CALL_TIMEOUT_MS, NULL, &error);
+    if (!reply) {
+        g_clear_error(&error);
+        return g_portal_scheme;
+    }
+    GVariant *value = g_variant_get_child_value(reply, 0);
+    g_portal_scheme = portal_scheme_from_variant(value);
+    g_variant_unref(value);
+    g_variant_unref(reply);
+    return g_portal_scheme;
+}
+
 bool npad_gtk_instance_init(void) {
     GError *error = NULL;
     g_bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &error);
@@ -147,6 +255,7 @@ bool npad_gtk_instance_init(void) {
     g_subscription =
         g_dbus_connection_signal_subscribe(g_bus, NULL, NPAD_DBUS_INTERFACE, NULL, NPAD_DBUS_PATH,
                                            NULL, G_DBUS_SIGNAL_FLAGS_NONE, on_signal, NULL, NULL);
+    portal_subscribe();
     return true;
 }
 
@@ -156,6 +265,10 @@ void npad_gtk_instance_cleanup(void) {
     if (g_subscription) {
         g_dbus_connection_signal_unsubscribe(g_bus, g_subscription);
         g_subscription = 0;
+    }
+    if (g_portal_subscription) {
+        g_dbus_connection_signal_unsubscribe(g_bus, g_portal_subscription);
+        g_portal_subscription = 0;
     }
     // Releasing the bus connection releases the name with it
     g_object_unref(g_bus);

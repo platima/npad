@@ -230,14 +230,12 @@ static void on_about_response(GtkDialog *dialog, gint response, gpointer data) {
 void ui_platform_show_about_dialog(Window *parent) {
     const char *authors[] = { "Platima", NULL };
     GtkWindow *owner = parent_window(parent);
-    const char *icon = owner ? gtk_window_get_icon_name(owner) : NULL;
     GtkWidget *dialog = gtk_about_dialog_new();
     g_object_set(dialog, "program-name", "npad", "version", NPAD_VERSION, "comments",
                  "A lightweight, cross-platform text editor\n"
                  "inspired by classic Windows Notepad.",
                  "website", "https://npad.dev", "website-label", "npad.dev", "authors", authors,
-                 "logo-icon-name", icon ? icon : "accessories-text-editor", "title", "About npad",
-                 NULL);
+                 "logo-icon-name", npad_gtk_app_icon_name(), "title", "About npad", NULL);
     if (owner) {
         gtk_window_set_transient_for(GTK_WINDOW(dialog), owner);
         gtk_window_set_destroy_with_parent(GTK_WINDOW(dialog), TRUE);

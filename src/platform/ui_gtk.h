@@ -12,6 +12,8 @@
  *   ui_gtk_edit.c     - context menu, file drops, external-change prompt,
  *                       Ctrl+wheel zoom
  *   ui_gtk_find.c     - Find / Replace / Go To
+ *   ui_gtk_lists.c    - the optional Markdown list tools: menu, transforms, list
+ *                       continuation, cut-a-line, rich-text paste
  *   ui_gtk_prefs.c    - Preferences and Format > Font
  *   ui_gtk_instance.c - cross-instance messaging over D-Bus: settings sync,
  *                       view sync, Close All, instance counting
@@ -89,6 +91,8 @@ typedef enum {
     NPAD_CMD_EDIT_TIME_DATE,
     NPAD_CMD_EDIT_PREFERENCES,
     NPAD_CMD_EDIT_PREFERENCES_DEBUG, // Ctrl+Shift+. : Preferences on the hidden Debug page
+    NPAD_CMD_EDIT_PASTE_ALT,         // Ctrl+Shift+V : the alternate paste mode
+    NPAD_CMD_EDIT_PASTE_MARKDOWN,    // Markdown menu: always a full conversion
     NPAD_CMD_FORMAT_WORD_WRAP,
     NPAD_CMD_FORMAT_MONOSPACE,
     NPAD_CMD_FORMAT_EOL_CRLF,
@@ -101,6 +105,16 @@ typedef enum {
     NPAD_CMD_VIEW_ZOOM_RESET,
     NPAD_CMD_VIEW_STATUS_BAR,
     NPAD_CMD_HELP_ABOUT,
+    // Markdown list tools (ui_gtk_lists.c)
+    NPAD_CMD_LIST_SORT_ASC,
+    NPAD_CMD_LIST_SORT_DESC,
+    NPAD_CMD_LIST_SORT_CASE,
+    NPAD_CMD_LIST_UNIQUE,
+    NPAD_CMD_LIST_CONVERT_DELIM,
+    NPAD_CMD_LIST_INDENT,        // With the default indent format
+    NPAD_CMD_LIST_UNINDENT,      // With the default indent format
+    NPAD_CMD_LIST_INDENT_FORMAT, // + a ListIndentFormat: indent in that format
+    NPAD_CMD_LIST_INDENT_FORMAT_LAST = NPAD_CMD_LIST_INDENT_FORMAT + 6,
     NPAD_CMD_COUNT
 } NpadCommand;
 
@@ -193,6 +207,10 @@ void npad_gtk_apply_synced_view_state(Window *window, int zoom, bool monospace);
 // ported Replace / list tools later)
 void npad_gtk_replace_selection(Window *window, const char *text);
 
+// Paste the clipboard's plain text at the caret (Ctrl+V with the Markdown tools
+// off, and the fallback for every rich paste)
+void npad_gtk_paste_plain(Window *window);
+
 // Launch another npad process with extra arguments (NULL-terminated array,
 // may be NULL)
 void npad_gtk_spawn_self(const char *const *extra_args);
@@ -242,6 +260,41 @@ void npad_gtk_find_reload_settings(void);
 // Close any open find/replace dialog (shutdown)
 void npad_gtk_find_cleanup(void);
 
+// Find / Replace term history: most-recent-first, de-duplicated, capped; kept in
+// settings.json as <prefix>_0, <prefix>_1, ... (shared with the Win32 build).
+// The Convert Delimiters dialog uses the same machinery.
+void npad_gtk_history_load(GtkWidget *combo, const char *prefix);
+// Put value first; true when the stored list changed (the caller saves)
+bool npad_gtk_history_push(const char *prefix, const char *value);
+
+// --- ui_gtk_lists.c -----------------------------------------------------------
+
+// Which clipboard conversion a paste uses
+typedef enum {
+    NPAD_PASTE_PRIMARY, // Ctrl+V: markdown_paste_primary
+    NPAD_PASTE_ALT,     // Ctrl+Shift+V: markdown_paste_alt
+    NPAD_PASTE_MARKDOWN // Markdown > Paste as Markdown: always full
+} NpadPasteKind;
+
+// Connect the key handling (Tab, Shift+Tab, Enter) and build the Markdown menu
+// when the tools are on. The menu bar must exist.
+void npad_gtk_lists_init(Window *window);
+// Settings changed: insert, remove or rebuild the Markdown menu to match
+void npad_gtk_lists_reload_settings(Window *window);
+// Append the tools to the right-click menu (a separator and the Markdown
+// items) when list_tools_enabled is on
+void npad_gtk_lists_populate_context_menu(Window *window, GtkWidget *menu);
+// Run a list command (or the alternate paste); false if it is none of those
+bool npad_gtk_lists_command(Window *window, NpadCommand command);
+// Whether a list command can act right now (the greying of both menus)
+bool npad_gtk_lists_command_enabled(Window *window, NpadCommand command);
+// Ctrl+X with the tools on and nothing selected: cut the whole line. Returns
+// true when it did (or the document was empty); false means "cut normally".
+bool npad_gtk_lists_cut_line(Window *window);
+// Paste a pending cut line above the caret's, or the clipboard's HTML
+// converted per kind. false: do a plain paste.
+bool npad_gtk_lists_paste(Window *window, NpadPasteKind kind);
+
 // --- ui_gtk_prefs.c ----------------------------------------------------------
 
 // The modal Preferences dialog; show_debug adds the hidden Debug page and
@@ -250,6 +303,12 @@ void npad_gtk_show_preferences(Window *window, bool show_debug);
 // Format > Font: GtkFontChooserDialog writing the font keys for the font type
 // this window is showing
 void npad_gtk_show_font_dialog(Window *window);
+
+// What the colour-scheme code sees (Debug page); g_free() the result
+char *npad_gtk_theme_diagnostics(void);
+
+// The icon name for windows and the About dialog (ui_gtk.c)
+const char *npad_gtk_app_icon_name(void);
 
 // --- ui_gtk_instance.c -------------------------------------------------------
 
@@ -269,5 +328,13 @@ int npad_gtk_instance_count_others(void);
 
 // Whether pid is a running npad instance (bus first, /proc as fallback)
 bool npad_gtk_instance_pid_is_npad(long pid);
+
+// The desktop's colour preference from the xdg-desktop-portal Settings
+// interface (org.freedesktop.appearance color-scheme): 0 = none / no portal,
+// 1 = dark, 2 = light. Asked once on first use, then kept current by the
+// portal's SettingChanged signal, which calls npad_gtk_system_scheme_changed()
+// (ui_gtk.c) when the value differs.
+int npad_gtk_portal_color_scheme(void);
+void npad_gtk_system_scheme_changed(void);
 
 #endif // UI_GTK_H
