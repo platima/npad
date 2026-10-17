@@ -410,7 +410,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] Appear in Windows' "Open with" list for any file type (like notepad.exe)
 - [ ] **Cross-Platform Expansion**
   - [ ] macOS Cocoa implementation
-  - [ ] Linux GTK 3 implementation (X11 & Wayland) - first released in v0.36.0, see [LINUX_PORT.md](LINUX_PORT.md)
+  - [ ] Linux GTK 3 implementation (X11 & Wayland) - first released in v0.34.0, see [LINUX_PORT.md](LINUX_PORT.md)
   - [ ] ncurses terminal implementation
   - [ ] Windows Terminal implementation
 - [ ] **Future Considerations**

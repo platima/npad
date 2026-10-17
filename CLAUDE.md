@@ -117,7 +117,17 @@ something turns out to work differently than it reasonably appears to.
 
 **Versioning & changelog conventions (every change):**
 - Bump the version per semver in `src/main.h` AND `src/platform/npad.rc`
-  (0.x: minor = feature rounds / breaking changes, patch = fix-only rounds)
+  (0.x: minor = feature rounds / breaking changes, patch = fix-only rounds),
+  **once per release cycle**, measured from the latest release tag
+  (`git describe --tags --abbrev=0`):
+  - If the branch's version is still the latest release's, bump it (minor or
+    patch as above) and open a new `CHANGELOG.md` heading for it.
+  - If it is already above the latest release, this cycle has its number:
+    do NOT bump again. Add your notes under that existing heading, and raise
+    patch to minor only if this round adds features to a fix-only cycle.
+  - Work rounds on `linux` and feature branches are not releases. Bumping per
+    round there produced 0.34, 0.35 and 0.36 after v0.33.0, all unreleased,
+    which had to be renumbered back to v0.34.0 before the release.
 - Add curated notes to `CHANGELOG.md` under the version heading (the
   commit-level history lives in `git log`, so there is no separate changes file)
 - Document any new setting/shortcut/behavior in `DOCUMENTATION.md`

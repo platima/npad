@@ -7,7 +7,7 @@ this file is for open loops.
 
 ---
 
-## 🧪 Needs testing - v0.36.0 Linux Find / Replace / Go To (on Mint / Debian 13)
+## 🧪 Needs testing - v0.34.0 Linux Find / Replace / Go To (on Mint / Debian 13)
 
 Verified in Broadway only. On a real desktop:
 
@@ -18,7 +18,7 @@ Verified in Broadway only. On a real desktop:
 - [ ] Typing accented / CJK text into the Find box and searching for it
 - [ ] Highlight all stays right while editing a large file
 
-## 🧪 Needs testing - v0.36.0 Linux printing (on Mint / Debian 13)
+## 🧪 Needs testing - v0.34.0 Linux printing (on Mint / Debian 13)
 
 Verified only with Print to File under Broadway in WSL. On a real desktop:
 
@@ -32,7 +32,7 @@ Verified only with Print to File under Broadway in WSL. On a real desktop:
 - [ ] The preview's line breaks match the printed page on the real printer
       (they are measured in points, independent of the printer's dpi)
 
-## 🧪 Needs testing - v0.36.0 Linux foundation (on Mint / Debian 13)
+## 🧪 Needs testing - v0.34.0 Linux foundation (on Mint / Debian 13)
 
 Verified only under GTK's Broadway backend in WSL (see LINUX_PORT.md). On a
 real desktop, X11 and Wayland sessions both:

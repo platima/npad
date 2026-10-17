@@ -65,7 +65,7 @@ jobs:
         git config --global --add safe.directory "$GITHUB_WORKSPACE"
         make clean
         # A release builds the tag's version, including a pre-release suffix
-        # (v0.36.0-rc1 -> 0.36.0-rc1). nfpm turns the suffix into 0.36.0~rc1
+        # (v0.34.0-rc1 -> 0.34.0-rc1). nfpm turns the suffix into 0.34.0~rc1
         # inside both packages, so an rc sorts before the final release in dpkg
         # and rpm, while the file names keep the tag's spelling, which is what
         # release.yml validates and attaches. The tag's base version must

@@ -5,7 +5,7 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.36.0] - 2026-10-17
+## [0.34.0] - 2026-10-17
 
 The first release with a Linux desktop build, which installs from signed
 apt and dnf repositories at <https://pkg.npad.dev>. Windows users get Find
