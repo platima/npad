@@ -179,9 +179,9 @@ Shift+click Preferences). Differences:
   shows which application currently handles plain text.
 - **No application-icon choice** on Appearance: the icon comes from the icon
   theme.
-- **Markdown** edits the shared keys, but the Markdown list tools themselves
-  have not been ported yet (the page says so). Turning Basic Markdown support
-  on already adds "Interpret escapes" to Find / Replace.
+- **Markdown** edits the shared keys the list tools read (see
+  [Markdown list tools on Linux](#markdown-list-tools-on-linux)). Turning Basic
+  Markdown support on also adds "Interpret escapes" to Find / Replace.
 - **Debug** shows the Linux diagnostics: version, executable, GTK version and
   display backend, session type, locale, settings and recovery paths, the
   number of open windows and the startup profile, with Copy Diagnostics.
@@ -215,6 +215,37 @@ These match the Windows build; the differences are noted.
 - **Scroll bars** are always shown and greyed out when the text fits, as in
   Notepad, instead of appearing and disappearing (GTK's overlay scroll bars are
   turned off for the text area). With Word Wrap on there is no horizontal bar.
+
+### Markdown list tools on Linux
+
+Everything under *Markdown list tools* in the behaviour notes below applies,
+with the same settings keys, defaults and rules, and none of it exists until
+**Basic Markdown support** (`list_tools_enabled`, Preferences > Markdown) is on.
+Switching it on or off takes effect at once in every open window: the
+**Markdown** menu appears between Format and View (or goes), and Tab, Enter,
+Ctrl+X and the paste shortcuts change behaviour. Linux specifics:
+
+- **Menu and right-click.** Markdown > Sort (Ascending, Descending, Case
+  Sensitive), Unique, Convert Delimiters..., Indent (with its formats and
+  Custom...), Unindent and Paste as Markdown; the right-click menu repeats them
+  after Select All. They are greyed while the document is empty (Paste as
+  Markdown while the clipboard is). Cut stays available with nothing selected,
+  because Ctrl+X then cuts the line.
+- **Keys.** Tab and Shift+Tab, or Ctrl+] and Ctrl+[ when
+  `list_indent_shortcut_brackets` is on (the menu shows whichever is active;
+  Ctrl+[ and Ctrl+] need a keyboard layout where the brackets are typed without
+  AltGr). Enter and Ctrl+X behave as on Windows.
+- **Cut line / paste above** remembers the cut line, and pastes it above while
+  the clipboard still holds exactly that text. (Windows compares clipboard
+  sequence numbers; Linux has none.)
+- **Rich paste** reads the clipboard's `text/html`, which sources offer as
+  UTF-8 or UTF-16; Ctrl+V uses `markdown_paste_primary` (default Lists) and
+  Ctrl+Shift+V `markdown_paste_alt` (default Plain), both plain while the tools
+  are off.
+- **Dialogs.** Convert Delimiters and Custom Indent are plain GTK dialogs with
+  the Windows wording; the selection you started from survives them.
+- Every transform is one undo step, and a transform that changes nothing is not
+  an edit (the document stays unmodified).
 
 ### Installing on Linux
 
@@ -344,7 +375,7 @@ File handling: saving, opening, recent files, recovery, and what happens when a 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `default_encoding` | int | `0` (UTF-8) | Encoding for new files: 0 UTF-8, 1 UTF-8 BOM, 2 UTF-16 LE, 3 UTF-16 BE, 4 ANSI. |
-| `default_line_ending` | int | `0` (CRLF) | Line endings for new files: 0 CRLF, 1 LF, 2 CR. |
+| `default_line_ending` | int | platform: `0` (CRLF) on Windows, `1` (LF) on Linux | Line endings for new files, and for opened files with no line breaks: 0 CRLF, 1 LF, 2 CR. |
 | `default_font_mono` | bool | `true` | New windows start in monospace (`true`) or proportional (`false`) mode. **Monospace by default**, which is what mirrors notepad.exe: it has a single font setting and ships it as Consolas 11 - the same face and size as npad's monospace default. |
 | `default_zoom` | int | `100` | New windows' zoom percent (10-500). |
 | `auto_update_defaults` | bool | `false` | View changes (font type, zoom) immediately become the new defaults. |

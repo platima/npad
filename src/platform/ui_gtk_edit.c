@@ -41,8 +41,13 @@ bool npad_gtk_edit_command_enabled(Window *window, NpadCommand command) {
             return undo_can_undo(window->undo);
         case NPAD_CMD_EDIT_REDO:
             return undo_can_redo(window->undo);
-        case NPAD_CMD_EDIT_CUT: // Batch D2: with the Markdown tools on, Ctrl+X
-                                // cuts the line, so a non-empty document is enough
+        case NPAD_CMD_EDIT_CUT:
+            // With the Markdown tools on, Ctrl+X without a selection cuts the
+            // line, so Cut then only needs a non-empty document
+            if (settings_get_bool("list_tools_enabled", false))
+                return gtk_text_buffer_get_has_selection(window->buffer) ||
+                       gtk_text_buffer_get_char_count(window->buffer) > 0;
+            return gtk_text_buffer_get_has_selection(window->buffer);
         case NPAD_CMD_EDIT_COPY:
         case NPAD_CMD_EDIT_DELETE:
             return gtk_text_buffer_get_has_selection(window->buffer);
@@ -50,6 +55,8 @@ bool npad_gtk_edit_command_enabled(Window *window, NpadCommand command) {
             return gtk_clipboard_wait_is_text_available(
                 gtk_widget_get_clipboard(window->text_view, GDK_SELECTION_CLIPBOARD));
         default:
+            if (command >= NPAD_CMD_LIST_SORT_ASC || command == NPAD_CMD_EDIT_PASTE_MARKDOWN)
+                return npad_gtk_lists_command_enabled(window, command);
             return true;
     }
 }
@@ -77,14 +84,12 @@ static void add_context_separator(GtkWidget *menu) {
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
 }
 
-// Batch D2 hook: the Markdown list tools append here (a separator, then the
-// items of the Markdown menu, mirrored) when the list_tools_enabled setting is
-// on - exactly where Win32's show_context_menu calls populate_list_menu. The
-// menu is built fresh for every popup, so items can be added unconditionally
-// and their sensitivity set right here, like the edit items above.
+// The Markdown list tools append here (a separator, then the items of the
+// Markdown menu, mirrored) when the list_tools_enabled setting is on - exactly
+// where Win32's show_context_menu calls populate_list_menu. The menu is built
+// fresh for every popup, so their sensitivity is set as they are added.
 static void extend_context_menu(Window *window, GtkWidget *menu) {
-    (void) window;
-    (void) menu;
+    npad_gtk_lists_populate_context_menu(window, menu);
 }
 
 // Replace GTK's stock text-view menu (Emoji, input methods, its own idea of
