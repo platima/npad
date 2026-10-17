@@ -330,8 +330,8 @@ static bool g_match_case = false;
 static bool g_whole_word = false;
 static bool g_search_down = true;
 static bool g_wrap_around = true;
-static bool g_interpret_escapes = false;  // Interpret \n \t \\ \uXXXX in find/replace
-static bool g_highlight_all = false;      // Highlight every match while the dialog is open
+static bool g_interpret_escapes = false; // Interpret \n \t \\ \uXXXX in find/replace
+static bool g_highlight_all = false;     // Highlight every match while the dialog is open
 
 // Highlight-all overlay match list, sorted ascending (drawn over the text in
 // the WM_PAINT hook; the control's plain-text mode rejects per-range
