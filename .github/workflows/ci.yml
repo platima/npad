@@ -80,7 +80,7 @@ jobs:
     - name: Build Windows variants
       run: |
         make clean
-        make windows
+        make windows WERROR=1
     
     - name: Verify Windows builds exist and generate checksums
       run: |
@@ -133,7 +133,7 @@ jobs:
     - name: Build npad-arm64.exe
       run: |
         make clean
-        make windows-arm64
+        make windows-arm64 WERROR=1
 
     - name: Verify the arm64 build
       run: |
@@ -183,7 +183,7 @@ jobs:
     - name: Build Linux variants
       run: |
         make clean
-        make linux
+        make linux WERROR=1
     
     - name: Verify Linux builds exist and generate checksums
       run: |
@@ -240,7 +240,7 @@ jobs:
 
     - name: Run unit tests
       run: |
-        make test
+        make test WERROR=1
 
     - name: Download artifacts
       uses: actions/download-artifact@v8

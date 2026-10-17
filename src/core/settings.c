@@ -902,7 +902,6 @@ static char *serialize_settings(void) {
     // Calculate required buffer size more accurately
     size_t total_size = 100; // Base size for JSON structure
     SettingEntry *current = g_settings_head;
-    int entry_count = 0;
 
     while (current) {
         // Calculate exact size needed for this entry
@@ -931,7 +930,6 @@ static char *serialize_settings(void) {
 
         // "key": "value", plus quotes, colon, space, comma, newline
         total_size += key_escaped_len + value_escaped_len + 20;
-        entry_count++;
         current = current->next;
     }
 
