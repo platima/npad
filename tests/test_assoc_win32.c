@@ -14,7 +14,7 @@
  * run tests\test_assoc_win32.exe. Not part of `make test`, which is native.
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #include "test_framework.h"

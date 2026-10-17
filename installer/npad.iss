@@ -10,7 +10,8 @@
 #endif
 #define AppName "npad"
 #define AppPublisher "Platima"
-#define AppURL "https://github.com/platima/npad"
+#define AppURL "https://npad.dev"
+#define RepoURL "https://github.com/platima/npad"
 #define AppExe "npad.exe"
 
 [Setup]
@@ -19,8 +20,8 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
-AppSupportURL={#AppURL}/issues
-AppUpdatesURL={#AppURL}/releases
+AppSupportURL={#RepoURL}/issues
+AppUpdatesURL={#RepoURL}/releases
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 ; Add/Remove Programs shows just "npad" - the version has its own column

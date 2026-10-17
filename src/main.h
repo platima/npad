@@ -3,7 +3,7 @@
  * Global definitions and version information
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #ifndef MAIN_H
@@ -14,7 +14,7 @@
 #define NPAD_STRINGIFY(x) NPAD_STRINGIFY_HELPER(x)
 
 #define NPAD_VERSION_MAJOR 0
-#define NPAD_VERSION_MINOR 33
+#define NPAD_VERSION_MINOR 34
 #define NPAD_VERSION_PATCH 0
 #define NPAD_VERSION_RELEASE "dev"
 

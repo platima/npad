@@ -346,6 +346,15 @@ is indistinguishable from a deliberate one (UNC paths begin with two). Decide
 explicitly which you are doing, and say so — here the entries age out of Recent
 Files on their own, so freezing was the right trade.
 
+**A key that starts with a kept prefix is kept - even when it is a preference.**
+Reset All Preferences preserves everything under `find_` (search options and
+history), so `find_seed_selection`, a real Preferences checkbox, would have
+survived a reset and the checkbox would then lie about "defaults". Name a new
+preference outside the kept prefixes where you can; where the name is fixed
+(it is shared across platforms), remove it explicitly after the prefix reset
+(`reset_all_preferences` does) and say so wherever the next platform's reset
+gets written (LINUX_PORT.md batch B).
+
 ## Core: text model
 
 **Detect a limitation where you can prove it, not where you guessed it.** The
@@ -360,6 +369,128 @@ truncates at that byte: a 120 KB PNG loads as 9 bytes. The counts are then
 honest — it is the *load* that is broken. Worse, `current_file` still points at
 the original, so typing one character and saving overwrites it. Genuine binary
 support needs length-carrying buffers throughout.
+
+## GTK / Linux
+
+**GtkTextBuffer (GTK 3) looks like RichEdit's peer, but it has no undo at
+all.** GTK 4 added one; GTK 3 never will. → npad records edits from the
+buffer's `insert-text` / `delete-range` signals into `core/undo.c` and replays
+them. Connect the handlers normally (not `_after`): they then run before the
+default handler, while the iterators still show where the edit starts.
+
+**GTK wraps every keystroke in a "user action"**, not just compound edits. So
+the obvious design - one undo step per user action - makes every character its
+own step and kills word-level coalescing. → Hold the edits seen inside a user
+action and flush at its end: one edit is recorded plainly (it can still merge
+with the previous keystroke), several become one group. A paste or typing over
+a selection is several; a keystroke is one.
+
+**`gtk_check_menu_item_set_active` emits `activate`.** Syncing a check mark
+from code therefore runs the command again - a Word Wrap check refreshed on
+menu open toggles wrap back off. Radio items also emit `activate` for the item
+being switched OFF. → Route state syncs through one helper that sets a guard
+flag, and ignore `activate` on a radio item that is not active.
+
+**`gtk_widget_remove_accelerator` warns when the accelerator is not
+installed**, so "remove both possibilities, then add the right one" (the
+Ctrl+N / Ctrl+Shift+N swap) prints GTK-CRITICAL noise. Track what is
+installed.
+
+**A CSS number built with printf breaks under a decimal-comma locale.**
+`font-size: 10,5pt` is rejected silently and the old font stays, so it looks
+like the setting did nothing - only for users in de_DE, fr_FR and friends.
+→ `g_ascii_dtostr`, never `%f`, for anything parsed as CSS.
+
+**Wayland does not let a client read or set its window position.**
+`gtk_window_get_position` returns 0,0 and `gtk_window_move` is ignored.
+Persisting what it reports would overwrite the position an X11 session saved
+with 0,0. → Remember the last requested position and report that back; only
+X11 (`GdkX11Display`) positions for real.
+
+**`g_set_prgname` must run before `gtk_init`, and must be the app id.** It
+becomes the Wayland `app_id` and the X11 `WM_CLASS`, which is how the desktop
+matches windows to the `.desktop` launcher and its icon. Get it wrong and the
+taskbar shows a generic icon however the launcher is set up.
+
+**A .deb built on a new Ubuntu does not install on an old Debian by default.**
+`dpkg-shlibdeps` would write `libgtk-3-0t64` (the 64-bit time_t rename in
+Debian 13 / Ubuntu 24.04), which Debian 12 and Ubuntu 22.04 do not have, and
+a `libc6` floor from the build host. -> `packaging/linux/nfpm.yaml` writes
+`libgtk-3-0t64 | libgtk-3-0` by hand and `scripts/build-package.sh` takes the
+libc6 floor from the binary's highest `GLIBC_x.y` symbol; releases build in a
+Debian 12 container to keep that floor low, and `packages.yml` fails if it
+rises above Ubuntu 22.04's 2.35. A .desktop file's name must equal the app id
+(`g_set_prgname`) or the shell shows a generic icon.
+
+**nfpm expands `${VAR}` in `contents` only when the entry says `expand: true`.**
+Environment variables work in `version`, `release` and the `depends` lists
+without any switch, which makes the `src:` failure ("Glob failed:
+`${STAGE}/usr/bin/npad`: no matching files") look like a bug in your path.
+Likewise `type: tree` makes the rpm *own* the directories it walks (it listed
+`/usr/share/icons/hicolor`, which belongs to hicolor-icon-theme), so
+`nfpm.yaml` lists files individually. An empty `release` gives a deb version
+without a `-1` revision; the rpm needs one.
+
+**Artifact names must be unique within a workflow run, and `release.yml` runs
+`ci.yml` first.** Both build the Linux packages through `packages.yml`, so
+that workflow takes an `artifact_name` input and the release passes its own;
+otherwise the second upload fails. Attaching to the release happens in
+`release.yml`, not in `packages.yml`, because a reusable workflow requesting
+`contents: write` makes every caller that has only read access fail at
+startup, including plain CI runs.
+
+**A `GtkComboBoxText` with an entry is not the entry's parent.** The entry sits
+inside a `GtkBox` inside the combo, so `gtk_widget_get_parent(entry)` and a
+cast to `GTK_COMBO_BOX_TEXT` fail with a CRITICAL and the history list stays
+empty - silently, apart from the log. → Keep the combo widget and fetch the
+entry with `gtk_bin_get_child`.
+
+**Applying a `GtkTextTag` invalidates `GtkTextIter`s**, just as an edit does.
+Highlighting every match by walking forward with one iterator and tagging as
+you go gives stale iterators. → Collect the matches as character offsets
+first, then rebuild iterators and apply.
+
+**`gtk_text_iter_forward_search` takes the string before the flags** (`iter,
+str, flags, ...`) - the reverse of what the name and every wrapper suggest. A
+wrong order is a compile error, not a runtime surprise.
+
+**Under `-std=c99`, `strdup` is not declared**, and the implicit declaration
+turns the result into an `int`. In the GTK files use `g_strdup`; GLib's
+allocator is plain `malloc` (2.46+), so core's `free()` is still right.
+
+**GtkPrintOperation's built-in preview is a PDF viewer, not a preview.**
+`GTK_PRINT_OPERATION_ACTION_PREVIEW` exports a temporary PDF and opens it in
+the desktop's default PDF handler. On a machine with none (WSL, a minimal
+install) nothing appears and nothing reports an error; it also has no Print or
+Page Setup. → Connect the operation's `preview` signal, return TRUE and draw
+the pages yourself with `gtk_print_operation_preview_render_page` onto your own
+cairo context. The page count only exists after the preview's `ready` signal,
+so build the window there.
+
+**A `preview` handler must give the print context a cairo context before it
+returns, or GTK aborts.** `print_pages` checks right after the signal and calls
+`g_error("You must set a cairo context on the print context")` - a fatal abort
+with the backtrace inside libgtk, not in npad. Pagination (`begin-print`) runs
+afterwards and needs it too. → `gtk_print_context_set_cairo_context` with a
+throwaway surface straight away; set the real one in each draw.
+
+**GTK's 72 dpi print context hints glyph advances to whole points, so text
+measures differently at different resolutions.** A 14 pt monospace face is
+8.43 pt per glyph but laid out as 8 pt on the export/PDF context: 96 columns
+fit where 91 should, and a preview built on a 300 dpi context wraps five
+columns earlier than the page it claims to preview. Pango 1.44+ also rounds
+glyph positions on its own. → Measure and draw on a Pango context of your own
+(`pango_font_map_create_context(pango_cairo_font_map_get_default())`, 72 dpi,
+`CAIRO_HINT_METRICS_OFF`, `pango_context_set_round_glyph_positions(FALSE)`),
+work in points, and `cairo_scale(72 / dpi)` when drawing onto the print
+context. The same text then measures the same on every device.
+
+**`gtk_print_operation_set_use_full_page(TRUE)` is how margins can be measured
+from the sheet edge.** By default the context's origin and size are the page
+setup's own margins, which GTK's paper dialog cannot edit (it has no margin
+fields) and which start at the printer's hardware margins. Full page gives the
+corner of the sheet, so Notepad-style margins are applied by npad alone.
+Landscape needs no rotation here: the context is already orientation-aware.
 
 ## Installers
 
@@ -476,6 +607,82 @@ a clean review; it later completed with six, including the critical one that
 took the release down.
 
 **npad itself can be inspected the same way.** `scripts/probe-prefs.ps1` posts WM_COMMAND for Preferences / Find / Replace to a fresh npad, walks the property sheet with `PSM_SETCURSEL`, captures each page with `PrintWindow`, and closes everything with `PSM_PRESSBUTTON` / `WM_CLOSE`. Two PowerShell traps met on the way: `$pid` is a read-only automatic variable (a parameter of that name fails at call time), and a static method is `[W]::Name`, never `W::Name`.
+
+**`wsl.exe` expands `$` before your `sh -c` ever sees it.** From Git Bash,
+`wsl.exe -- sh -c 'echo $HOME; $(pgrep x)'` substitutes on the way in (empty
+variables, mangled loops), and Git Bash also rewrites `/mnt/d/...` arguments
+into Windows paths unless `MSYS_NO_PATHCONV=1` is set. → Put anything with a
+`$` in a script file and run that: `MSYS_NO_PATHCONV=1 wsl.exe -d Debian --
+sh /mnt/c/.../script.sh`.
+
+**A background process started by a `wsl.exe` call dies if that call returns
+at once.** `nohup app &` as the last line of the script, with `wsl.exe`
+exiting straight after, tears the session down and kills the job before it
+gets going - silently, with nothing in its log. It looked like npad crashing
+on launch, twice. → Keep the call alive a second or two after launching
+(`sleep 1`), or start the process with `setsid`.
+
+**GTK's Broadway backend is a non-intrusive way to look at the Linux build
+from Windows** - it renders into a browser tab, not onto the desktop - but it
+only paints while the page is visible. With Claude's browser pane hidden,
+screenshots time out, and a page reloaded while hidden comes back blank. Keys
+still arrive, but only at the window Broadway last focused, so a newly
+launched window needs a click first. Screenshots are scaled (a 1280x720
+viewport comes back as 800x450), so measure in the screenshot's frame. When
+the pane cannot paint, verify through files: Ctrl+S and read the bytes, or
+watch `~/.config/npad/recovery/`.
+
+**Several sessions share one `broadwayd`, and `pkill broadwayd` is global.**
+Another session's cleanup killed the display mid-test (the page went dark and
+the app was gone). → Use your own display number (`:7` serves 8087) and run
+renamed copies of `broadwayd` and the binary so a sibling's `pkill` cannot
+match them. Also: the pane's screenshot trails the last action by a frame, and
+the `type` action does not reach GTK widgets (use `key`).
+
+**A user-local Xvfb (`apt-get download` + `dpkg -x`) cannot start.** It runs
+the keymap compiler from a path compiled into the binary (`/usr/bin/xkbcomp`)
+and has no option to move it, so without root it dies with "Failed to activate
+virtual core keyboard". Use Broadway, or install `xvfb` properly.
+
+**`path_traversal_protection` passes only because of where the checkout
+sits.** It expects `file_read_text("../../../etc/passwd")` to fail, and
+nothing in npad blocks traversal (by design - see `is_valid_path`). On CI the
+checkout is deep enough that the path does not exist; from a directory two
+levels below `/` it resolves to the real `/etc/passwd`, which reads fine and
+fails the test. Build mirrors at least three levels deep, and treat the test
+as asserting nothing about security.
+
+**Other sessions share the WSL and its Broadway displays.** `broadwayd :5` and
+`:7` were already in use by parallel sessions; starting a second one on the
+same number fails silently and the app connects to the *other* session's
+display - the screenshot then shows someone else's window, and keystrokes land
+in it. `pkill broadwayd` / `pkill npad-linux` kills theirs too. → Use an
+unused display number (`:23` is port 8103), record your own PIDs, and kill
+only those.
+
+**`lround` is in libm, which the Linux build does not link.** `make linux-gtk`
+fails at link time with "DSO missing from command line" for a single call to
+`lround`, even though the header compiles. → A one-line rounding helper, or
+add `-lm` deliberately.
+
+**A Python patch run from a heredoc can silently never match.** The Bash tool
+collapses a C `"\n"` (backslash-n) in a heredoc, so a `replace()` whose search
+text contained one failed its assertion and wrote nothing, and a heredoc with
+apostrophes broke the shell outright. → Write patch scripts with the file tool
+and run them, as with the existing heredoc advice.
+
+**A private npad for probing, and the traps on the way.** npad reads its
+settings through `SHGetFolderPath(CSIDL_APPDATA)`, which `APPDATA=` does not
+move - but overriding `USERPROFILE` for the child does, provided
+`%USERPROFILE%\AppData\Roaming\Platima\npad` already exists (otherwise it
+exits with "Failed to initialize settings"). That keeps a probe off the real
+settings.json, whose hash you can compare before and after. Start it with
+`WindowStyle Minimized` and `ShowWindow(SW_SHOWNOACTIVATE)` so it never takes
+focus. `PSM_PRESSBUTTON` takes `PSBTN_OK`=3, `APPLYNOW`=4, `CANCEL`=5 (0 is
+BACK, 1 is NEXT - they do nothing on a sheet). Boolean settings are stored as
+the strings `"true"`/`"false"`. And never `SendMessage` a command that can raise
+a message box (Find Next with no further match): the sender blocks forever;
+`PostMessage` it.
 
 ## Method
 

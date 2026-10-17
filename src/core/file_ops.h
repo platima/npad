@@ -3,7 +3,7 @@
  * Cross-platform file I/O operations
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #ifndef FILE_OPS_H
@@ -124,6 +124,12 @@ char *file_get_filename(const char *filepath);
 char *file_get_extension(const char *filepath);
 char *file_join_paths(const char *dir, const char *filename);
 bool file_is_absolute_path(const char *path);
+
+// The path made absolute against the current directory (malloc'd; NULL on
+// error). A file named on the command line is usually relative, and it has
+// to be resolved before anything stores it: Recent Files and crash recovery
+// reopen it later, from wherever that later launch happens to run.
+char *file_get_absolute_path(const char *path);
 
 // Error handling
 const char *file_get_last_error(void);

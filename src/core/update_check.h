@@ -6,7 +6,7 @@
  * automatically unless the user enables it in Preferences > Updates.
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #ifndef UPDATE_CHECK_H

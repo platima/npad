@@ -3,7 +3,7 @@
  * Unit tests for file I/O operations
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #include "test_framework.h"
@@ -320,6 +320,33 @@ TEST_CASE(stamp_equality_rejects_nulls) {
     remove("test_stamp.txt");
 }
 
+// A relative name is resolved against the working directory; an absolute one
+// comes back unchanged. Both checked by shape rather than against a fixed
+// string, since the working directory is wherever the tests run from.
+TEST_CASE(absolute_path_resolution) {
+    char *abs = file_get_absolute_path("notes.txt");
+    TEST_ASSERT_NOT_NULL(abs, "relative path resolves");
+    TEST_ASSERT(file_is_absolute_path(abs), "result is absolute");
+    size_t len = strlen(abs);
+    TEST_ASSERT(len > 10 && (strcmp(abs + len - 10, "/notes.txt") == 0 ||
+                             strcmp(abs + len - 10, "\\notes.txt") == 0),
+                "result ends with the file name");
+    free(abs);
+
+    char *dotted = file_get_absolute_path("./notes.txt");
+    TEST_ASSERT_NOT_NULL(dotted, "dot-relative path resolves");
+    TEST_ASSERT(strstr(dotted, "/./") == NULL, "leading ./ is dropped");
+    free(dotted);
+
+#ifndef _WIN32
+    char *same = file_get_absolute_path("/tmp/x.txt");
+    TEST_ASSERT_STR_EQ("/tmp/x.txt", same, "absolute path unchanged");
+    free(same);
+#endif
+    TEST_ASSERT_NULL(file_get_absolute_path(""), "empty path rejected");
+    TEST_ASSERT_NULL(file_get_absolute_path(NULL), "NULL rejected");
+}
+
 int main(void) {
     // Initialize error system for testing
     npad_error_init();
@@ -355,6 +382,7 @@ int main(void) {
     RUN_TEST(stamp_changes_when_size_changes);
     RUN_TEST(stamp_reports_a_missing_file);
     RUN_TEST(stamp_equality_rejects_nulls);
+    RUN_TEST(absolute_path_resolution);
     
     // Cleanup error system
     npad_error_cleanup();

@@ -123,7 +123,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update -q
-        sudo apt-get install -y -q build-essential libx11-dev libwayland-dev libncurses-dev
+        sudo apt-get install -y -q build-essential pkg-config libgtk-3-dev libncurses-dev
     
     - name: Build Linux variants
       run: |
@@ -133,36 +133,24 @@ jobs:
     - name: Verify Linux builds exist and generate checksums
       run: |
         echo "Verifying Linux builds were created..."
-        ls -la npad-linux-x11 npad-linux-wayland npad-linux-terminal
-        echo "Linux X11 size: $(stat -c%s npad-linux-x11) bytes"
-        echo "Linux Wayland size: $(stat -c%s npad-linux-wayland) bytes"
+        ls -la npad-linux npad-linux-terminal
+        echo "Linux desktop size: $(stat -c%s npad-linux) bytes"
         echo "Linux Terminal size: $(stat -c%s npad-linux-terminal) bytes"
         
         echo "Generating checksums..."
-        sha256sum npad-linux-x11 > npad-linux-x11.sha256
-        sha256sum npad-linux-wayland > npad-linux-wayland.sha256
+        sha256sum npad-linux > npad-linux.sha256
         sha256sum npad-linux-terminal > npad-linux-terminal.sha256
         
-        echo "Linux X11 SHA256: $(cat npad-linux-x11.sha256)"
-        echo "Linux Wayland SHA256: $(cat npad-linux-wayland.sha256)"
+        echo "Linux desktop SHA256: $(cat npad-linux.sha256)"
         echo "Linux Terminal SHA256: $(cat npad-linux-terminal.sha256)"
     
-    - name: Upload Linux X11 artifact
+    - name: Upload Linux desktop artifact
       uses: actions/upload-artifact@v7
       with:
-        name: npad-linux-x11-x64
+        name: npad-linux-x64
         path: |
-          npad-linux-x11
-          npad-linux-x11.sha256
-        retention-days: 7
-    
-    - name: Upload Linux Wayland artifact
-      uses: actions/upload-artifact@v7
-      with:
-        name: npad-linux-wayland-x64
-        path: |
-          npad-linux-wayland
-          npad-linux-wayland.sha256
+          npad-linux
+          npad-linux.sha256
         retention-days: 7
     
     - name: Upload Linux Terminal artifact
@@ -174,6 +162,14 @@ jobs:
           npad-linux-terminal.sha256
         retention-days: 7
 
+  # .deb and .rpm: built in a Debian 12 container with nfpm and install-tested
+  # on Debian 12/13, Ubuntu 22.04/24.04 and Fedora (see packages.yml). Gated
+  # on lint like every other build job: lint is the cheap first check, and a
+  # red lint must stop the whole run rather than be worked around.
+  packages:
+    needs: lint
+    uses: ./.github/workflows/packages.yml
+
   test:
     runs-on: ubuntu-latest
     needs: [build-windows, build-linux]
@@ -183,7 +179,8 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update -q
-        sudo apt-get install -y -q build-essential
+        # GTK runtime libraries, so the Linux desktop binary can be executed
+        sudo apt-get install -y -q build-essential libgtk-3-dev
 
     - name: Run unit tests
       run: |
@@ -278,89 +275,47 @@ jobs:
     - name: Verify checksums and test Linux builds
       run: |
         echo "=== Restoring execute permissions ==="
-        chmod +x artifacts/npad-linux-x11-x64/npad-linux-x11
-        chmod +x artifacts/npad-linux-wayland-x64/npad-linux-wayland
+        chmod +x artifacts/npad-linux-x64/npad-linux
         chmod +x artifacts/npad-linux-terminal-x64/npad-linux-terminal
         
-        echo "=== Verifying Linux X11 Build ==="
-        if [ ! -f "artifacts/npad-linux-x11-x64/npad-linux-x11" ]; then
-          echo "ERROR: Linux X11 executable not found"
+        echo "=== Verifying Linux Desktop Build ==="
+        if [ ! -f "artifacts/npad-linux-x64/npad-linux" ]; then
+          echo "ERROR: Linux desktop executable not found"
           exit 1
         fi
         
         # Verify checksum
-        if [ -f "artifacts/npad-linux-x11-x64/npad-linux-x11.sha256" ]; then
-          echo "Verifying Linux X11 checksum..."
-          cd artifacts/npad-linux-x11-x64/
-          if sha256sum -c npad-linux-x11.sha256; then
-            echo "✓ Linux X11 checksum verified"
+        if [ -f "artifacts/npad-linux-x64/npad-linux.sha256" ]; then
+          echo "Verifying Linux desktop checksum..."
+          cd artifacts/npad-linux-x64/
+          if sha256sum -c npad-linux.sha256; then
+            echo "✓ Linux desktop checksum verified"
           else
-            echo "ERROR: Linux X11 checksum verification failed"
+            echo "ERROR: Linux desktop checksum verification failed"
             exit 1
           fi
           cd ../..
         else
-          echo "WARNING: Linux X11 checksum file not found"
+          echo "WARNING: Linux desktop checksum file not found"
         fi
         
-        file artifacts/npad-linux-x11-x64/npad-linux-x11 || echo "file command not available"
+        file artifacts/npad-linux-x64/npad-linux || echo "file command not available"
         
-        if [ ! -x "artifacts/npad-linux-x11-x64/npad-linux-x11" ]; then
-          echo "ERROR: Linux X11 executable is not executable"
+        if [ ! -x "artifacts/npad-linux-x64/npad-linux" ]; then
+          echo "ERROR: Linux desktop executable is not executable"
           exit 1
         fi
         
-        size_x11=$(stat -c%s artifacts/npad-linux-x11-x64/npad-linux-x11)
-        echo "Linux X11 size: $size_x11 bytes"
+        size_desktop=$(stat -c%s artifacts/npad-linux-x64/npad-linux)
+        echo "Linux desktop size: $size_desktop bytes"
         
-        if [ "$size_x11" -le 20000 ]; then
-          echo "ERROR: Linux X11 build too small ($size_x11 bytes, expected > 20000)"
+        if [ "$size_desktop" -le 40000 ]; then
+          echo "ERROR: Linux desktop build too small ($size_desktop bytes, expected > 40000)"
           exit 1
         fi
         
-        if [ "$size_x11" -ge 5000000 ]; then
-          echo "ERROR: Linux X11 build too large ($size_x11 bytes, expected < 5000000)"
-          exit 1
-        fi
-        
-        echo "=== Verifying Linux Wayland Build ==="
-        if [ ! -f "artifacts/npad-linux-wayland-x64/npad-linux-wayland" ]; then
-          echo "ERROR: Linux Wayland executable not found"
-          exit 1
-        fi
-        
-        # Verify checksum
-        if [ -f "artifacts/npad-linux-wayland-x64/npad-linux-wayland.sha256" ]; then
-          echo "Verifying Linux Wayland checksum..."
-          cd artifacts/npad-linux-wayland-x64/
-          if sha256sum -c npad-linux-wayland.sha256; then
-            echo "✓ Linux Wayland checksum verified"
-          else
-            echo "ERROR: Linux Wayland checksum verification failed"
-            exit 1
-          fi
-          cd ../..
-        else
-          echo "WARNING: Linux Wayland checksum file not found"
-        fi
-        
-        file artifacts/npad-linux-wayland-x64/npad-linux-wayland || echo "file command not available"
-        
-        if [ ! -x "artifacts/npad-linux-wayland-x64/npad-linux-wayland" ]; then
-          echo "ERROR: Linux Wayland executable is not executable"
-          exit 1
-        fi
-        
-        size_wayland=$(stat -c%s artifacts/npad-linux-wayland-x64/npad-linux-wayland)
-        echo "Linux Wayland size: $size_wayland bytes"
-        
-        if [ "$size_wayland" -le 20000 ]; then
-          echo "ERROR: Linux Wayland build too small ($size_wayland bytes, expected > 20000)"
-          exit 1
-        fi
-        
-        if [ "$size_wayland" -ge 5000000 ]; then
-          echo "ERROR: Linux Wayland build too large ($size_wayland bytes, expected < 5000000)"
+        if [ "$size_desktop" -ge 5000000 ]; then
+          echo "ERROR: Linux desktop build too large ($size_desktop bytes, expected < 5000000)"
           exit 1
         fi
         
@@ -411,15 +366,15 @@ jobs:
       run: |
         echo "=== Testing executable functionality ==="
         
-        echo "Testing version output for Linux X11 build..."
-        if ! timeout 10s artifacts/npad-linux-x11-x64/npad-linux-x11 --version; then
+        echo "Testing version output for Linux desktop build..."
+        if ! timeout 10s artifacts/npad-linux-x64/npad-linux --version; then
           exit_code=$?
           echo "ERROR: Version command failed with exit code $exit_code"
           exit 1
         fi
         
-        echo "Testing help output for Linux X11 build..."
-        if ! timeout 10s artifacts/npad-linux-x11-x64/npad-linux-x11 --help; then
+        echo "Testing help output for Linux desktop build..."
+        if ! timeout 10s artifacts/npad-linux-x64/npad-linux --help; then
           exit_code=$?
           echo "ERROR: Help command failed with exit code $exit_code"
           exit 1

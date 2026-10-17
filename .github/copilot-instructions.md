@@ -92,4 +92,5 @@ See Project README.md
 - **Author**: Platima
 - **License**: MIT
 - **Repository**: https://github.com/platima/npad
+- **Website**: https://npad.dev
 - **Sponsorship**: Available via GitHub Sponsors

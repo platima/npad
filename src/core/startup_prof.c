@@ -2,7 +2,7 @@
  * npad - Startup profiling implementation
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #ifndef _WIN32

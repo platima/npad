@@ -5,6 +5,156 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.34.0] - 2026-10-17
+
+The first release with a Linux desktop build, which installs from signed
+apt and dnf repositories at <https://pkg.npad.dev>. Windows users get Find
+pre-filled from the selection (as notepad.exe does), a new home page at
+<https://npad.dev>, and a fix for files opened by a relative name.
+
+### 🆕 Features
+- **Find is filled from the selection (Windows and Linux).** Since Windows 10
+  1809, notepad.exe puts the selected text in "Find what" when Find or Replace
+  is opened; npad did not. Ctrl+F / Ctrl+H now do, on by default for that
+  reason, with the text selected so typing replaces it. Only a non-empty,
+  single-line selection of at most 255 characters seeds the box - anything
+  else leaves the last search term as before. One preference, **Fill Find
+  with the selected text** (Preferences > General, key `find_seed_selection`),
+  turns it off, and the same key and rule apply on every platform; the rule
+  lives in a unit-tested core module (`find_seed`) so the terminal and macOS
+  builds will share it. With "Interpret escapes" on, a selected `C:\new` is
+  seeded as `C:\\new` so it still finds itself. Reset All Preferences resets
+  it even though its key starts with `find_`.
+- **Linux desktop build, foundation round.** npad now builds as a native GTK 3
+  app on Linux - one binary, `npad-linux`, that runs on both X11 and Wayland
+  (GDK picks the display server at runtime). It replaces the empty X11 and
+  Wayland stubs. This round lays the groundwork rather than finishing the
+  port: the window, menus and shortcuts, editing and the clipboard,
+  undo/redo, open and save with each file's encoding and line endings
+  preserved, recent files, word wrap, monospace, zoom, the colour schemes,
+  the status bar and its pickers, and Time/Date are all in. Find/Replace,
+  Preferences, Font and printing are greyed out until the next rounds port
+  them. [LINUX_PORT.md](LINUX_PORT.md) tracks what is done, how to test it,
+  and the remaining checklist.
+  - **Every window still knows about every other.** On Windows, npad's
+    windows coordinate through a broadcast window message; Wayland lets an
+    app see nothing of other apps' windows, so on Linux the same messages go
+    over D-Bus. A preference changed in one window applies live in all of
+    them, Close All closes them all (each with its own save prompt), and view
+    sync works as on Windows. D-Bus support is part of GLib, which GTK
+    already needs, so nothing new is required to run npad. Without a session
+    bus npad still edits files; the windows just stop syncing.
+  - **Logging out keeps unsaved work.** When the session ends (or npad is
+    sent SIGTERM), npad parks unsaved changes without prompting and the next
+    launch reopens them silently - the Linux counterpart of the Windows
+    restart handling.
+  - **Crash recovery works the same way as on Windows**: a snapshot on the
+    first edit, then every 30 seconds, offered back after a crash.
+- **Linux: Find, Replace and Go To Line.** The Edit menu's Find, Find Next /
+  Previous (F3 / Shift+F3), Replace and Go To (Ctrl+G, or click Ln/Col in the
+  status bar) now work in the GTK build, with the same options, settings keys
+  and wording as the Windows build: Match case, Match whole word only, Wrap
+  around, Highlight all matches, Up / Down (Find only), the optional
+  "Interpret escapes" row (shown with Basic Markdown support), search history,
+  and "Match n of m" / "Wrapped around" / "Replaced n occurrences" messages.
+  - **Replace All is a single undo step**, however many occurrences it
+    changed, and Highlight All is a text tag, so it never marks the document
+    modified or enters the undo history.
+  - Searching works in characters, not bytes: accented and non-Latin text
+    matches, folds case correctly (Café finds CAFÉ) and counts as one column
+    per character.
+  - F3, Shift+F3, Ctrl+F, Ctrl+H and Ctrl+G keep working while the Find /
+    Replace dialog has the focus.
+  - The dialog is placed by the window manager (centred over the npad window
+    by most desktops) rather than at a fixed offset, because Wayland does not
+    let an application position its own windows.
+- **Linux: Page Setup, Print and Print Preview.** File > Page Setup, Print
+  (Ctrl+P) and Print Preview (Ctrl+Shift+P) work in the GTK build, with the
+  same behaviour as Windows: they print the *document* rather than the
+  window, in the font that window is showing, at the same point size, with
+  the Notepad header and footer codes (`&f` `&p` `&d` `&t` `&l` `&c` `&r`
+  `&&`) from Preferences > Defaults, and lines too long for the page are
+  re-wrapped at a space.
+  - **Page Setup** sets paper, orientation and the four margins. Margins are
+    stored in thousandths of an inch under the same `print_*` keys as
+    Windows, so a settings file means the same on both; the dialog shows
+    inches or millimetres to suit your locale, and a margin you did not touch
+    is never rewritten by the rounding (0.75 in stays 750, not 752). Paper
+    and orientation use GTK's own paper dialog, reached from a button.
+  - **Print Preview is npad's own window**, not GTK's stock one: GTK's hands
+    a PDF to whatever viewer the desktop has - none, on a minimal install -
+    and offers neither Print nor Page Setup. Ours shows the pages as they
+    will print, with Print, Page Setup, Previous/Next, Zoom, PgUp/PgDn,
+    Ctrl+Home/End and Esc, and re-paginates after Page Setup. The print
+    dialog's own Preview button opens it too.
+  - **The preview cannot disagree with the page.** Layout is measured once,
+    in points, on a Pango context with metric hinting and glyph rounding off,
+    and the stored lines are replayed to both. Measured on GTK's own 72 dpi
+    print context instead, a 14 pt monospace face rounds each glyph to 8 pt
+    and fits five more columns than a preview at another resolution.
+  - Set `NPAD_PRINT_EXPORT=/path/file.pdf` to make Print skip its dialog and
+    write a PDF - for checking output on a machine with no printer.
+- **Linux packaging and desktop integration.** `make install` now installs the
+  GTK app as `npad` together with its launcher (`io.github.platima.npad.desktop`,
+  registered for plain text, Markdown, JSON, XML and similar types), hicolor
+  icons (16-256 px, generated from the npad artwork) and AppStream metainfo,
+  under `PREFIX` (default `/usr/local`) and honouring `DESTDIR`; `make
+  uninstall` removes them. The empty ncurses stub is no longer installed.
+- **`make deb`** builds `npad_<version>_amd64.deb` with `dpkg-deb`. It depends
+  on `libgtk-3-0t64 | libgtk-3-0`, so one package covers Debian 12/13 and
+  Ubuntu 22.04/24.04, and its `libc6` floor is read from the binary. CI builds
+  and validates it on every push; releases attach it with a checksum, and
+  release validation now requires it.
+- **`.rpm` for Fedora, and signed apt/dnf repositories.** Releases now attach
+  `npad-<version>-1.x86_64.rpm` beside the `.deb` (`make rpm` builds it). Both
+  packages are described once in `packaging/linux/nfpm.yaml` and built by
+  [nfpm](https://nfpm.goreleaser.com) inside a Debian 12 container, so the
+  binary runs on Debian 12/13, Ubuntu 22.04+, Mint 21+/LMDE and current
+  Fedora. CI installs each package on those distros and checks every shared
+  library resolves, and fails if the libc floor rises above Ubuntu 22.04's.
+  Releases also notify `platima/npad-packages`, which publishes signed
+  repositories at <https://pkg.npad.dev> so `apt upgrade` and `dnf upgrade`
+  keep npad current. Setup instructions are in the README and
+  [DOCUMENTATION.md](DOCUMENTATION.md#installing-on-linux).
+  - `make deb` uses nfpm when it is installed and falls back to `dpkg-deb`
+    otherwise; CI fails if the two ever disagree about the package's
+    dependencies.
+  - The release workflow reads a new `NPAD_PACKAGES_TOKEN` secret for that
+    notification (see the comment on the `notify-packages` job). Without it
+    the job warns and the repositories pick the release up at their next
+    daily rebuild.
+
+### 🔄 Changed
+- **npad has a home page: [npad.dev](https://npad.dev).** The About box
+  (Windows and Linux), `npad --version`, the Windows installers' "more
+  information" link in Apps & features, and the Linux package and AppStream
+  metadata now point there. Issues, releases and the update check stay on
+  GitHub.
+
+### 🐛 Fixed
+- **A file opened from the command line by a relative name is remembered by
+  its full path.** `npad notes.txt` stored "notes.txt" in Recent Files and in
+  crash-recovery snapshots, so reopening it later from anywhere else failed.
+  The name is now resolved against the folder npad was started in, on both
+  Windows and Linux.
+
+### 🔧 Internal
+- **The GTK port now passes `make lint`.** CI ran only on pull requests into
+  `main`, so the Linux branch first met CI's cppcheck 2.13 late; it found ten
+  style issues in the GTK files, now fixed. CI now also runs on pull requests
+  into `linux`. The fixes const-qualified the GDK event parameters of the
+  status-bar click, window-state, Find dialog and print preview key callbacks,
+  made the window parameter of the `ui_is_window_maximized` / `ui_can_undo` /
+  `ui_can_redo` / `ui_is_text_modified` queries (and their `ui_platform_*`
+  implementations on every platform) `const`, and narrowed the
+  scope of a local in the Recent Files handler. No behaviour change.
+- A platform-neutral undo history (`src/core/undo.c`, with tests) for text
+  widgets that have no undo of their own: GTK 3's, and later the terminal
+  builds'. Typing undoes a word at a time, runs of Backspace or Delete undo
+  together, and compound edits undo as one step.
+- CI builds and checks `npad-linux` instead of the two stubs. `make linux`
+  needs `pkg-config` and `libgtk-3-dev`.
+
 ## [0.33.0] - 2026-09-27
 
 ### 🆕 Features
@@ -305,11 +455,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A Swap button** in Convert Delimiters, to reverse a conversion without
   retyping either field.
 - The default target is now `
-` rather than `
+` rather than `
 `. npad normalises the
   document to `
 ` internally, so the old default quietly taught a token that
-  could never work as a *source* - which is what made a `
+  could never work as a *source* - which is what made a `
 ` search match
   nothing before v0.27.1.
 

@@ -128,7 +128,91 @@ releases by `installer/fetch-fonts.ps1`. CI builds both via
 | Settings | `%APPDATA%\Platima\npad\settings.json` |
 | Crash-recovery snapshots | `%APPDATA%\Platima\npad\recovery\<slot>.txt` / `.meta` |
 
-Linux (when implemented): `~/.config/npad/`.
+Linux: `~/.config/npad/settings.json`, with snapshots in
+`~/.config/npad/recovery/`.
+
+## Linux
+
+The Linux desktop build (GTK 3; one binary for X11 and Wayland) is in
+progress. It shares the settings keys and behaviour described here; what is
+ported so far, and the deliberate differences (window position on Wayland,
+colour schemes against a dark GTK theme, the Text Documents filter, no Check
+for Updates), are tracked in [LINUX_PORT.md](LINUX_PORT.md).
+
+Find, Find Next / Previous, Replace, Replace All and Go To Line (Ctrl+F,
+F3, Shift+F3, Ctrl+H, Ctrl+G, or a click on Ln/Col) behave as described
+elsewhere in this document, with the same settings keys. Differences: the
+dialogs are positioned by the window manager rather than at a fixed offset
+and a remembered position, and Whole word only demands a word boundary
+beside a term edge that is itself a letter, digit or underscore.
+
+### Installing on Linux
+
+- **.deb** (Debian 12/13, Ubuntu 22.04+, Mint): `sudo apt install
+  ./npad_<version>_amd64.deb`. It depends only on GTK 3 (`libgtk-3-0` or
+  `libgtk-3-0t64`) and installs `/usr/bin/npad`, the launcher
+  (`io.github.platima.npad.desktop`, offered for text, Markdown, JSON, XML and
+  similar files in "Open with"), hicolor icons from 16 to 256 px and the
+  AppStream metainfo for software centres.
+- **.rpm** (Fedora): `sudo dnf install ./npad-<version>-1.x86_64.rpm`. It
+  requires `gtk3` and installs the same files as the .deb.
+- **apt / dnf repository (recommended; updates arrive with the rest of the
+  system).** The repositories at <https://pkg.npad.dev> are rebuilt from the
+  GitHub releases and signed with the npad packaging key
+  (<https://pkg.npad.dev/npad.asc>); the key lives only in the separate
+  `platima/npad-packages` repository.
+
+  Debian, Ubuntu, Mint:
+
+  ```bash
+  sudo install -d -m 0755 /etc/apt/keyrings
+  sudo curl -fsSL https://pkg.npad.dev/npad.asc -o /etc/apt/keyrings/npad.asc
+  sudo curl -fsSL https://pkg.npad.dev/npad.sources -o /etc/apt/sources.list.d/npad.sources
+  sudo apt update && sudo apt install npad
+  ```
+
+  Fedora:
+
+  ```bash
+  sudo curl -fsSL https://pkg.npad.dev/npad.repo -o /etc/yum.repos.d/npad.repo
+  sudo dnf install npad
+  ```
+
+  `curl -fsSL https://pkg.npad.dev/install.sh | sudo sh` does the right one of
+  these. To remove the repository, delete `/etc/apt/sources.list.d/npad.sources`
+  and `/etc/apt/keyrings/npad.asc` (or `/etc/yum.repos.d/npad.repo`).
+  Pre-releases are not published there; use the release assets for those.
+- **From source**: `make linux-gtk`, then `sudo make install`. `PREFIX`
+  (default `/usr/local`) and `DESTDIR` are honoured; `make uninstall` reverses
+  it. `make deb` and `make rpm` build the packages into `dist/`; both use
+  [nfpm](https://nfpm.goreleaser.com) (`scripts/install-nfpm.sh` fetches the
+  pinned release), and `make deb` falls back to `dpkg-deb` without it. Build
+  in a Debian 12 container for packages that run on every supported distro.
+- The desktop file name, icon name and window class are all the application
+  id `io.github.platima.npad`; the shell matches windows to the launcher and
+  icon through it.
+
+### Printing on Linux
+
+File > Page Setup, Print (Ctrl+P) and Print Preview (Ctrl+Shift+P) behave as
+described under *Behaviour notes* for Windows - same header/footer codes, same
+`print_*` settings, the document rather than the window - with these
+differences:
+
+- **Print opens GTK's print dialog** (printers known to CUPS, plus *Print to
+  File* for a PDF). The paper and orientation from Page Setup seed it.
+- **Page Setup** is npad's own dialog for the margins (inches or millimetres,
+  following your locale) with a *Paper and Orientation...* button into GTK's
+  paper dialog. Margins run from the edge of the sheet, as in Notepad.
+- **Print Preview is npad's own window** (Print, Page Setup, Previous / Next,
+  Zoom In / Out; PgUp / PgDn, Ctrl+Home / End, Ctrl++ / Ctrl+-, Ctrl+P and
+  Esc), so it works without a PDF viewer installed. It is also what the print
+  dialog's *Preview* button opens.
+- **Date and time codes** (`&d`, `&t`) use the locale's short date and its
+  time format without seconds.
+- Setting the environment variable `NPAD_PRINT_EXPORT` to a file path makes
+  Print write a PDF there without showing the dialog (used to test printing
+  on a machine with no printer).
 
 ## Settings reference
 
@@ -149,6 +233,7 @@ File handling: saving, opening, recent files, recovery, and what happens when a 
 | `session_resume_enabled` | bool | `true` | Crash recovery: snapshot unsaved work on the first edit and then on a timer; offer to restore after an unclean exit. On by default: snapshots never touch the user's file. All windows are restored, extras in their own cascaded windows. Does **not** gate handoff snapshots taken when an update or a Windows restart closes npad - those would otherwise be silently discarded. |
 | `session_interval` | int | `30` | Snapshot period in seconds (minimum 5). |
 | `ctrl_n_new_window` | bool | `false` | Swap Ctrl+N / Ctrl+Shift+N between "New" (clear this window) and "New Window" (open another instance). |
+| `find_seed_selection` | bool | `true` | **Fill Find with the selected text.** Opening (or re-focusing) Find or Replace with Ctrl+F / Ctrl+H puts the current selection in "Find what", selected so typing replaces it. On by default because Windows 10 notepad.exe (1809+) does exactly this, so it is the behaviour a Notepad user expects. Only a non-empty selection that contains no line break and is at most 255 characters seeds the box; anything else leaves the last search term as it was. The same key and rule apply on every platform. Unlike the other `find_` keys it is a preference, so Reset All Preferences resets it. |
 
 ### Appearance (Preferences > Appearance)
 
@@ -365,6 +450,13 @@ Window does). Not intended for direct use.
 
 ## Behaviour notes
 
+- **Find is filled from the selection**: with text selected, Ctrl+F / Ctrl+H
+  open the dialog with that text in "Find what" (selected, so typing replaces
+  it), as Windows 10 notepad.exe does. A selection that spans lines, is empty
+  or is longer than 255 characters is not used; the last search term stays.
+  With "Interpret escapes" on, backslashes in the seeded text are doubled so it
+  still matches the selection literally. Preferences > General > **Fill Find
+  with the selected text** (`find_seed_selection`, on by default) turns it off.
 - **Atomic saves**: files are written to a temp file, verified, then renamed
   over the original. A failed save never destroys the existing file.
 - **Unsaved-changes prompt**: closing or replacing a modified document asks

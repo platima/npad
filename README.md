@@ -95,7 +95,8 @@ Current features (Windows build):
 
 Planned (see the [Roadmap](#roadmap)):
 
-- 🚧 macOS, Linux (X11/Wayland) and terminal builds
+- 🚧 Linux desktop build (GTK 3, X11 and Wayland) - in progress, see [LINUX_PORT.md](LINUX_PORT.md)
+- 🚧 macOS and terminal builds
 - 🚧 Optional tabbed interface
 - 🚧 Multi-language support
 - 🚧 Custom keyboard shortcuts
@@ -151,7 +152,7 @@ Settings include window position, auto-save preferences, theme selection, and ot
 |----------|--------|---------|
 | Windows  | ✅ Active Development | Win32 API |
 | macOS    | 🚧 Planned | Cocoa |
-| Linux    | 🚧 Planned | X11 & Wayland |
+| Linux    | 🚧 In progress ([status](LINUX_PORT.md)) | GTK 3 (X11 & Wayland) |
 | *nix Terminal | 🚧 Planned | ncurses |
 | Windows Terminal | 🚧 Planned | Windows Console API |
 
@@ -198,6 +199,33 @@ installer reference (tasks, features, fonts, the Windows 11 notepad alias).
 > **Apply** (or choose "More info" → "Run anyway" on the SmartScreen
 > prompt). Verify the SHA256 against `CHECKSUMS.txt` first if unsure.
 
+- 🐧 **`npad_<version>_amd64.deb`** - Linux (Debian 12/13, Ubuntu 22.04+, Mint):
+  `sudo apt install ./npad_<version>_amd64.deb`. Installs the GTK 3 desktop app
+  (X11 and Wayland) with its launcher entry, icons and AppStream metadata.
+- 🐧 **`npad-<version>-1.x86_64.rpm`** - Linux (Fedora):
+  `sudo dnf install ./npad-<version>-1.x86_64.rpm`.
+  From source instead: `make linux-gtk && sudo make install` (honours `PREFIX`
+  and `DESTDIR`; `sudo make uninstall` removes it).
+
+**Linux updates through your package manager.** Add the signed npad
+repository once and `apt upgrade` / `dnf upgrade` keep npad current
+(packages and key served from <https://pkg.npad.dev>):
+
+```bash
+# Debian, Ubuntu, Mint
+sudo install -d -m 0755 /etc/apt/keyrings
+sudo curl -fsSL https://pkg.npad.dev/npad.asc -o /etc/apt/keyrings/npad.asc
+sudo curl -fsSL https://pkg.npad.dev/npad.sources -o /etc/apt/sources.list.d/npad.sources
+sudo apt update && sudo apt install npad
+
+# Fedora
+sudo curl -fsSL https://pkg.npad.dev/npad.repo -o /etc/yum.repos.d/npad.repo
+sudo dnf install npad
+```
+
+Or run `curl -fsSL https://pkg.npad.dev/install.sh | sudo sh`, which detects
+which of the two you need. Read the script first if you prefer.
+
 **Planned:** 🎁 **Winget** - for `winget install npad`.
 
 ### Compile Yourself
@@ -205,7 +233,7 @@ installer reference (tasks, features, fonts, the Windows 11 notepad alias).
 #### Prerequisites
 - **Windows**: MinGW-w64 or Visual Studio Build Tools
 - **macOS**: Xcode Command Line Tools  
-- **Linux**: GCC and development headers for X11
+- **Linux**: GCC, pkg-config and the GTK 3 development files (`libgtk-3-dev`)
 
 #### Build Instructions
 
@@ -221,7 +249,7 @@ installer reference (tasks, features, fonts, the Windows 11 notepad alias).
    ./scripts/setup-runner.sh
    
    # Or manually install
-   sudo apt-get install build-essential gcc-mingw-w64 libx11-dev
+   sudo apt-get install build-essential pkg-config gcc-mingw-w64 libgtk-3-dev
    ```
 
 3. **Build for your platform:**
@@ -229,7 +257,7 @@ installer reference (tasks, features, fonts, the Windows 11 notepad alias).
    # Windows (cross-compile from Linux)
    make windows        # Windows x64 build
    
-   # Native Linux
+   # Native Linux (./npad-linux - one binary for X11 and Wayland)
    make linux
    
    # macOS (when implemented)
@@ -277,7 +305,7 @@ Core Logic (platform-independent)
     ↓
 UI Interface Layer (abstraction)
     ↓
-Platform Implementation (Win32/Cocoa/X11/ncurses)
+Platform Implementation (Win32/GTK/Cocoa/ncurses)
 ```
 
 ## Contributing 🤝
@@ -382,7 +410,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] Appear in Windows' "Open with" list for any file type (like notepad.exe)
 - [ ] **Cross-Platform Expansion**
   - [ ] macOS Cocoa implementation
-  - [ ] Linux X11/Wayland implementation
+  - [ ] Linux GTK 3 implementation (X11 & Wayland) - first released in v0.34.0, see [LINUX_PORT.md](LINUX_PORT.md)
   - [ ] ncurses terminal implementation
   - [ ] Windows Terminal implementation
 - [ ] **Future Considerations**

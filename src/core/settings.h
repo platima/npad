@@ -3,7 +3,7 @@
  * Cross-platform settings storage and retrieval
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #ifndef SETTINGS_H

@@ -3,7 +3,7 @@
  * Platform-independent UI abstraction
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #ifndef UI_INTERFACE_H
@@ -102,7 +102,7 @@ void ui_set_window_size(Window *window, int width, int height);
 void ui_get_window_position(Window *window, int *x, int *y);
 void ui_set_window_position(Window *window, int x, int y);
 void ui_set_window_maximized(Window *window, bool maximized);
-bool ui_is_window_maximized(Window *window);
+bool ui_is_window_maximized(const Window *window);
 
 // Sensible first-run window geometry: a DPI-correct fraction of the primary
 // monitor work area, centred.
@@ -128,8 +128,8 @@ void ui_paste(Window *window);
 // Undo/Redo
 void ui_undo(Window *window);
 void ui_redo(Window *window);
-bool ui_can_undo(Window *window);
-bool ui_can_redo(Window *window);
+bool ui_can_undo(const Window *window);
+bool ui_can_redo(const Window *window);
 
 // Dialogs
 char *ui_show_open_dialog(Window *parent, const FileDialogParams *params);
@@ -166,7 +166,7 @@ bool ui_is_dark_mode(void);
 bool ui_system_supports_dark_mode(void);
 
 // Status information
-bool ui_is_text_modified(Window *window);
+bool ui_is_text_modified(const Window *window);
 void ui_set_text_modified(Window *window, bool modified);
 int ui_get_line_count(Window *window);
 void ui_get_cursor_line_column(Window *window, int *line, int *column);

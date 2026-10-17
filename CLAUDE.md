@@ -12,7 +12,7 @@ npad is a lightweight, cross-platform text editor inspired by classic Windows No
 - `make` - Auto-detect platform and build
 - `make all` - Build all Windows and Linux variants
 - `make windows` - Build for Windows x64 using MinGW (cross or native)
-- `make linux` - Build Linux variants (X11, Wayland, ncurses stubs)
+- `make linux` - Build Linux variants (GTK 3 desktop `npad-linux`, ncurses stub)
 - `make debug` - Build with debug symbols enabled
 - `make clean` - Clean build artifacts
 
@@ -50,7 +50,7 @@ Platform Implementation (Win32/X11/Cocoa/ncurses)
 **Key components:**
 - `src/core/` - Platform-independent editor logic, file operations, settings
 - `src/ui_interface.h/c` - UI abstraction layer defining events and window operations
-- `src/platform/` - Platform-specific UI implementations (ui_win32.c, ui_x11.c, etc.)
+- `src/platform/` - Platform-specific UI implementations (ui_win32.c, ui_gtk*.c, etc.)
 - `src/main.c` - Application entry point and initialization sequence
 
 **State management:**
@@ -81,7 +81,7 @@ something turns out to work differently than it reasonably appears to.
 
 **Platform targets:**
 - Windows: Win32 API (primary focus, most complete)
-- Linux: X11 & Wayland (planned)  
+- Linux: GTK 3 for X11 & Wayland (in progress - see LINUX_PORT.md)  
 - macOS: Cocoa (planned)
 - Terminal: ncurses (planned)
 
@@ -105,9 +105,29 @@ something turns out to work differently than it reasonably appears to.
   window message; font type and zoom are per-window view state seeded from
   the Defaults preferences (see DOCUMENTATION.md for the full model)
 
+**Branches:**
+- `main` takes only releases and Windows fixes: every push to it runs the full
+  CI build, so it is never the place for work in progress
+- Linux port work integrates on the `linux` branch (feature branches merge
+  into `linux`, not `main`); `linux` merges into `main` when a release ships
+  it. Windows fixes made on `main` are merged back into `linux`
+- The website lives in `site/` (deployed to https://npad.dev by Pages); the
+  signed apt/dnf repos live in the separate `platima/npad-packages` repo
+  (https://pkg.npad.dev)
+
 **Versioning & changelog conventions (every change):**
 - Bump the version per semver in `src/main.h` AND `src/platform/npad.rc`
-  (0.x: minor = feature rounds / breaking changes, patch = fix-only rounds)
+  (0.x: minor = feature rounds / breaking changes, patch = fix-only rounds),
+  **once per release cycle**, measured from the latest release tag
+  (`git describe --tags --abbrev=0`):
+  - If the branch's version is still the latest release's, bump it (minor or
+    patch as above) and open a new `CHANGELOG.md` heading for it.
+  - If it is already above the latest release, this cycle has its number:
+    do NOT bump again. Add your notes under that existing heading, and raise
+    patch to minor only if this round adds features to a fix-only cycle.
+  - Work rounds on `linux` and feature branches are not releases. Bumping per
+    round there produced 0.34, 0.35 and 0.36 after v0.33.0, all unreleased,
+    which had to be renumbered back to v0.34.0 before the release.
 - Add curated notes to `CHANGELOG.md` under the version heading (the
   commit-level history lives in `git log`, so there is no separate changes file)
 - Document any new setting/shortcut/behavior in `DOCUMENTATION.md`

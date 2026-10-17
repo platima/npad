@@ -31,7 +31,7 @@ Thank you for your interest in contributing to npad! This document provides guid
 
 Or manually install:
 ```bash
-sudo apt-get install build-essential gcc-mingw-w64 libx11-dev cppcheck clang-format
+sudo apt-get install build-essential pkg-config gcc-mingw-w64 libgtk-3-dev cppcheck clang-format
 ```
 
 #### Windows
@@ -219,10 +219,11 @@ Use conventional commits for consistency:
 - Uses native Win32 API for maximum performance
 - Handle Windows-specific features (registry, file associations)
 
-### Linux (X11 & Wayland)
-- **Future implementation** in `src/platform/ui_x11.c`
-- Currently contains stubs - contributions welcome!
-- Should support both X11 & Wayland display protocols
+### Linux (GTK 3: X11 & Wayland)
+- **In progress** in `src/platform/ui_gtk*.c` - one binary serves both
+  display servers
+- [LINUX_PORT.md](LINUX_PORT.md) has the conventions, the testing recipe and
+  the remaining parity checklist
 
 ### macOS (Cocoa)
 - **Future implementation** in `src/platform/ui_cocoa.m`

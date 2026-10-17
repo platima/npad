@@ -3,7 +3,7 @@
  * Resource ID definitions for Windows resources
  *
  * Author: Platima
- * https://github.com/platima/npad
+ * https://npad.dev
  */
 
 #ifndef RESOURCE_H
@@ -142,6 +142,7 @@
 #define ID_PREF_ASSOC_MACHINE 3174
 #define ID_PREF_ASSOC_NOTE 3175
 #define ID_PREF_ASSOC_DEFAULTS 3176
+#define ID_PREF_FIND_SEED 3177
 
 // Static text controls
 #define IDC_STATIC -1
