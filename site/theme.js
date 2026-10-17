@@ -30,7 +30,12 @@
         try { localStorage.setItem(key, next); } catch (e) {}
       }
       var metas = document.querySelectorAll('meta[name="theme-color"]');
-      for (var i = 0; i < metas.length; i++) metas[i].setAttribute('content', next === 'dark' ? '#17181b' : '#ffffff');
+      for (var i = 0; i < metas.length; i++) {
+        if (!metas[i].hasAttribute('data-orig')) metas[i].setAttribute('data-orig', metas[i].getAttribute('content'));
+        /* an override forces one colour; following the system restores each media-specific tag */
+        metas[i].setAttribute('content', next === system && !d.hasAttribute('data-theme')
+          ? metas[i].getAttribute('data-orig') : (next === 'dark' ? '#17181b' : '#ffffff'));
+      }
       label();
     });
     label();
