@@ -514,6 +514,32 @@ static void apply_chrome_variant(bool dark) {
     g_free(name);
 }
 
+// What the colour-scheme code sees, for the Debug page: why a dark desktop does
+// or does not darken the window. Caller g_free()s.
+char *npad_gtk_theme_diagnostics(void) {
+    char *name = NULL;
+    gboolean prefer_dark = FALSE;
+    g_object_get(gtk_settings_get_default(), "gtk-theme-name", &name,
+                 "gtk-application-prefer-dark-theme", &prefer_dark, NULL);
+    char *scheme = settings_get_string("theme", "light");
+    int portal = npad_gtk_portal_color_scheme();
+    const char *portal_text = portal == 1 ? "dark" : portal == 2 ? "light" : "none";
+    bool has_dark_variant = name && gtk_theme_has_file(name, "gtk-dark.css");
+
+    GString *out = g_string_new(NULL);
+    g_string_append_printf(out, "Colour scheme: %s (desktop colour-scheme via portal: %s)\n",
+                           scheme ? scheme : "light", portal_text);
+    g_string_append_printf(out, "GTK prefer-dark: %s at startup, %s now\n",
+                           g_initial_prefer_dark ? "on" : "off", prefer_dark ? "on" : "off");
+    g_string_append_printf(out, "Theme has a dark variant (gtk-dark.css): %s\n",
+                           has_dark_variant ? "yes" : "no");
+    g_string_append_printf(out, "Switched to dark sibling theme: %s\n",
+                           g_dark_sibling_theme ? g_dark_sibling_theme : "no");
+    g_free(scheme);
+    g_free(name);
+    return g_string_free(out, FALSE);
+}
+
 // Colour scheme: the text colours come from apply_view_css; the window chrome
 // follows via GTK's dark variant (or the dark sibling theme), so a dark scheme
 // does not sit inside a light frame

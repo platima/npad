@@ -1003,6 +1003,9 @@ static char *build_diagnostics_text(void) {
     g_object_get(gtk_settings_get_default(), "gtk-theme-name", &theme, NULL);
     g_string_append_printf(out, "GTK theme: %s\n", theme ? theme : "?");
     g_free(theme);
+    char *colours = npad_gtk_theme_diagnostics();
+    g_string_append(out, colours);
+    g_free(colours);
     const char *locale = setlocale(LC_ALL, NULL);
     g_string_append_printf(out, "Locale: %s\n", locale ? locale : "?");
 

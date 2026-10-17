@@ -304,6 +304,9 @@ void npad_gtk_show_preferences(Window *window, bool show_debug);
 // this window is showing
 void npad_gtk_show_font_dialog(Window *window);
 
+// What the colour-scheme code sees (Debug page); g_free() the result
+char *npad_gtk_theme_diagnostics(void);
+
 // The icon name for windows and the About dialog (ui_gtk.c)
 const char *npad_gtk_app_icon_name(void);
 
