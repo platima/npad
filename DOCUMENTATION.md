@@ -146,6 +146,36 @@ dialogs are positioned by the window manager rather than at a fixed offset
 and a remembered position, and Whole word only demands a word boundary
 beside a term edge that is itself a letter, digit or underscore.
 
+### Preferences and Font on Linux
+
+Edit > Preferences (Ctrl+,) opens a dialog with the same pages, wording,
+settings keys and defaults as the Windows build: General, Appearance,
+Defaults, Markdown and Backup, plus the hidden Debug page (Ctrl+Shift+., or
+Shift+click Preferences). Differences:
+
+- **No OK / Apply.** Every control saves the moment it changes, writing only
+  its own key, and every other open npad window picks the change up live.
+  Number boxes and text fields (print header / footer, custom indent prefix)
+  commit when you press Enter or leave the field, and when the dialog closes.
+  Reset All Preferences keeps the same things as on Windows and closes the
+  dialog; Import Settings refuses a file that is not a JSON object.
+- **No Updates page.** Linux installs update through apt or dnf.
+- **Associations** is one explicit action, *Make npad the default text
+  editor*, which runs `xdg-mime default io.github.platima.npad.desktop
+  text/plain` for your account. Nothing runs until you click it, and the page
+  shows which application currently handles plain text.
+- **No application-icon choice** on Appearance: the icon comes from the icon
+  theme.
+- **Markdown** edits the shared keys, but the Markdown list tools themselves
+  have not been ported yet (the page says so). Turning Basic Markdown support
+  on already adds "Interpret escapes" to Find / Replace.
+- **Debug** shows the Linux diagnostics: version, executable, GTK version and
+  display backend, session type, locale, settings and recovery paths, the
+  number of open windows and the startup profile, with Copy Diagnostics.
+- **Format > Font...** is GTK's font chooser. It edits the font for the font
+  type the window is showing (monospace, proportional or OpenDyslexic) and
+  the shared size, weight and italic keys, exactly as on Windows; Appearance
+  has buttons for the monospace and proportional fonts directly.
 ### Editing behaviours on Linux
 
 These match the Windows build; the differences are noted.

@@ -296,6 +296,14 @@ static const char *active_font_key(const Window *window, const char **default_fa
     return "proportional_font";
 }
 
+const char *npad_gtk_active_font_key(const Window *window, const char **default_face) {
+    return active_font_key(window, default_face);
+}
+
+bool npad_gtk_font_is_installed(const char *family) {
+    return font_is_installed(family);
+}
+
 // The colour scheme's text colours, NULL for "system" (the GTK theme's own).
 // Same values as the Win32 theme_colors.
 static void scheme_colors(const char *theme, const char **bg, const char **fg, bool *dark) {
@@ -708,9 +716,6 @@ static GtkWidget *create_status_bar(Window *window) {
 // when the feature lands - LINUX_PORT.md tracks what is left.
 static bool command_available(NpadCommand command) {
     switch (command) {
-        case NPAD_CMD_EDIT_PREFERENCES:
-        case NPAD_CMD_FORMAT_FONT:
-            return false;
         default:
             return true;
     }
@@ -1011,6 +1016,11 @@ static void create_menu(Window *window) {
 
     // Shortcuts without a menu item of their own, or second keys for one
     add_hidden_accel(window, GDK_KEY_e, C, NPAD_CMD_FORMAT_EOL_CYCLE);
+    // Ctrl+Shift+. : GTK matches the shifted symbol on most layouts, the
+    // unshifted key on the rest
+    add_hidden_accel(window, GDK_KEY_period, CS, NPAD_CMD_EDIT_PREFERENCES_DEBUG);
+    add_hidden_accel(window, GDK_KEY_greater, CS, NPAD_CMD_EDIT_PREFERENCES_DEBUG);
+    add_hidden_accel(window, GDK_KEY_greater, C, NPAD_CMD_EDIT_PREFERENCES_DEBUG);
     add_hidden_accel(window, GDK_KEY_equal, C, NPAD_CMD_VIEW_ZOOM_IN);
     add_hidden_accel(window, GDK_KEY_KP_Add, C, NPAD_CMD_VIEW_ZOOM_IN);
     add_hidden_accel(window, GDK_KEY_KP_Subtract, C, NPAD_CMD_VIEW_ZOOM_OUT);
@@ -1121,6 +1131,13 @@ static void launch_new_window(void) {
     npad_gtk_spawn_self(args);
 }
 
+// Was Shift held for the event that activated this command? (a Shift+click on
+// a menu item, as the Win32 build's hidden Debug page expects)
+static bool preferences_shift_held(void) {
+    GdkModifierType state = 0;
+    return gtk_get_current_event_state(&state) && (state & GDK_SHIFT_MASK) != 0;
+}
+
 void npad_gtk_handle_command(Window *window, NpadCommand command) {
     if (!window || !command_available(command))
         return;
@@ -1204,6 +1221,13 @@ void npad_gtk_handle_command(Window *window, NpadCommand command) {
         case NPAD_CMD_EDIT_TIME_DATE:
             insert_time_date(window);
             break;
+        case NPAD_CMD_EDIT_PREFERENCES:
+            // Shift+click (or Shift+Enter) on the menu item opens the Debug page
+            npad_gtk_show_preferences(window, preferences_shift_held());
+            break;
+        case NPAD_CMD_EDIT_PREFERENCES_DEBUG:
+            npad_gtk_show_preferences(window, true);
+            break;
         case NPAD_CMD_FORMAT_WORD_WRAP:
             window->word_wrap_enabled = !window->word_wrap_enabled;
             settings_set_bool("word_wrap", window->word_wrap_enabled);
@@ -1213,6 +1237,9 @@ void npad_gtk_handle_command(Window *window, NpadCommand command) {
             break;
         case NPAD_CMD_FORMAT_MONOSPACE:
             toggle_monospace(window);
+            break;
+        case NPAD_CMD_FORMAT_FONT:
+            npad_gtk_show_font_dialog(window);
             break;
         case NPAD_CMD_FORMAT_EOL_CRLF:
         case NPAD_CMD_FORMAT_EOL_LF:
