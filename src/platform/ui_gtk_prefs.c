@@ -356,8 +356,9 @@ static void load_widgets(void) {
     gtk_combo_box_set_active(GTK_COMBO_BOX(P.enc_combo),
                              (enc >= 0 && enc <= (int) NPAD_ENC_ANSI) ? enc : 0);
     int eol = settings_get_int("default_line_ending", (int) NPAD_DEFAULT_LINE_ENDING);
-    gtk_combo_box_set_active(GTK_COMBO_BOX(P.eol_combo),
-                             (eol >= 0 && eol <= (int) NPAD_EOL_CR) ? eol : 0);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(P.eol_combo), (eol >= 0 && eol <= (int) NPAD_EOL_CR)
+                                                             ? eol
+                                                             : (int) NPAD_DEFAULT_LINE_ENDING);
     // Falls back to the pre-0.7 monospace_enabled so the shown default equals
     // the effective one (see the Win32 page)
     gtk_combo_box_set_active(
