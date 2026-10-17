@@ -28,6 +28,15 @@ typedef enum {
     NPAD_EOL_CR        // Classic Mac
 } LineEnding;
 
+// The line ending a platform's own text files use, and so what new documents
+// and files with no line breaks get unless the user chose otherwise
+// (default_line_ending): CRLF on Windows like Notepad, LF everywhere else
+#ifdef _WIN32
+#define NPAD_DEFAULT_LINE_ENDING NPAD_EOL_CRLF
+#else
+#define NPAD_DEFAULT_LINE_ENDING NPAD_EOL_LF
+#endif
+
 // Detected properties of a text file (filled by file_read_text_ex,
 // consumed by file_write_text_ex so files round-trip unchanged)
 typedef struct {
