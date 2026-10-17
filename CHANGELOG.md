@@ -7,10 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.34.0] - 2026-10-17
 
-The first release with a Linux desktop build, which installs from signed
-apt and dnf repositories at <https://pkg.npad.dev>. Windows users get Find
-pre-filled from the selection (as notepad.exe does), a new home page at
-<https://npad.dev>, and a fix for files opened by a relative name.
+### ✨ Highlights
+- **npad comes to Linux.** A native GTK 3 build that runs on both X11 and
+  Wayland, installed from signed apt and dnf repositories at
+  <https://pkg.npad.dev> (Debian 12/13, Ubuntu 22.04+, Mint, Fedora) so it
+  updates with the rest of your system. Editing, encodings, Find / Replace,
+  printing and crash recovery are in; Preferences, the font picker and the
+  Markdown tools are still to come.
+- **Find is filled from your selection** (Windows and Linux), as Windows 10
+  Notepad does: select a word, press Ctrl+F, and it is already in the box.
+  Turn it off under Preferences > General.
+- **npad has a home page: [npad.dev](https://npad.dev).** The About box and
+  the installers link there.
+- **Fixed:** a file opened from the command line by a relative path
+  (`npad notes.txt`) now reopens correctly from Recent Files and after a
+  crash.
 
 ### 🆕 Features
 - **Find is filled from the selection (Windows and Linux).** Since Windows 10

@@ -107,7 +107,9 @@ something turns out to work differently than it reasonably appears to.
 
 **Branches:**
 - `main` takes only releases and Windows fixes: every push to it runs the full
-  CI build, so it is never the place for work in progress
+  CI build, so it is never the place for work in progress. It is protected:
+  changes land only through a pull request (a direct push is rejected), so
+  even a one-line fix goes branch, then PR, then merge
 - Linux port work integrates on the `linux` branch (feature branches merge
   into `linux`, not `main`); `linux` merges into `main` when a release ships
   it. Windows fixes made on `main` are merged back into `linux`
@@ -130,6 +132,13 @@ something turns out to work differently than it reasonably appears to.
     which had to be renumbered back to v0.34.0 before the release.
 - Add curated notes to `CHANGELOG.md` under the version heading (the
   commit-level history lives in `git log`, so there is no separate changes file)
+- Every version entry opens with a `### ✨ Highlights` list before its other
+  sections. This is the release announcement: 3-6 bullets on what a user
+  would notice, in plain language, naming the platform when a change is not
+  on both, with fixes included where users hit them. Keep it current as rounds
+  land in the cycle. `scripts/release-notes.sh` publishes it as the GitHub
+  release notes, and the release fails before anything is published if it is
+  missing.
 - Document any new setting/shortcut/behavior in `DOCUMENTATION.md`
 
 The codebase is currently in early development with Windows Win32 implementation being the primary focus.
