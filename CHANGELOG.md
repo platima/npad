@@ -63,6 +63,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🔄 Changed
 - Linux: Edit > Preferences and Format > Font are no longer greyed out.
+- **Linux: new documents default to LF line endings**, the native text-file
+  format there, instead of Windows' CRLF. The same applies to an opened file
+  with no line breaks (or an empty one), and to the Defaults page's "Default
+  line endings" when you have never chosen one (`default_line_ending` is
+  platform-dependent when unset: CRLF on Windows, LF on Linux). A choice you
+  have saved is honoured, so a settings file imported from Windows keeps its
+  CRLF. Windows is unchanged.
 - **Linux: the vertical scroll bar is permanent**, greyed out when the text
   fits - like the Windows build and Notepad - instead of coming and going.
   This also keeps the text a constant width, so wrapped lines no longer

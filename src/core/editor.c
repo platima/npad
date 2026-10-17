@@ -319,13 +319,13 @@ static void editor_check_session_recovery(void) {
 // Encoding/line endings for new documents, from user preferences
 static void load_default_file_info(TextFileInfo *info) {
     int encoding = settings_get_int("default_encoding", (int) NPAD_ENC_UTF8);
-    int line_ending = settings_get_int("default_line_ending", (int) NPAD_EOL_CRLF);
+    int line_ending = settings_get_int("default_line_ending", (int) NPAD_DEFAULT_LINE_ENDING);
 
     if (encoding < 0 || encoding > (int) NPAD_ENC_ANSI) {
         encoding = (int) NPAD_ENC_UTF8;
     }
     if (line_ending < 0 || line_ending > (int) NPAD_EOL_CR) {
-        line_ending = (int) NPAD_EOL_CRLF;
+        line_ending = (int) NPAD_DEFAULT_LINE_ENDING;
     }
 
     info->encoding = (TextEncoding) encoding;

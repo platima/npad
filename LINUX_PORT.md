@@ -256,6 +256,10 @@ Decisions taken in the foundation round. Each is easy to revisit.
 - **Print Preview is npad's own window** (not GTK's PDF-viewer hand-off).
 - **No Check for Updates** - Linux updates come from the package manager, so
   Preferences has no Updates page either.
+- **New documents default to LF**, not CRLF: `default_line_ending` falls back
+  to `NPAD_DEFAULT_LINE_ENDING` (`core/file_ops.h`), CRLF on Windows and LF
+  elsewhere. The same constant covers files with no line breaks and the
+  session / write fallbacks, so an empty file you type into saves as LF.
 - **Preferences has no OK / Apply.** Each control saves and broadcasts as it
   changes, writing only its own key; text fields and number boxes commit on
   Enter, on losing focus and when the dialog closes. The dialog is modal, as

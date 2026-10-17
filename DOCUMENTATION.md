@@ -313,7 +313,7 @@ File handling: saving, opening, recent files, recovery, and what happens when a 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `default_encoding` | int | `0` (UTF-8) | Encoding for new files: 0 UTF-8, 1 UTF-8 BOM, 2 UTF-16 LE, 3 UTF-16 BE, 4 ANSI. |
-| `default_line_ending` | int | `0` (CRLF) | Line endings for new files: 0 CRLF, 1 LF, 2 CR. |
+| `default_line_ending` | int | platform: `0` (CRLF) on Windows, `1` (LF) on Linux | Line endings for new files, and for opened files with no line breaks: 0 CRLF, 1 LF, 2 CR. |
 | `default_font_mono` | bool | `true` | New windows start in monospace (`true`) or proportional (`false`) mode. **Monospace by default**, which is what mirrors notepad.exe: it has a single font setting and ships it as Consolas 11 - the same face and size as npad's monospace default. |
 | `default_zoom` | int | `100` | New windows' zoom percent (10-500). |
 | `auto_update_defaults` | bool | `false` | View changes (font type, zoom) immediately become the new defaults. |

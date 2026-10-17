@@ -431,11 +431,13 @@ LineEnding file_detect_line_ending(const char *text) {
         }
     }
 
+    if (crlf + lf + cr == 0)
+        return NPAD_DEFAULT_LINE_ENDING; // Nothing to detect: the platform's own
     if (lf > crlf && lf > cr)
         return NPAD_EOL_LF;
     if (cr > crlf && cr > lf)
         return NPAD_EOL_CR;
-    return NPAD_EOL_CRLF; // Majority CRLF, or no line breaks at all
+    return NPAD_EOL_CRLF; // Majority CRLF (or a tie)
 }
 
 char *file_convert_line_endings(const char *text, LineEnding target) {
@@ -831,7 +833,7 @@ bool file_write_binary(const char *filename, const void *data, size_t size) {
 // Convert UTF-8 content to the target encoding/line endings as raw bytes.
 // Returns malloc'd buffer, sets *out_len.
 static uint8_t *encode_text(const char *utf8_content, const TextFileInfo *info, size_t *out_len) {
-    TextFileInfo defaults = { NPAD_ENC_UTF8, NPAD_EOL_CRLF, false };
+    TextFileInfo defaults = { NPAD_ENC_UTF8, NPAD_DEFAULT_LINE_ENDING, false };
     if (!info)
         info = &defaults;
 
