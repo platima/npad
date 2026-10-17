@@ -49,7 +49,7 @@ npad aims to recreate the beloved simplicity of original Windows Notepad while a
 
 Current features (Windows build):
 
-- **⚡ Lightning fast** - Native API implementation with minimal overhead; a ~314 KB executable that imports only 8 system libraries, loading the rest (update check, file dialogs) on first use
+- **⚡ Lightning fast** - Native API implementation with minimal overhead; a ~400 KB executable that imports only 8 system libraries, loading the rest (update check, file dialogs) on first use
 - **💨 Minimal resource usage** - ~3.4 MB of RAM per window and ~40 ms from process start to a usable window. Each window is its own process, and the cost stays linear: 30 windows measured 104 MB in total
 - **🎯 Classic interface** - Familiar Notepad-style UI and behavior
 - **🌍 Unicode throughout** - Detects and preserves UTF-8, UTF-8 BOM, UTF-16 LE/BE and ANSI encodings
@@ -321,9 +321,9 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] Print Preview
 - [ ] **Core Enhancements**
   - [x] Settings system with JSON storage
-  - [x] Auto-save feature (enabled by default)
-  - [x] Session resume / crash protection (disabled by default)
-  - [x] Dark/light theme support (follow system by default)
+  - [x] Auto-save feature (disabled by default - it overwrites your file, so it is opt-in)
+  - [x] Session resume / crash protection (enabled by default - non-destructive)
+  - [x] Dark/light theme support (light by default like notepad; following the system is opt-in)
   - [x] Deep Undo & Redo history (100,000 actions)
   - [x] Improvements to Find & Replace dialogs
     - [x] Recent list (configurable)
