@@ -50,15 +50,15 @@ Every change in this release: [CHANGELOG.md](https://github.com/$repo/blob/$tag/
 
 ### Downloads
 
-**Windows** (x64)
-- \`npad-$tag-setup-win-x64.exe\` - installer (per-user by default; system-wide available)
-- \`npad-$tag-msi-win-x64.msi\` - MSI for silent or managed deployment (\`msiexec /i npad-$tag-msi-win-x64.msi /qn\`)
-- \`npad-$tag-portable-win-x64.exe\` - portable, no installation
+**Windows** (\`x64\` for most PCs, \`arm64\` for Windows on Arm)
+- \`npad-$tag-setup-win-x64.exe\` / \`npad-$tag-setup-win-arm64.exe\` - installer (per-user by default; system-wide available)
+- \`npad-$tag-msi-win-x64.msi\` / \`npad-$tag-msi-win-arm64.msi\` - MSI for silent or managed deployment (\`msiexec /i <file> /qn\`)
+- \`npad-$tag-portable-win-x64.exe\` / \`npad-$tag-portable-win-arm64.exe\` - portable, no installation
 
-**Linux** (GTK 3 desktop app for X11 and Wayland)
+**Linux** (GTK 3 desktop app for X11 and Wayland; amd64, arm64 and riscv64, where riscv64 needs Debian 13 / Ubuntu 24.04 or newer)
 - Recommended: the signed apt and dnf repositories at https://pkg.npad.dev, so npad updates with the rest of your system
-- \`npad_${version}_amd64.deb\` - Debian, Ubuntu, Mint (\`sudo apt install ./npad_${version}_amd64.deb\`)
-- \`npad-${version}-1.x86_64.rpm\` - Fedora (\`sudo dnf install ./npad-${version}-1.x86_64.rpm\`)
+- \`npad_${version}_<arch>.deb\` (\`amd64\`, \`arm64\`, \`riscv64\`) - Debian, Ubuntu, Mint (\`sudo apt install ./npad_${version}_amd64.deb\`)
+- \`npad-${version}-1.<arch>.rpm\` (\`x86_64\`, \`aarch64\`, \`riscv64\`) - Fedora, openSUSE (\`sudo dnf install ./npad-${version}-1.x86_64.rpm\`)
 
 **Verification:** \`CHECKSUMS.txt\` lists the SHA-256 of every file (\`sha256sum -c CHECKSUMS.txt\` on Linux, \`Get-FileHash\` on Windows).
 

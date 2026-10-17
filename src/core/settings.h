@@ -57,6 +57,14 @@ bool settings_set_file_path(const char *path);
 // The directory settings are stored in (malloc'd; caller frees). NULL on error.
 char *settings_get_config_dir(void);
 
+// Where settings live on Linux/Unix, as pure string logic so it can be tested
+// without touching the environment: $XDG_CONFIG_HOME/npad when that is set and
+// absolute, otherwise <home>/.config/npad (also what settings_resolve_legacy_dir
+// returns). malloc'd; caller frees. NULL when no directory can be formed.
+// Windows ignores these: its settings stay in %APPDATA%\Platima\npad.
+char *settings_resolve_config_dir(const char *xdg_config_home, const char *home);
+char *settings_resolve_legacy_dir(const char *home);
+
 // Window state helpers
 bool settings_save_window_state(int x, int y, int width, int height, bool maximized);
 bool settings_load_window_state(int *x, int *y, int *width, int *height, bool *maximized);

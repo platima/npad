@@ -4,6 +4,10 @@
 # Compiler settings
 CC ?= gcc
 CFLAGS = -Wall -Wextra -std=c99 -O2
+# WERROR=1 turns every compiler warning into an error (CI sets it)
+ifeq ($(WERROR),1)
+CFLAGS += -Werror
+endif
 LDFLAGS =
 
 # Platform detection
@@ -29,6 +33,17 @@ MINGW_STRIP ?= x86_64-w64-mingw32-strip
 MINGW_DLLTOOL ?= x86_64-w64-mingw32-dlltool
 endif
 
+# Windows on Arm (arm64) is cross-compiled with llvm-mingw (clang + lld; MinGW
+# GCC has no arm64 Windows target), whose tools carry the target in their
+# name: put its bin/ on PATH (scripts/install-llvm-mingw.sh fetches the pinned
+# release CI uses) or point ARM64_MINGW_PREFIX at it. `make windows-arm64`
+# builds npad-arm64.exe with the same sources and flags as npad.exe, in its own
+# build directory so the two never share an object.
+ARM64_MINGW_PREFIX ?= aarch64-w64-mingw32-
+WINDOWS_ARM64_TARGET = npad-arm64.exe
+# Per-architecture intermediates (delay-import libraries, the compiled .rc)
+WIN_BUILD_DIR ?= build
+
 # Source files
 CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/startup_prof.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c src/core/find_seed.c
 SHARED_SOURCES = src/ui_interface.c
@@ -48,8 +63,24 @@ WINDOWS_GUI_SOURCES = src/platform/ui_win32.c src/platform/print_win32.c src/pla
 # on the first real call. The matching -l flags must NOT also be passed, or the
 # normal import library wins and the DLL is bound statically again.
 DELAY_DLLS = winhttp bcrypt comdlg32 msimg32
-DELAY_LIBS = $(patsubst %,build/lib%_delay.a,$(DELAY_DLLS))
-WINDOWS_GUI_LIBS = -mwindows -lcomctl32 -lgdi32 -lkernel32 -lshell32 -luser32 -lole32 -luuid $(DELAY_LIBS) -ldelayimp
+#
+# llvm-mingw (the arm64 build, WIN_LINKER=lld) gets there another way:
+# llvm-dlltool has no -y, but lld delay-loads any DLL named with --delayload,
+# taking the thunks from an ordinary import library and the resolver from
+# libmingwex. So there the .def files become plain import libraries (still the
+# only place those entry points are declared) and each DLL is named once more.
+DELAY_LIBS = $(patsubst %,$(WIN_BUILD_DIR)/lib%_delay.a,$(DELAY_DLLS))
+WIN_RES = $(WIN_BUILD_DIR)/npad.res
+WIN_LINKER ?= bfd
+comma := ,
+ifeq ($(WIN_LINKER),lld)
+DELAY_DLLTOOL_FLAG = -l
+DELAY_LINK = $(DELAY_LIBS) $(patsubst %,-Wl$(comma)--delayload=%.dll,$(DELAY_DLLS))
+else
+DELAY_DLLTOOL_FLAG = -y
+DELAY_LINK = $(DELAY_LIBS) -ldelayimp
+endif
+WINDOWS_GUI_LIBS = -mwindows -lcomctl32 -lgdi32 -lkernel32 -lshell32 -luser32 -lole32 -luuid $(DELAY_LINK)
 WINDOWS_GUI_TARGET = npad.exe
 
 # Windows Terminal specific
@@ -65,7 +96,7 @@ MACOS_TARGET = npad-macos
 # Linux desktop: GTK 3, one binary for both X11 and Wayland (GDK picks the
 # display server at runtime). pkg-config is only consulted when this target
 # is actually built - these are recursively expanded.
-LINUX_GTK_SOURCES = src/platform/ui_gtk.c src/platform/ui_gtk_dialogs.c src/platform/ui_gtk_find.c src/platform/ui_gtk_instance.c src/platform/print_gtk.c
+LINUX_GTK_SOURCES = src/platform/ui_gtk.c src/platform/ui_gtk_dialogs.c src/platform/ui_gtk_edit.c src/platform/ui_gtk_find.c src/platform/ui_gtk_lists.c src/platform/ui_gtk_prefs.c src/platform/ui_gtk_instance.c src/platform/print_gtk.c
 LINUX_GTK_HEADERS = src/platform/ui_gtk.h src/platform/print_gtk.h
 LINUX_GTK_CFLAGS = $(shell pkg-config --cflags gtk+-3.0)
 LINUX_GTK_LIBS = $(shell pkg-config --libs gtk+-3.0) -lpthread
@@ -147,15 +178,25 @@ windows: windows-gui windows-terminal
 
 windows-gui: $(WINDOWS_GUI_TARGET)
 
+# The GUI only: the terminal variant is an unimplemented stub and does not ship
+windows-arm64:
+	$(MAKE) $(WINDOWS_ARM64_TARGET) WINDOWS_GUI_TARGET=$(WINDOWS_ARM64_TARGET) \
+		WIN_BUILD_DIR=build/arm64 WIN_LINKER=lld \
+		MINGW_CC=$(ARM64_MINGW_PREFIX)clang \
+		MINGW_WINDRES=$(ARM64_MINGW_PREFIX)windres \
+		MINGW_STRIP=$(ARM64_MINGW_PREFIX)strip \
+		MINGW_DLLTOOL=$(ARM64_MINGW_PREFIX)dlltool
+
 # Delay-import libraries, one per DLL, built from the .def files that document
 # exactly which entry points npad uses
-build/lib%_delay.a: src/platform/delay/%.def
-	@mkdir -p build
-	$(MINGW_DLLTOOL) -d $< -D $*.dll -y $@
+$(WIN_BUILD_DIR)/lib%_delay.a: src/platform/delay/%.def
+	@mkdir -p $(WIN_BUILD_DIR)
+	$(MINGW_DLLTOOL) -d $< -D $*.dll $(DELAY_DLLTOOL_FLAG) $@
 
 $(WINDOWS_GUI_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(WINDOWS_GUI_SOURCES) src/main.c src/platform/npad.rc $(DELAY_LIBS)
-	cd src/platform && $(MINGW_WINDRES) npad.rc -O coff -o npad.res
-	$(MINGW_CC) $(CFLAGS) -o $@ $(CORE_SOURCES) $(SHARED_SOURCES) $(WINDOWS_GUI_SOURCES) src/main.c src/platform/npad.res $(WINDOWS_GUI_LIBS) $(LDFLAGS)
+	@mkdir -p $(WIN_BUILD_DIR)
+	cd src/platform && $(MINGW_WINDRES) npad.rc -O coff -o ../../$(WIN_RES)
+	$(MINGW_CC) $(CFLAGS) -o $@ $(CORE_SOURCES) $(SHARED_SOURCES) $(WINDOWS_GUI_SOURCES) src/main.c $(WIN_RES) $(WINDOWS_GUI_LIBS) $(LDFLAGS)
 ifndef DEBUG
 	$(MINGW_STRIP) $@
 endif
@@ -362,6 +403,9 @@ DATADIR ?= $(PREFIX)/share
 APP_ID = io.github.platima.npad
 LINUX_PKG_DIR = packaging/linux
 LINUX_ICON_SIZES = 16 24 32 48 64 128 256
+# The standard icon, and the dark artwork the window switches to under a dark
+# scheme (the launcher always uses the standard one)
+LINUX_ICON_NAMES = $(APP_ID) $(APP_ID)-dark
 
 # Build first (make linux-gtk); install does not, so `sudo make install` never
 # compiles as root.
@@ -375,10 +419,10 @@ else
 	install -D -m 755 $(LINUX_GTK_TARGET) $(DESTDIR)$(BINDIR)/npad
 	install -D -m 644 $(LINUX_PKG_DIR)/$(APP_ID).desktop $(DESTDIR)$(DATADIR)/applications/$(APP_ID).desktop
 	install -D -m 644 $(LINUX_PKG_DIR)/$(APP_ID).metainfo.xml $(DESTDIR)$(DATADIR)/metainfo/$(APP_ID).metainfo.xml
-	for s in $(LINUX_ICON_SIZES); do \
-		install -D -m 644 $(LINUX_PKG_DIR)/icons/hicolor/$${s}x$${s}/apps/$(APP_ID).png \
-			$(DESTDIR)$(DATADIR)/icons/hicolor/$${s}x$${s}/apps/$(APP_ID).png || exit 1; \
-	done
+	for n in $(LINUX_ICON_NAMES); do for s in $(LINUX_ICON_SIZES); do \
+		install -D -m 644 $(LINUX_PKG_DIR)/icons/hicolor/$${s}x$${s}/apps/$${n}.png \
+			$(DESTDIR)$(DATADIR)/icons/hicolor/$${s}x$${s}/apps/$${n}.png || exit 1; \
+	done; done
 endif
 
 uninstall:
@@ -389,9 +433,9 @@ else
 	rm -f $(DESTDIR)$(BINDIR)/npad $(DESTDIR)$(BINDIR)/npad-terminal
 	rm -f $(DESTDIR)$(DATADIR)/applications/$(APP_ID).desktop
 	rm -f $(DESTDIR)$(DATADIR)/metainfo/$(APP_ID).metainfo.xml
-	for s in $(LINUX_ICON_SIZES); do \
-		rm -f $(DESTDIR)$(DATADIR)/icons/hicolor/$${s}x$${s}/apps/$(APP_ID).png; \
-	done
+	for n in $(LINUX_ICON_NAMES); do for s in $(LINUX_ICON_SIZES); do \
+		rm -f $(DESTDIR)$(DATADIR)/icons/hicolor/$${s}x$${s}/apps/$${n}.png; \
+	done; done
 endif
 
 # Linux packages in dist/. Both are described once, in
@@ -399,22 +443,26 @@ endif
 # installs a pinned copy with scripts/install-nfpm.sh). Build in a Debian 12
 # container, as release CI does, so the libc floor stays low enough for
 # Debian 12 and Ubuntu 22.04.
-#   deb: npad_<version>_amd64.deb      Depends: libgtk-3-0t64 | libgtk-3-0
-#   rpm: npad-<version>-1.x86_64.rpm   Requires: gtk3
+#   deb: npad_<version>_<arch>.deb     Depends: libgtk-3-0t64 | libgtk-3-0
+#   rpm: npad-<version>-1.<arch>.rpm   Requires: gtk3
+# The architecture is the binary's own (amd64, arm64, riscv64; the rpm says
+# x86_64, aarch64, riscv64), so a binary built elsewhere - CI compiles riscv64
+# under QEMU - packages on any host with nfpm. PKG_ARCH, if set, must match it.
 # Without nfpm, `make deb` falls back to dpkg-deb (scripts/build-deb.sh); the
 # rpm needs nfpm.
 DEB_VERSION = $(MAJOR).$(MINOR).$(PATCH)
+PKG_ARCH ?=
 
 deb: $(LINUX_GTK_TARGET)
 ifneq ($(shell command -v nfpm 2>/dev/null),)
-	sh scripts/build-package.sh deb $(DEB_VERSION) $(LINUX_GTK_TARGET) dist
+	sh scripts/build-package.sh deb $(DEB_VERSION) $(LINUX_GTK_TARGET) dist $(PKG_ARCH)
 else
 	@echo "nfpm not found, using dpkg-deb (scripts/install-nfpm.sh installs nfpm)"
-	sh scripts/build-deb.sh $(DEB_VERSION) $(LINUX_GTK_TARGET) dist
+	sh scripts/build-deb.sh $(DEB_VERSION) $(LINUX_GTK_TARGET) dist $(PKG_ARCH)
 endif
 
 rpm: $(LINUX_GTK_TARGET)
-	sh scripts/build-package.sh rpm $(DEB_VERSION) $(LINUX_GTK_TARGET) dist
+	sh scripts/build-package.sh rpm $(DEB_VERSION) $(LINUX_GTK_TARGET) dist $(PKG_ARCH)
 
 # Help
 help:
@@ -425,6 +473,7 @@ help:
 	@echo "  all              - Build Windows and Linux variants"
 	@echo "  windows          - Build all Windows variants (GUI + Terminal)"
 	@echo "  windows-gui      - Build Windows GUI version"
+	@echo "  windows-arm64    - Build npad-arm64.exe (Windows on Arm; needs llvm-mingw)"
 	@echo "  windows-terminal - Build Windows Terminal version"
 	@echo "  linux            - Build all Linux variants (desktop + Terminal)"
 	@echo "  linux-gtk        - Build the Linux desktop app (GTK 3; X11 and Wayland)"
@@ -443,8 +492,8 @@ help:
 	@echo "  clean            - Remove build artifacts"
 	@echo "  install          - Install to PREFIX (default /usr/local; honours DESTDIR)"
 	@echo "  uninstall        - Remove from PREFIX"
-	@echo "  deb              - Build dist/npad_<version>_amd64.deb (Linux; nfpm or dpkg-deb)"
-	@echo "  rpm              - Build dist/npad-<version>-1.x86_64.rpm (Linux; needs nfpm)"
+	@echo "  deb              - Build dist/npad_<version>_<arch>.deb (Linux; nfpm or dpkg-deb)"
+	@echo "  rpm              - Build dist/npad-<version>-1.<arch>.rpm (Linux; needs nfpm)"
 	@echo "  help             - Show this help"
 	@echo ""
 	@echo "Variables:"
@@ -455,4 +504,4 @@ help:
 	@echo "  DEBUG=1          - Enable debug build"
 	@echo "  VERSION          - Version string (auto-detected from git)"
 
-.PHONY: all windows windows-gui windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo help detect-platform
+.PHONY: all windows windows-gui windows-arm64 windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo help detect-platform

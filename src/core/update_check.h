@@ -46,4 +46,16 @@ bool update_is_newer_unskipped(const char *current, const char *latest, const ch
 // Returns false when no asset matches, the URL is missing, or out is too small.
 bool update_find_asset_url(const char *json, const char *name_suffix, char *out, size_t out_cap);
 
+// The Windows architecture THIS build was compiled for, as release assets
+// name it: "x64" or "arm64", or NULL for any other target. Decided by the
+// compiler's target macros, not by asking Windows: an x64 npad running under
+// emulation on an Arm PC is an x64 build and keeps updating to x64.
+const char *update_build_arch(void);
+
+// The release asset suffix of the installer for arch ("x64" or "arm64"), or of
+// its .sha256 digest when checksum is true - e.g. "-setup-win-arm64.exe". NULL
+// for any other arch, so a build of unknown architecture is offered nothing
+// rather than the x64 installer.
+const char *update_installer_suffix(const char *arch, bool checksum);
+
 #endif // UPDATE_CHECK_H

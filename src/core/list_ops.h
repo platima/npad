@@ -16,6 +16,7 @@
 #define LIST_OPS_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 // Indent marker/whitespace styles. Order matches the Preferences dropdown and
 // the ID_LIST_INDENT_BASE command range.
@@ -64,5 +65,13 @@ char *list_unindent_lines(const char *text, ListIndentFormat fmt, const char *cu
 // tab, or a whitespace-only custom prefix) are not bullets, so "- " is
 // returned. Used by rich-text paste to stamp list items in the user's style.
 char *list_bullet_marker(ListIndentFormat fmt, const char *custom_prefix);
+
+// Length of the bullet marker that starts s (leading whitespace already
+// skipped; len is the bytes of s that belong to the line): the custom marker
+// body (custom may carry leading whitespace, which is ignored) or the built-in
+// "* " / "- ". allow_bare also accepts the space-less marker when the line
+// ends right after it. 0 when s does not start a bullet. This is what list
+// continuation (Enter) uses to find the prefix to repeat.
+size_t list_marker_length(const char *s, size_t len, const char *custom, bool allow_bare);
 
 #endif // LIST_OPS_H

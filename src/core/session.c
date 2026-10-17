@@ -121,7 +121,8 @@ static void parse_meta(const char *meta, char **out_path, TextEncoding *encoding
         *encoding = (enc >= 0 && enc <= (int) NPAD_ENC_ANSI) ? (TextEncoding) enc : NPAD_ENC_UTF8;
     }
     if (line_ending) {
-        *line_ending = (eol >= 0 && eol <= (int) NPAD_EOL_CR) ? (LineEnding) eol : NPAD_EOL_CRLF;
+        *line_ending =
+            (eol >= 0 && eol <= (int) NPAD_EOL_CR) ? (LineEnding) eol : NPAD_DEFAULT_LINE_ENDING;
     }
 }
 

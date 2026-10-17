@@ -95,7 +95,6 @@ Current features (Windows build):
 
 Planned (see the [Roadmap](#roadmap)):
 
-- 🚧 Linux desktop build (GTK 3, X11 and Wayland) - in progress, see [LINUX_PORT.md](LINUX_PORT.md)
 - 🚧 macOS and terminal builds
 - 🚧 Optional tabbed interface
 - 🚧 Multi-language support
@@ -140,7 +139,7 @@ These items may or may not be added, and are essentially subject to my whim, but
 ## Configuration 🔧
 
 npad stores its settings in JSON format in standard system locations:
-- **Linux**: `~/.config/npad/settings.json`
+- **Linux**: `~/.config/npad/settings.json` (or `$XDG_CONFIG_HOME/npad/settings.json` when set)
 - **Windows**: `%APPDATA%\Platima\npad\settings.json`
 - **macOS**: `~/Library/Application Support/npad/settings.json` (when implemented)
 
@@ -148,11 +147,11 @@ Settings include window position, auto-save preferences, theme selection, and ot
 
 ## Platform Support 🖥️
 
-| Platform | Status | Backend |
-|----------|--------|---------|
-| Windows  | ✅ Active Development | Win32 API |
-| macOS    | 🚧 Planned | Cocoa |
-| Linux    | 🚧 In progress ([status](LINUX_PORT.md)) | GTK 3 (X11 & Wayland) |
+| Platform | Status | Backend | Architectures |
+|----------|--------|---------|---------------|
+| Windows  | ✅ Active Development | Win32 API | x64, arm64 (Windows on Arm) |
+| macOS    | 🚧 Planned | Cocoa | |
+| Linux    | 🧪 Beta: every Windows feature, real-desktop testing under way ([status](LINUX_PORT.md)) | GTK 3 (X11 & Wayland) | amd64, arm64, riscv64 |
 | *nix Terminal | 🚧 Planned | ncurses |
 | Windows Terminal | 🚧 Planned | Windows Console API |
 
@@ -174,7 +173,10 @@ Your support makes a real difference in keeping this project alive and thriving!
 
 ### Pre-Built
 
-Download from the [**Releases page**](https://github.com/platima/npad/releases):
+Download from the [**Releases page**](https://github.com/platima/npad/releases).
+Windows files come in `x64` (most PCs) and `arm64` (Windows on Arm, e.g.
+Snapdragon laptops) - pick `-win-arm64` in place of `-win-x64` below for a
+native Arm build:
 
 - 🛠️ **`npad-v<version>-setup-win-x64.exe`** - Windows installer. Per-user by
   default (no admin needed); system-wide when run elevated or chosen in the
@@ -202,8 +204,11 @@ installer reference (tasks, features, fonts, the Windows 11 notepad alias).
 - 🐧 **`npad_<version>_amd64.deb`** - Linux (Debian 12/13, Ubuntu 22.04+, Mint):
   `sudo apt install ./npad_<version>_amd64.deb`. Installs the GTK 3 desktop app
   (X11 and Wayland) with its launcher entry, icons and AppStream metadata.
+  Also `_arm64.deb` (64-bit Arm, e.g. a Raspberry Pi on a 64-bit OS) and
+  `_riscv64.deb` (Debian 13 / Ubuntu 24.04 or newer).
 - 🐧 **`npad-<version>-1.x86_64.rpm`** - Linux (Fedora):
-  `sudo dnf install ./npad-<version>-1.x86_64.rpm`.
+  `sudo dnf install ./npad-<version>-1.x86_64.rpm`. Also `.aarch64.rpm` and
+  `.riscv64.rpm`.
   From source instead: `make linux-gtk && sudo make install` (honours `PREFIX`
   and `DESTDIR`; `sudo make uninstall` removes it).
 
@@ -256,6 +261,7 @@ which of the two you need. Read the script first if you prefer.
    ```bash
    # Windows (cross-compile from Linux)
    make windows        # Windows x64 build
+   make windows-arm64  # Windows on Arm (npad-arm64.exe; needs llvm-mingw on PATH)
    
    # Native Linux (./npad-linux - one binary for X11 and Wayland)
    make linux
@@ -410,7 +416,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] Appear in Windows' "Open with" list for any file type (like notepad.exe)
 - [ ] **Cross-Platform Expansion**
   - [ ] macOS Cocoa implementation
-  - [ ] Linux GTK 3 implementation (X11 & Wayland) - first released in v0.34.0, see [LINUX_PORT.md](LINUX_PORT.md)
+  - [ ] Linux GTK 3 implementation (X11 & Wayland) - first released in v0.34.0, every Windows feature in v0.35.0; real-desktop testing under way, see [LINUX_PORT.md](LINUX_PORT.md)
   - [ ] ncurses terminal implementation
   - [ ] Windows Terminal implementation
 - [ ] **Future Considerations**

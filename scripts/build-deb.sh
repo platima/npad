@@ -1,20 +1,23 @@
 #!/bin/sh
 # Build npad_<version>_<arch>.deb from an installed staging tree.
-# Usage: scripts/build-deb.sh <version> <binary> <outdir>
+# Usage: scripts/build-deb.sh <version> <binary> <outdir> [arch]
+# arch defaults to the binary's own ELF machine, as in build-package.sh; given
+# explicitly, the binary must match it.
 set -eu
 version=$1
 binary=$2
 outdir=$3
-arch=$(dpkg --print-architecture 2>/dev/null || echo amd64)
+arch=$(sh "$(dirname "$0")/elf-arch.sh" "$binary" "${4:-}")
 pkg=npad_${version}_${arch}
 root=$outdir/$pkg
 
 rm -rf "$root"
-make install DESTDIR="$root" PREFIX=/usr
+make install DESTDIR="$root" PREFIX=/usr LINUX_GTK_TARGET="$binary"
 
 # Highest glibc symbol version the binary needs becomes the libc6 floor, so
-# the .deb stays installable on the oldest distro that can run it.
-glibc=$(objdump -T "$binary" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -n1)
+# the .deb stays installable on the oldest distro that can run it. readelf, not
+# objdump: it reads a foreign architecture's ELF too.
+glibc=$(readelf -W --dyn-syms "$binary" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -n1)
 [ -n "$glibc" ] || glibc=2.31
 
 size=$(du -sk "$root" | cut -f1)

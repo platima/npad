@@ -176,6 +176,40 @@ bool update_parse_sha256(const char *text, char *out) {
     return true;
 }
 
+const char *update_build_arch(void) {
+#if defined(_M_ARM64) || defined(__aarch64__)
+    return "arm64";
+#elif defined(_M_X64) || defined(__x86_64__)
+    return "x64";
+#else
+    return NULL;
+#endif
+}
+
+// The installer each architecture's updater downloads. Release validation
+// (scripts/validate-release-assets.sh) reads every quoted string in this file
+// that starts with -setup-win- and fails the release unless an asset ends with
+// each one, so keep them spelled out here rather than assembled at run time,
+// and quote no other string of that shape in this file.
+static const struct {
+    const char *arch;
+    const char *installer;
+    const char *checksum;
+} k_installers[] = {
+    { "x64", "-setup-win-x64.exe", "-setup-win-x64.exe.sha256" },
+    { "arm64", "-setup-win-arm64.exe", "-setup-win-arm64.exe.sha256" },
+};
+
+const char *update_installer_suffix(const char *arch, bool checksum) {
+    if (!arch)
+        return NULL;
+    for (size_t i = 0; i < sizeof(k_installers) / sizeof(k_installers[0]); i++) {
+        if (strcmp(arch, k_installers[i].arch) == 0)
+            return checksum ? k_installers[i].checksum : k_installers[i].installer;
+    }
+    return NULL;
+}
+
 bool update_is_newer_unskipped(const char *current, const char *latest, const char *skipped) {
     if (!latest || !latest[0])
         return false;

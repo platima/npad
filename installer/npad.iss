@@ -8,6 +8,18 @@
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
+; Target architecture, x64 or arm64 (ISCC /DArch=arm64), and the npad.exe built
+; for it (/DNpadExe=<path>). One AppId for both: installing the other
+; architecture's setup over an install replaces it in place.
+#ifndef Arch
+  #define Arch "x64"
+#endif
+#ifndef NpadExe
+  #define NpadExe "..\npad.exe"
+#endif
+#if Arch != "x64" && Arch != "arm64"
+  #error Arch must be x64 or arm64
+#endif
 #define AppName "npad"
 #define AppPublisher "Platima"
 #define AppURL "https://npad.dev"
@@ -28,14 +40,21 @@ DefaultGroupName={#AppName}
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExe}
 OutputDir=..\dist
-OutputBaseFilename=npad-v{#AppVersion}-setup-win-x64
+OutputBaseFilename=npad-v{#AppVersion}-setup-win-{#Arch}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog commandline
+#if Arch == "arm64"
+; Windows on Arm only: an arm64 npad.exe cannot run anywhere else
+ArchitecturesAllowed=arm64
+ArchitecturesInstallIn64BitMode=arm64
+#else
+; x64compatible includes Windows on Arm, which runs x64 code under emulation
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+#endif
 ChangesAssociations=yes
 ; The 'addtopath' task edits PATH via [Code]; broadcast the change at the end
 ChangesEnvironment=yes
@@ -96,7 +115,7 @@ Name: "fontdefaults2"; Description: "Set the bundled fonts as npad's default edi
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
 [Files]
-Source: "..\npad.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#NpadExe}"; DestDir: "{app}"; DestName: "{#AppExe}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\DOCUMENTATION.md"; DestDir: "{app}"; Flags: ignoreversion

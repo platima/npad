@@ -34,6 +34,7 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.35.0" date="2026-10-17"/>
     <release version="0.34.0" date="2026-10-17"/>
   </releases>
 </component>

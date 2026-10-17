@@ -6,6 +6,12 @@
  * https://npad.dev
  */
 
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L /* rmdir under -std=c99 */
+#include <unistd.h>
+#else
+#include <direct.h>
+#endif
 #include "test_framework.h"
 #include "../src/core/session.h"
 #include "../src/core/file_ops.h"

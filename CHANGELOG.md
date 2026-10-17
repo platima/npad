@@ -5,6 +5,213 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.35.0] - 2026-10-17
+
+### ✨ Highlights
+- **On Windows, this release is about Windows on Arm.** There are now native
+  arm64 builds (installer, MSI and portable) alongside x64, and the update
+  check offers each copy of npad the build for its own architecture. Nothing
+  changes in day-to-day use on an x64 PC.
+- **Linux catches up with Windows.** Preferences (with OK, Cancel and Apply),
+  Format > Font, and the optional Markdown list tools all arrive, with the
+  same settings and defaults as the Windows build.
+- **Linux behaves like Notepad.** npad's own right-click menu, drag a file
+  onto the window to open it (hold Ctrl to insert its text instead), Ctrl and
+  the mouse wheel to zoom, a scroll bar that stays put, and an optional prompt
+  when another program changes the file you have open.
+- **Linux fits your desktop.** The `system` colour scheme follows your
+  desktop's light/dark setting as it changes, including a dark window frame on
+  themes with no dark variant. npad gets a properly sized icon with a dark
+  version, settings follow `$XDG_CONFIG_HOME`, and new documents use LF line
+  endings.
+- **More Linux machines.** arm64 (Raspberry Pi and other Arm boards) and
+  riscv64 packages join amd64, in the signed apt and dnf repositories at
+  <https://pkg.npad.dev>.
+
+### 🆕 Features
+- **Linux: the Markdown list tools** (`ui_gtk_lists.c`, with the same keys and
+  rules as the Windows build). With `list_tools_enabled` on, a **Markdown**
+  menu appears between Format and View - and disappears again as soon as the
+  setting is turned off, in every open window - and its items are mirrored at
+  the end of the right-click menu, greyed while the document is empty.
+  - *Sort* (Ascending, Descending, Case Sensitive), *Unique*, *Convert
+    Delimiters...* (From / To with recent values, Swap, escapes, Selection
+    only) and *Indent* / *Unindent*, which take the selected lines, or the
+    caret's line. Sort and Unique take the whole document when no line break
+    is selected. The Indent submenu has the seven formats, with *Custom...*
+    prompting for a prefix. Every transform is a single undo step, and one
+    that changes nothing leaves the document unmodified.
+  - **Tab** indents a selection and **Shift+Tab** unindents the selection or
+    the current line (plain Tab with nothing selected still types a tab); a
+    preference moves both to **Ctrl+]** / **Ctrl+[**. **Enter** on a list line
+    starts the next line with the same indent and marker, and on an empty bullet
+    removes the marker to end the list. **Ctrl+X** with nothing selected cuts the
+    line, and the next **Ctrl+V** puts it back above the current line.
+  - **Rich-text paste.** Ctrl+V and Ctrl+Shift+V convert the clipboard's HTML
+    to lists or Markdown as chosen in Preferences (defaults: Lists, Plain), and
+    Markdown > Paste as Markdown always converts fully. The HTML may arrive as
+    UTF-8 or UTF-16, as browsers offer it. A plain-text clipboard, and every
+    paste while the tools are off, pastes plain.
+  - The Enter rule is now a unit-tested core function, `list_marker_length`.
+- **Linux Preferences dialog.** A notebook of the Windows pages minus the two
+  that are Windows-only: there is no Updates page (Linux updates through apt
+  or dnf), and Associations is a single *Make npad the default text editor*
+  button that runs `xdg-mime default io.github.platima.npad.desktop
+  text/plain` for your account - only when you click it. Like the Windows property
+  sheet it has OK, Cancel and Apply (Apply stays greyed until you change
+  something); only the settings you changed are written, so a page you merely
+  looked at can never write its whole state back. Export, Import and Reset All
+  Preferences are on Backup (Reset keeps recent files, window position and
+  Find/Replace options and history, as on Windows; Import refuses a file that
+  is not a JSON object). The Markdown page edits the keys the list tools read.
+  The Debug page
+  shows Linux diagnostics (GTK and display backend, session, locale, paths,
+  window count, startup profile) with a Copy Diagnostics button.
+- **Linux Format > Font.** GTK's font chooser writes the same font keys
+  (face, size, weight, italic) as the Windows dialog, for the font type the
+  window is showing, and updates every open window live.
+- **Linux: npad's own context menu** replaces GTK's stock text-view menu, in
+  the same order as on Windows and greyed by the same rules (it shares the code
+  that greys the Edit menu). It opens from the mouse and from Shift+F10 / the
+  Menu key. With Basic Markdown support on, the Markdown list tools follow it.
+- **Linux: drag a file onto the window** to open it, through the usual "save
+  changes?" prompt. Hold **Ctrl** while dropping and the file's text is
+  inserted at the drop point instead, as one undo step (the Windows build
+  inserts at the caret). Only the first file of a multi-file drop is used,
+  and dropped text still goes in as text.
+- **Linux: external-change detection.** With `watch_file_changes` on, bringing
+  the window forward after another program changed or deleted the open file
+  asks what to do, in Windows' wording: *Reload from disk* (discards unsaved
+  changes), *Save as a different file*, *Keep editing* - the default, which
+  Esc also chooses, because it is the only one that writes nothing - and *Stop
+  telling me about this file*. A deleted file offers no Reload. Nothing is
+  polled; the check happens on activation.
+- **Linux: Ctrl + mouse wheel zoom**, in 10% steps like Ctrl+Plus / Ctrl+Minus.
+  Smooth-scrolling wheels and touchpads are accumulated, one step per whole
+  notch, so a touchpad swipe does not run away.
+- **Windows on Arm (arm64) builds.** Every release now also ships
+  `npad-v<v>-setup-win-arm64.exe` (Inno Setup, Windows on Arm only),
+  `npad-v<v>-msi-win-arm64.msi` (WiX, platform arm64) and
+  `npad-v<v>-portable-win-arm64.exe`, signed like the x64 ones. Installing
+  either architecture over the other upgrades in place (one AppId, one MSI
+  UpgradeCode). The x64 installer still installs on Windows on Arm, under
+  emulation.
+- **The in-app updater downloads the installer for its own architecture**,
+  decided when npad was compiled: an arm64 build fetches
+  `-setup-win-arm64.exe` and is never handed the x64 installer - on a release
+  without one it reports that, rather than falling back. An x64 build running
+  under emulation on an Arm PC keeps updating to x64.
+- **Linux arm64 and riscv64 packages**: `npad_<v>_arm64.deb` /
+  `npad-<v>-1.aarch64.rpm` and `npad_<v>_riscv64.deb` /
+  `npad-<v>-1.riscv64.rpm`, next to amd64 / x86_64. arm64 has the same floor
+  as amd64 (Debian 12, Ubuntu 22.04); riscv64 needs Debian 13 / Ubuntu 24.04
+  or newer, since nothing older has an official riscv64 port. The apt and dnf
+  repositories at pkg.npad.dev serve all three.
+
+- **Linux: the `system` colour scheme follows the desktop's light/dark
+  preference.** It reads `org.freedesktop.appearance color-scheme` from the
+  xdg-desktop-portal Settings interface and follows its `SettingChanged`
+  signal, so switching the desktop between light and dark re-themes every
+  open npad window immediately. Without a portal (or when it expresses no
+  preference) it falls back to GTK's own `gtk-application-prefer-dark-theme`
+  as before. The portal is only asked when the scheme is `system`, and a
+  repeat of the same value, or any other portal setting changing, does
+  nothing, so idle windows are not re-themed.
+- **Linux: dark schemes now darken the window frame on themes that have no
+  dark variant.** GTK's "prefer dark" hint only works for themes that ship one
+  (Adwaita, Yaru); the Mint-Y family, Arc and others make dark a separate
+  theme, so on Linux Mint (MATE, Cinnamon) the `dark` and Solarized Dark
+  schemes left a light frame around a dark page and `system` could not follow
+  a dark desktop at all. npad now switches its own windows to the installed
+  dark sibling theme (`Mint-Y` -> `Mint-Y-Dark`, `Mint-Y-Aqua` ->
+  `Mint-Y-Dark-Aqua`, `Arc` -> `Arc-Dark`) for a dark scheme, and back when the
+  scheme turns light. A light theme with no dark sibling at all (Cinnamon's
+  TraditionalOk) falls back to GTK's built-in Adwaita in its dark variant; a
+  theme that is already dark (BlackMATE) is left alone. Nothing is written to
+  your desktop's settings.
+- **Linux: `system` no longer shows a white page in dark chrome.** Some dark
+  themes (BlackMATE, found on Mint MATE) keep their text areas white. When the
+  desktop prefers dark and the theme's own text area is light, `system` now
+  uses the Dark scheme's page colours instead; a theme with a genuinely dark
+  text area is left alone.
+- **Settings honour `$XDG_CONFIG_HOME` (Linux).** Settings and crash-recovery
+  snapshots live in `$XDG_CONFIG_HOME/npad` when the variable is set to an
+  absolute path (an empty or relative value is ignored, per the XDG spec),
+  otherwise `~/.config/npad` as before. When the new location has no
+  `settings.json` yet but `~/.config/npad/settings.json` exists, npad reads
+  that one - the old file is only read, never moved or deleted, and the next
+  save writes the new location. Windows is unaffected.
+- **Linux: a saved window position that is off every monitor is replaced.**
+  On X11, a position left over from an unplugged monitor or a changed layout
+  opens the window centred on the primary monitor instead of out of reach;
+  the corrected position is what gets saved. (Wayland ignores positions.)
+- **Linux: every npad window and dialog uses npad's icon.** The installed
+  `io.github.platima.npad` hicolor icon is the window icon, the default icon
+  of Preferences, Find and the other dialogs, and the logo in About; a build
+  run from the source tree, with no icon installed, keeps the stock
+  text-editor icon.
+
+### 🔄 Changed
+- Linux: Edit > Preferences and Format > Font are no longer greyed out.
+- **Linux: new documents default to LF line endings**, the native text-file
+  format there, instead of Windows' CRLF. The same applies to an opened file
+  with no line breaks (or an empty one), and to the Defaults page's "Default
+  line endings" when you have never chosen one (`default_line_ending` is
+  platform-dependent when unset: CRLF on Windows, LF on Linux). A choice you
+  have saved is honoured, so a settings file imported from Windows keeps its
+  CRLF. Windows is unchanged.
+- **Linux: the vertical scroll bar is permanent**, greyed out when the text
+  fits - like the Windows build and Notepad - instead of coming and going.
+  This also keeps the text a constant width, so wrapped lines no longer
+  reflow when a document grows past one screen. GTK's overlay scroll bars are
+  turned off for the text area, since they hide themselves whatever the
+  policy says. With Word Wrap off the horizontal bar follows the same rule.
+
+### 🐛 Fixed
+- **Linux: the app icon looked stretched and oversized in the panel.** The
+  hicolor PNGs were not distorted (each size is the artwork at one uniform
+  scale), but the notepad ran to the very edge of every canvas, 94% as wide as
+  it is tall, so beside the line-art icons of a MATE or Cinnamon window list it
+  read as a big, wide block. Each size is now regenerated from `assets/` with
+  a single scale factor and a transparent margin (1 px at 16, 2 at 24 and 32,
+  3 at 48, 4 at 64, 8 at 128, 16 at 256) as the Adwaita application icons
+  have, as full-colour PNGs instead of the old heavily quantised palette
+  images. `scripts/make-linux-icons.py` produces them.
+- **Linux: the window icon did not follow a dark scheme.** There is now a
+  second icon, `io.github.platima.npad-dark` (the dark artwork, same seven
+  sizes), installed beside the standard one by `make install` and both
+  packages. The main window, new dialogs and the About dialog switch to it
+  while the View > Dark Mode, Dark or Solarized Dark scheme (or a dark system
+  scheme) is active, and back when it ends. The `.desktop` launcher keeps
+  `io.github.platima.npad`, and there is still no icon preference on Linux.
+  If the dark icon is not installed (a build run from the source tree), the
+  standard icon is used.
+### 🔧 Internal
+- **CI builds every architecture.** Windows arm64 is cross-compiled with a
+  pinned, checksum-verified llvm-mingw (`make windows-arm64`,
+  `scripts/install-llvm-mingw.sh`); MinGW GCC still builds x64. llvm-dlltool
+  has no `-y`, so the arm64 build delay-loads winhttp, bcrypt, comdlg32 and
+  msimg32 through lld's `--delayload` instead, from import libraries built from
+  the same `.def` files; CI checks that all four really are delay-loaded.
+  Linux arm64 compiles natively on GitHub's arm runners in Debian 12, riscv64
+  under QEMU in Debian 13, and both are packaged on the host with nfpm
+  (`make deb rpm`, which now reads the architecture from the binary's ELF header
+  and refuses to label it as any other). Each architecture is install-tested:
+  amd64 and arm64 on Debian 12/13, Ubuntu 22.04/24.04 and Fedora; riscv64
+  under QEMU on Debian 13, Ubuntu 24.04 and openSUSE Tumbleweed (Fedora has no
+  riscv64 image).
+- **Compiler warnings now fail CI.** `make WERROR=1` adds `-Werror`, and every
+  CI build uses it (Windows x64 and arm64, Linux, the unit tests and the
+  packages), after PR #19's use-after-free merged with GCC warning about it.
+  The warnings that surfaced under GCC and clang were fixed in the code and
+  tests, with no behaviour change. Local builds are unchanged.
+- **Release dry run.** `release.yml` can be run by hand (`gh workflow run
+  release.yml -f version=v0.35.0`): it builds, signs, install-tests and
+  validates every asset exactly as a tag would, and publishes nothing.
+  Validation (`scripts/validate-release-assets.sh`) now checks every asset's
+  checksum, the architecture inside each portable exe and .deb, and every
+  installer the updater can ask for.
+
 ## [0.34.0] - 2026-10-17
 
 ### ✨ Highlights

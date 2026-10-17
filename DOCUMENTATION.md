@@ -17,9 +17,18 @@ rights:
 
 | Artifact | Use |
 |----------|-----|
-| `npad-v<v>-setup-win-x64.exe` | Interactive installer (Inno Setup) |
-| `npad-v<v>-msi-win-x64.msi` | Silent/managed deployment (`msiexec`) |
-| `npad-v<v>-portable-win-x64.exe` | Portable - run from anywhere, no install |
+| `npad-v<v>-setup-win-<arch>.exe` | Interactive installer (Inno Setup) |
+| `npad-v<v>-msi-win-<arch>.msi` | Silent/managed deployment (`msiexec`) |
+| `npad-v<v>-portable-win-<arch>.exe` | Portable - run from anywhere, no install |
+
+`<arch>` is **`x64`** for ordinary Intel/AMD PCs and **`arm64`** for Windows
+on Arm (Snapdragon and other Arm laptops). The arm64 builds are native and
+install only on Windows on Arm; the x64 ones also run there, under emulation.
+Both architectures install to the same place under the same identity, so
+installing one over the other replaces it. The in-app updater downloads the
+installer for the architecture npad was built for, so an arm64 npad stays
+arm64 (and an x64 npad under emulation stays x64 until you install the arm64
+one).
 
 **SmartScreen / Defender**: releases from v0.32.4 are code-signed (Azure
 Artifact Signing; check Properties > Digital Signatures). A publisher's
@@ -118,7 +127,11 @@ installed fonts.
 **Building the installers** (repo checkout, Windows): `pwsh
 installer/build-installers.ps1` - needs Inno Setup 6, the WiX dotnet tool
 and a built `npad.exe`; fonts are downloaded from SHA256-pinned upstream
-releases by `installer/fetch-fonts.ps1`. CI builds both via
+releases by `installer/fetch-fonts.ps1`. Add `-Arch arm64` for the Windows on
+Arm set, from `npad-arm64.exe` (`make windows-arm64`, which needs
+[llvm-mingw](https://github.com/mstorsjo/llvm-mingw) on `PATH`;
+`scripts/install-llvm-mingw.sh` fetches the pinned release CI uses). Both
+architectures build on an x64 PC. CI builds all six deliverables via
 `.github/workflows/installers.yml`.
 
 ## File locations
@@ -129,13 +142,18 @@ releases by `installer/fetch-fonts.ps1`. CI builds both via
 | Crash-recovery snapshots | `%APPDATA%\Platima\npad\recovery\<slot>.txt` / `.meta` |
 
 Linux: `~/.config/npad/settings.json`, with snapshots in
-`~/.config/npad/recovery/`.
+`~/.config/npad/recovery/`. If `$XDG_CONFIG_HOME` is set to an absolute path,
+the directory is `$XDG_CONFIG_HOME/npad` instead (an empty or relative value
+is ignored). When that directory has no `settings.json` yet and
+`~/.config/npad/settings.json` exists, npad starts from the old settings and
+writes the new file on the next save; the old file is never moved or deleted.
 
 ## Linux
 
-The Linux desktop build (GTK 3; one binary for X11 and Wayland) is in
-progress. It shares the settings keys and behaviour described here; what is
-ported so far, and the deliberate differences (window position on Wayland,
+The Linux desktop build (GTK 3; one binary for X11 and Wayland) has every
+feature of the Windows build and is in beta while it is tested on real
+desktops. It shares the settings keys and behaviour described here; its
+status, and the deliberate differences (window position on Wayland,
 colour schemes against a dark GTK theme, the Text Documents filter, no Check
 for Updates), are tracked in [LINUX_PORT.md](LINUX_PORT.md).
 
@@ -146,16 +164,132 @@ dialogs are positioned by the window manager rather than at a fixed offset
 and a remembered position, and Whole word only demands a word boundary
 beside a term edge that is itself a letter, digit or underscore.
 
+### Preferences and Font on Linux
+
+Edit > Preferences (Ctrl+,) opens a dialog with the same pages, wording,
+settings keys and defaults as the Windows build: General, Appearance,
+Defaults, Markdown and Backup, plus the hidden Debug page (Ctrl+Shift+., or
+Shift+click Preferences). Differences:
+
+- **OK / Cancel / Apply, as on Windows.** Changes are held until you press
+  Apply (the dialog stays open) or OK (apply and close); Cancel, Esc or the
+  close box drops them. Apply stays greyed until something has changed, and it
+  writes only the settings you changed - a page you only looked at is never
+  written - then saves and every other open npad window picks the change up
+  live. As on Windows, the font buttons, Clear Recent Files Now, Export /
+  Import, the xdg-mime button and Reset All Preferences act immediately.
+  Reset keeps the same things as on Windows and closes the dialog; Import
+  Settings refuses a file that is not a JSON object.
+- **No Updates page.** Linux installs update through apt or dnf.
+- **Associations** is one explicit action, *Make npad the default text
+  editor*, which runs `xdg-mime default io.github.platima.npad.desktop
+  text/plain` for your account. Nothing runs until you click it, and the page
+  shows which application currently handles plain text.
+- **No application-icon choice** on Appearance: the icon comes from the icon
+  theme. The window and taskbar icon is the standard one under the Light and
+  Solarized Light schemes and a dark one (`io.github.platima.npad-dark`) under
+  Dark, Solarized Dark and a dark System scheme, switching live; the launcher
+  keeps the standard icon.
+- **Markdown** edits the shared keys, but the Markdown list tools themselves
+  have not been ported yet (the page says so). Turning Basic Markdown support
+  on already adds "Interpret escapes" to Find / Replace.
+  theme.
+- **Markdown** edits the shared keys the list tools read (see
+  [Markdown list tools on Linux](#markdown-list-tools-on-linux)). Turning Basic
+  Markdown support on also adds "Interpret escapes" to Find / Replace.
+- **Debug** shows the Linux diagnostics: version, executable, GTK version and
+  display backend, session type, locale, settings and recovery paths, the
+  number of open windows and the startup profile, with Copy Diagnostics.
+- **Format > Font...** is GTK's font chooser. It edits the font for the font
+  type the window is showing (monospace, proportional or OpenDyslexic) and
+  the shared size, weight and italic keys, exactly as on Windows; Appearance
+  has buttons for the monospace and proportional fonts directly.
+### Editing behaviours on Linux
+
+These match the Windows build; the differences are noted.
+
+- **Context menu** (right-click, Shift+F10 or the Menu key): Undo, Redo, Cut,
+  Copy, Paste, Delete, Select All, greyed exactly as in the Edit menu - Undo and
+  Redo by history, Cut / Copy / Delete without a selection, Paste with no text on
+  the clipboard. It replaces GTK's stock text menu (no emoji or input-method
+  entries).
+- **Drag & drop**: drop a file on the window to open it (after the usual save
+  prompt); hold **Ctrl** and its contents are inserted at the drop point
+  instead, as one undo step. Only the first file of a multi-file drop is used,
+  as on Windows. Dropped *text* is inserted as text. Whether Ctrl is seen
+  while dragging depends on the desktop and on the file manager you drag from.
+- **External changes** (`watch_file_changes`, off by default): when the window
+  becomes active, a file changed or deleted by another program offers *Reload
+  from disk*, *Save as a different file* or *Keep editing* (the default;
+  Esc also keeps), with a **Stop telling me about this file** box. Reload
+  discards unsaved edits, which is why it is never the default. Until
+  Preferences is ported, set the key in `settings.json`.
+- **Ctrl + mouse wheel** zooms in 10% steps, like Ctrl+Plus / Ctrl+Minus. High
+  resolution wheels and touchpads send many small steps; they are added up,
+  one zoom step per whole notch, so a swipe is not a runaway.
+- **Scroll bars** are always shown and greyed out when the text fits, as in
+  Notepad, instead of appearing and disappearing (GTK's overlay scroll bars are
+  turned off for the text area). With Word Wrap on there is no horizontal bar.
+
+### Markdown list tools on Linux
+
+Everything under *Markdown list tools* in the behaviour notes below applies,
+with the same settings keys, defaults and rules, and none of it exists until
+**Basic Markdown support** (`list_tools_enabled`, Preferences > Markdown) is on.
+Switching it on or off takes effect at once in every open window: the
+**Markdown** menu appears between Format and View (or goes), and Tab, Enter,
+Ctrl+X and the paste shortcuts change behaviour. Linux specifics:
+
+- **Menu and right-click.** Markdown > Sort (Ascending, Descending, Case
+  Sensitive), Unique, Convert Delimiters..., Indent (with its formats and
+  Custom...), Unindent and Paste as Markdown; the right-click menu repeats them
+  after Select All. They are greyed while the document is empty (Paste as
+  Markdown while the clipboard is). Cut stays available with nothing selected,
+  because Ctrl+X then cuts the line.
+- **Keys.** Tab and Shift+Tab, or Ctrl+] and Ctrl+[ when
+  `list_indent_shortcut_brackets` is on (the menu shows whichever is active;
+  Ctrl+[ and Ctrl+] need a keyboard layout where the brackets are typed without
+  AltGr). Enter and Ctrl+X behave as on Windows.
+- **Cut line / paste above** remembers the cut line, and pastes it above while
+  the clipboard still holds exactly that text. (Windows compares clipboard
+  sequence numbers; Linux has none.)
+- **Rich paste** reads the clipboard's `text/html`, which sources offer as
+  UTF-8 or UTF-16; Ctrl+V uses `markdown_paste_primary` (default Lists) and
+  Ctrl+Shift+V `markdown_paste_alt` (default Plain), both plain while the tools
+  are off.
+- **Dialogs.** Convert Delimiters and Custom Indent are plain GTK dialogs with
+  the Windows wording; the selection you started from survives them.
+- Every transform is one undo step, and a transform that changes nothing is not
+  an edit (the document stays unmodified).
+
 ### Installing on Linux
 
+Packages are built for three architectures. The .deb and .rpm spell them
+differently:
+
+| Architecture | .deb | .rpm | Oldest supported |
+|--------------|------|------|------------------|
+| x86-64 (Intel/AMD) | `amd64` | `x86_64` | Debian 12, Ubuntu 22.04 |
+| 64-bit Arm (Raspberry Pi 4/5 on a 64-bit OS, Arm laptops and servers) | `arm64` | `aarch64` | Debian 12, Ubuntu 22.04 |
+| 64-bit RISC-V | `riscv64` | `riscv64` | Debian 13, Ubuntu 24.04 |
+
+riscv64 starts later because no older Debian or Ubuntu has an official
+riscv64 port. `dpkg --print-architecture` (or `uname -m`) tells you which one
+you have; the apt and dnf repositories pick the right one by themselves.
+
 - **.deb** (Debian 12/13, Ubuntu 22.04+, Mint): `sudo apt install
-  ./npad_<version>_amd64.deb`. It depends only on GTK 3 (`libgtk-3-0` or
+  ./npad_<version>_amd64.deb` (or `_arm64` / `_riscv64`). It depends only on GTK 3 (`libgtk-3-0` or
   `libgtk-3-0t64`) and installs `/usr/bin/npad`, the launcher
   (`io.github.platima.npad.desktop`, offered for text, Markdown, JSON, XML and
-  similar files in "Open with"), hicolor icons from 16 to 256 px and the
-  AppStream metainfo for software centres.
+  similar files in "Open with"), hicolor icons from 16 to 256 px (standard
+  and dark) and the AppStream metainfo for software centres.
 - **.rpm** (Fedora): `sudo dnf install ./npad-<version>-1.x86_64.rpm`. It
   requires `gtk3` and installs the same files as the .deb.
+  similar files in "Open with"), hicolor icons from 16 to 256 px and the
+  AppStream metainfo for software centres.
+- **.rpm** (Fedora, openSUSE): `sudo dnf install ./npad-<version>-1.x86_64.rpm`
+  (or `.aarch64` / `.riscv64`). It requires `gtk3` and installs the same files
+  as the .deb.
 - **apt / dnf repository (recommended; updates arrive with the rest of the
   system).** The repositories at <https://pkg.npad.dev> are rebuilt from the
   GitHub releases and signed with the npad packaging key
@@ -187,7 +321,11 @@ beside a term edge that is itself a letter, digit or underscore.
   it. `make deb` and `make rpm` build the packages into `dist/`; both use
   [nfpm](https://nfpm.goreleaser.com) (`scripts/install-nfpm.sh` fetches the
   pinned release), and `make deb` falls back to `dpkg-deb` without it. Build
-  in a Debian 12 container for packages that run on every supported distro.
+  in a Debian 12 container for packages that run on every supported distro
+  (Debian 13 for riscv64). The package architecture is read from the binary,
+  so a binary compiled elsewhere (CI compiles riscv64 under QEMU) packages on
+  any host with nfpm; `PKG_ARCH=arm64` makes it an error if the binary is
+  anything else.
 - The desktop file name, icon name and window class are all the application
   id `io.github.platima.npad`; the shell matches windows to the launcher and
   icon through it.
@@ -239,7 +377,7 @@ File handling: saving, opening, recent files, recovery, and what happens when a 
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `theme` | string | `light` | Colour scheme: `light`, `dark`, `system` (follow OS), `solarized-light`, `solarized-dark`. |
+| `theme` | string | `light` | Colour scheme: `light`, `dark`, `system` (follow OS), `solarized-light`, `solarized-dark`. On Linux, `system` follows the desktop's light/dark preference live (the xdg-desktop-portal `color-scheme` setting, or GTK's own when there is no portal). |
 | `monospace_font` | string | `Consolas` | Face used in monospace mode (picker button). |
 | `proportional_font` | string | `Segoe UI` | Face used in proportional mode (picker button). |
 | `font_size` / `font_weight` / `font_italic` | int/int/bool | `11`/`400`/`false` | Shared font metrics, set via the font pickers or Format > Font. |
@@ -256,7 +394,7 @@ File handling: saving, opening, recent files, recovery, and what happens when a 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `default_encoding` | int | `0` (UTF-8) | Encoding for new files: 0 UTF-8, 1 UTF-8 BOM, 2 UTF-16 LE, 3 UTF-16 BE, 4 ANSI. |
-| `default_line_ending` | int | `0` (CRLF) | Line endings for new files: 0 CRLF, 1 LF, 2 CR. |
+| `default_line_ending` | int | platform: `0` (CRLF) on Windows, `1` (LF) on Linux | Line endings for new files, and for opened files with no line breaks: 0 CRLF, 1 LF, 2 CR. |
 | `default_font_mono` | bool | `true` | New windows start in monospace (`true`) or proportional (`false`) mode. **Monospace by default**, which is what mirrors notepad.exe: it has a single font setting and ships it as Consolas 11 - the same face and size as npad's monospace default. |
 | `default_zoom` | int | `100` | New windows' zoom percent (10-500). |
 | `auto_update_defaults` | bool | `false` | View changes (font type, zoom) immediately become the new defaults. |
@@ -301,6 +439,9 @@ Installing an update runs the downloaded, checksum-verified installer and
 closes npad through the normal save-changes prompt; a fully seamless
 no-close update is not possible because Inno/MSI must replace the running
 `npad.exe`. Portable-exe users get the same verified installer download.
+The installer is the one for the architecture npad was compiled for
+(`-setup-win-x64.exe` or `-setup-win-arm64.exe`); an arm64 npad is never
+offered the x64 installer, and reports an error if a release has none for it.
 
 ### Associations (Preferences > Associations)
 
