@@ -276,6 +276,7 @@ footer ul { margin: 0; padding: 0; list-style: none; }
 footer li { margin-bottom: 0.4rem; }
 footer p { margin: 0 0 0.6rem; }
 footer .legal { border-top: 1px solid var(--border); margin-top: 2rem; padding-top: 1.25rem; }
+footer .legal-credit { display: block; text-align: right; margin-top: 0.35rem; }
 
 @media (max-width: 52rem) {
   .row { grid-template-columns: 1fr; gap: 1.5rem; }
