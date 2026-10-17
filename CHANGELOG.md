@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the text fits, as in Notepad, rather than appearing and disappearing.
 - **Linux: Reload / Keep editing when another program changes your file**, if
   you turn on `watch_file_changes` (off by default, as in Notepad).
+- **npad now runs natively on Arm and RISC-V.** Windows on Arm gets its own
+  installer, MSI and portable exe (`-win-arm64`), and its in-app updater
+  fetches the arm64 installer. Linux packages and the apt/dnf repositories at
+  pkg.npad.dev now carry arm64 and riscv64 alongside amd64 (riscv64 needs
+  Debian 13 or Ubuntu 24.04 or newer).
 
 ### 🆕 Features
 - **Linux Preferences dialog.** A notebook of the Windows pages minus the two
@@ -60,6 +65,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Linux: Ctrl + mouse wheel zoom**, in 10% steps like Ctrl+Plus / Ctrl+Minus.
   Smooth-scrolling wheels and touchpads are accumulated, one step per whole
   notch, so a touchpad swipe does not run away.
+- **Windows on Arm (arm64) builds.** Every release now also ships
+  `npad-v<v>-setup-win-arm64.exe` (Inno Setup, Windows on Arm only),
+  `npad-v<v>-msi-win-arm64.msi` (WiX, platform arm64) and
+  `npad-v<v>-portable-win-arm64.exe`, signed like the x64 ones. Installing
+  either architecture over the other upgrades in place (one AppId, one MSI
+  UpgradeCode). The x64 installer still installs on Windows on Arm, under
+  emulation.
+- **The in-app updater downloads the installer for its own architecture**,
+  decided when npad was compiled: an arm64 build fetches
+  `-setup-win-arm64.exe` and is never handed the x64 installer - on a release
+  without one it reports that, rather than falling back. An x64 build running
+  under emulation on an Arm PC keeps updating to x64.
+- **Linux arm64 and riscv64 packages**: `npad_<v>_arm64.deb` /
+  `npad-<v>-1.aarch64.rpm` and `npad_<v>_riscv64.deb` /
+  `npad-<v>-1.riscv64.rpm`, next to amd64 / x86_64. arm64 has the same floor
+  as amd64 (Debian 12, Ubuntu 22.04); riscv64 needs Debian 13 / Ubuntu 24.04
+  or newer, since nothing older has an official riscv64 port. The apt and dnf
+  repositories at pkg.npad.dev serve all three.
 
 ### 🔄 Changed
 - Linux: Edit > Preferences and Format > Font are no longer greyed out.
@@ -69,6 +92,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reflow when a document grows past one screen. GTK's overlay scroll bars are
   turned off for the text area, since they hide themselves whatever the
   policy says. With Word Wrap off the horizontal bar follows the same rule.
+
+### 🔧 Internal
+- **CI builds every architecture.** Windows arm64 is cross-compiled with a
+  pinned, checksum-verified llvm-mingw (`make windows-arm64`,
+  `scripts/install-llvm-mingw.sh`); MinGW GCC still builds x64. llvm-dlltool
+  has no `-y`, so the arm64 build delay-loads winhttp, bcrypt, comdlg32 and
+  msimg32 through lld's `--delayload` instead, from import libraries built from
+  the same `.def` files; CI checks that all four really are delay-loaded.
+  Linux arm64 compiles natively on GitHub's arm runners in Debian 12, riscv64
+  under QEMU in Debian 13, and both are packaged on the host with nfpm
+  (`make deb rpm`, which now reads the architecture from the binary's ELF header
+  and refuses to label it as any other). Each architecture is install-tested:
+  amd64 and arm64 on Debian 12/13, Ubuntu 22.04/24.04 and Fedora; riscv64
+  under QEMU on Debian 13, Ubuntu 24.04 and openSUSE Tumbleweed (Fedora has no
+  riscv64 image).
+- **Release dry run.** `release.yml` can be run by hand (`gh workflow run
+  release.yml -f version=v0.35.0`): it builds, signs, install-tests and
+  validates every asset exactly as a tag would, and publishes nothing.
+  Validation (`scripts/validate-release-assets.sh`) now checks every asset's
+  checksum, the architecture inside each portable exe and .deb, and every
+  installer the updater can ask for.
 
 ## [0.34.0] - 2026-10-17
 

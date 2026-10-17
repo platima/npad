@@ -3,6 +3,9 @@
   npad MSI (silent-install oriented; no UI suite - use msiexec /qn or /qb).
 
   Build: wix build npad.wxs -arch x64 -d Version=x.y.z -o ../dist/npad-vx.y.z-msi-win-x64.msi
+  Windows on Arm: -arch arm64 -d NpadExe=<path to the arm64 npad.exe>, output
+  npad-vx.y.z-msi-win-arm64.msi (build-installers.ps1 -Arch arm64). Both share
+  the UpgradeCode, so either architecture's MSI upgrades the other in place.
 
   Scope: per-user by default; machine-wide with ALLUSERS=1:
     msiexec /i npad.msi /qn                  (current user)
@@ -19,6 +22,9 @@
     ADDLOCAL negation or a transform if unwanted.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <?ifndef NpadExe ?>
+    <?define NpadExe = ..\npad.exe ?>
+  <?endif ?>
   <Package Name="npad"
            Manufacturer="Platima"
            Version="$(var.Version)"
@@ -41,7 +47,7 @@
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="npad">
         <Component Id="MainExecutable">
-          <File Id="npadExe" Source="..\npad.exe" KeyPath="yes" />
+          <File Id="npadExe" Source="$(var.NpadExe)" Name="npad.exe" KeyPath="yes" />
         </Component>
         <Component Id="Docs" Guid="D8BDF90B-67FC-4E05-9539-B51C29881D4B">
           <File Source="..\LICENSE" />

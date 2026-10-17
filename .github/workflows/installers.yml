@@ -2,8 +2,13 @@ name: Installers
 
 # Builds the Windows deliverables on a hosted Windows runner: the Inno Setup
 # EXE, the WiX MSI, and the portable exe (the same npad.exe the installers
-# carry). Runs standalone via workflow_dispatch for testing, or is called from
-# release.yml with a release tag to attach the artifacts.
+# carry), once for x64 and once for arm64 (Windows on Arm). Runs standalone
+# via workflow_dispatch for testing - a dry run that publishes nothing - or is
+# called from release.yml with a release tag to attach the artifacts.
+#
+# x64's npad.exe is built natively with MSYS2's MinGW GCC. arm64's is
+# cross-compiled on Linux with a pinned llvm-mingw (MinGW GCC has no arm64
+# Windows target) in the job before, and packaged and signed here alongside.
 #
 # Code signing (Azure Artifact Signing, formerly Trusted Signing) switches on
 # when ALL six repository variables below are set, and is skipped entirely
@@ -42,7 +47,33 @@ permissions:
   id-token: write   # OIDC token for azure/login; harmless when signing is off
 
 jobs:
+  build-arm64-exe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install llvm-mingw (pinned, checksum-verified)
+        run: |
+          sudo sh scripts/install-llvm-mingw.sh /opt/llvm-mingw
+          echo /opt/llvm-mingw/bin >> "$GITHUB_PATH"
+
+      - name: Build npad-arm64.exe
+        # git must see the checkout so the Makefile derives the release
+        # version string, as on the Windows side
+        run: |
+          make windows-arm64
+          llvm-readobj --file-headers npad-arm64.exe | grep 'IMAGE_FILE_MACHINE_ARM64'
+
+      # Named apart from ci.yml's arm64 artifact: release.yml runs both
+      # workflows in one run, and artifact names must be unique within it
+      - uses: actions/upload-artifact@v7
+        with:
+          name: npad-installer-input-arm64
+          path: npad-arm64.exe
+          retention-days: 1
+
   build-installers:
+    needs: build-arm64-exe
     runs-on: windows-latest
     # The app registration's federated credential is bound to this GitHub
     # environment (subject repo:platima/npad:environment:release), which is
@@ -147,9 +178,33 @@ jobs:
           ) | Set-Content $cmd -Encoding ascii
           "NPAD_SIGN_CMD=$cmd" >> $env:GITHUB_ENV
 
-      - name: Build installers
+      - name: Fetch npad-arm64.exe
+        uses: actions/download-artifact@v8
+        with:
+          name: npad-installer-input-arm64
+          path: build/arm64-input
+
+      - name: Build installers (x64)
         shell: pwsh
-        run: pwsh -NoProfile -File installer/build-installers.ps1 -SignCmd "$env:NPAD_SIGN_CMD"
+        run: pwsh -NoProfile -File installer/build-installers.ps1 -Arch x64 -SignCmd "$env:NPAD_SIGN_CMD"
+
+      - name: Build installers (arm64)
+        shell: pwsh
+        run: pwsh -NoProfile -File installer/build-installers.ps1 -Arch arm64 -NpadExe build/arm64-input/npad-arm64.exe -SignCmd "$env:NPAD_SIGN_CMD"
+
+      - name: Check every deliverable is there
+        shell: pwsh
+        run: |
+          $missing = @()
+          foreach ($arch in "x64", "arm64") {
+            foreach ($kind in "setup-win-$arch.exe", "msi-win-$arch.msi", "portable-win-$arch.exe") {
+              foreach ($ext in "", ".sha256") {
+                if (-not (Get-ChildItem dist -Filter "npad-v*-$kind$ext" -ErrorAction SilentlyContinue)) { $missing += "npad-v*-$kind$ext" }
+              }
+            }
+          }
+          Get-ChildItem dist | Format-Table Name, Length
+          if ($missing) { throw "Missing: $($missing -join ', ')" }
 
       - name: Verify signatures
         if: env.SIGNING == 'true'
