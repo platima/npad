@@ -82,28 +82,27 @@
     </div>
 
     <div class="os-block" id="linux">
-      <div class="os-title"><h2>Linux</h2><span class="badge soon">In progress</span></div>
-      <p class="intro" style="margin-bottom:1.25rem">The GTK&nbsp;3 desktop build (one binary for X11 and Wayland) is being ported. Windows, menus, editing, open and save with each file&rsquo;s encoding and line endings kept, Find / Replace / Go To and printing are in; Preferences, the font picker and the Markdown tools are not yet, and there is no update checker on Linux by design. It has been tested so far on GTK&rsquo;s Broadway backend, WSLg and a Debian 13 Cinnamon desktop, with wider X11 and Wayland testing still under way. Follow progress in <a href="https://github.com/platima/npad/blob/linux/LINUX_PORT.md" target="_blank" rel="noopener noreferrer">LINUX_PORT.md<span class="sr-only"> (opens in a new tab)</span></a>.</p>
+      <div class="os-title"><h2>Linux</h2><span class="badge ok">Available</span><span class="badge">x64</span></div>
+      <p class="intro" style="margin-bottom:1.25rem">The GTK&nbsp;3 desktop build, one binary for X11 and Wayland, first released in v0.34.0. Editing, open and save with each file&rsquo;s encoding and line endings kept, Find / Replace / Go To and printing are in. Preferences, the font picker and the Markdown tools are still being ported. There is no update checker on Linux by design: updates arrive through apt or dnf with the rest of your system. Follow progress in <a href="https://github.com/platima/npad/blob/main/LINUX_PORT.md" target="_blank" rel="noopener noreferrer">LINUX_PORT.md<span class="sr-only"> (opens in a new tab)</span></a>.</p>
       <div class="cards">
         <article class="card tint t3 wide">
-          <h3>apt (Debian, Ubuntu, Mint) <span class="badge soon">Coming soon</span></h3>
-          <p>A signed apt repository at <code>pkg.npad.dev</code> is being set up. This is the planned usage; the final commands will be confirmed here when it goes live.</p>
-          <pre><code>curl -fsSL https://pkg.npad.dev/npad.gpg \
-  | sudo tee /etc/apt/keyrings/npad.gpg &gt;/dev/null
-echo "deb [signed-by=/etc/apt/keyrings/npad.gpg] https://pkg.npad.dev/apt stable main" \
-  | sudo tee /etc/apt/sources.list.d/npad.list
+          <h3>apt (Debian, Ubuntu, Mint) <span class="badge ok">Recommended</span></h3>
+          <p>Debian 12 and 13, Ubuntu 22.04 and newer, Mint 21 and newer, LMDE. The repository at <code>pkg.npad.dev</code> is signed with the npad packaging key, and npad then updates with the rest of your system.</p>
+          <pre><code>sudo install -d -m 0755 /etc/apt/keyrings
+sudo curl -fsSL https://pkg.npad.dev/npad.asc -o /etc/apt/keyrings/npad.asc
+sudo curl -fsSL https://pkg.npad.dev/npad.sources -o /etc/apt/sources.list.d/npad.sources
 sudo apt update &amp;&amp; sudo apt install npad</code></pre>
+          <p class="fine">Or let one script set up whichever of apt or dnf you have: <code>curl -fsSL https://pkg.npad.dev/install.sh | sudo sh</code></p>
         </article>
         <article class="card tint t4">
-          <h3>dnf (Fedora) <span class="badge soon">Coming soon</span></h3>
-          <p>The same repository will serve RPMs. Planned usage on Fedora 41 and newer; RHEL-family commands will be listed too:</p>
-          <pre><code>sudo dnf config-manager addrepo \
-  --from-repofile=https://pkg.npad.dev/rpm/npad.repo
+          <h3>dnf (Fedora)</h3>
+          <p>The same signed repository serves the RPM:</p>
+          <pre><code>sudo curl -fsSL https://pkg.npad.dev/npad.repo -o /etc/yum.repos.d/npad.repo
 sudo dnf install npad</code></pre>
         </article>
         <article class="card tint t8">
-          <h3>.deb package <span class="badge soon">Coming soon</span></h3>
-          <p>A <code>.deb</code> will be attached to GitHub releases with the first Linux release.</p>
+          <h3>.deb and .rpm</h3>
+          <p>Every release also attaches the packages themselves: <code>sudo apt install ./npad_&lt;version&gt;_amd64.deb</code> or <code>sudo dnf install ./npad-&lt;version&gt;-1.x86_64.rpm</code>. These do not update themselves.</p>
           <a class="btn" href="https://github.com/platima/npad/releases/latest" target="_blank" rel="noopener noreferrer">Latest release<span class="sr-only"> (opens in a new tab)</span></a>
         </article>
       </div>
@@ -117,11 +116,8 @@ sudo dnf install npad</code></pre>
           <pre><code>git clone https://github.com/platima/npad.git
 cd npad
 make windows   # Windows x64 with MinGW-w64 (cross or native)
-make test      # unit tests
-
-# Linux GTK 3 build (on the linux branch until the port is merged)
-git checkout linux
-make linux-gtk # produces ./npad-linux</code></pre>
+make linux-gtk # Linux GTK 3 build, produces ./npad-linux
+make test      # unit tests</code></pre>
           <p>See the <a href="https://github.com/platima/npad#compile-yourself" target="_blank" rel="noopener noreferrer">build instructions<span class="sr-only"> (opens in a new tab)</span></a> and <a href="https://github.com/platima/npad/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener noreferrer">CONTRIBUTING.md<span class="sr-only"> (opens in a new tab)</span></a>.</p>
         </article>
       </div>
@@ -150,7 +146,7 @@ make linux-gtk # produces ./npad-linux</code></pre>
         <ul>
           <li><a href="/docs/">Docs</a></li>
           <li><a href="https://github.com/platima/npad/blob/main/DOCUMENTATION.md" target="_blank" rel="noopener noreferrer">Full reference<span class="sr-only"> (opens in a new tab)</span></a></li>
-          <li><a href="https://github.com/platima/npad/blob/linux/LINUX_PORT.md" target="_blank" rel="noopener noreferrer">Linux port<span class="sr-only"> (opens in a new tab)</span></a></li>
+          <li><a href="https://github.com/platima/npad/blob/main/LINUX_PORT.md" target="_blank" rel="noopener noreferrer">Linux port<span class="sr-only"> (opens in a new tab)</span></a></li>
         </ul>
       </div>
       <div>
