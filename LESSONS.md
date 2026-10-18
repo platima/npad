@@ -736,6 +736,15 @@ accelerator either; open Preferences with Alt+E, S there.
 
 ## Installers
 
+**A pre-release tag cannot be the installers' version.** MSI's ProductVersion
+and Inno Setup's AppVersion must be numeric, so `build-installers.ps1` builds
+from `src/main.h` (0.36.0) - and it also named the files from it, while the
+Linux packages and `validate-release-assets.sh` use the tag (`v0.36.0-rc1`).
+The first release candidate failed validation for it, after every file was
+already attached. → The version inside an installer and the version in its
+file name are separate: `-FileVersion` (the tag, from installers.yml) names
+the files, `$Version` stays numeric.
+
 **Inno Setup's check lists do not scale their check box offset.**
 `TNewCheckListBox.Offset` defaults to 2 (Components) and 4 (Tasks) raw
 pixels, and stays there at any DPI while the glyph scales; at 150% with the

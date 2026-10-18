@@ -24,6 +24,9 @@ param(
     [string]$Arch = "x64",     # Target architecture of npad.exe and both installers
     [string]$NpadExe = "",     # Path to npad.exe; defaults to <repo>\npad.exe (x64) or <repo>\npad-arm64.exe
     [string]$Version = "",     # Override; defaults to parsing src/main.h
+    [string]$FileVersion = "", # Version in the file names; defaults to $Version. A
+                               # pre-release tag (0.36.0-rc1) goes here: MSI and
+                               # Inno versions must stay numeric (x.y.z)
     [string]$SignCmd = ""      # Path to a "sign one file" command; empty = unsigned
 )
 
@@ -49,7 +52,11 @@ if (-not $Version) {
     if (-not ($maj -and $min -and $pat)) { throw "Could not parse version from src/main.h" }
     $Version = "$maj.$min.$pat"
 }
-Write-Host "Building $Arch installers for npad $Version$(if ($SignCmd) { ' (signed)' } else { ' (unsigned)' })"
+if (-not $FileVersion) { $FileVersion = $Version }
+if ($FileVersion -ne $Version -and -not $FileVersion.StartsWith("$Version-")) {
+    throw "FileVersion $FileVersion is not $Version or a pre-release of it"
+}
+Write-Host "Building $Arch installers for npad $FileVersion$(if ($SignCmd) { ' (signed)' } else { ' (unsigned)' })"
 
 # --- npad.exe ---
 if (-not $NpadExe) {
@@ -93,7 +100,7 @@ if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
 
 # --- Inno Setup ---
 Write-Host "Compiling Inno Setup installer..."
-$isccArgs = @("/Q", "/DAppVersion=$Version", "/DArch=$Arch", "/DNpadExe=$stagedExe")
+$isccArgs = @("/Q", "/DAppVersion=$Version", "/DFileVersion=$FileVersion", "/DArch=$Arch", "/DNpadExe=$stagedExe")
 if ($SignCmd) {
     # npad.iss enables SignTool=npadsign and SignedUninstaller=yes under
     # #ifdef Sign; the tool itself is defined here on the command line so the
@@ -109,14 +116,14 @@ if ($SignCmd) {
 }
 & $iscc @isccArgs (Join-Path $installerDir "npad.iss")
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
-$setupExe = Join-Path $dist "npad-v$Version-setup-win-$Arch.exe"
+$setupExe = Join-Path $dist "npad-v$FileVersion-setup-win-$Arch.exe"
 if (-not (Test-Path $setupExe)) { throw "Expected output missing: $setupExe" }
 # Not signed here: with SignTool set, Inno signs the finished setup exe itself
 # (as well as the uninstaller) - a second pass here just spent a signing call
 
 # --- MSI ---
 Write-Host "Building MSI..."
-$msi = Join-Path $dist "npad-v$Version-msi-win-$Arch.msi"
+$msi = Join-Path $dist "npad-v$FileVersion-msi-win-$Arch.msi"
 # wix resolves the .wxs's relative Source paths against the current directory
 Push-Location $installerDir
 try {
@@ -126,7 +133,7 @@ try {
 Invoke-Signing $msi
 
 # --- Portable: the very same binary the installers carry ---
-$portable = Join-Path $dist "npad-v$Version-portable-win-$Arch.exe"
+$portable = Join-Path $dist "npad-v$FileVersion-portable-win-$Arch.exe"
 Copy-Item $stagedExe $portable -Force
 
 # --- Checksums (after signing: the signature is part of the bytes) ---

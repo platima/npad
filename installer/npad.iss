@@ -8,6 +8,11 @@
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
+; The version in the file name: the release tag's spelling, which for a
+; pre-release (0.36.0-rc1) is not a valid AppVersion (/DFileVersion=...)
+#ifndef FileVersion
+  #define FileVersion AppVersion
+#endif
 ; Target architecture, x64 or arm64 (ISCC /DArch=arm64), and the npad.exe built
 ; for it (/DNpadExe=<path>). One AppId for both: installing the other
 ; architecture's setup over an install replaces it in place.
@@ -40,7 +45,7 @@ DefaultGroupName={#AppName}
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExe}
 OutputDir=..\dist
-OutputBaseFilename=npad-v{#AppVersion}-setup-win-{#Arch}
+OutputBaseFilename=npad-v{#FileVersion}-setup-win-{#Arch}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
