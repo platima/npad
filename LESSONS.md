@@ -956,6 +956,17 @@ variable, a C11-only typedef redefinition and a set-but-unused global that
 GCC accepted. Check `make WERROR=1 test linux windows windows-arm64` before
 pushing, and fix the cause rather than silencing the warning.
 
+**A posted `WM_KEYDOWN` already gets its own `WM_CHAR`.** Probing the Win32 Tab
+key by `PostMessage`, the keydown, a hand-posted `WM_CHAR` and the keyup gave
+two tabs with the feature off and spaces *plus* a tab with it on - the swallow
+flag looked broken. It was not: npad's own message loop runs `TranslateMessage`
+on the posted keydown, which queues the real `WM_CHAR`, so the hand-posted one
+was a second character. Post the keydown and keyup only, and the flag logic
+behaves as with a real key. (A logging build, in the mirror only, showed the two
+`WM_CHAR`s in a minute.) Typing keys this way never touches the user's
+keyboard: `GetKeyState` still reads the real modifier state, so do not test
+while holding Shift.
+
 ## Method
 
 **Measure before optimising, and let the measurement kill the hypothesis.** Two

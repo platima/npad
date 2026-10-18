@@ -181,6 +181,35 @@ TEST_CASE(unindent_spaces) {
                  "unindent removes up to four leading spaces");
 }
 
+TEST_CASE(spaces_format_follows_configured_width) {
+    ASSERT_XFORM(list_indent_lines_w("one\ntwo", LIST_INDENT_SPACES, NULL, 2), "  one\n  two",
+                 "width 2 indents by two spaces");
+    ASSERT_XFORM(list_indent_lines_w("one", LIST_INDENT_SPACES, NULL, 8), "        one",
+                 "width 8 indents by eight spaces");
+    ASSERT_XFORM(list_indent_lines_w("one", LIST_INDENT_SPACES, NULL, 4), "    one",
+                 "width 4 matches the historic default");
+    ASSERT_XFORM(list_unindent_lines_w("        x", LIST_INDENT_SPACES, NULL, 2), "      x",
+                 "width 2 unindent strips two");
+    ASSERT_XFORM(list_unindent_lines_w("   x", LIST_INDENT_SPACES, NULL, 8), "x",
+                 "unindent strips only the spaces there are, up to the width");
+    ASSERT_XFORM(list_indent_lines_w("one", LIST_INDENT_SPACES, NULL, 0), " one",
+                 "width below 1 clamps to 1");
+    ASSERT_XFORM(list_indent_lines_w("one", LIST_INDENT_SPACES, NULL, 99), "                one",
+                 "width above 16 clamps to 16");
+}
+
+TEST_CASE(other_formats_ignore_the_width) {
+    ASSERT_XFORM(list_indent_lines_w("one", LIST_INDENT_TAB, NULL, 2), "\tone", "tab stays a tab");
+    ASSERT_XFORM(list_indent_lines_w("one", LIST_INDENT_HYPHEN, NULL, 2), "- one",
+                 "marker formats keep their marker");
+    ASSERT_XFORM(list_indent_lines_w("- one", LIST_INDENT_HYPHEN, NULL, 8), "  - one",
+                 "markdown nesting stays two spaces");
+    ASSERT_XFORM(list_unindent_lines_w("  - one", LIST_INDENT_HYPHEN, NULL, 8), "- one",
+                 "and unindent strips two");
+    ASSERT_XFORM(list_indent_lines_w("one", LIST_INDENT_CUSTOM, "> ", 8), "> one",
+                 "custom stays as typed");
+}
+
 TEST_CASE(unindent_tab) {
     ASSERT_XFORM(list_unindent_lines("\tx", LIST_INDENT_TAB, NULL), "x",
                  "unindent removes a leading tab");
@@ -346,6 +375,8 @@ int main(void) {
     RUN_TEST(unindent_hyphen_lsp_legacy_spaceless);
     RUN_TEST(unindent_hyphen_lsp_deepened);
     RUN_TEST(unindent_spaces);
+    RUN_TEST(spaces_format_follows_configured_width);
+    RUN_TEST(other_formats_ignore_the_width);
     RUN_TEST(unindent_tab);
     RUN_TEST(unindent_noop);
     RUN_TEST(unindent_cross_format);

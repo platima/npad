@@ -322,6 +322,15 @@ Decisions taken in the foundation round. Each is easy to revisit.
 - **Fonts:** `Monospace` / `Sans` defaults, resolved by fontconfig.
 - **Column numbers** count code points, so an emoji is one column; Windows
   counts UTF-16 units (two). Notepad itself does the latter.
+- **Tab inserts spaces** (`tab_inserts_spaces`, `tab_width`; shared rule in
+  `core/tab_stops`) counts code points on both platforms. GTK reads the
+  line's text straight from the buffer; Win32 converts the line before the
+  caret to UTF-8 first, so an emoji is one column there too even though the
+  status bar's `Col` counts it as two. The key handler lives in
+  `ui_gtk_lists.c` beside the Markdown Tab handling because it shares that
+  key-press hook, but it is not gated on `list_tools_enabled`. Over a
+  selection it deletes and inserts inside one undo group, so a Tab is one
+  step (unlike a typed replacement, below).
 - **Typing over a selection** undoes in two steps (the replacement plus its
   first character, then the rest of the word); RichEdit does one.
 - **Undo history** keeps 10,000 steps (typing coalesces per word); Windows

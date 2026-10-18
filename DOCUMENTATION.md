@@ -402,6 +402,8 @@ File handling: saving, opening, recent files, recovery, and what happens when a 
 | `session_interval` | int | `30` | Snapshot period in seconds (minimum 5). |
 | `ctrl_n_new_window` | bool | `false` | Swap Ctrl+N / Ctrl+Shift+N between "New" (clear this window) and "New Window" (open another instance). |
 | `find_seed_selection` | bool | `true` | **Fill Find with the selected text.** Opening (or re-focusing) Find or Replace with Ctrl+F / Ctrl+H puts the current selection in "Find what", selected so typing replaces it. On by default because Windows 10 notepad.exe (1809+) does exactly this, so it is the behaviour a Notepad user expects. Only a non-empty selection that contains no line break and is at most 255 characters seeds the box; anything else leaves the last search term as it was. The same key and rule apply on every platform. Unlike the other `find_` keys it is a preference, so Reset All Preferences resets it. |
+| `tab_inserts_spaces` | bool | `false` | **Tab key inserts spaces up to the next tab stop.** Off by default, because Windows 10 notepad.exe types a tab character. See *Tab inserts spaces* in the behaviour notes. Same key and wording on every platform; independent of Basic Markdown support. |
+| `tab_width` | int | `4` | Distance between tab stops, in columns (1-16; anything outside is clamped). Used when `tab_inserts_spaces` is on, and then also as the step of the Markdown tools' Spaces indent format. |
 
 ### Appearance (Preferences > Appearance)
 
@@ -578,7 +580,8 @@ propagates live to all open npad windows.
 | Ctrl+Plus / Ctrl+Minus / Ctrl+0 | Zoom in / out / reset (this window; Ctrl+Scroll also zooms) |
 | Ctrl+, | Preferences |
 | Ctrl+Shift+. | Preferences opened on the hidden Debug page (also: Shift+click the Preferences menu item) |
-| Tab / Shift+Tab | Indent / Unindent (Markdown tools). Tab indents any selection; without one it types a tab. Shift+Tab always unindents - the selected lines, or the current line. A preference switches this binding to Ctrl+] / Ctrl+[. |
+| Tab | Types a tab character (as Notepad does) - or, with *Tab key inserts spaces* on, the spaces up to the next tab stop, replacing any selection. The Markdown tools' indent on a selection takes precedence over that while they are on. |
+| Tab / Shift+Tab | Indent / Unindent (Markdown tools). Tab indents any selection; without one it types a tab (or spaces, see above). Shift+Tab always unindents - the selected lines, or the current line. A preference switches this binding to Ctrl+] / Ctrl+[. |
 | Ctrl+X (no selection) | Cut the whole current line (Markdown tools); Ctrl+V then pastes that line above the current line, keeping the caret in place, until the clipboard changes |
 | Enter (on a list line) | Continue the list: the new line starts with the same indent + marker (Markdown tools). On an empty bullet, removes the marker and inserts a plain newline (ends the list). |
 
@@ -703,6 +706,26 @@ Window does). Not intended for direct use.
 - **Emoji & mixed scripts**: characters the configured font lacks (emoji,
   CJK, etc.) render via Windows font fallback - when typed, when a file is
   opened, and across font or theme changes.
+- **Tab inserts spaces** (Preferences > General, `tab_inserts_spaces`, off by
+  default; width `tab_width`, 4 unless changed, 1-16): a plain Tab types the
+  spaces that reach the next tab stop instead of a tab character. The stop is
+  the next multiple of the width counted in characters from the start of the
+  line, so at width 4 a Tab types four spaces on an empty line, three after
+  one character, one after three and a whole four again after four. A tab
+  character already on the line advances to the next stop too, and each
+  character counts as one column whatever its UTF-8 / UTF-16 length (an emoji
+  is one). Wide East Asian glyphs are still one column each, since the rule
+  is about characters, not about how wide the font draws them; the on-screen
+  width of a literal tab character is the editor's own and `tab_width` does
+  not change it. Over a selection Tab replaces the selection with the spaces,
+  as Notepad replaces it with a tab. One press is one undo step. Shift+Tab
+  (outside the Markdown tools), Ctrl+Tab and Alt+Tab are not touched. With the
+  Markdown list tools on, Tab over a selection still indents the selected
+  lines (it does not replace them), exactly as before; and with this option on
+  their *Spaces* indent format steps by `tab_width` instead of four (Tab and
+  Ctrl+] / Ctrl+[ then agree), while the nesting step of marker formats
+  stays two spaces and the *Tab* format stays a tab character. Changing
+  either setting applies to every open window at once.
 - **Markdown list tools** (Preferences > Markdown, off by default): add a
   **Markdown** menu and right-click items.
   - *Sort / Unique* treat each line as an entry. If the selection spans more
@@ -726,7 +749,7 @@ Window does). Not intended for direct use.
     line that already has its marker adds two spaces instead of a second
     marker (markdown-style nesting); unindent removes one unit - two nesting
     spaces, then the marker itself. Whitespace formats add/remove a tab or
-    up to four spaces. Each operation is a single undo step. Line scoping
+    up to four spaces (up to `tab_width` spaces while *Tab inserts spaces* is on). Each operation is a single undo step. Line scoping
     follows logical lines, so word wrap does not fragment the target.
   - *Enter continues lists*: pressing Enter on a line starting with a marker
     (`* `, `- `, or the custom prefix, at any nesting depth) starts the next

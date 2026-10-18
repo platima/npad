@@ -9,6 +9,10 @@
  * counterparts are list_do, populate_list_menu, handle_markdown_tab,
  * handle_markdown_return, ui_platform_cut and do_paste in ui_win32.c.
  *
+ * The one exception is "Tab inserts spaces" (insert_tab_spaces, the
+ * tab_inserts_spaces preference): it is not a Markdown feature and works with
+ * the tools off, but it shares this file's key-press hook and undo grouping.
+ *
  * Every transform is one undo step: the edits are wrapped in a GTK user
  * action, which ui_gtk.c turns into a single undo group. Positions are GTK
  * character offsets, never byte indexes.
@@ -26,6 +30,7 @@
 #include "../core/html_md.h"
 #include "../core/list_ops.h"
 #include "../core/settings.h"
+#include "../core/tab_stops.h"
 
 #define LIST_INDENT_FORMATS 7 // ListIndentFormat values, LIST_INDENT_CUSTOM included
 
@@ -227,8 +232,11 @@ static void list_do(Window *window, ListOp op, int arg) {
             // The custom prefix goes in for every format, so lines carrying a
             // custom bullet still deepen / unindent under a built-in format
             char *custom = get_custom_indent();
-            out = (op == OP_INDENT) ? list_indent_lines(text, (ListIndentFormat) arg, custom)
-                                    : list_unindent_lines(text, (ListIndentFormat) arg, custom);
+            // The Spaces format steps by the tab width when Tab inserts spaces
+            int width = tab_list_indent_width();
+            out = (op == OP_INDENT)
+                      ? list_indent_lines_w(text, (ListIndentFormat) arg, custom, width)
+                      : list_unindent_lines_w(text, (ListIndentFormat) arg, custom, width);
             free(custom);
             break;
         }
@@ -516,6 +524,37 @@ static bool handle_tab(Window *window, bool shift) {
     return false;
 }
 
+// "Tab inserts spaces" (a general editing preference, not a Markdown one, so
+// it is NOT gated on list_tools_enabled): a plain Tab types the spaces that
+// reach the next tab stop instead of a tab character. The column is counted
+// in characters from the start of the line (core/tab_stops). A selection is
+// replaced, exactly as it is by a tab character. One Tab is one undo step:
+// the group keeps the spaces from merging with the typing around them.
+static bool insert_tab_spaces(Window *window) {
+    GtkTextBuffer *buffer = window->buffer;
+    if (!gtk_text_view_get_editable(GTK_TEXT_VIEW(window->text_view)))
+        return false;
+
+    begin_step(window);
+    gtk_text_buffer_delete_selection(buffer, TRUE, TRUE);
+    GtkTextIter caret, line_start;
+    gtk_text_buffer_get_iter_at_mark(buffer, &caret, gtk_text_buffer_get_insert(buffer));
+    line_start = caret;
+    gtk_text_iter_set_line_offset(&line_start, 0);
+    char *prefix = gtk_text_buffer_get_text(buffer, &line_start, &caret, TRUE);
+    int width = tab_width_setting();
+    int count = tab_spaces_for_line_prefix(prefix, strlen(prefix), width);
+    g_free(prefix);
+
+    char spaces[TAB_WIDTH_MAX + 1];
+    memset(spaces, ' ', sizeof spaces);
+    spaces[count] = '\0';
+    gtk_text_buffer_insert_at_cursor(buffer, spaces, count);
+    end_step(window);
+    scroll_to_cursor(window);
+    return true;
+}
+
 // Enter on a list line continues the marker on the new line; Enter on an
 // empty bullet removes the marker and leaves a plain newline (ends the list).
 // Returns true when the keystroke was consumed.
@@ -603,9 +642,15 @@ static bool handle_return(Window *window) {
 static gboolean on_key_press(GtkWidget *widget, const GdkEventKey *event, gpointer data) {
     (void) widget;
     Window *window = data;
+    GdkModifierType mods = event->state & gtk_accelerator_get_default_mod_mask();
+    // Tab inserts spaces needs no Markdown tools; Shift+Tab and any other
+    // modifier are left alone
+    if (event->keyval == GDK_KEY_Tab && mods == 0 && tab_inserts_spaces_enabled() &&
+        !(list_tools_enabled() && !brackets_shortcut() &&
+          gtk_text_buffer_get_has_selection(window->buffer)))
+        return insert_tab_spaces(window) ? TRUE : FALSE;
     if (!list_tools_enabled())
         return FALSE;
-    GdkModifierType mods = event->state & gtk_accelerator_get_default_mod_mask();
     switch (event->keyval) {
         case GDK_KEY_Tab:
         case GDK_KEY_ISO_Left_Tab:
