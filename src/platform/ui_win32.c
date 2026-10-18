@@ -2687,9 +2687,11 @@ static bool g_update_check_manual = false;
 // menu code); forward-declared for the update result handlers
 static void apply_update_indicator(Window *window);
 
-// Current version as "vMAJOR.MINOR.PATCH"
+// Current version as the release tag spells it: "v0.36.0", "v0.36.0-rc2" for
+// a pre-release, "v0.36.0-dev" for a development build (update_check.h)
 static void current_version_string(char *out, size_t cap) {
-    snprintf(out, cap, "v%d.%d.%d", NPAD_VERSION_MAJOR, NPAD_VERSION_MINOR, NPAD_VERSION_PATCH);
+    update_current_version(NPAD_VERSION, NPAD_VERSION_MAJOR, NPAD_VERSION_MINOR, NPAD_VERSION_PATCH,
+                           out, cap);
 }
 
 // Stamp the last-checked time (local "YYYY-MM-DD HH:MM") into settings

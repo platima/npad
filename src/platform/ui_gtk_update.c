@@ -61,7 +61,8 @@ static struct {
 } U;
 
 void npad_gtk_update_current_version(char *out, size_t cap) {
-    snprintf(out, cap, "v%d.%d.%d", NPAD_VERSION_MAJOR, NPAD_VERSION_MINOR, NPAD_VERSION_PATCH);
+    update_current_version(NPAD_VERSION, NPAD_VERSION_MAJOR, NPAD_VERSION_MINOR, NPAD_VERSION_PATCH,
+                           out, cap);
 }
 
 bool npad_gtk_update_busy(void) {

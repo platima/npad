@@ -124,6 +124,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   previous page, wrapping round at either end, as in the Windows property
   sheet. GTK's notebook only binds Ctrl+PageUp / PageDown, and only while
   focus is on its tabs, so Ctrl+Tab just moved the focus.
+- **A release candidate knows it is one** (Windows and Linux). A build from
+  a pre-release tag called itself `v0.36.0-dev` in About and `v0.36.0` on the
+  Updates page; it now says `v0.36.0-rc2` in both. The update check also
+  ranks a pre-release before its release (`0.36.0-rc2` < `0.36.0`, and rc2 <
+  rc10), so a release candidate is offered the final release, which it
+  previously treated as the version it already had. Ordinary releases
+  compare exactly as before.
 - **Release: a pre-release tag now builds a complete release.** The Windows
   installer, MSI and portable exe took their file names from `src/main.h`
   (`npad-v0.36.0-...`) while every Linux file and the validation used the

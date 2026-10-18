@@ -19,10 +19,21 @@
 // JSON response into out. Returns false when absent or too long.
 bool update_extract_tag(const char *json, char *out, size_t out_cap);
 
-// Compare two dotted version strings numerically (an optional leading 'v'
-// and any suffix after the numeric triple, e.g. "-dev", are ignored):
-// negative when a < b, 0 when equal, positive when a > b.
+// Compare two dotted version strings: the numeric triple first (an optional
+// leading 'v'), then, for the same triple, a pre-release suffix ("-rc2",
+// "-dev") sorts BEFORE the plain release, as in semver - so a v0.36.0-rc2
+// build is offered v0.36.0. Two suffixes compare with numbers as numbers
+// (rc2 < rc10). Anything after a space (" (abc1234)") is ignored.
+// Negative when a < b, 0 when equal, positive when a > b.
 int update_version_compare(const char *a, const char *b);
+
+// This build's version as the updater and the Updates page should show it,
+// from the compile-time version string (NPAD_VERSION): "v0.36.0" for a
+// release, "v0.36.0-rc2" for a pre-release, "v0.36.0-dev" for anything else
+// (the " (abc1234)" commit note is dropped). Falls back to the numeric
+// triple when the string does not start with one.
+void update_current_version(const char *build_version, int major, int minor, int patch, char *out,
+                            size_t cap);
 
 // Parse the leading 64-hex-digit SHA-256 digest from a .sha256 file's text
 // (formats like "<hex>  <filename>") into out[65], lowercased. Returns

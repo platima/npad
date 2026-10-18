@@ -128,8 +128,13 @@ endif
 # Building exactly at the matching release tag (clean tree): plain "v0.10.1".
 # Otherwise a dev build: "v0.10.2-dev (abc1234)"; without git available
 # (e.g. some CI shells), just "v0.10.2-dev" - never empty parens.
+# A pre-release tag of this version (v0.10.2-rc1, clean tree) is spelled as
+# the tag, so the About box and the updater know it is a release candidate.
+GIT_PRERELEASE_TAG = $(filter-out %-dirty,$(filter $(BASE_VERSION)-%,$(GIT_EXACT_TAG)))
 ifeq ($(GIT_EXACT_TAG),$(BASE_VERSION))
 VERSION ?= $(BASE_VERSION)
+else ifneq ($(GIT_PRERELEASE_TAG),)
+VERSION ?= $(GIT_PRERELEASE_TAG)
 else ifneq ($(GIT_COMMIT),)
 VERSION ?= $(HEADER_VERSION) ($(GIT_COMMIT))
 else
