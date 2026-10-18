@@ -1189,6 +1189,27 @@ static void read_pending_spins(void) {
         gtk_spin_button_update(GTK_SPIN_BUTTON(P.spins[i]));
 }
 
+// Ctrl+Tab / Ctrl+Shift+Tab step through the pages, wrapping at either end,
+// as they do in the Windows property sheet. GtkNotebook only binds
+// Ctrl+PageUp / PageDown, and only while focus is inside it; Ctrl+Tab would
+// otherwise just move the keyboard focus out of the page.
+static gboolean on_prefs_key(GtkWidget *widget, const GdkEventKey *event, gpointer data) {
+    (void) widget;
+    GdkModifierType mods = event->state & gtk_accelerator_get_default_mod_mask();
+    bool tab = event->keyval == GDK_KEY_Tab || event->keyval == GDK_KEY_KP_Tab ||
+               event->keyval == GDK_KEY_ISO_Left_Tab;
+    if (!tab || !(mods & GDK_CONTROL_MASK) || (mods & ~(GDK_CONTROL_MASK | GDK_SHIFT_MASK)))
+        return FALSE;
+    GtkNotebook *notebook = GTK_NOTEBOOK(data);
+    int count = gtk_notebook_get_n_pages(notebook);
+    if (count < 2)
+        return TRUE;
+    int step = (mods & GDK_SHIFT_MASK) ? count - 1 : 1;
+    gtk_notebook_set_current_page(notebook,
+                                  (gtk_notebook_get_current_page(notebook) + step) % count);
+    return TRUE;
+}
+
 void npad_gtk_show_preferences(Window *window, bool show_debug) {
     if (!window)
         return;
@@ -1208,6 +1229,7 @@ void npad_gtk_show_preferences(Window *window, bool show_debug) {
 
     GtkWidget *notebook = gtk_notebook_new();
     gtk_container_set_border_width(GTK_CONTAINER(notebook), 6);
+    g_signal_connect(P.dialog, "key-press-event", G_CALLBACK(on_prefs_key), notebook);
     gtk_box_pack_start(GTK_BOX(gtk_dialog_get_content_area(GTK_DIALOG(P.dialog))), notebook, TRUE,
                        TRUE, 0);
 

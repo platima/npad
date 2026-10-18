@@ -686,6 +686,14 @@ keycode == keyval, so Ctrl+Shift+letter does not resolve to the accelerator
 GTK would match on a real keymap; call `gtk_accel_groups_activate(window,
 lowercase_key, state)` for those.
 
+**GtkNotebook does not take Ctrl+Tab.** A notebook looks like a Windows
+property sheet, where Ctrl+Tab / Ctrl+Shift+Tab change page from anywhere in
+it. GTK binds only Ctrl+PageUp / PageDown, and only while focus is on the
+tabs; Ctrl+Tab inside a page just moves the focus. → Handle Tab /
+ISO_Left_Tab with Control in a `key-press-event` on the dialog
+(`on_prefs_key` in `ui_gtk_prefs.c`). In Broadway, Ctrl+, does not reach the
+accelerator either; open Preferences with Alt+E, S there.
+
 ## Installers
 
 **Inno Setup's check lists do not scale their check box offset.**

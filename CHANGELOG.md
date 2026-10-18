@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   commands to add npad to your applications menu under `~/.local`. It is the
   same binary the packages install; for automatic updates, the apt and dnf
   repositories at <https://pkg.npad.dev> remain the recommended route.
+- **Linux: Ctrl+Tab switches Preferences pages**, as it does on Windows.
 
 ### 🆕 Features
 - **Linux: portable tarball** (`make tarball`, `scripts/build-package.sh
@@ -32,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `~/.local` steps. Releases attach it with a `.sha256` (so `CHECKSUMS.txt`
   lists it), release validation checks each tarball's ELF architecture, and
   the release notes list it under Linux downloads.
+
+### 🐛 Fixed
+- **Linux: Ctrl+Tab / Ctrl+Shift+Tab in Preferences** now step to the next /
+  previous page, wrapping round at either end, as in the Windows property
+  sheet. GTK's notebook only binds Ctrl+PageUp / PageDown, and only while
+  focus is on its tabs, so Ctrl+Tab just moved the focus.
 
 ## [0.35.0] - 2026-10-17
 
