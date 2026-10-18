@@ -340,19 +340,19 @@ release.
   people who want their packages AUR-managed; the pacman repository below is
   built from the same release and needs no build step.
 - **Portable tarball** (any glibc distro with GTK 3, including ones with no
-  .deb or .rpm: `npad-v<version>-linux-<arch>.tar.gz`, with the
-  .deb's architecture names (`amd64`, `arm64`, `riscv64`) and the same oldest
-  supported releases as the table above. It is the Linux counterpart of the
+  .deb or .rpm: `npad-v<version>-portable-linux-<arch>.tar.gz`, with the
+  architecture as `uname -m` prints it (`x86_64`, `aarch64`, `riscv64`) and
+  the same oldest supported releases as the table above. It is the Linux counterpart of the
   Windows portable exe: the very binary the packages install, dynamically
   linked against the system's GTK 3 (GTK cannot usefully be linked
   statically, and bundling it would undo npad's lightness, so there is no
-  static build or AppImage). It unpacks to `npad-v<version>-linux-<arch>/`
+  static build or AppImage). It unpacks to `npad-v<version>-portable-linux-<arch>/`
   holding `npad`, a `README.txt`, and `share/` with the launcher, the hicolor
   icons and the AppStream metainfo, laid out as under `/usr/share`.
 
   ```bash
-  tar -xzf npad-v<version>-linux-amd64.tar.gz
-  cd npad-v<version>-linux-amd64
+  tar -xzf npad-v<version>-portable-linux-x86_64.tar.gz
+  cd npad-v<version>-portable-linux-x86_64
   ./npad
   ```
 

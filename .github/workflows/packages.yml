@@ -3,7 +3,7 @@ name: Linux packages
 # Builds the .deb, .rpm and Arch .pkg.tar.zst for every Linux architecture npad
 # ships - amd64, arm64 and riscv64 (the rpm and the Arch package name them
 # x86_64, aarch64, riscv64) - with nfpm (packaging/linux/nfpm.yaml), plus the
-# portable tarball (npad-v<version>-linux-<arch>.tar.gz, the same binary with a
+# portable tarball (npad-v<version>-portable-linux-<arch>.tar.gz, the same binary with a
 # README), and proves each installs, or for the tarball runs, on the distros it
 # is meant for. release.yml calls it with the release tag (which must match the
 # version in src/main.h) and attaches the artifacts to the release; it is
@@ -118,12 +118,12 @@ jobs:
         deb=$(ls dist/npad_*_"$ARCH".deb)
         rpm=$(ls dist/npad-*-1."$RPM_ARCH".rpm)
         pkg=$(ls dist/npad-*-1-"$RPM_ARCH".pkg.tar.zst)
-        tarball=$(ls dist/npad-v*-linux-"$ARCH".tar.gz)
+        tarball=$(ls dist/npad-v*-portable-linux-"$RPM_ARCH".tar.gz)
         if [ -n "$RELEASE_TAG" ] && [ "$(basename "$deb")" != "npad_${RELEASE_TAG#v}_${ARCH}.deb" ]; then
           echo "ERROR: built $(basename "$deb") but the tag is $RELEASE_TAG"
           exit 1
         fi
-        if [ -n "$RELEASE_TAG" ] && [ "$(basename "$tarball")" != "npad-${RELEASE_TAG}-linux-${ARCH}.tar.gz" ]; then
+        if [ -n "$RELEASE_TAG" ] && [ "$(basename "$tarball")" != "npad-${RELEASE_TAG}-portable-linux-${RPM_ARCH}.tar.gz" ]; then
           echo "ERROR: built $(basename "$tarball") but the tag is $RELEASE_TAG"
           exit 1
         fi
@@ -219,7 +219,7 @@ jobs:
         RPM_ARCH: ${{ matrix.rpm_arch }}
       run: |
         cd dist
-        for f in npad_*_"$ARCH".deb npad-*."$RPM_ARCH".rpm npad-*-1-"$RPM_ARCH".pkg.tar.zst npad-v*-linux-"$ARCH".tar.gz; do sha256sum "$f" > "$f.sha256"; done
+        for f in npad_*_"$ARCH".deb npad-*."$RPM_ARCH".rpm npad-*-1-"$RPM_ARCH".pkg.tar.zst npad-v*-portable-linux-"$RPM_ARCH".tar.gz; do sha256sum "$f" > "$f.sha256"; done
         cat *.sha256
 
     - uses: actions/upload-artifact@v7
@@ -229,7 +229,7 @@ jobs:
           dist/npad_*_${{ matrix.arch }}.deb
           dist/npad-*.${{ matrix.rpm_arch }}.rpm
           dist/npad-*-1-${{ matrix.rpm_arch }}.pkg.tar.zst
-          dist/npad-v*-linux-${{ matrix.arch }}.tar.gz
+          dist/npad-v*-portable-linux-${{ matrix.rpm_arch }}.tar.gz
           dist/*.sha256
         retention-days: 7
 

@@ -398,7 +398,7 @@ clean:
 	find src tests -name '*.o' -delete 2>/dev/null || true
 	rm -f src/platform/npad.res
 	rm -rf build
-	rm -rf dist/npad_* dist/npad-*.rpm dist/npad-*.pkg.tar.zst dist/npad-v*-linux-*.tar.gz
+	rm -rf dist/npad_* dist/npad-*.rpm dist/npad-*.pkg.tar.zst dist/npad-v*-portable-linux-*.tar.gz
 	rm -f tests/test_file_ops tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md tests/test_undo tests/test_find_seed tests/test_tab_stops
 	rm -f tests/test_file_ops.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe tests/test_html_md.exe tests/test_undo.exe tests/test_find_seed.exe tests/test_tab_stops.exe
 
@@ -477,7 +477,7 @@ rpm: $(LINUX_GTK_TARGET)
 pacman: $(LINUX_GTK_TARGET)
 	sh scripts/build-package.sh arch $(DEB_VERSION) $(LINUX_GTK_TARGET) dist $(PKG_ARCH)
 
-# The portable download: dist/npad-v<version>-linux-<arch>.tar.gz, the same
+# The portable download: dist/npad-v<version>-portable-linux-<arch>.tar.gz, the same
 # binary plus the launcher entry, icons, metainfo and a README.txt, to run in
 # place or copy under ~/.local. Needs no nfpm.
 tarball: $(LINUX_GTK_TARGET)
@@ -514,7 +514,7 @@ help:
 	@echo "  deb              - Build dist/npad_<version>_<arch>.deb (Linux; nfpm or dpkg-deb)"
 	@echo "  rpm              - Build dist/npad-<version>-1.<arch>.rpm (Linux; needs nfpm)"
 	@echo "  pacman           - Build dist/npad-<version>-1-<arch>.pkg.tar.zst (Arch Linux; needs nfpm)"
-	@echo "  tarball          - Build dist/npad-v<version>-linux-<arch>.tar.gz (Linux portable)"
+	@echo "  tarball          - Build dist/npad-v<version>-portable-linux-<arch>.tar.gz (Linux portable)"
 	@echo "  help             - Show this help"
 	@echo ""
 	@echo "Variables:"

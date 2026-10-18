@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `install.sh` does them for you). An `npad-bin` package for the AUR is ready
   to publish.
 - **A portable Linux download.** Each release now has
-  `npad-v<version>-linux-amd64.tar.gz` (and `-arm64`, `-riscv64`) beside the
+  `npad-v<version>-portable-linux-x86_64.tar.gz` (and `-aarch64`, `-riscv64`) beside the
   .deb and .rpm: unpack it and run `./npad`, on any glibc distro with GTK 3,
   including ones with no .deb or .rpm such as Arch. Its README.txt gives the
   commands to add npad to your applications menu under `~/.local`. It is the
@@ -93,7 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and is skipped otherwise; `packaging/arch/README.md` has the one-time
   account and key setup.
 - **Linux: portable tarball** (`make tarball`, `scripts/build-package.sh
-  tar`). It unpacks to `npad-v<version>-linux-<arch>/` with `npad`,
+  tar`). It unpacks to `npad-v<version>-portable-linux-<arch>/` with `npad`,
   `README.txt` and `share/` (the launcher, hicolor icons and AppStream
   metainfo, laid out as under `/usr/share`), and is built reproducibly (fixed
   order, owner and timestamps). No static build and no AppImage: GTK cannot

@@ -1,7 +1,8 @@
 # Maintainer: Platima <13729856+platima@users.noreply.github.com>
 #
 # npad-bin: npad built by the project's CI, repackaged for the AUR.
-# The sources are the release's portable tarballs (npad-v<ver>-linux-<arch>),
+# The sources are the release's portable tarballs
+# (npad-v<ver>-portable-linux-<arch>, named with $CARCH's own spelling),
 # the very binary the .deb, .rpm and Arch packages carry. Do not edit pkgver or
 # the sums by hand: scripts/aur-update.sh <tag> rewrites them from the release's
 # published .sha256 files and regenerates .SRCINFO. See packaging/arch/README.md.
@@ -22,21 +23,16 @@ conflicts=("$_name")
 options=('!strip' '!debug')
 _rel="https://github.com/platima/npad/releases/download/v$pkgver"
 source=("$_name-$pkgver-LICENSE::https://raw.githubusercontent.com/platima/npad/v$pkgver/LICENSE")
-source_x86_64=("npad-v$pkgver-linux-amd64.tar.gz::$_rel/npad-v$pkgver-linux-amd64.tar.gz")
-source_aarch64=("npad-v$pkgver-linux-arm64.tar.gz::$_rel/npad-v$pkgver-linux-arm64.tar.gz")
-source_riscv64=("npad-v$pkgver-linux-riscv64.tar.gz::$_rel/npad-v$pkgver-linux-riscv64.tar.gz")
+source_x86_64=("npad-v$pkgver-portable-linux-x86_64.tar.gz::$_rel/npad-v$pkgver-portable-linux-x86_64.tar.gz")
+source_aarch64=("npad-v$pkgver-portable-linux-aarch64.tar.gz::$_rel/npad-v$pkgver-portable-linux-aarch64.tar.gz")
+source_riscv64=("npad-v$pkgver-portable-linux-riscv64.tar.gz::$_rel/npad-v$pkgver-portable-linux-riscv64.tar.gz")
 sha256sums=('45a1f63f08f4438286cb1d6f9824fa150c9b5e7dcb33a492e2d8249fd6cdd71e')
 sha256sums_x86_64=('0000000000000000000000000000000000000000000000000000000000000000')
 sha256sums_aarch64=('0000000000000000000000000000000000000000000000000000000000000000')
 sha256sums_riscv64=('0000000000000000000000000000000000000000000000000000000000000000')
 
 package() {
-	case $CARCH in
-	x86_64) _debarch=amd64 ;;
-	aarch64) _debarch=arm64 ;;
-	riscv64) _debarch=riscv64 ;;
-	esac
-	cd "$srcdir/npad-v$pkgver-linux-$_debarch"
+	cd "$srcdir/npad-v$pkgver-portable-linux-$CARCH"
 
 	install -Dm755 npad "$pkgdir/usr/bin/npad"
 	# share/ is laid out as under /usr/share: the launcher, the hicolor icons

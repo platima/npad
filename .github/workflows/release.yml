@@ -115,7 +115,7 @@ jobs:
 
   # Linux: the .deb (Debian, Ubuntu, Mint), .rpm (Fedora, openSUSE) and Arch
   # .pkg.tar.zst for amd64, arm64 and riscv64, compiled in Debian containers and packaged with
-  # nfpm, plus the portable npad-v<version>-linux-<arch>.tar.gz of the same
+  # nfpm, plus the portable npad-v<version>-portable-linux-<arch>.tar.gz of the same
   # binary, then install-tested on each distro by packages.yml. The artifact
   # names differ from the ones CI's own call uses: names must be unique within
   # a run, and ci-validation above builds the packages too.
@@ -145,7 +145,7 @@ jobs:
           pkgs/npad_*.deb
           pkgs/npad-*.rpm
           pkgs/npad-*.pkg.tar.zst
-          pkgs/npad-v*-linux-*.tar.gz
+          pkgs/npad-v*-portable-linux-*.tar.gz
           pkgs/*.sha256
 
   # Nothing releasable can execute on this runner, so validation asserts the

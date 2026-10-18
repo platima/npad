@@ -21,8 +21,8 @@ cd "$HOME/npad"
 echo "OK: .SRCINFO matches the PKGBUILD"
 
 mkdir aur-assets
-for a in amd64 arm64 riscv64; do
-	echo "$(printf %064d 7)  npad-v9.9.9-linux-$a.tar.gz" >"aur-assets/npad-v9.9.9-linux-$a.tar.gz.sha256"
+for a in x86_64 aarch64 riscv64; do
+	echo "$(printf %064d 7)  npad-v9.9.9-portable-linux-$a.tar.gz" >"aur-assets/npad-v9.9.9-portable-linux-$a.tar.gz.sha256"
 done
 sh scripts/aur-update.sh v9.9.9 aur-assets
 grep -q '^pkgver=9.9.9$' packaging/arch/aur/npad-bin/PKGBUILD

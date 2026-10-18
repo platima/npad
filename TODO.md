@@ -34,7 +34,7 @@ questions need answers then:
 ### Distribution formats (after the terminal build)
 
 - **Linux portable tarball** - done for 0.36.0 (per-arch
-  `npad-v<v>-linux-<arch>.tar.gz`; needs GTK 3 installed).
+  `npad-v<v>-portable-linux-<arch>.tar.gz`; needs GTK 3 installed).
 - **Arch Linux** - package, pacman repository and `npad-bin` PKGBUILD done for
   0.36.0; left for the maintainer: create the AUR account and first push
   (`packaging/arch/README.md`), then optionally the `AUR_SSH_KEY` secret so
@@ -93,10 +93,14 @@ drag). On a real desktop, X11 and Wayland sessions both:
 - [ ] Right-click and Shift+F10 / the Menu key open npad's menu (Undo, Redo,
       Cut, Copy, Paste, Delete, Select All), greyed like the Edit menu, with no
       GTK emoji / input-method entries
+      - Right-click menu confirmed working by the user on v0.36.0-rc2
+        (2026-10-18, an X11 session); Shift+F10 / Menu key and Wayland not yet
 - [ ] Dragging a text file from the file manager onto the window opens it
       (save prompt when modified); Ctrl+drag inserts its text at the drop
       point - check that Ctrl is seen mid-drag on Wayland and on X11 and from
       each file manager (Nemo, Nautilus, Dolphin)
+      - Dragging a file in confirmed working by the user on v0.36.0-rc2
+        (2026-10-18, X11); Ctrl+drag, other file managers and Wayland not yet
 - [ ] Dragging selected text within the window still moves it; text dragged in
       from another app is inserted as text
 - [ ] With `watch_file_changes` on, `echo >> file` from a terminal and then
@@ -121,6 +125,9 @@ Verified in Broadway only. On a real desktop:
 ## 🧪 Needs testing - v0.34.0 Linux printing (on Mint / Debian 13)
 
 Verified only with Print to File under Broadway in WSL. On a real desktop:
+
+- [x] Print to PDF and Print Preview work (the user, v0.36.0-rc2, 2026-10-18,
+      an X11 session)
 
 - [ ] Print to a real CUPS printer: orientation, paper and margins as set in
       Page Setup; a long line wraps at a space; header and footer on every page
