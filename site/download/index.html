@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Download - npad</title>
-<meta name="description" content="Download npad for Windows (installer, MSI, portable; x64 and Arm) or Linux (apt, dnf, .deb, .rpm; amd64, arm64, riscv64). Free and open source.">
+<meta name="description" content="Download npad for Windows (installer, MSI, portable; x64 and Arm) or Linux (apt, dnf, pacman, .deb, .rpm, Arch, portable; amd64, arm64, riscv64). Free and open source.">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#17181b" media="(prefers-color-scheme: dark)">
@@ -15,7 +15,7 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="npad">
 <meta property="og:title" content="Download npad">
-<meta property="og:description" content="Download npad for Windows (installer, MSI, portable; x64 and Arm) or Linux (apt, dnf, .deb, .rpm; amd64, arm64, riscv64). Free and open source.">
+<meta property="og:description" content="Download npad for Windows (installer, MSI, portable; x64 and Arm) or Linux (apt, dnf, pacman, .deb, .rpm, Arch, portable; amd64, arm64, riscv64). Free and open source.">
 <meta property="og:url" content="https://npad.dev/download/">
 <meta property="og:image" content="https://npad.dev/assets/og.png">
 <meta property="og:image:width" content="1200">
@@ -23,7 +23,7 @@
 <meta property="og:image:alt" content="The npad notepad icon next to the word npad and the tagline: a fast, native, Notepad-faithful text editor">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Download npad">
-<meta name="twitter:description" content="Download npad for Windows (installer, MSI, portable; x64 and Arm) or Linux (apt, dnf, .deb, .rpm; amd64, arm64, riscv64). Free and open source.">
+<meta name="twitter:description" content="Download npad for Windows (installer, MSI, portable; x64 and Arm) or Linux (apt, dnf, pacman, .deb, .rpm, Arch, portable; amd64, arm64, riscv64). Free and open source.">
 <meta name="twitter:image" content="https://npad.dev/assets/og.png">
 <link rel="stylesheet" href="/style.css">
 <script src="/theme.js"></script>
@@ -101,12 +101,12 @@
 
       <div class="tabpanel" id="linux" data-label="Linux">
         <h2>Linux</h2>
-        <p class="lede">The GTK&nbsp;3 desktop build, one binary for X11 and Wayland, on amd64, arm64 and riscv64. There is no update checker on Linux by design: updates arrive through apt or dnf with the rest of your system. Follow progress in <a href="https://github.com/platima/npad/blob/main/LINUX_PORT.md" target="_blank" rel="noopener noreferrer">LINUX_PORT.md<span class="sr-only"> (opens in a new tab)</span></a>.</p>
+        <p class="lede">The GTK&nbsp;3 desktop build, one binary for X11 and Wayland, on amd64, arm64 and riscv64. Install from the apt, dnf or pacman repository and npad updates with the rest of your system; Help &gt; Check for Updates tells any copy when a new release is out and how to update it. Follow progress in <a href="https://github.com/platima/npad/blob/main/LINUX_PORT.md" target="_blank" rel="noopener noreferrer">LINUX_PORT.md<span class="sr-only"> (opens in a new tab)</span></a>.</p>
         <div class="stack">
           <div class="box quick">
             <span class="label">Quickest</span>
             <h3>Install in one step</h3>
-            <p>Detects apt or dnf, adds the signed repository at <code>pkg.npad.dev</code> and its key, and installs npad.</p>
+            <p>Detects apt, dnf or pacman, adds the signed repository at <code>pkg.npad.dev</code> and its key, and installs npad.</p>
             <div class="code copyable"><div class="code-head"><span>Terminal</span><button type="button" class="copy" aria-live="polite">Copy</button></div><pre class="wrapped"><code>curl -fsSL https://pkg.npad.dev/<wbr>install.sh | sudo sh</code></pre></div>
             <p class="note">Add <code>-s -- --repo-only</code> after <code>sh</code> to add the repository without installing. <a href="https://pkg.npad.dev/install.sh" target="_blank" rel="noopener noreferrer">Read the script<span class="sr-only"> (opens in a new tab)</span></a> first if you prefer.</p>
           </div>
@@ -129,8 +129,19 @@ sudo apt update &amp;&amp; sudo apt install npad</code></pre></div>
             <div class="code copyable"><div class="code-head"><span>Terminal</span><button type="button" class="copy" aria-live="polite">Copy</button></div><pre><code>sudo curl -fsSL https://pkg.npad.dev/npad.repo \
   -o /etc/yum.repos.d/npad.repo
 sudo dnf install npad</code></pre></div>
-            <p class="note">apt and dnf pick your machine&rsquo;s own architecture. riscv64 needs Debian 13, Ubuntu 24.04 or newer.</p>
           </div>
+
+          <div class="box">
+            <h3>pacman <span class="where">Arch Linux, Arch Linux ARM, Arch RISC-V</span></h3>
+            <p>Adds the signing key to pacman&rsquo;s keyring, trusts it, and adds the <code>[npad]</code> repository.</p>
+            <div class="code copyable"><div class="code-head"><span>Terminal</span><button type="button" class="copy" aria-live="polite">Copy</button></div><pre><code>curl -fsSL https://pkg.npad.dev/npad.asc | sudo pacman-key --add -
+sudo pacman-key --lsign-key FC186296D341CC374A190DCAA7AAB310EB562025
+printf '\n[npad]\nSigLevel = Required DatabaseRequired\nServer = https://pkg.npad.dev/arch/$arch\n' \
+  | sudo tee -a /etc/pacman.conf
+sudo pacman -Syu npad</code></pre></div>
+            <p class="note">pacman fills in <code>$arch</code> itself. Before trusting the key, compare its fingerprint with <span class="fpr">FC18 6296 D341 CC37 4A19 0DCA A7AA B310 EB56 2025</span>, also shown on <a href="https://pkg.npad.dev/#key" target="_blank" rel="noopener noreferrer">pkg.npad.dev<span class="sr-only"> (opens in a new tab)</span></a>.</p>
+          </div>
+          <p class="fine">apt, dnf and pacman pick your machine&rsquo;s own architecture: amd64 (x86_64), arm64 (aarch64) or riscv64. On Debian and Ubuntu, riscv64 needs Debian 13, Ubuntu 24.04 or newer.</p>
 
           <p class="group">Or download a package</p>
 
@@ -153,10 +164,32 @@ sudo dnf install npad</code></pre></div>
               </ul>
               <div class="code"><pre><code>sudo dnf install ./npad-&lt;version&gt;-1.x86_64.rpm</code></pre></div>
             </div>
+            <div class="box">
+              <h3>Arch package <span class="where">Arch Linux, ARM, RISC-V</span></h3>
+              <ul class="files">
+                <li><span class="arch">x86_64</span><span><code>npad-&lt;version&gt;-1-x86_64.pkg.tar.zst</code></span></li>
+                <li><span class="arch">aarch64</span><span><code>npad-&lt;version&gt;-1-aarch64.pkg.tar.zst</code></span></li>
+                <li><span class="arch">riscv64</span><span><code>npad-&lt;version&gt;-1-riscv64.pkg.tar.zst</code></span></li>
+              </ul>
+              <div class="code"><pre><code>sudo pacman -U ./npad-&lt;version&gt;-1-x86_64.pkg.tar.zst</code></pre></div>
+            </div>
           </div>
-          <p class="fine">Packages are attached to every <a href="https://github.com/platima/npad/releases/latest" target="_blank" rel="noopener noreferrer">GitHub release<span class="sr-only"> (opens in a new tab)</span></a>; file names include the version number. They do not update themselves. The oldest supported systems are Debian 12 and Ubuntu 22.04 (riscv64: Debian 13 and Ubuntu 24.04). Not sure which you need? <code>dpkg --print-architecture</code> or <code>uname -m</code> tells you.</p>
+          <p class="fine">Packages are attached to every <a href="https://github.com/platima/npad/releases/latest" target="_blank" rel="noopener noreferrer">GitHub release<span class="sr-only"> (opens in a new tab)</span></a>; file names include the version number. They do not update themselves. The oldest supported systems are Debian 12 and Ubuntu 22.04 (riscv64: Debian 13 and Ubuntu 24.04). Not sure which you need? <code>uname -m</code> tells you.</p>
 
-          <!-- Boxes for the portable tarball and the Arch (pacman) repository go here once those ship. -->
+          <div class="box">
+            <h3>Portable <span class="where">any glibc distribution with GTK&nbsp;3</span></h3>
+            <p>The same binary the packages install, with its launcher, icons and a README. Unpack it and run it in place: nothing needs root, and it does not update itself.</p>
+            <ul class="files">
+              <li><span class="arch">amd64</span><span><code>npad-v&lt;version&gt;-linux-amd64.tar.gz</code></span></li>
+              <li><span class="arch">arm64</span><span><code>npad-v&lt;version&gt;-linux-arm64.tar.gz</code></span></li>
+              <li><span class="arch">riscv64</span><span><code>npad-v&lt;version&gt;-linux-riscv64.tar.gz</code></span></li>
+            </ul>
+            <div class="code copyable"><div class="code-head"><span>Terminal</span><button type="button" class="copy" aria-live="polite">Copy</button></div><pre><code>tar -xzf npad-v&lt;version&gt;-linux-amd64.tar.gz
+cd npad-v&lt;version&gt;-linux-amd64
+./npad</code></pre></div>
+            <p class="note">Its <code>README.txt</code> gives the commands to add npad to your applications menu under <code>~/.local</code>.</p>
+          </div>
+
         </div>
       </div>
 
