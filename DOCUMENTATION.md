@@ -168,7 +168,7 @@ beside a term edge that is itself a letter, digit or underscore.
 ### Preferences and Font on Linux
 
 Edit > Preferences (Ctrl+,) opens a dialog with the same pages, wording,
-settings keys and defaults as the Windows build: General, Appearance,
+settings keys and defaults as the Windows build: General, Editor, Appearance,
 Defaults, Markdown, Backup, Updates and Associations, plus the hidden Debug
 page (Ctrl+Shift+., or Shift+click Preferences). Differences:
 
@@ -472,7 +472,15 @@ File handling: saving, opening, recent files, recovery, and what happens when a 
 | `session_resume_enabled` | bool | `true` | Crash recovery: snapshot unsaved work on the first edit and then on a timer; offer to restore after an unclean exit. On by default: snapshots never touch the user's file. All windows are restored, extras in their own cascaded windows. Does **not** gate handoff snapshots taken when an update or a Windows restart closes npad - those would otherwise be silently discarded. |
 | `session_interval` | int | `30` | Snapshot period in seconds (minimum 5). |
 | `ctrl_n_new_window` | bool | `false` | Swap Ctrl+N / Ctrl+Shift+N between "New" (clear this window) and "New Window" (open another instance). |
+
+### Editor (Preferences > Editor)
+
+How typing and Find behave.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
 | `find_seed_selection` | bool | `true` | **Fill Find with the selected text.** Opening (or re-focusing) Find or Replace with Ctrl+F / Ctrl+H puts the current selection in "Find what", selected so typing replaces it. On by default because Windows 10 notepad.exe (1809+) does exactly this, so it is the behaviour a Notepad user expects. Only a non-empty selection that contains no line break and is at most 255 characters seeds the box; anything else leaves the last search term as it was. The same key and rule apply on every platform. Unlike the other `find_` keys it is a preference, so Reset All Preferences resets it. |
+| `find_wrap_around` | bool | `false` | Whether Find and Replace wrap around by default. Off, matching notepad.exe. Also toggled from the dialogs themselves. |
 | `tab_inserts_spaces` | bool | `false` | **Tab key inserts spaces up to the next tab stop.** Off by default, because Windows 10 notepad.exe types a tab character. See *Tab inserts spaces* in the behaviour notes. Same key and wording on every platform; independent of Basic Markdown support. |
 | `tab_width` | int | `4` | Distance between tab stops, in columns (1-16; anything outside is clamped). Used when `tab_inserts_spaces` is on, and then also as the step of the Markdown tools' Spaces indent format. |
 
@@ -490,6 +498,7 @@ File handling: saving, opening, recent files, recovery, and what happens when a 
 | `icon_style` | string | `system` | Which app icon to show. `system` (**Automatic**) matches each surface to the theme it sits on: the **taskbar** icon follows Windows, the **window caption** icon follows npad's own colour scheme - they are separate slots, so they can differ. `npad` makes both follow npad; `light` / `dark` pin both to one variant; `classic` restores the original pre-0.28 icon. Preferences > Appearance. |
 |  |  |  | *Caveats on Automatic:* Windows draws a **grouped** taskbar button (several npad windows combined, the Windows 11 default) from the executable's icon rather than the window's, so the taskbar variant is not consulted there; and with **small taskbar buttons** the taskbar reads the caption slot instead, collapsing the two to the same artwork. Both fall back to a sensible icon, never a missing one. |
 | `sync_view_state` | bool | `false` | Mirror per-window view changes (font type, zoom) live to every open npad window. |
+| `auto_update_defaults` | bool | `false` | View changes (font type, zoom) immediately become the new defaults. |
 | `status_show_counts` | bool | `false` | Show word / character / line counts in the leftmost status bar segment. Refreshed live while typing (coalesced ~8x/second); documents over ~1 MB fall back to a settle-then-count debounce. Shared with transient messages, which win until the next change. Numbers are grouped using your Windows regional settings (e.g. `1,234,567`), including any separator customised in Control Panel. |
 
 ### Defaults (Preferences > Defaults) - initial state for new windows/files, and the print header/footer
@@ -500,8 +509,6 @@ File handling: saving, opening, recent files, recovery, and what happens when a 
 | `default_line_ending` | int | platform: `0` (CRLF) on Windows, `1` (LF) on Linux | Line endings for new files, and for opened files with no line breaks: 0 CRLF, 1 LF, 2 CR. |
 | `default_font_mono` | bool | `true` | New windows start in monospace (`true`) or proportional (`false`) mode. **Monospace by default**, which is what mirrors notepad.exe: it has a single font setting and ships it as Consolas 11 - the same face and size as npad's monospace default. |
 | `default_zoom` | int | `100` | New windows' zoom percent (10-500). |
-| `auto_update_defaults` | bool | `false` | View changes (font type, zoom) immediately become the new defaults. |
-| `find_wrap_around` | bool | `false` | Whether Find and Replace wrap around by default. Off, matching notepad.exe. Also toggled from the dialogs themselves. |
 | `print_header` | string | `&f` | Printed page header. Uses the codes below; edited in Preferences > Defaults. |
 | `print_footer` | string | `Page &p` | Printed page footer. Same codes as the header. |
 | `print_margin_left` / `_right` | int | `750` | Print margins in **thousandths of an inch**, set in File > Page Setup. Stored in that unit rather than the locale's, so a settings file means the same thing on a metric and an imperial machine. |

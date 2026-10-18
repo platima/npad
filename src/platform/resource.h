@@ -28,6 +28,7 @@
 #define IDD_PREFS_DEBUG 215
 #define IDD_PREFS_UPDATES 216
 #define IDD_PREFS_ASSOC 217
+#define IDD_PREFS_EDITOR 218
 
 // Control IDs for Find Dialog
 #define ID_FIND_TEXT 3001

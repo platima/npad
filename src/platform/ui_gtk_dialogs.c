@@ -227,15 +227,17 @@ static void on_about_response(GtkDialog *dialog, gint response, gpointer data) {
 // A fresh dialog every time rather than gtk_show_about_dialog(), which caches
 // the first one on its parent and re-presents it unchanged: after a colour
 // scheme change it would keep showing the logo of the old scheme
+// The same text as the Windows About box. No "authors" list: GTK turns that
+// into a Credits button, which Windows has no counterpart for.
 void ui_platform_show_about_dialog(Window *parent) {
-    const char *authors[] = { "Platima", NULL };
     GtkWindow *owner = parent_window(parent);
     GtkWidget *dialog = gtk_about_dialog_new();
     g_object_set(dialog, "program-name", "npad", "version", NPAD_VERSION, "comments",
                  "A lightweight, cross-platform text editor\n"
-                 "inspired by classic Windows Notepad.",
-                 "website", "https://npad.dev", "website-label", "npad.dev", "authors", authors,
-                 "logo-icon-name", npad_gtk_app_icon_name(), "title", "About npad", NULL);
+                 "inspired by classic Windows Notepad.\n\n"
+                 "Author: Platima",
+                 "website", "https://npad.dev", "website-label", "npad.dev", "logo-icon-name",
+                 npad_gtk_app_icon_name(), "title", "About npad", NULL);
     if (owner) {
         gtk_window_set_transient_for(GTK_WINDOW(dialog), owner);
         gtk_window_set_destroy_with_parent(GTK_WINDOW(dialog), TRUE);

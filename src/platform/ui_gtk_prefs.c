@@ -3,11 +3,11 @@
  *
  * The Preferences dialog is a GtkNotebook with the same pages, wording, keys
  * and defaults as the Win32 property sheet (prefs_*_proc in ui_win32.c is the
- * reference): General, Appearance, Defaults, Markdown, Backup, and the hidden
- * Debug page. Windows-only parts are replaced rather than ported: Updates has
- * no install mode and no Install Now (npad on Linux says how to update through
- * the package manager instead) and Associations becomes a single "Make npad
- * the default text editor" action.
+ * reference): General, Editor, Appearance, Defaults, Markdown, Backup, Updates,
+ * Associations and the hidden Debug page. Windows-only parts are replaced rather than ported:
+ * Updates has no install mode and no Install Now (npad on Linux says how to update through the
+ * package manager instead) and Associations becomes a single "Make npad the default text editor"
+ * action.
  *
  * OK, Cancel and Apply work as in the property sheet. A control only stages
  * its change; Apply writes the staged keys, saves, tells the other instances
@@ -78,6 +78,7 @@ static const char *const UPDATE_MODE_LABELS[] = { "Do nothing (check manually fr
 // Same order as the Windows property sheet
 enum {
     PAGE_GENERAL,
+    PAGE_EDITOR,
     PAGE_APPEARANCE,
     PAGE_DEFAULTS,
     PAGE_MARKDOWN,
@@ -665,11 +666,36 @@ static void build_general(GtkWidget *notebook) {
               "ctrl_n_new_window", false);
     add_check(page, "Tell me when an open file is changed by another program", "watch_file_changes",
               false);
-    add_check(page, "_Fill Find with the selected text", FIND_SEED_KEY, true);
-    P.tab_check = add_check(page, "_Tab key inserts spaces up to the next tab stop",
-                            TAB_INSERTS_SPACES_KEY, false);
-    P.tab_spin = add_spin(page, "Tab _width (columns, 1-16):", TAB_WIDTH_KEY, TAB_WIDTH_DEFAULT,
+}
+
+// ---------------------------------------------------------------------------
+// Editor page: how typing and Find behave
+// ---------------------------------------------------------------------------
+
+// A titled frame on the page, returning the box its controls go in
+static GtkWidget *add_group(GtkWidget *page, const char *title) {
+    GtkWidget *frame = gtk_frame_new(title);
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_container_set_border_width(GTK_CONTAINER(box), 8);
+    gtk_container_add(GTK_CONTAINER(frame), box);
+    gtk_box_pack_start(GTK_BOX(page), frame, FALSE, FALSE, 0);
+    return box;
+}
+
+static void build_editor(GtkWidget *notebook) {
+    GtkWidget *page = new_page(notebook, "Editor");
+
+    GtkWidget *find = add_group(page, "Find and Replace");
+    add_check(find, "_Fill Find with the selected text", FIND_SEED_KEY, true);
+    add_check(find, "Wrap _around by default", "find_wrap_around", false);
+
+    GtkWidget *tab = add_group(page, "Tab key");
+    P.tab_check =
+        add_check(tab, "Insert _spaces up to the next tab stop", TAB_INSERTS_SPACES_KEY, false);
+    P.tab_spin = add_spin(tab, "Tab _width (columns, 1-16):", TAB_WIDTH_KEY, TAB_WIDTH_DEFAULT,
                           TAB_WIDTH_MIN, TAB_WIDTH_MAX);
+
+    add_note(page, "Off by default: Tab types a tab character, as Notepad does.");
 }
 
 // ---------------------------------------------------------------------------
@@ -744,6 +770,8 @@ static void build_appearance(GtkWidget *notebook) {
         gtk_check_button_new_with_mnemonic("S_ync view (font type and zoom) across all instances");
     g_signal_connect(P.sync_check, "toggled", G_CALLBACK(on_sync_toggled), NULL);
     gtk_box_pack_start(GTK_BOX(page), P.sync_check, FALSE, FALSE, 0);
+    add_check(page, "Auto-_update defaults in real time (view changes become the new defaults)",
+              "auto_update_defaults", false);
     add_check(page, "Show _word / character / line counts in the status bar", "status_show_counts",
               false);
 }
@@ -801,10 +829,6 @@ static void build_defaults(GtkWidget *notebook) {
     gtk_box_pack_start(GTK_BOX(current), use, FALSE, FALSE, 0);
     add_note(current, "Copies this window's font type and zoom into the fields above.");
     gtk_box_pack_start(GTK_BOX(page), current, FALSE, FALSE, 0);
-
-    add_check(page, "_Auto-update defaults in real time (view changes become the new defaults)",
-              "auto_update_defaults", false);
-    add_check(page, "Find and _Replace wrap around by default", "find_wrap_around", false);
 
     // Header/footer codes match notepad.exe; see DOCUMENTATION.md
     P.header_entry = add_entry(page, "Print _header:", "print_header", "&f", 255);
@@ -1406,6 +1430,7 @@ static void show_preferences(Window *window, bool show_debug, int start_page) {
     // Built while loading is set so no control writes a setting on the way up
     P.loading = true;
     build_general(notebook);
+    build_editor(notebook);
     build_appearance(notebook);
     build_defaults(notebook);
     build_markdown(notebook);
