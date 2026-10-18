@@ -109,6 +109,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the release notes list it under Linux downloads.
 
 ### 🐛 Fixed
+- **Arch package: a pre-release no longer looks like the final release.**
+  nfpm's archlinux packager dropped the pre-release from `pkgver`, so
+  `npad-0.36.0-rc2-1-x86_64.pkg.tar.zst` said `pkgver = 0.36.0-1` and pacman
+  never offered the final 0.36.0 to someone who had installed the candidate
+  (the .deb and .rpm already sorted correctly). `scripts/build-package.sh
+  arch` now gives nfpm Arch's own spelling, a suffix with no hyphen
+  (`0.36.0rc2`), which `vercmp` sorts after 0.35.0, rc1 before rc2 and before
+  0.36.0; the file name keeps the tag's spelling. The build checks the
+  declared `pkgver` for a release tag and for made-up pre-release tags, and
+  the Arch container check asserts the `vercmp` ordering. The AUR script and
+  job already skipped pre-releases.
 - **Linux: Ctrl+Tab / Ctrl+Shift+Tab in Preferences** now step to the next /
   previous page, wrapping round at either end, as in the Windows property
   sheet. GTK's notebook only binds Ctrl+PageUp / PageDown, and only while
