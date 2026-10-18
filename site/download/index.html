@@ -54,6 +54,11 @@
 <section>
   <div class="wrap">
     <div class="tabbox" id="downloads">
+      <div class="tablist" role="tablist" aria-label="Operating system">
+        <button type="button" class="tab" id="tab-windows" role="tab" aria-controls="windows">Windows</button>
+        <button type="button" class="tab" id="tab-linux" role="tab" aria-controls="linux">Linux</button>
+        <button type="button" class="tab" id="tab-macos" role="tab" aria-controls="macos">macOS</button>
+      </div>
 
       <div class="tabpanel" id="windows" data-label="Windows">
         <h2>Windows</h2>
@@ -102,7 +107,7 @@
             <span class="label">Quickest</span>
             <h3>Install in one step</h3>
             <p>Detects apt or dnf, adds the signed repository at <code>pkg.npad.dev</code> and its key, and installs npad.</p>
-            <div class="code copyable"><pre class="wrapped"><code>curl -fsSL https://pkg.npad.dev/<wbr>install.sh | sudo sh</code></pre></div>
+            <div class="code copyable"><div class="code-head"><span>Terminal</span><button type="button" class="copy" aria-live="polite">Copy</button></div><pre class="wrapped"><code>curl -fsSL https://pkg.npad.dev/<wbr>install.sh | sudo sh</code></pre></div>
             <p class="note">Add <code>-s -- --repo-only</code> after <code>sh</code> to add the repository without installing. <a href="https://pkg.npad.dev/install.sh" target="_blank" rel="noopener noreferrer">Read the script<span class="sr-only"> (opens in a new tab)</span></a> first if you prefer.</p>
           </div>
 
@@ -111,7 +116,7 @@
           <div class="box">
             <h3>apt <span class="where">Debian, Ubuntu, Mint</span></h3>
             <p>Debian 12 and 13, Ubuntu 22.04 and newer, Mint 21 and newer, LMDE.</p>
-            <div class="code copyable"><pre><code>sudo install -d -m 0755 /etc/apt/keyrings
+            <div class="code copyable"><div class="code-head"><span>Terminal</span><button type="button" class="copy" aria-live="polite">Copy</button></div><pre><code>sudo install -d -m 0755 /etc/apt/keyrings
 sudo curl -fsSL https://pkg.npad.dev/npad.asc \
   -o /etc/apt/keyrings/npad.asc
 sudo curl -fsSL https://pkg.npad.dev/npad.sources \
@@ -121,7 +126,7 @@ sudo apt update &amp;&amp; sudo apt install npad</code></pre></div>
 
           <div class="box">
             <h3>dnf <span class="where">Fedora</span></h3>
-            <div class="code copyable"><pre><code>sudo curl -fsSL https://pkg.npad.dev/npad.repo \
+            <div class="code copyable"><div class="code-head"><span>Terminal</span><button type="button" class="copy" aria-live="polite">Copy</button></div><pre><code>sudo curl -fsSL https://pkg.npad.dev/npad.repo \
   -o /etc/yum.repos.d/npad.repo
 sudo dnf install npad</code></pre></div>
             <p class="note">apt and dnf pick your machine&rsquo;s own architecture. riscv64 needs Debian 13, Ubuntu 24.04 or newer.</p>
