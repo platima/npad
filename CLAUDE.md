@@ -123,6 +123,30 @@ something turns out to work differently than it reasonably appears to.
   signed apt/dnf repos live in the separate `platima/npad-packages` repo
   (https://pkg.npad.dev)
 
+**Release asset names (one convention; do not drift):**
+- npad's own downloads are `npad-v<version>-<type>-<os>-<arch>.<ext>`, with
+  `<version>` spelled as the tag (so `v0.36.0-rc2` gives `npad-v0.36.0-rc2-...`)
+  and `<arch>` in that OS's own spelling:
+  - Windows: `npad-v<v>-setup-win-<x64|arm64>.exe`, `-msi-win-<arch>.msi`,
+    `-portable-win-<arch>.exe`. **These names are an API**: every installed
+    copy's updater finds its download by the end of the name
+    (`update_installer_suffix` in `src/core/update_check.c`, guarded in
+    release.yml). Never rename them; a new kind of Windows download gets a new
+    name and leaves the old ones in place.
+  - Linux: `npad-v<v>-portable-linux-<x86_64|aarch64|riscv64>.tar.gz`
+    (`uname -m` names)
+  - macOS, when it exists: `npad-v<v>-<type>-macos-<arm64|x64|universal>.<ext>`
+- Packages for a package manager keep their ecosystem's own names, which
+  their tools parse and whose extension already says the OS: Debian
+  `npad_<version>_<amd64|arm64|riscv64>.deb`, RPM
+  `npad-<version>-1.<x86_64|aarch64|riscv64>.rpm`, Arch
+  `npad-<version>-1-<x86_64|aarch64|riscv64>.pkg.tar.zst` (a pre-release is
+  spelled inside each package the way its manager sorts it before the final:
+  `0.36.0~rc2`, `0.36.0~rc2`, `0.36.0rc2`)
+- Every asset has a `<name>.sha256`, and `CHECKSUMS.txt` lists them all.
+  `scripts/validate-release-assets.sh` is the executable form of this list:
+  change it, the build scripts, release-notes.sh and the docs together
+
 **Versioning & changelog conventions (every change):**
 - Bump the version per semver in `src/main.h` AND `src/platform/npad.rc`
   (0.x: minor = feature rounds / breaking changes, patch = fix-only rounds),

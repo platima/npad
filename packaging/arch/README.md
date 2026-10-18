@@ -10,7 +10,7 @@ Three things ship for Arch, Arch Linux ARM (aarch64) and the Arch RISC-V port
 | `npad-bin` | the AUR | this directory: `aur/npad-bin/PKGBUILD` and `.SRCINFO` |
 
 `npad-bin` is built from the release's **portable tarball**
-(`npad-v<version>-linux-<amd64|arm64|riscv64>.tar.gz`), the same binary the
+(`npad-v<version>-portable-linux-<x86_64|aarch64|riscv64>.tar.gz`), the same binary the
 packages carry, so an AUR helper does not need to compile anything. It
 `provides=npad` and `conflicts=npad`, so it and the repository package are
 alternatives, not companions.
@@ -47,7 +47,7 @@ Nothing here is published automatically until you have done steps 1-4.
    `SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4` (published at
    <https://archlinux.org/news/aur-migration-new-ssh-hostkeys/>; compare it).
 3. **Wait for a release that has the Arch assets**, i.e. the first npad
-   release built from this branch (the tarballs `npad-v<version>-linux-*.tar.gz`
+   release built from this branch (the tarballs `npad-v<version>-portable-linux-*.tar.gz`
    must exist on GitHub). Then, on an Arch machine (or WSL/container), in a
    checkout of npad at that release:
 

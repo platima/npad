@@ -534,7 +534,7 @@ version.
       pkg.npad.dev apt repository publishes `binary-amd64`, `binary-arm64`
       and `binary-riscv64`, and the dnf repository all three rpm
       architectures.
-- [x] Portable tarball (v0.36.0): `npad-v<version>-linux-<arch>.tar.gz` for
+- [x] Portable tarball (v0.36.0): `npad-v<version>-portable-linux-<arch>.tar.gz` for
       amd64, arm64 and riscv64, the counterpart of the Windows portable exe.
       The same binary as the .deb (CI compares them byte for byte) with
       `share/` (launcher, icons, metainfo) and a README.txt
@@ -569,8 +569,9 @@ version.
       account up is in `packaging/arch/README.md`
 - [ ] Not verified on real Fedora / Mint / Arch hardware: installs are only tested in
       CI containers (no display), so launching the app from the .rpm is unseen.
-      Likewise arm64 and riscv64 have only been installed in containers, not
-      launched on real hardware. The Arch aarch64 and riscv64 installs have
+      The user ran the GUI on real arm64 (v0.35.0) and installed v0.35.0 from
+      the apt repository on a real riscv64 board (SpacemiT K3), where
+      `npad --version` runs; the riscv64 GUI is not yet seen. The Arch aarch64 and riscv64 installs have
       only run in CI containers; the x86_64 package, the PKGBUILD (makepkg)
       and `pacman -U` were also run in a local Arch Linux (WSL)
 

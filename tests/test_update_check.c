@@ -379,7 +379,7 @@ TEST_CASE(exe_may_be_packaged) {
     TEST_ASSERT(update_exe_may_be_packaged("/bin/npad"), "/bin (unmerged /usr)");
     TEST_ASSERT(!update_exe_may_be_packaged("/usr/local/bin/npad"), "make install");
     TEST_ASSERT(!update_exe_may_be_packaged("/home/me/.local/bin/npad"), "~/.local/bin");
-    TEST_ASSERT(!update_exe_may_be_packaged("/home/me/npad-v0.35.1-linux-amd64/npad"), "tarball");
+    TEST_ASSERT(!update_exe_may_be_packaged("/home/me/npad-v0.36.0-portable-linux-x86_64/npad"), "tarball");
     TEST_ASSERT(!update_exe_may_be_packaged("/usr/bin/sub/npad"), "below /usr/bin");
     TEST_ASSERT(!update_exe_may_be_packaged("/usr/bin/"), "no file name");
     TEST_ASSERT(!update_exe_may_be_packaged(NULL), "NULL");

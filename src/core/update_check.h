@@ -114,7 +114,7 @@ const char *update_install_advice(UpdateInstallSource source);
 
 // Whether a package manager could own this executable at all: packages put
 // npad in /usr/bin (or /bin). Anything else - ~/.local/bin, an unpacked
-// npad-v*-linux-* folder, /usr/local/bin from `make install` - is not worth
+// npad-v*-portable-linux-* folder, /usr/local/bin from `make install` - is not worth
 // asking dpkg, rpm or pacman about.
 bool update_exe_may_be_packaged(const char *exe_path);
 

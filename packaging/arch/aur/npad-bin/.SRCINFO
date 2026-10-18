@@ -18,11 +18,11 @@ pkgbase = npad-bin
 	options = !debug
 	source = npad-0.35.1-LICENSE::https://raw.githubusercontent.com/platima/npad/v0.35.1/LICENSE
 	sha256sums = 45a1f63f08f4438286cb1d6f9824fa150c9b5e7dcb33a492e2d8249fd6cdd71e
-	source_x86_64 = npad-v0.35.1-linux-amd64.tar.gz::https://github.com/platima/npad/releases/download/v0.35.1/npad-v0.35.1-linux-amd64.tar.gz
+	source_x86_64 = npad-v0.35.1-portable-linux-x86_64.tar.gz::https://github.com/platima/npad/releases/download/v0.35.1/npad-v0.35.1-portable-linux-x86_64.tar.gz
 	sha256sums_x86_64 = 0000000000000000000000000000000000000000000000000000000000000000
-	source_aarch64 = npad-v0.35.1-linux-arm64.tar.gz::https://github.com/platima/npad/releases/download/v0.35.1/npad-v0.35.1-linux-arm64.tar.gz
+	source_aarch64 = npad-v0.35.1-portable-linux-aarch64.tar.gz::https://github.com/platima/npad/releases/download/v0.35.1/npad-v0.35.1-portable-linux-aarch64.tar.gz
 	sha256sums_aarch64 = 0000000000000000000000000000000000000000000000000000000000000000
-	source_riscv64 = npad-v0.35.1-linux-riscv64.tar.gz::https://github.com/platima/npad/releases/download/v0.35.1/npad-v0.35.1-linux-riscv64.tar.gz
+	source_riscv64 = npad-v0.35.1-portable-linux-riscv64.tar.gz::https://github.com/platima/npad/releases/download/v0.35.1/npad-v0.35.1-portable-linux-riscv64.tar.gz
 	sha256sums_riscv64 = 0000000000000000000000000000000000000000000000000000000000000000
 
 pkgname = npad-bin

@@ -44,7 +44,7 @@ if [ "$kind" = tarball ]; then
 		echo "no package manager to install GTK 3 with" >&2
 		exit 2
 	fi
-	tarball=$(ls pkgs/npad-v*-linux-*.tar.gz)
+	tarball=$(ls pkgs/npad-v*-portable-linux-*.tar.gz)
 	top=$(basename "$tarball" .tar.gz)
 	work=$(mktemp -d)
 	tar -C "$work" -xzf "$tarball"

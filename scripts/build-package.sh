@@ -8,14 +8,15 @@
 #         <outdir>/npad-<version>-1.<arch>.rpm (x86_64, aarch64, riscv64),
 #         <outdir>/npad-<version>-1-<arch>.pkg.tar.zst (x86_64, aarch64,
 #         riscv64; Arch Linux, Arch Linux ARM and Arch RISC-V) or
-#         <outdir>/npad-v<version>-linux-<arch>.tar.gz (amd64, arm64, riscv64)
+#         <outdir>/npad-v<version>-portable-linux-<arch>.tar.gz (x86_64, aarch64,
+#         riscv64: `uname -m` names, like the rpm and Arch package)
 # The deb, rpm and Arch package need nfpm on PATH (CI installs a pinned copy with
 # scripts/install-nfpm.sh); all three need readelf. The binary may be for
 # another architecture than the host: readelf reads any ELF, where an amd64
 # host's objdump may refuse a riscv64 one.
 #
 # The tarball is the Linux counterpart of the Windows portable exe: the same
-# binary the packages ship, unpacked into npad-v<version>-linux-<arch>/ with
+# binary the packages ship, unpacked into npad-v<version>-portable-linux-<arch>/ with
 # the files `make install` would put under share/ and a README.txt
 # (packaging/linux/README-portable.txt) on running it in place or copying it
 # under ~/.local. It is the normal dynamically linked binary: GTK cannot be
@@ -71,7 +72,7 @@ arch)
 	nfpm_version=$base$pre
 	;;
 tar)
-	name=npad-v${version}-linux-${arch}
+	name=npad-v${version}-portable-linux-${rpm_arch}
 	out=$outdir/$name.tar.gz
 	# The oldest releases each architecture is built and tested for
 	# (packages.yml's glibc_max): riscv64 builds on Debian 13, the oldest
@@ -87,7 +88,7 @@ tar)
 	# under the prefix, so the README's `cp -r share/. ~/.local/share/` is
 	# the same layout the packages install under /usr
 	make install DESTDIR="$stage/$name" PREFIX= BINDIR= DATADIR=/share LINUX_GTK_TARGET="$binary"
-	sed -e "s|@VERSION@|v$version|g" -e "s|@ARCH@|$arch|g" \
+	sed -e "s|@VERSION@|v$version|g" -e "s|@ARCH@|$rpm_arch|g" \
 		-e "s|@GLIBC@|$glibc|g" -e "s|@DISTROS@|$distros|g" \
 		packaging/linux/README-portable.txt >"$stage/$name/README.txt"
 	if grep -n '@[A-Z]*@' "$stage/$name/README.txt"; then

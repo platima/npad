@@ -106,10 +106,10 @@ for pair in amd64:x86_64 arm64:aarch64 riscv64:riscv64; do
 		fi
 		rm -rf "$x"
 	fi
-	# The portable tarball is named like the Windows downloads (tag
-	# spelling) with the .deb's architecture names. Its name claims an
-	# architecture; the binary's ELF header is the proof.
-	top=npad-$tag-linux-$deb_arch
+	# The portable tarball is named like the Windows downloads,
+	# npad-<tag>-<type>-<os>-<arch>, with `uname -m` architecture names. Its
+	# name claims an architecture; the binary's ELF header is the proof.
+	top=npad-$tag-portable-linux-$rpm_arch
 	check "$top.tar.gz" 50000
 	if [ -f "$dir/$top.tar.gz" ]; then
 		x=$(mktemp -d)

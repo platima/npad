@@ -736,6 +736,13 @@ accelerator either; open Preferences with Alt+E, S there.
 
 ## Installers
 
+**Release asset names drifted once already.** The Windows downloads were
+`npad-v<v>-<type>-win-<arch>`, and the portable Linux tarball arrived as
+`npad-v<v>-linux-<arch>` with no type and Debian's architecture names, so the
+two looked like different schemes. -> The convention is written in CLAUDE.md
+("Release asset names"); `scripts/validate-release-assets.sh` enforces it.
+Packages for a package manager keep their own ecosystem's names on purpose.
+
 **A pre-release tag cannot be the installers' version.** MSI's ProductVersion
 and Inno Setup's AppVersion must be numeric, so `build-installers.ps1` builds
 from `src/main.h` (0.36.0) - and it also named the files from it, while the

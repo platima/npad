@@ -213,11 +213,11 @@ installer reference (tasks, features, fonts, the Windows 11 notepad alias).
   Linux ARM / Arch RISC-V as `-aarch64` / `-riscv64`):
   `sudo pacman -U ./npad-<version>-1-x86_64.pkg.tar.zst`. The same files as
   the .deb.
-- 📦 **`npad-v<version>-linux-amd64.tar.gz`** - Linux portable, for any glibc
+- 📦 **`npad-v<version>-portable-linux-x86_64.tar.gz`** - Linux portable, for any glibc
   distro with GTK 3 and no package for it: unpack and run
   `./npad`; its `README.txt` gives the commands to add a menu entry under
   `~/.local`. The same binary as the packages, without automatic updates.
-  Also `-linux-arm64` and `-linux-riscv64`.
+  Also `-aarch64` and `-riscv64`.
   From source instead: `make linux-gtk && sudo make install` (honours `PREFIX`
   and `DESTDIR`; `sudo make uninstall` removes it).
 

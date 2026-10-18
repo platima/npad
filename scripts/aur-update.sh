@@ -6,8 +6,8 @@
 #
 # The sums come from the release's own .sha256 files (the ones CHECKSUMS.txt is
 # made of): downloaded from the GitHub release, or read from asset-dir, which
-# must then hold npad-<tag>-linux-<arch>.tar.gz.sha256 for amd64, arm64 and
-# riscv64. The tarballs themselves are never downloaded here. The LICENSE's sum
+# must then hold npad-<tag>-portable-linux-<arch>.tar.gz.sha256 for x86_64,
+# aarch64 and riscv64. The tarballs themselves are never downloaded here. The LICENSE's sum
 # is taken from the tagged source on raw.githubusercontent.com (what the
 # PKGBUILD downloads), or from LICENSE in the working directory with asset-dir.
 #
@@ -53,9 +53,9 @@ sum_of() {
 	printf '%s' "$hash"
 }
 
-amd64=$(sum_of "npad-$tag-linux-amd64.tar.gz")
-arm64=$(sum_of "npad-$tag-linux-arm64.tar.gz")
-riscv64=$(sum_of "npad-$tag-linux-riscv64.tar.gz")
+amd64=$(sum_of "npad-$tag-portable-linux-x86_64.tar.gz")
+arm64=$(sum_of "npad-$tag-portable-linux-aarch64.tar.gz")
+riscv64=$(sum_of "npad-$tag-portable-linux-riscv64.tar.gz")
 if [ -n "$assets" ]; then
 	license=$(sha256sum LICENSE | cut -d' ' -f1)
 else
