@@ -15,6 +15,18 @@
 set -eu
 kind=$1
 
+# Run a download step up to three times. Distribution mirrors (Arch Linux ARM's
+# above all) sometimes stall mid-download ("Operation too slow"); one stall
+# must not fail CI, or a release, for something npad does not control.
+retry() {
+	for attempt in 1 2 3; do
+		"$@" && return 0
+		echo "retry: '$*' failed (attempt $attempt of 3)" >&2
+		[ "$attempt" -lt 3 ] && sleep 30
+	done
+	return 1
+}
+
 if [ "$kind" = tarball ]; then
 	if command -v apt-get >/dev/null 2>&1; then
 		export DEBIAN_FRONTEND=noninteractive
@@ -23,7 +35,7 @@ if [ "$kind" = tarball ]; then
 		apt-get install -y -q --no-install-recommends libgtk-3-0t64 ||
 			apt-get install -y -q --no-install-recommends libgtk-3-0
 	elif command -v pacman >/dev/null 2>&1; then
-		pacman -Sy --noconfirm --needed gtk3 tar gzip
+		retry pacman -Sy --noconfirm --needed gtk3 tar gzip
 	elif command -v dnf >/dev/null 2>&1; then
 		dnf install -y gtk3 tar gzip
 	elif command -v zypper >/dev/null 2>&1; then
@@ -89,7 +101,7 @@ pacman)
 	# Neither is under test, so switch them off; pacman.conf lists the
 	# options commented out
 	sed -i -e 's/^#DisableSandbox/DisableSandbox/' -e 's/^CheckSpace/#CheckSpace/' /etc/pacman.conf
-	pacman -Syu --noconfirm
+	retry pacman -Syu --noconfirm
 	pacman -U --noconfirm ./pkgs/npad-*.pkg.tar.zst
 	pacman -Qi npad
 	pacman -Qk npad
