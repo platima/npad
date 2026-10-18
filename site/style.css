@@ -449,6 +449,7 @@ html:not(.js) .tabpanel + .tabpanel { border-top: 1px solid var(--border); }
 .box .actions { margin: 1rem 0 0; }
 .box.quick { border-color: var(--accent); background: linear-gradient(var(--accent-soft), var(--surface) 75%); }
 .box .label { display: inline-block; margin-bottom: 0.2rem; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
+.fpr { font-family: var(--mono); font-size: 0.85rem; overflow-wrap: anywhere; color: var(--text); }
 .where { color: var(--muted); font-size: 0.85rem; font-weight: 400; }
 h3 .where { margin-left: 0.4rem; }
 .tabpanel .fine { margin: 0; padding-inline: 0.25rem; }
