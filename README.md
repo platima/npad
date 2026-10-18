@@ -6,6 +6,9 @@
 [![Release](https://github.com/platima/npad/workflows/Release/badge.svg)](https://github.com/platima/npad/actions/workflows/release.yml)
 [![Latest Release](https://img.shields.io/github/v/release/platima/npad)](https://github.com/platima/npad/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Downloads](https://img.shields.io/github/downloads/platima/npad/total)](https://github.com/platima/npad/releases/latest)
+![Stars](https://img.shields.io/github/stars/platima/npad)
+
 
 A lightweight, cross-platform text editor inspired by the simplicity and speed of classic Windows Notepad. Built with native APIs for maximum performance and minimal resource usage.
 
