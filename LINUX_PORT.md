@@ -547,10 +547,32 @@ version.
       22.04 and Arch (amd64), Debian 12 (arm64) and Debian 13 (riscv64).
       Deliberately not static (GTK cannot usefully be) and not an AppImage
       (bundling GTK is against npad's lightness)
-- [ ] Not verified on real Fedora / Mint hardware: installs are only tested in
+- [x] Arch Linux (v0.36.0): `npad-<version>-1-<arch>.pkg.tar.zst` for x86_64,
+      aarch64 (Arch Linux ARM) and riscv64 (the Arch RISC-V port), built by
+      nfpm's archlinux packager from the same `nfpm.yaml` (`make pacman`,
+      `scripts/build-package.sh arch`); depends `gtk3` plus the libraries the
+      binary links directly, and carries `/usr/share/licenses/npad/LICENSE`.
+      CI checks it holds the .deb's binary byte for byte and says the right
+      `arch` in `.PKGINFO`; release validation reads each package's `.PKGINFO`
+      and ELF architecture. Install-tested with `pacman -U` after a full
+      `pacman -Syu`: x86_64 in the official `archlinux` image, aarch64 in an
+      image imported from Arch Linux ARM's generic rootfs (signature checked
+      against the pinned Build System key) and riscv64 in one imported from
+      the Arch RISC-V mirror's rootfs (SHA-256 pinned), both by
+      `scripts/ci-arch-rootfs.sh`. Arch has no official aarch64 or riscv64
+      container images, and the community ones on Docker Hub are rebuilds of
+      those same tarballs. The pacman repository at pkg.npad.dev
+      (`/arch/<arch>/npad.db`, signed) is built by `platima/npad-packages`.
+      AUR: `packaging/arch/aur/npad-bin` (the portable tarball, per arch),
+      updated by `scripts/aur-update.sh` and, when the `AUR_SSH_KEY` secret
+      exists, pushed by release.yml's `publish-aur` job; setting the AUR
+      account up is in `packaging/arch/README.md`
+- [ ] Not verified on real Fedora / Mint / Arch hardware: installs are only tested in
       CI containers (no display), so launching the app from the .rpm is unseen.
       Likewise arm64 and riscv64 have only been installed in containers, not
-      launched on real hardware
+      launched on real hardware. The Arch aarch64 and riscv64 installs have
+      only run in CI containers; the x86_64 package, the PKGBUILD (makepkg)
+      and `pacman -U` were also run in a local Arch Linux (WSL)
 
 ### Batch F - Polish - done in v0.35.0
 - [x] `system` scheme follows the desktop's light/dark preference live

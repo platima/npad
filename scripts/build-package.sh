@@ -1,13 +1,15 @@
 #!/bin/sh
-# Build the .deb or .rpm with nfpm from packaging/linux/nfpm.yaml, or the
-# portable tarball.
-# Usage: scripts/build-package.sh <deb|rpm|tar> <version> <binary> <outdir> [arch]
+# Build the .deb, .rpm or Arch .pkg.tar.zst with nfpm from
+# packaging/linux/nfpm.yaml, or the portable tarball.
+# Usage: scripts/build-package.sh <deb|rpm|arch|tar> <version> <binary> <outdir> [arch]
 # arch is the Debian name (amd64, arm64, riscv64) and defaults to the binary's
 # own ELF machine; given explicitly, the binary must match it.
 # Output: <outdir>/npad_<version>_<arch>.deb (amd64, arm64, riscv64),
-#         <outdir>/npad-<version>-1.<arch>.rpm (x86_64, aarch64, riscv64) or
+#         <outdir>/npad-<version>-1.<arch>.rpm (x86_64, aarch64, riscv64),
+#         <outdir>/npad-<version>-1-<arch>.pkg.tar.zst (x86_64, aarch64,
+#         riscv64; Arch Linux, Arch Linux ARM and Arch RISC-V) or
 #         <outdir>/npad-v<version>-linux-<arch>.tar.gz (amd64, arm64, riscv64)
-# The deb and rpm need nfpm on PATH (CI installs a pinned copy with
+# The deb, rpm and Arch package need nfpm on PATH (CI installs a pinned copy with
 # scripts/install-nfpm.sh); all three need readelf. The binary may be for
 # another architecture than the host: readelf reads any ELF, where an amd64
 # host's objdump may refuse a riscv64 one.
@@ -20,6 +22,7 @@
 # linked statically in any useful way, and bundling it would not be npad.
 set -eu
 format=$1
+packager=$format
 version=$2
 binary=$3
 outdir=$4
@@ -29,8 +32,8 @@ arch=${5:-}
 # binary as riscv64 would install and then fail to execute, so never trust a
 # file name or a variable over the ELF header.
 arch=$(sh "$(dirname "$0")/elf-arch.sh" "$binary" "$arch")
-# rpm spells the same architectures differently; nfpm maps them, the file
-# name is ours
+# rpm and pacman spell the same architectures differently; nfpm maps them,
+# the file name is ours
 case $arch in
 amd64) rpm_arch=x86_64 ;;
 arm64) rpm_arch=aarch64 ;;
@@ -50,6 +53,12 @@ deb)
 rpm)
 	out=$outdir/npad-${version}-1.${rpm_arch}.rpm
 	release=1
+	;;
+arch)
+	# Arch's own naming: <pkgname>-<pkgver>-<pkgrel>-<arch>.pkg.tar.zst
+	out=$outdir/npad-${version}-1-${rpm_arch}.pkg.tar.zst
+	release=1
+	packager=archlinux
 	;;
 tar)
 	name=npad-v${version}-linux-${arch}
@@ -85,7 +94,7 @@ tar)
 	exit 0
 	;;
 *)
-	echo "format must be deb, rpm or tar" >&2
+	echo "format must be deb, rpm, arch or tar" >&2
 	exit 2
 	;;
 esac
@@ -99,7 +108,18 @@ rm -rf "$stage"
 mkdir -p "$outdir"
 make install DESTDIR="$stage" PREFIX=/usr LINUX_GTK_TARGET="$binary"
 
+config=packaging/linux/nfpm.yaml
+if [ "$packager" = archlinux ]; then
+	# pacman shows pkgdesc on one line (pacman -Si, software centres), but
+	# nfpm.yaml carries the deb's synopsis plus long description, which nfpm
+	# would run together into one long sentence. Use the synopsis alone.
+	config=$stage.nfpm.yaml
+	awk '/^description:/ { getline synopsis; sub(/^ +/, "", synopsis); print "description: " synopsis; skip = 1; next }
+		skip && /^ / { next }
+		{ skip = 0; print }' packaging/linux/nfpm.yaml >"$config"
+fi
+
 NPAD_VERSION=$version NPAD_RELEASE=$release NPAD_GLIBC=$glibc NPAD_STAGE=$stage NPAD_ARCH=$arch \
-	nfpm package --packager "$format" --config packaging/linux/nfpm.yaml --target "$out"
-rm -rf "$stage"
+	nfpm package --packager "$packager" --config "$config" --target "$out"
+rm -rf "$stage" "$stage.nfpm.yaml"
 echo "Built $out (libc floor $glibc)"

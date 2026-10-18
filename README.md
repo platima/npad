@@ -209,8 +209,12 @@ installer reference (tasks, features, fonts, the Windows 11 notepad alias).
 - 🐧 **`npad-<version>-1.x86_64.rpm`** - Linux (Fedora):
   `sudo dnf install ./npad-<version>-1.x86_64.rpm`. Also `.aarch64.rpm` and
   `.riscv64.rpm`.
+- 🐧 **`npad-<version>-1-x86_64.pkg.tar.zst`** - Linux (Arch Linux, and Arch
+  Linux ARM / Arch RISC-V as `-aarch64` / `-riscv64`):
+  `sudo pacman -U ./npad-<version>-1-x86_64.pkg.tar.zst`. The same files as
+  the .deb.
 - 📦 **`npad-v<version>-linux-amd64.tar.gz`** - Linux portable, for any glibc
-  distro with GTK 3 (Arch and others without .deb/.rpm): unpack and run
+  distro with GTK 3 and no package for it: unpack and run
   `./npad`; its `README.txt` gives the commands to add a menu entry under
   `~/.local`. The same binary as the packages, without automatic updates.
   Also `-linux-arm64` and `-linux-riscv64`.
@@ -218,8 +222,8 @@ installer reference (tasks, features, fonts, the Windows 11 notepad alias).
   and `DESTDIR`; `sudo make uninstall` removes it).
 
 **Linux updates through your package manager.** Add the signed npad
-repository once and `apt upgrade` / `dnf upgrade` keep npad current
-(packages and key served from <https://pkg.npad.dev>):
+repository once and `apt upgrade` / `dnf upgrade` / `pacman -Syu` keep npad
+current (packages and key served from <https://pkg.npad.dev>):
 
 ```bash
 # Debian, Ubuntu, Mint
@@ -231,10 +235,19 @@ sudo apt update && sudo apt install npad
 # Fedora
 sudo curl -fsSL https://pkg.npad.dev/npad.repo -o /etc/yum.repos.d/npad.repo
 sudo dnf install npad
+
+# Arch Linux, Arch Linux ARM, Arch RISC-V (and Arch derivatives)
+curl -fsSL https://pkg.npad.dev/npad.asc -o /tmp/npad.asc
+sudo pacman-key --add /tmp/npad.asc
+sudo pacman-key --lsign-key "$(gpg --show-keys --with-colons /tmp/npad.asc | awk -F: '$1=="fpr"{print $10; exit}')"
+printf '\n[npad]\nSigLevel = Required DatabaseRequired\nServer = https://pkg.npad.dev/arch/$arch\n' | sudo tee -a /etc/pacman.conf
+sudo pacman -Sy npad
 ```
 
 Or run `curl -fsSL https://pkg.npad.dev/install.sh | sudo sh`, which detects
-which of the two you need. Read the script first if you prefer.
+which of the three you need. Read the script first if you prefer. The AUR
+package `npad-bin` (built from the release's portable tarball) is the other
+route on Arch.
 
 **Planned:** 🎁 **Winget** - for `winget install npad`.
 

@@ -453,6 +453,23 @@ may not recognise a riscv64 file at all, where `readelf` reads any ELF.
 `build-package.sh` refuses a binary whose header disagrees with `PKG_ARCH`,
 because a mislabelled package installs and then cannot execute.
 
+**nfpm's archlinux packager: `pkgver` is `version-release`, the description is
+flattened into `pkgdesc`, and `license: MIT` is not enough.** `release: 1` becomes `pkgver = 0.35.1-1` in `.PKGINFO`, which is
+what pacman wants (`npad-0.35.1-1-x86_64.pkg.tar.zst`). The multi-line
+description (the deb's synopsis plus long text) comes out as one 200-character
+`pkgdesc`, so `build-package.sh arch` hands nfpm a copy of the config with the
+synopsis alone. `licence: MIT` is not enough for namcap: Arch wants the file
+under `/usr/share/licenses/<pkg>/`, added to the Arch package only with
+`packager: archlinux` on the content entry. Arch has no official aarch64 or
+riscv64 container image: `scripts/ci-arch-rootfs.sh` imports Arch Linux ARM's
+rootfs (its `latest` moves, so the detached signature is verified against the
+pinned Build System fingerprint; the `.md5` beside it is plain http and proves
+nothing) and the Arch RISC-V mirror's (no checksums published, so one dated
+file's SHA-256 is pinned). Do not swap in a Docker Hub rebuild. A rootfs
+imported this way needs `pacman-key --init && --populate` and a full
+`pacman -Syu` before `pacman -U` (Arch supports no partial upgrades, and these
+images can be months old).
+
 **Fedora publishes no riscv64 container image; openSUSE Tumbleweed does.**
 Debian (trixie) and Ubuntu (24.04) have riscv64 images, Debian 12 does not
 (no official port, which is also why riscv64's floor is Debian 13 / Ubuntu

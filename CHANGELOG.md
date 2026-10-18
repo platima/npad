@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hand, the release page for a portable copy. It never downloads or installs
   anything itself. Preferences gains the Updates page, off by default as on
   Windows.
+- **npad for Arch Linux.** Each release now has a native pacman package for
+  x86_64, aarch64 (Arch Linux ARM) and riscv64 (the Arch RISC-V port), and
+  the signed repository at <https://pkg.npad.dev> serves it, so on Arch
+  `pacman -Syu` keeps npad current (the install commands are in the README;
+  `install.sh` does them for you). An `npad-bin` package for the AUR is ready
+  to publish.
 - **A portable Linux download.** Each release now has
   `npad-v<version>-linux-amd64.tar.gz` (and `-arm64`, `-riscv64`) beside the
   .deb and .rpm: unpack it and run `./npad`, on any glibc distro with GTK 3,
@@ -63,6 +69,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package). Everything runs in a worker thread and needs no root. The lookup
   is HTTP/1.1 over GIO's TLS - no new library; without glib-networking at run
   time the check says to install it.
+- **Linux: Arch package** (`make pacman`, `scripts/build-package.sh arch`):
+  `npad-<version>-1-<arch>.pkg.tar.zst` for x86_64, aarch64 and riscv64, built
+  by nfpm's archlinux packager from the same `packaging/linux/nfpm.yaml` as the
+  .deb and .rpm. It depends on `gtk3` and the libraries the binary links
+  directly, carries the licence under `/usr/share/licenses/npad/`, and has no
+  install scriptlets (pacman's hooks refresh the icon and desktop caches).
+  CI compares its binary with the .deb's, checks `.PKGINFO`, and installs it
+  with `pacman -U` after a full `pacman -Syu` in the official `archlinux`
+  image (x86_64) and in images imported from Arch Linux ARM's and the Arch
+  RISC-V port's own rootfs tarballs (`scripts/ci-arch-rootfs.sh`: the former's
+  signature is verified against its pinned Build System key, the latter's
+  SHA-256 is pinned), then runs `npad --version`. Releases attach the packages
+  with `.sha256` files, validation reads each package's `.PKGINFO` and ELF
+  architecture, and the release notes list them. The pacman repository itself
+  is built by `platima/npad-packages`.
+- **Linux: AUR package `npad-bin`** (`packaging/arch/aur/npad-bin`): the
+  PKGBUILD installs the release's portable tarball for the machine's
+  architecture. `scripts/aur-update.sh <tag>` points it at a release (version,
+  sums from the release's own `.sha256` files) and regenerates `.SRCINFO`; CI
+  checks that `.SRCINFO` matches the PKGBUILD in a real Arch. release.yml's
+  `publish-aur` job pushes it to the AUR when the `AUR_SSH_KEY` secret is set
+  and is skipped otherwise; `packaging/arch/README.md` has the one-time
+  account and key setup.
 - **Linux: portable tarball** (`make tarball`, `scripts/build-package.sh
   tar`). It unpacks to `npad-v<version>-linux-<arch>/` with `npad`,
   `README.txt` and `share/` (the launcher, hicolor icons and AppStream

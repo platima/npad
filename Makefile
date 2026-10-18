@@ -398,7 +398,7 @@ clean:
 	find src tests -name '*.o' -delete 2>/dev/null || true
 	rm -f src/platform/npad.res
 	rm -rf build
-	rm -rf dist/npad_* dist/npad-*.rpm dist/npad-v*-linux-*.tar.gz
+	rm -rf dist/npad_* dist/npad-*.rpm dist/npad-*.pkg.tar.zst dist/npad-v*-linux-*.tar.gz
 	rm -f tests/test_file_ops tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md tests/test_undo tests/test_find_seed tests/test_tab_stops
 	rm -f tests/test_file_ops.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe tests/test_html_md.exe tests/test_undo.exe tests/test_find_seed.exe tests/test_tab_stops.exe
 
@@ -446,18 +446,20 @@ else
 	done; done
 endif
 
-# Linux packages in dist/. Both are described once, in
+# Linux packages in dist/. All are described once, in
 # packaging/linux/nfpm.yaml, and built by nfpm (a single static binary: CI
 # installs a pinned copy with scripts/install-nfpm.sh). Build in a Debian 12
 # container, as release CI does, so the libc floor stays low enough for
 # Debian 12 and Ubuntu 22.04.
 #   deb: npad_<version>_<arch>.deb     Depends: libgtk-3-0t64 | libgtk-3-0
 #   rpm: npad-<version>-1.<arch>.rpm   Requires: gtk3
-# The architecture is the binary's own (amd64, arm64, riscv64; the rpm says
-# x86_64, aarch64, riscv64), so a binary built elsewhere - CI compiles riscv64
+#   pacman: npad-<version>-1-<arch>.pkg.tar.zst   depends=gtk3 (Arch Linux,
+#           Arch Linux ARM, Arch RISC-V)
+# The architecture is the binary's own (amd64, arm64, riscv64; the rpm and the
+# Arch package say x86_64, aarch64, riscv64), so a binary built elsewhere - CI compiles riscv64
 # under QEMU - packages on any host with nfpm. PKG_ARCH, if set, must match it.
 # Without nfpm, `make deb` falls back to dpkg-deb (scripts/build-deb.sh); the
-# rpm needs nfpm.
+# the rpm and the Arch package need nfpm.
 DEB_VERSION = $(MAJOR).$(MINOR).$(PATCH)
 PKG_ARCH ?=
 
@@ -471,6 +473,9 @@ endif
 
 rpm: $(LINUX_GTK_TARGET)
 	sh scripts/build-package.sh rpm $(DEB_VERSION) $(LINUX_GTK_TARGET) dist $(PKG_ARCH)
+
+pacman: $(LINUX_GTK_TARGET)
+	sh scripts/build-package.sh arch $(DEB_VERSION) $(LINUX_GTK_TARGET) dist $(PKG_ARCH)
 
 # The portable download: dist/npad-v<version>-linux-<arch>.tar.gz, the same
 # binary plus the launcher entry, icons, metainfo and a README.txt, to run in
@@ -508,6 +513,7 @@ help:
 	@echo "  uninstall        - Remove from PREFIX"
 	@echo "  deb              - Build dist/npad_<version>_<arch>.deb (Linux; nfpm or dpkg-deb)"
 	@echo "  rpm              - Build dist/npad-<version>-1.<arch>.rpm (Linux; needs nfpm)"
+	@echo "  pacman           - Build dist/npad-<version>-1-<arch>.pkg.tar.zst (Arch Linux; needs nfpm)"
 	@echo "  tarball          - Build dist/npad-v<version>-linux-<arch>.tar.gz (Linux portable)"
 	@echo "  help             - Show this help"
 	@echo ""
@@ -519,4 +525,4 @@ help:
 	@echo "  DEBUG=1          - Enable debug build"
 	@echo "  VERSION          - Version string (auto-detected from git)"
 
-.PHONY: all windows windows-gui windows-arm64 windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm tarball lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo help detect-platform
+.PHONY: all windows windows-gui windows-arm64 windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm pacman tarball lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo help detect-platform

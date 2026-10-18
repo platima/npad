@@ -98,7 +98,7 @@ jobs:
   # installers carry - for x64 and for arm64. One build per architecture, one
   # (optional) signature, one checksum set. ci.yml still cross-compiles both
   # Windows targets on Linux, so that path stays tested; it just is not what
-  # ships. Linux ships as the .deb, .rpm and portable tarball from
+  # ships. Linux ships as the .deb, .rpm, Arch package and portable tarball from
   # build-packages below; the
   # terminal variants are unimplemented stubs and are not published.
   # In a dry run release_tag is empty, so the deliverables stay artifacts.
@@ -113,8 +113,8 @@ jobs:
       contents: write
       id-token: write
 
-  # Linux: the .deb (Debian, Ubuntu, Mint) and .rpm (Fedora, openSUSE) for
-  # amd64, arm64 and riscv64, compiled in Debian containers and packaged with
+  # Linux: the .deb (Debian, Ubuntu, Mint), .rpm (Fedora, openSUSE) and Arch
+  # .pkg.tar.zst for amd64, arm64 and riscv64, compiled in Debian containers and packaged with
   # nfpm, plus the portable npad-v<version>-linux-<arch>.tar.gz of the same
   # binary, then install-tested on each distro by packages.yml. The artifact
   # names differ from the ones CI's own call uses: names must be unique within
@@ -144,6 +144,7 @@ jobs:
         files: |
           pkgs/npad_*.deb
           pkgs/npad-*.rpm
+          pkgs/npad-*.pkg.tar.zst
           pkgs/npad-v*-linux-*.tar.gz
           pkgs/*.sha256
 
@@ -296,3 +297,77 @@ jobs:
           echo "::warning::dispatch to npad-packages returned HTTP $status; it will pick the release up at its next daily rebuild"
           cat response.txt
         fi
+
+  # Optional: publish npad-bin to the AUR (packaging/arch/aur/npad-bin). Runs
+  # only when the AUR_SSH_KEY secret exists - the private half of an SSH key
+  # whose public half is on the maintainer's AUR account - and is skipped
+  # otherwise, so a repository without it is unaffected. Final releases only,
+  # after every asset is attached and validated: scripts/aur-update.sh reads the
+  # sums from the release's own .sha256 files and writes .SRCINFO with makepkg
+  # (in an archlinux container; makepkg refuses root). The AUR host key is
+  # pinned, not trusted on first use. See packaging/arch/README.md for setting
+  # the account and the secret up.
+  publish-aur:
+    runs-on: ubuntu-latest
+    needs: [meta, create-release, validate-release, create-checksums, update-release-notes]
+    if: ${{ !cancelled() && !failure() && needs.meta.outputs.publish == 'true' && !contains(needs.meta.outputs.version, '-') }}
+    steps:
+    - name: Check for the AUR key
+      id: key
+      env:
+        AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+      run: |
+        if [ -z "$AUR_SSH_KEY" ]; then
+          echo "::notice::AUR_SSH_KEY is not set; skipping the AUR update"
+          echo "present=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "present=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    - uses: actions/checkout@v7
+      if: steps.key.outputs.present == 'true'
+
+    - name: Update PKGBUILD and .SRCINFO for the release
+      if: steps.key.outputs.present == 'true'
+      env:
+        VERSION: ${{ needs.create-release.outputs.version }}
+      run: |
+        docker run --rm -v "$PWD:/w" -w /w -e VERSION archlinux:latest sh -c '
+          set -e
+          pacman -Syu --noconfirm --needed base-devel curl
+          useradd -m builder
+          chown -R builder /w
+          su builder -c "cd /w && sh scripts/aur-update.sh $VERSION"
+        '
+        cat packaging/arch/aur/npad-bin/.SRCINFO
+
+    - name: Push to the AUR
+      if: steps.key.outputs.present == 'true'
+      env:
+        AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+        VERSION: ${{ needs.create-release.outputs.version }}
+      run: |
+        set -e
+        install -d -m 700 ~/.ssh
+        printf '%s\n' "$AUR_SSH_KEY" > ~/.ssh/aur
+        chmod 600 ~/.ssh/aur
+        # Pin the host: the ED25519 fingerprint the Arch team published
+        # (https://archlinux.org/news/aur-migration-new-ssh-hostkeys/)
+        ssh-keyscan -t ed25519 aur.archlinux.org > ~/.ssh/aur_known_hosts
+        ssh-keygen -lf ~/.ssh/aur_known_hosts | grep -F 'SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4' || {
+          echo "ERROR: aur.archlinux.org presented an unexpected host key"
+          exit 1
+        }
+        export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/aur_known_hosts -o StrictHostKeyChecking=yes"
+        git clone ssh://aur@aur.archlinux.org/npad-bin.git aur
+        cd aur
+        git checkout -B master
+        cp ../packaging/arch/aur/npad-bin/PKGBUILD ../packaging/arch/aur/npad-bin/.SRCINFO .
+        git add PKGBUILD .SRCINFO
+        if git diff --cached --quiet; then
+          echo "The AUR already has npad-bin $VERSION"
+          exit 0
+        fi
+        git -c user.name="npad release" -c user.email="13729856+platima@users.noreply.github.com" \
+          commit -m "Update to ${VERSION#v}"
+        git push origin master

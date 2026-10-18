@@ -1,12 +1,15 @@
-# nfpm configuration: one description for both the .deb and the .rpm.
+# nfpm configuration: one description for the .deb, the .rpm and the Arch
+# .pkg.tar.zst.
 # Driven by scripts/build-package.sh, which stages `make install` into
 # NPAD_STAGE and exports NPAD_VERSION, NPAD_RELEASE (empty for the .deb, which
-# has no packaging revision; 1 for the .rpm), NPAD_GLIBC and NPAD_ARCH. nfpm
+# has no packaging revision; 1 for the .rpm and the Arch package, where it is
+# pkgrel), NPAD_GLIBC and NPAD_ARCH. nfpm
 # is a single static binary used by CI and by anyone building the rpm; it is
 # not a build dependency of npad itself.
 name: npad
 # The Debian name - amd64, arm64 or riscv64, read from the binary by the build
-# script. nfpm writes the rpm's own spelling (x86_64, aarch64, riscv64).
+# script. nfpm writes the rpm's and pacman's own spelling (x86_64, aarch64,
+# riscv64).
 arch: ${NPAD_ARCH}
 platform: linux
 version: ${NPAD_VERSION}
@@ -77,6 +80,13 @@ contents:
   - src: ${NPAD_STAGE}/usr/share/icons/hicolor/256x256/apps/io.github.platima.npad-dark.png
     dst: /usr/share/icons/hicolor/256x256/apps/io.github.platima.npad-dark.png
     expand: true
+  # Arch wants a licence file under /usr/share/licenses for any licence that is
+  # not on its common list, MIT included (the deb and rpm record the licence
+  # in their metadata instead). The path is relative to the repository root,
+  # where build-package.sh runs nfpm.
+  - src: LICENSE
+    dst: /usr/share/licenses/npad/LICENSE
+    packager: archlinux
 
 # libgtk-3-0t64 is the name since Debian 13 / Ubuntu 24.04 (64-bit time_t
 # transition); older releases ship libgtk-3-0. The libc floor is read from the
@@ -91,3 +101,18 @@ overrides:
     depends:
       - glibc >= ${NPAD_GLIBC}
       - gtk3 >= 3.24
+  # pacman: the repository names on Arch, Arch Linux ARM and Arch RISC-V
+  # alike. gtk3 pulls in glib2, cairo and pango, but they are listed because
+  # the binary links them directly (readelf -d: gtk-3, gdk-3, pangocairo,
+  # pango, cairo, gio, gobject, glib), as Arch packaging asks. Arch is
+  # rolling and never ships an older glibc than the one npad was built
+  # against, so the floor is only a sanity check. The icon and desktop caches
+  # are refreshed by pacman hooks (gtk-update-icon-cache,
+  # update-desktop-database), so the package needs no scriptlets.
+  archlinux:
+    depends:
+      - glibc>=${NPAD_GLIBC}
+      - gtk3>=3.24
+      - glib2
+      - cairo
+      - pango

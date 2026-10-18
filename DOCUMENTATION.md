@@ -299,18 +299,23 @@ Ctrl+X and the paste shortcuts change behaviour. Linux specifics:
 
 ### Installing on Linux
 
-Packages are built for three architectures. The .deb and .rpm spell them
-differently:
+Packages are built for three architectures. The .deb spells them differently
+from the .rpm and the Arch package:
 
-| Architecture | .deb | .rpm | Oldest supported |
-|--------------|------|------|------------------|
+| Architecture | .deb | .rpm / Arch | Oldest supported |
+|--------------|------|-------------|------------------|
 | x86-64 (Intel/AMD) | `amd64` | `x86_64` | Debian 12, Ubuntu 22.04 |
 | 64-bit Arm (Raspberry Pi 4/5 on a 64-bit OS, Arm laptops and servers) | `arm64` | `aarch64` | Debian 12, Ubuntu 22.04 |
 | 64-bit RISC-V | `riscv64` | `riscv64` | Debian 13, Ubuntu 24.04 |
 
 riscv64 starts later because no older Debian or Ubuntu has an official
 riscv64 port. `dpkg --print-architecture` (or `uname -m`) tells you which one
-you have; the apt and dnf repositories pick the right one by themselves.
+you have; the apt, dnf and pacman repositories pick the right one by
+themselves. Arch Linux itself is x86_64 only: aarch64 is [Arch Linux
+ARM](https://archlinuxarm.org) and riscv64 the [Arch RISC-V
+port](https://riscv.mirror.pkgbuild.com), and the pacman packages and
+repository serve all three. Arch is rolling, so it has no "oldest supported"
+release.
 
 - **.deb** (Debian 12/13, Ubuntu 22.04+, Mint): `sudo apt install
   ./npad_<version>_amd64.deb` (or `_arm64` / `_riscv64`). It depends only on GTK 3 (`libgtk-3-0` or
@@ -321,8 +326,21 @@ you have; the apt and dnf repositories pick the right one by themselves.
 - **.rpm** (Fedora, openSUSE): `sudo dnf install ./npad-<version>-1.x86_64.rpm`
   (or `.aarch64` / `.riscv64`). It requires `gtk3` and installs the same files
   as the .deb.
+- **Arch package** (Arch Linux, Arch Linux ARM, Arch RISC-V; also Arch
+  derivatives such as Manjaro or EndeavourOS): `sudo pacman -U
+  ./npad-<version>-1-x86_64.pkg.tar.zst` (or `-aarch64` / `-riscv64`). It
+  depends on `gtk3` (and `glib2`, `cairo`, `pango`, which the binary links
+  directly) and installs the same files as the .deb plus
+  `/usr/share/licenses/npad/LICENSE`; pacman's hooks refresh the icon and
+  desktop caches. `make pacman` builds one into `dist/`.
+- **AUR: `npad-bin`** (Arch and derivatives): an AUR helper builds a package
+  from the release's portable tarball, `yay -S npad-bin` (or `paru -S
+  npad-bin`, or `git clone https://aur.archlinux.org/npad-bin.git && cd
+  npad-bin && makepkg -si`). It provides and conflicts with `npad`. It is for
+  people who want their packages AUR-managed; the pacman repository below is
+  built from the same release and needs no build step.
 - **Portable tarball** (any glibc distro with GTK 3, including ones with no
-  .deb or .rpm, such as Arch): `npad-v<version>-linux-<arch>.tar.gz`, with the
+  .deb or .rpm: `npad-v<version>-linux-<arch>.tar.gz`, with the
   .deb's architecture names (`amd64`, `arm64`, `riscv64`) and the same oldest
   supported releases as the table above. It is the Linux counterpart of the
   Windows portable exe: the very binary the packages install, dynamically
@@ -356,9 +374,9 @@ you have; the apt and dnf repositories pick the right one by themselves.
   A portable copy never updates itself; the repositories below do (Help >
   Check for Updates still tells you when there is a new release). `make
   tarball` builds one into `dist/`.
-- **apt / dnf repository (recommended; updates arrive with the rest of the
-  system).** The repositories at <https://pkg.npad.dev> are rebuilt from the
-  GitHub releases and signed with the npad packaging key
+- **apt / dnf / pacman repository (recommended; updates arrive with the rest
+  of the system).** The repositories at <https://pkg.npad.dev> are rebuilt from
+  the GitHub releases and signed with the npad packaging key
   (<https://pkg.npad.dev/npad.asc>); the key lives only in the separate
   `platima/npad-packages` repository.
 
@@ -378,20 +396,37 @@ you have; the apt and dnf repositories pick the right one by themselves.
   sudo dnf install npad
   ```
 
+  Arch Linux, Arch Linux ARM, Arch RISC-V (pacman verifies the signed
+  database and packages against a key you add and trust once):
+
+  ```bash
+  curl -fsSL https://pkg.npad.dev/npad.asc -o /tmp/npad.asc
+  sudo pacman-key --add /tmp/npad.asc
+  sudo pacman-key --lsign-key "$(gpg --show-keys --with-colons /tmp/npad.asc | awk -F: '$1=="fpr"{print $10; exit}')"
+  printf '\n[npad]\nSigLevel = Required DatabaseRequired\nServer = https://pkg.npad.dev/arch/$arch\n' | sudo tee -a /etc/pacman.conf
+  sudo pacman -Sy npad
+  ```
+
   `curl -fsSL https://pkg.npad.dev/install.sh | sudo sh` does the right one of
-  these. To remove the repository, delete `/etc/apt/sources.list.d/npad.sources`
-  and `/etc/apt/keyrings/npad.asc` (or `/etc/yum.repos.d/npad.repo`).
+  these (on Arch it appends `[npad]` to `/etc/pacman.conf` only if it is not
+  there already). To remove the repository, delete
+  `/etc/apt/sources.list.d/npad.sources` and `/etc/apt/keyrings/npad.asc` (or
+  `/etc/yum.repos.d/npad.repo`; on Arch the `[npad]` section of
+  `/etc/pacman.conf`, then `sudo pacman-key --delete <fingerprint>`).
   Pre-releases are not published there; use the release assets for those.
 - **From source**: `make linux-gtk`, then `sudo make install`. `PREFIX`
   (default `/usr/local`) and `DESTDIR` are honoured; `make uninstall` reverses
-  it. `make deb` and `make rpm` build the packages into `dist/`; both use
+  it. `make deb`, `make rpm` and `make pacman` build the packages into
+  `dist/`; all use
   [nfpm](https://nfpm.goreleaser.com) (`scripts/install-nfpm.sh` fetches the
   pinned release), and `make deb` falls back to `dpkg-deb` without it. Build
   in a Debian 12 container for packages that run on every supported distro
   (Debian 13 for riscv64). The package architecture is read from the binary,
   so a binary compiled elsewhere (CI compiles riscv64 under QEMU) packages on
   any host with nfpm; `PKG_ARCH=arm64` makes it an error if the binary is
-  anything else.
+  anything else. The Arch package comes out of the same `nfpm.yaml` (its own
+  `depends`, a one-line description and the licence file); `packaging/arch/`
+  holds the AUR package and its README how it is published.
 - The desktop file name, icon name and window class are all the application
   id `io.github.platima.npad`; the shell matches windows to the launcher and
   icon through it.
