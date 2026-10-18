@@ -2,8 +2,10 @@ name: Linux packages
 
 # Builds the .deb and .rpm for every Linux architecture npad ships - amd64,
 # arm64 and riscv64 (the rpm names them x86_64, aarch64, riscv64) - with nfpm
-# (packaging/linux/nfpm.yaml), and proves each installs on the distros it is
-# meant for. release.yml calls it with the release tag (which must match the
+# (packaging/linux/nfpm.yaml), plus the portable tarball
+# (npad-v<version>-linux-<arch>.tar.gz, the same binary with a README), and
+# proves each installs, or for the tarball runs, on the distros it is meant
+# for. release.yml calls it with the release tag (which must match the
 # version in src/main.h) and attaches the artifacts to the release; it is
 # attached there, not here, so a plain CI run never needs write access. The
 # signed apt/dnf repositories at pkg.npad.dev are built from those release
@@ -104,20 +106,36 @@ jobs:
           fi
           make deb DEB_VERSION="$version" PKG_ARCH="$ARCH"
           make rpm DEB_VERSION="$version" PKG_ARCH="$ARCH"
+          make tarball DEB_VERSION="$version" PKG_ARCH="$ARCH"
         else
           make deb PKG_ARCH="$ARCH"
           make rpm PKG_ARCH="$ARCH"
+          make tarball PKG_ARCH="$ARCH"
         fi
         ls -la dist/
         deb=$(ls dist/npad_*_"$ARCH".deb)
         rpm=$(ls dist/npad-*-1."$RPM_ARCH".rpm)
+        tarball=$(ls dist/npad-v*-linux-"$ARCH".tar.gz)
         if [ -n "$RELEASE_TAG" ] && [ "$(basename "$deb")" != "npad_${RELEASE_TAG#v}_${ARCH}.deb" ]; then
           echo "ERROR: built $(basename "$deb") but the tag is $RELEASE_TAG"
+          exit 1
+        fi
+        if [ -n "$RELEASE_TAG" ] && [ "$(basename "$tarball")" != "npad-${RELEASE_TAG}-linux-${ARCH}.tar.gz" ]; then
+          echo "ERROR: built $(basename "$tarball") but the tag is $RELEASE_TAG"
           exit 1
         fi
         [ "$(dpkg-deb -f "$deb" Architecture)" = "$ARCH" ] || { echo "ERROR: $deb is not Architecture: $ARCH"; exit 1; }
         dpkg-deb --info "$deb"
         dpkg-deb --contents "$deb"
+        # The tarball's binary is the one in the .deb, byte for byte
+        top=$(basename "$tarball" .tar.gz)
+        tar -tzvf "$tarball"
+        mkdir -p check/deb check/tar
+        dpkg-deb -x "$deb" check/deb
+        tar -C check/tar -xzf "$tarball"
+        cmp check/deb/usr/bin/npad "check/tar/$top/npad" || { echo "ERROR: the tarball's npad differs from the .deb's"; exit 1; }
+        sh scripts/elf-arch.sh "check/tar/$top/npad" "$ARCH"
+        rm -rf check
 
     - name: Check the libc floor
       env:
@@ -156,7 +174,7 @@ jobs:
         RPM_ARCH: ${{ matrix.rpm_arch }}
       run: |
         cd dist
-        for f in npad_*_"$ARCH".deb npad-*."$RPM_ARCH".rpm; do sha256sum "$f" > "$f.sha256"; done
+        for f in npad_*_"$ARCH".deb npad-*."$RPM_ARCH".rpm npad-v*-linux-"$ARCH".tar.gz; do sha256sum "$f" > "$f.sha256"; done
         cat *.sha256
 
     - uses: actions/upload-artifact@v7
@@ -165,6 +183,7 @@ jobs:
         path: |
           dist/npad_*_${{ matrix.arch }}.deb
           dist/npad-*.${{ matrix.rpm_arch }}.rpm
+          dist/npad-v*-linux-${{ matrix.arch }}.tar.gz
           dist/*.sha256
         retention-days: 7
 
@@ -173,9 +192,11 @@ jobs:
   # these cover them. arm64 runs natively on an arm runner; riscv64 runs under
   # QEMU, on the distros that publish riscv64 images and are new enough for
   # its glibc floor (Fedora publishes none, so openSUSE Tumbleweed tests the
-  # riscv64 rpm).
+  # riscv64 rpm). The `tarball` rows install only GTK 3 and run the portable
+  # download in place: on each architecture's oldest supported distro, and on
+  # Arch, which is who the tarball is for (no .deb or .rpm there).
   install-test:
-    name: install-test (${{ matrix.arch }}, ${{ matrix.image }})
+    name: install-test (${{ matrix.arch }}, ${{ matrix.image }}${{ matrix.kind == 'tarball' && ', tarball' || '' }})
     needs: build
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -195,6 +216,10 @@ jobs:
         - { arch: riscv64, runner: ubuntu-latest,    image: "debian:trixie",       kind: deb,    qemu: true }
         - { arch: riscv64, runner: ubuntu-latest,    image: "ubuntu:24.04",        kind: deb,    qemu: true }
         - { arch: riscv64, runner: ubuntu-latest,    image: "opensuse/tumbleweed", kind: zypper, qemu: true }
+        - { arch: amd64,   runner: ubuntu-latest,    image: "ubuntu:22.04",        kind: tarball }
+        - { arch: amd64,   runner: ubuntu-latest,    image: "archlinux:latest",    kind: tarball }
+        - { arch: arm64,   runner: ubuntu-24.04-arm, image: "debian:12",           kind: tarball }
+        - { arch: riscv64, runner: ubuntu-latest,    image: "debian:trixie",       kind: tarball, qemu: true }
     steps:
     - uses: actions/checkout@v7
 

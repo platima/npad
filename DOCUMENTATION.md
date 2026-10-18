@@ -283,13 +283,43 @@ you have; the apt and dnf repositories pick the right one by themselves.
   (`io.github.platima.npad.desktop`, offered for text, Markdown, JSON, XML and
   similar files in "Open with"), hicolor icons from 16 to 256 px (standard
   and dark) and the AppStream metainfo for software centres.
-- **.rpm** (Fedora): `sudo dnf install ./npad-<version>-1.x86_64.rpm`. It
-  requires `gtk3` and installs the same files as the .deb.
-  similar files in "Open with"), hicolor icons from 16 to 256 px and the
-  AppStream metainfo for software centres.
 - **.rpm** (Fedora, openSUSE): `sudo dnf install ./npad-<version>-1.x86_64.rpm`
   (or `.aarch64` / `.riscv64`). It requires `gtk3` and installs the same files
   as the .deb.
+- **Portable tarball** (any glibc distro with GTK 3, including ones with no
+  .deb or .rpm, such as Arch): `npad-v<version>-linux-<arch>.tar.gz`, with the
+  .deb's architecture names (`amd64`, `arm64`, `riscv64`) and the same oldest
+  supported releases as the table above. It is the Linux counterpart of the
+  Windows portable exe: the very binary the packages install, dynamically
+  linked against the system's GTK 3 (GTK cannot usefully be linked
+  statically, and bundling it would undo npad's lightness, so there is no
+  static build or AppImage). It unpacks to `npad-v<version>-linux-<arch>/`
+  holding `npad`, a `README.txt`, and `share/` with the launcher, the hicolor
+  icons and the AppStream metainfo, laid out as under `/usr/share`.
+
+  ```bash
+  tar -xzf npad-v<version>-linux-amd64.tar.gz
+  cd npad-v<version>-linux-amd64
+  ./npad
+  ```
+
+  To get a menu entry for your account, copy it under `~/.local` (from that
+  directory; the `sed` points the launcher at the copy, since `~/.local/bin`
+  is not always on the desktop's `PATH`):
+
+  ```bash
+  mkdir -p ~/.local/bin ~/.local/share
+  cp npad ~/.local/bin/
+  cp -r share/. ~/.local/share/
+  sed -i "s|^Exec=npad |Exec=$HOME/.local/bin/npad |" ~/.local/share/applications/io.github.platima.npad.desktop
+  ```
+
+  `update-desktop-database ~/.local/share/applications` adds it to "Open
+  with"; README.txt also lists the commands that remove it. If GTK 3 is
+  missing, install `libgtk-3-0t64` (Debian 13 / Ubuntu 24.04 and newer),
+  `libgtk-3-0` (Debian 12 / Ubuntu 22.04, openSUSE) or `gtk3` (Fedora, Arch).
+  A portable copy never updates itself; the repositories below do. `make
+  tarball` builds one into `dist/`.
 - **apt / dnf repository (recommended; updates arrive with the rest of the
   system).** The repositories at <https://pkg.npad.dev> are rebuilt from the
   GitHub releases and signed with the npad packaging key

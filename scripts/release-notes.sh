@@ -59,6 +59,7 @@ Every change in this release: [CHANGELOG.md](https://github.com/$repo/blob/$tag/
 - Recommended: the signed apt and dnf repositories at https://pkg.npad.dev, so npad updates with the rest of your system
 - \`npad_${version}_<arch>.deb\` (\`amd64\`, \`arm64\`, \`riscv64\`) - Debian, Ubuntu, Mint (\`sudo apt install ./npad_${version}_amd64.deb\`)
 - \`npad-${version}-1.<arch>.rpm\` (\`x86_64\`, \`aarch64\`, \`riscv64\`) - Fedora, openSUSE (\`sudo dnf install ./npad-${version}-1.x86_64.rpm\`)
+- \`npad-$tag-linux-<arch>.tar.gz\` (\`amd64\`, \`arm64\`, \`riscv64\`) - portable, for any glibc distro with GTK 3 (Arch and others): unpack and run \`./npad\` (its README.txt adds a menu entry under \`~/.local\`; no automatic updates)
 
 **Verification:** \`CHECKSUMS.txt\` lists the SHA-256 of every file (\`sha256sum -c CHECKSUMS.txt\` on Linux, \`Get-FileHash\` on Windows).
 
