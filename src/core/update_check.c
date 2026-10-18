@@ -8,6 +8,7 @@
 #include "update_check.h"
 
 #include <ctype.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -147,6 +148,62 @@ static void parse_triple(const char *s, long parts[3]) {
     }
 }
 
+// The pre-release suffix of a version string: what follows "-" right after
+// the numeric triple, up to a space or the end ("rc2" in "v0.36.0-rc2
+// (abc)"). NULL when there is none.
+static const char *prerelease_suffix(const char *s, size_t *len) {
+    if (!s)
+        return NULL;
+    if (*s == 'v' || *s == 'V')
+        s++;
+    for (int i = 0; i < 3; i++) {
+        if (!isdigit((unsigned char) *s))
+            return NULL;
+        while (isdigit((unsigned char) *s))
+            s++;
+        if (i < 2) {
+            if (*s != '.')
+                return NULL;
+            s++;
+        }
+    }
+    if (*s != '-' || !s[1] || s[1] == ' ')
+        return NULL;
+    s++;
+    size_t n = 0;
+    while (s[n] && s[n] != ' ')
+        n++;
+    *len = n;
+    return s;
+}
+
+// Compare two suffixes with runs of digits compared as numbers
+static int natural_compare(const char *a, size_t la, const char *b, size_t lb) {
+    size_t i = 0, j = 0;
+    while (i < la && j < lb) {
+        if (isdigit((unsigned char) a[i]) && isdigit((unsigned char) b[j])) {
+            unsigned long na = 0, nb = 0;
+            while (i < la && isdigit((unsigned char) a[i]))
+                na = na * 10 + (unsigned long) (a[i++] - '0');
+            while (j < lb && isdigit((unsigned char) b[j]))
+                nb = nb * 10 + (unsigned long) (b[j++] - '0');
+            if (na != nb)
+                return na < nb ? -1 : 1;
+            continue;
+        }
+        int ca = tolower((unsigned char) a[i]), cb = tolower((unsigned char) b[j]);
+        if (ca != cb)
+            return ca < cb ? -1 : 1;
+        i++;
+        j++;
+    }
+    if (i < la)
+        return 1;
+    if (j < lb)
+        return -1;
+    return 0;
+}
+
 int update_version_compare(const char *a, const char *b) {
     long pa[3], pb[3];
     parse_triple(a, pa);
@@ -155,7 +212,38 @@ int update_version_compare(const char *a, const char *b) {
         if (pa[i] != pb[i])
             return (pa[i] < pb[i]) ? -1 : 1;
     }
-    return 0;
+    // Same triple: a pre-release comes before its release
+    size_t la = 0, lb = 0;
+    const char *sa = prerelease_suffix(a, &la);
+    const char *sb = prerelease_suffix(b, &lb);
+    if (!sa && !sb)
+        return 0;
+    if (!sa)
+        return 1;
+    if (!sb)
+        return -1;
+    return natural_compare(sa, la, sb, lb);
+}
+
+void update_current_version(const char *build_version, int major, int minor, int patch, char *out,
+                            size_t cap) {
+    if (!out || cap == 0)
+        return;
+    const char *s = build_version ? build_version : "";
+    if (*s == 'v' || *s == 'V')
+        s++;
+    long parts[3];
+    parse_triple(s, parts);
+    if (!isdigit((unsigned char) *s) || parts[0] != major || parts[1] != minor ||
+        parts[2] != patch) {
+        // Not a version string we recognise, or not this build's numbers
+        snprintf(out, cap, "v%d.%d.%d", major, minor, patch);
+        return;
+    }
+    size_t n = 0;
+    while (s[n] && s[n] != ' ')
+        n++;
+    snprintf(out, cap, "v%.*s", (int) n, s);
 }
 
 bool update_parse_sha256(const char *text, char *out) {

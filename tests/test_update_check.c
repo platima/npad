@@ -46,6 +46,31 @@ TEST_CASE(version_compare_numeric) {
     TEST_ASSERT(update_version_compare("v0.15.0", "0.15.0") == 0, "leading v optional");
     TEST_ASSERT(update_version_compare("v0.16.0-dev", "v0.15.0") > 0, "suffix ignored");
     TEST_ASSERT(update_version_compare("v0.15.0", "v0.15.0") == 0, "equal");
+    // Pre-releases sort before their release, and among themselves naturally
+    TEST_ASSERT(update_version_compare("v0.36.0-rc2", "v0.36.0") < 0, "rc before its release");
+    TEST_ASSERT(update_version_compare("v0.36.0", "v0.36.0-rc2") > 0, "release after its rc");
+    TEST_ASSERT(update_version_compare("v0.36.0-rc2", "v0.35.0") > 0, "rc after the last release");
+    TEST_ASSERT(update_version_compare("v0.36.0-rc1", "v0.36.0-rc2") < 0, "rc1 before rc2");
+    TEST_ASSERT(update_version_compare("v0.36.0-rc2", "v0.36.0-rc10") < 0, "rc2 before rc10");
+    TEST_ASSERT(update_version_compare("v0.36.0-dev", "v0.36.0") < 0, "dev build before release");
+    TEST_ASSERT(update_version_compare("v0.36.0-rc2", "v0.36.0-rc2") == 0, "same rc");
+    TEST_ASSERT(update_version_compare("v0.36.0 (abc1234)", "v0.36.0") == 0, "commit note ignored");
+    TEST_ASSERT(update_is_newer_unskipped("v0.36.0-rc2", "v0.36.0", ""), "rc tester offered the final");
+    TEST_ASSERT(!update_is_newer_unskipped("v0.36.0-rc2", "v0.35.0", ""), "but not an older release");
+
+    char v[32];
+    update_current_version("v0.36.0", 0, 36, 0, v, sizeof(v));
+    TEST_ASSERT(strcmp(v, "v0.36.0") == 0, "release build");
+    update_current_version("v0.36.0-rc2", 0, 36, 0, v, sizeof(v));
+    TEST_ASSERT(strcmp(v, "v0.36.0-rc2") == 0, "pre-release build keeps its tag");
+    update_current_version("v0.36.0-dev (abc1234)", 0, 36, 0, v, sizeof(v));
+    TEST_ASSERT(strcmp(v, "v0.36.0-dev") == 0, "dev build drops the commit note");
+    update_current_version("0.36.0-dev", 0, 36, 0, v, sizeof(v));
+    TEST_ASSERT(strcmp(v, "v0.36.0-dev") == 0, "the header default gains its v");
+    update_current_version("v0.35.0", 0, 36, 0, v, sizeof(v));
+    TEST_ASSERT(strcmp(v, "v0.36.0") == 0, "a string for other numbers falls back to the triple");
+    update_current_version("garbage", 0, 36, 0, v, sizeof(v));
+    TEST_ASSERT(strcmp(v, "v0.36.0") == 0, "unrecognised falls back to the triple");
 }
 
 TEST_CASE(sha256_parse) {
