@@ -37,6 +37,7 @@
 #include "../core/session.h"
 #include "../core/settings.h"
 #include "../core/startup_prof.h"
+#include "../core/tab_stops.h"
 #include "../core/update_check.h"
 #include "../main.h"
 
@@ -106,6 +107,7 @@ static struct {
     // General
     GtkWidget *autosave_check, *autosave_spin, *large_spin, *recent_spin;
     GtkWidget *session_check, *session_spin;
+    GtkWidget *tab_check, *tab_spin;
     // Appearance
     GtkWidget *scheme_combo, *dyslexic_check, *sync_check;
     // Defaults
@@ -437,6 +439,8 @@ static void sync_sensitivity(void) {
                              gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(P.autosave_check)));
     gtk_widget_set_sensitive(P.session_spin,
                              gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(P.session_check)));
+    gtk_widget_set_sensitive(P.tab_spin,
+                             gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(P.tab_check)));
 
     bool md_on = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(P.md_check));
     gtk_widget_set_sensitive(P.custom_entry, gtk_combo_box_get_active(GTK_COMBO_BOX(
@@ -477,6 +481,7 @@ static void load_widgets(void) {
                                  editor_is_session_resume_enabled());
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(P.session_spin),
                               settings_get_int("session_interval", 30));
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(P.tab_spin), tab_width_setting());
 
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(P.dyslexic_check),
                                  settings_get_bool("opendyslexic_enabled", false));
@@ -661,6 +666,10 @@ static void build_general(GtkWidget *notebook) {
     add_check(page, "Tell me when an open file is changed by another program", "watch_file_changes",
               false);
     add_check(page, "_Fill Find with the selected text", FIND_SEED_KEY, true);
+    P.tab_check = add_check(page, "_Tab key inserts spaces up to the next tab stop",
+                            TAB_INSERTS_SPACES_KEY, false);
+    P.tab_spin = add_spin(page, "Tab _width (columns, 1-16):", TAB_WIDTH_KEY, TAB_WIDTH_DEFAULT,
+                          TAB_WIDTH_MIN, TAB_WIDTH_MAX);
 }
 
 // ---------------------------------------------------------------------------
@@ -1349,6 +1358,27 @@ static void read_pending_spins(void) {
         gtk_spin_button_update(GTK_SPIN_BUTTON(P.spins[i]));
 }
 
+// Ctrl+Tab / Ctrl+Shift+Tab step through the pages, wrapping at either end,
+// as they do in the Windows property sheet. GtkNotebook only binds
+// Ctrl+PageUp / PageDown, and only while focus is inside it; Ctrl+Tab would
+// otherwise just move the keyboard focus out of the page.
+static gboolean on_prefs_key(GtkWidget *widget, const GdkEventKey *event, gpointer data) {
+    (void) widget;
+    GdkModifierType mods = event->state & gtk_accelerator_get_default_mod_mask();
+    bool tab = event->keyval == GDK_KEY_Tab || event->keyval == GDK_KEY_KP_Tab ||
+               event->keyval == GDK_KEY_ISO_Left_Tab;
+    if (!tab || !(mods & GDK_CONTROL_MASK) || (mods & ~(GDK_CONTROL_MASK | GDK_SHIFT_MASK)))
+        return FALSE;
+    GtkNotebook *notebook = GTK_NOTEBOOK(data);
+    int count = gtk_notebook_get_n_pages(notebook);
+    if (count < 2)
+        return TRUE;
+    int step = (mods & GDK_SHIFT_MASK) ? count - 1 : 1;
+    gtk_notebook_set_current_page(notebook,
+                                  (gtk_notebook_get_current_page(notebook) + step) % count);
+    return TRUE;
+}
+
 // start_page: the page to open on; show_debug adds the hidden Debug page
 static void show_preferences(Window *window, bool show_debug, int start_page) {
     if (!window)
@@ -1369,6 +1399,7 @@ static void show_preferences(Window *window, bool show_debug, int start_page) {
 
     GtkWidget *notebook = gtk_notebook_new();
     gtk_container_set_border_width(GTK_CONTAINER(notebook), 6);
+    g_signal_connect(P.dialog, "key-press-event", G_CALLBACK(on_prefs_key), notebook);
     gtk_box_pack_start(GTK_BOX(gtk_dialog_get_content_area(GTK_DIALOG(P.dialog))), notebook, TRUE,
                        TRUE, 0);
 

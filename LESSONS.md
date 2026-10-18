@@ -709,6 +709,14 @@ secondary text for labels of your own makes the heading plain. -> Own labels
 with `xalign 0` for the body, and bold/larger markup on the heading
 (`gtk_message_dialog_set_markup`).
 
+**GtkNotebook does not take Ctrl+Tab.** A notebook looks like a Windows
+property sheet, where Ctrl+Tab / Ctrl+Shift+Tab change page from anywhere in
+it. GTK binds only Ctrl+PageUp / PageDown, and only while focus is on the
+tabs; Ctrl+Tab inside a page just moves the focus. → Handle Tab /
+ISO_Left_Tab with Control in a `key-press-event` on the dialog
+(`on_prefs_key` in `ui_gtk_prefs.c`). In Broadway, Ctrl+, does not reach the
+accelerator either; open Preferences with Alt+E, S there.
+
 ## Installers
 
 **Inno Setup's check lists do not scale their check box offset.**
@@ -994,6 +1002,17 @@ GCC build is not enough: clang (llvm-mingw, arm64) flagged an unused
 variable, a C11-only typedef redefinition and a set-but-unused global that
 GCC accepted. Check `make WERROR=1 test linux windows windows-arm64` before
 pushing, and fix the cause rather than silencing the warning.
+
+**A posted `WM_KEYDOWN` already gets its own `WM_CHAR`.** Probing the Win32 Tab
+key by `PostMessage`, the keydown, a hand-posted `WM_CHAR` and the keyup gave
+two tabs with the feature off and spaces *plus* a tab with it on - the swallow
+flag looked broken. It was not: npad's own message loop runs `TranslateMessage`
+on the posted keydown, which queues the real `WM_CHAR`, so the hand-posted one
+was a second character. Post the keydown and keyup only, and the flag logic
+behaves as with a real key. (A logging build, in the mirror only, showed the two
+`WM_CHAR`s in a minute.) Typing keys this way never touches the user's
+keyboard: `GetKeyState` still reads the real modifier state, so do not test
+while holding Shift.
 
 ## Method
 
