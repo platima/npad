@@ -151,11 +151,12 @@ jobs:
         grep -qx "arch = $RPM_ARCH" check/pkg/.PKGINFO || { echo "ERROR: $pkg is not arch = $RPM_ARCH"; exit 1; }
         grep -qx 'depend = gtk3>=3.24' check/pkg/.PKGINFO || { echo "ERROR: $pkg does not depend on gtk3"; exit 1; }
         # pkgver is the tag's version with a pre-release as a suffix and no
-        # hyphen (v0.36.0-rc2 -> 0.36.0rc2-1), which pacman sorts before the
+        # hyphen (v0.36.0-rc2 -> 0.36.0rc2-1; any further hyphen becomes a dot,
+        # as in build-package.sh), which pacman sorts before the
         # final 0.36.0; nfpm alone would have dropped the -rc2
         if [ -n "$RELEASE_TAG" ]; then
           case ${RELEASE_TAG#v} in
-          *-*) want="$(printf '%s' "${RELEASE_TAG#v}" | sed 's/-//')-1" ;;
+          *-*) want="$(printf '%s' "${RELEASE_TAG#v}" | sed 's/-//; s/-/./g')-1" ;;
           *) want="${RELEASE_TAG#v}-1" ;;
           esac
           grep -qx "pkgver = $want" check/pkg/.PKGINFO || { echo "ERROR: $pkg should say pkgver = $want"; exit 1; }
