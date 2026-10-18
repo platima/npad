@@ -547,7 +547,7 @@ version.
       22.04 and Arch (amd64), Debian 12 (arm64) and Debian 13 (riscv64).
       Deliberately not static (GTK cannot usefully be) and not an AppImage
       (bundling GTK is against npad's lightness)
-- [x] Arch Linux (v0.35.1): `npad-<version>-1-<arch>.pkg.tar.zst` for x86_64,
+- [x] Arch Linux (v0.36.0): `npad-<version>-1-<arch>.pkg.tar.zst` for x86_64,
       aarch64 (Arch Linux ARM) and riscv64 (the Arch RISC-V port), built by
       nfpm's archlinux packager from the same `nfpm.yaml` (`make pacman`,
       `scripts/build-package.sh arch`); depends `gtk3` plus the libraries the
