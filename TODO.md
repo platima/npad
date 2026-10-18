@@ -33,7 +33,7 @@ questions need answers then:
 
 ### Distribution formats (after the terminal build)
 
-- **Linux portable tarball** - in progress for 0.35.1 (per-arch
+- **Linux portable tarball** - done for 0.36.0 (per-arch
   `npad-v<v>-linux-<arch>.tar.gz`; needs GTK 3 installed).
 - **Flatpak / Flathub** - reaches Arch, Fedora Silverblue / Bazzite and
   SteamOS. Inside the sandbox files open only through the portal file
@@ -47,6 +47,21 @@ questions need answers then:
 - **WebAssembly** - the core is portable C, so Emscripten can build it, but
   it needs a new browser UI backend behind `ui_interface`. Decide the purpose
   first: a try-it demo on npad.dev, or a real app.
+
+## 🧪 Needs testing - v0.36.0 Linux Check for Updates (real installs)
+
+Verified with a harness and in Broadway for a portable copy only. On real
+machines, with a build numbered below the latest release:
+
+- [ ] apt repo install (Mint / Debian): the dialog and the Updates page say
+      `sudo apt update && sudo apt upgrade`; a .deb installed by hand with no
+      `npad.sources` suggests `install.sh` instead
+- [ ] dnf repo install (Fedora): `sudo dnf upgrade npad`; an rpm installed by
+      hand suggests the repository
+- [ ] Arch: the `[npad]` repo gives `sudo pacman -Syu`, the AUR `npad-bin`
+      gives the AUR-helper advice
+- [ ] A desktop without glib-networking: Check for Updates says to install it
+      (and nothing hangs); behind a proxy the check still works
 
 ## 🧪 Needs testing - v0.35.0 Linux Markdown list tools (on Mint / Debian 13)
 

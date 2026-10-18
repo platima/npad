@@ -5,9 +5,16 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.35.1] - Unreleased
+## [0.36.0] - Unreleased
 
 ### ✨ Highlights
+- **Linux: Check for Updates.** Help > Check for Updates tells you when a
+  newer npad is out and how to get it the way you installed it: your system's
+  updater (or the `apt` / `dnf` / `pacman` command) when npad came from its
+  repository, the repository or a download when you installed a package by
+  hand, the release page for a portable copy. It never downloads or installs
+  anything itself. Preferences gains the Updates page, off by default as on
+  Windows.
 - **A portable Linux download.** Each release now has
   `npad-v<version>-linux-amd64.tar.gz` (and `-arm64`, `-riscv64`) beside the
   .deb and .rpm: unpack it and run `./npad`, on any glibc distro with GTK 3,
@@ -17,6 +24,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repositories at <https://pkg.npad.dev> remain the recommended route.
 
 ### 🆕 Features
+- **Linux: Check for Updates that notifies but never installs**
+  (`ui_gtk_update.c`). Help > Check for Updates and an Updates page in
+  Preferences with the Windows keys and defaults (`update_mode`,
+  `update_check_on_launch`, `update_skipped_version`, all opt-in): Check Now,
+  Skip This Version, the Help-menu ● and the item that turns into "Update
+  Available", and the launch check (the first npad window only, since each
+  Linux window is its own process). There is no download-and-install mode and
+  no Install Now; a settings file carrying the Windows `auto` mode behaves as
+  `prompt`. The result dialog and the page say how this copy updates, decided
+  in core (`update_install_source`, unit-tested) from who owns the executable
+  (`dpkg -S`, `rpm -qf`, `pacman -Qqo`, asked only for a binary in `/usr/bin`)
+  and which repositories are configured (an apt or dnf source naming
+  pkg.npad.dev, `[npad]` in `pacman.conf`, an AUR `npad-bin` / `npad-git`
+  package). Everything runs in a worker thread and needs no root. The lookup
+  is HTTP/1.1 over GIO's TLS - no new library; without glib-networking at run
+  time the check says to install it.
 - **Linux: portable tarball** (`make tarball`, `scripts/build-package.sh
   tar`). It unpacks to `npad-v<version>-linux-<arch>/` with `npad`,
   `README.txt` and `share/` (the launcher, hicolor icons and AppStream

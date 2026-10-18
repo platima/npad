@@ -81,7 +81,20 @@ menu and the popup actually opening, a real browser's `text/html` clipboard
 (Broadway does not share the clipboard between processes), Ctrl+] / Ctrl+[ on
 a layout where the brackets need AltGr.
 
-There is no Check for Updates on Linux by design.
+**Check for Updates (v0.36.0)** notifies only: Help > Check for Updates and an
+Updates page in Preferences, with the Windows keys and defaults but no install
+step (see the deliberate differences). Verified: the real lookup against
+GitHub over GIO TLS from a harness, and the clear failure when no TLS backend
+is loaded (`GIO_MODULE_DIR` at an empty folder); `dpkg -S` ownership and the
+apt-source scan (a throwaway `npad.sources`, a commented-out `.list`); in
+Broadway with a build numbered v0.34.0 and an isolated `HOME`: the up-to-date
+and update-available dialogs (portable advice, the release link, Skip writing
+`update_skipped_version`), the Help-menu dot and "Update Available" opening
+Preferences on Updates, Check Now refreshing the page live, Skip greying and
+clearing the dot, Apply writing only `update_check_on_launch`, and the launch
+check under a private `dbus-run-session` (with other npad windows on the
+session bus it rightly stands down). Not verified: a real apt / dnf / pacman /
+AUR install reporting its own advice, and a desktop without glib-networking.
 
 **Batch F (v0.35.0):** the `system` colour scheme follows the desktop live, the
 settings directory honours `$XDG_CONFIG_HOME`, an off-screen saved position is
@@ -333,8 +346,16 @@ Decisions taken in the foundation round. Each is easy to revisit.
   Windows `DMPAPER_*` equivalent is saved as custom (256 + width/length in
   tenths of a millimetre).
 - **Print Preview is npad's own window** (not GTK's PDF-viewer hand-off).
-- **No Check for Updates** - Linux updates come from the package manager, so
-  Preferences has no Updates page either.
+- **Check for Updates notifies only.** Linux updates come from the package
+  manager, so npad never downloads or installs: the Updates page has no
+  "Download and install automatically" mode (a settings file carrying `auto`
+  behaves as `prompt`) and no Install Now, and the update dialog says how to
+  update instead - decided by `update_install_source` (core) from who owns the
+  binary (`dpkg -S`, `rpm -qf`, `pacman -Qqo`, asked only for `/usr/bin/npad`)
+  and whether the pkg.npad.dev apt / dnf source or the `[npad]` pacman repo is
+  configured. The launch check runs from the first npad window only: each
+  window is its own process, so "no other npad on the session bus" stands in
+  for Windows' primary window.
 - **New documents default to LF**, not CRLF: `default_line_ending` falls back
   to `NPAD_DEFAULT_LINE_ENDING` (`core/file_ops.h`), CRLF on Windows and LF
   elsewhere. The same constant covers files with no line breaks and the
@@ -504,7 +525,7 @@ version.
       pkg.npad.dev apt repository publishes `binary-amd64`, `binary-arm64`
       and `binary-riscv64`, and the dnf repository all three rpm
       architectures.
-- [x] Portable tarball (v0.35.1): `npad-v<version>-linux-<arch>.tar.gz` for
+- [x] Portable tarball (v0.36.0): `npad-v<version>-linux-<arch>.tar.gz` for
       amd64, arm64 and riscv64, the counterpart of the Windows portable exe.
       The same binary as the .deb (CI compares them byte for byte) with
       `share/` (launcher, icons, metainfo) and a README.txt

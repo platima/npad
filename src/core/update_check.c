@@ -210,6 +210,339 @@ const char *update_installer_suffix(const char *arch, bool checksum) {
     return NULL;
 }
 
+// ---------------------------------------------------------------------------
+// HTTP response parsing (the Linux check)
+// ---------------------------------------------------------------------------
+
+// Whether the header line [line, line + n) is "<name>:" (case-insensitive);
+// on success *value points past the colon and any spaces
+static bool header_is(const char *line, size_t n, const char *name, const char **value) {
+    size_t ln = strlen(name);
+    if (n <= ln || line[ln] != ':')
+        return false;
+    for (size_t i = 0; i < ln; i++) {
+        if (tolower((unsigned char) line[i]) != tolower((unsigned char) name[i]))
+            return false;
+    }
+    const char *v = line + ln + 1;
+    while (v < line + n && (*v == ' ' || *v == '\t'))
+        v++;
+    *value = v;
+    return true;
+}
+
+// Whether [s, end) contains word, case-insensitively
+static bool span_contains_ci(const char *s, const char *end, const char *word) {
+    size_t lw = strlen(word);
+    for (; s + lw <= end; s++) {
+        size_t i = 0;
+        while (i < lw && tolower((unsigned char) s[i]) == tolower((unsigned char) word[i]))
+            i++;
+        if (i == lw)
+            return true;
+    }
+    return false;
+}
+
+// The first CRLF in [p, end), or NULL
+static const char *find_crlf(const char *p, const char *end) {
+    for (; p + 1 < end; p++) {
+        if (p[0] == '\r' && p[1] == '\n')
+            return p;
+    }
+    return NULL;
+}
+
+// De-chunk [p, end) into out (which has room for end - p bytes). Returns the
+// decoded length, or -1 when the chunks are malformed or cut short.
+static long dechunk(const char *p, const char *end, char *out) {
+    long n = 0;
+    for (;;) {
+        const char *eol = find_crlf(p, end);
+        if (!eol || !isxdigit((unsigned char) *p))
+            return -1;
+        unsigned long size = 0;
+        for (; p < eol && isxdigit((unsigned char) *p); p++) {
+            if (size > (unsigned long) (end - p))
+                return -1; // Larger than everything that is left
+            int c = tolower((unsigned char) *p);
+            size = size * 16 + (unsigned long) (isdigit(c) ? c - '0' : c - 'a' + 10);
+        }
+        p = eol + 2; // Past the size line (and any chunk extension)
+        if (size == 0)
+            return n; // Last chunk; trailers, if any, are of no interest
+        if (size > (unsigned long) (end - p) || (unsigned long) (end - p) - size < 2)
+            return -1;
+        memcpy(out + n, p, size);
+        n += (long) size;
+        p += size;
+        if (p[0] != '\r' || p[1] != '\n')
+            return -1;
+        p += 2;
+    }
+}
+
+bool update_http_parse_response(const char *raw, size_t len, int *status, char **body,
+                                size_t *body_len) {
+    if (!raw || !status || !body)
+        return false;
+    *body = NULL;
+    // "HTTP/1.x NNN"
+    if (len < 12 || strncmp(raw, "HTTP/1.", 7) != 0 || !isdigit((unsigned char) raw[7]) ||
+        raw[8] != ' ')
+        return false;
+    for (int i = 9; i < 12; i++) {
+        if (!isdigit((unsigned char) raw[i]))
+            return false;
+    }
+    int code = (raw[9] - '0') * 100 + (raw[10] - '0') * 10 + (raw[11] - '0');
+
+    const char *end = raw + len;
+    const char *line = find_crlf(raw, end);
+    if (!line)
+        return false;
+    line += 2;
+
+    bool chunked = false;
+    long long content_length = -1;
+    for (;;) {
+        const char *eol = find_crlf(line, end);
+        if (!eol)
+            return false; // The headers never ended
+        if (eol == line)
+            break; // The blank line: the body follows
+        const char *value = NULL;
+        size_t n = (size_t) (eol - line);
+        if (header_is(line, n, "Transfer-Encoding", &value)) {
+            chunked = span_contains_ci(value, eol, "chunked");
+        } else if (header_is(line, n, "Content-Length", &value)) {
+            content_length = 0;
+            for (; value < eol && isdigit((unsigned char) *value); value++) {
+                if (content_length > (long long) len)
+                    return false;
+                content_length = content_length * 10 + (*value - '0');
+            }
+        }
+        line = eol + 2;
+    }
+
+    const char *start = line + 2;
+    size_t avail = (size_t) (end - start);
+    char *out = malloc(avail + 1);
+    if (!out)
+        return false;
+    size_t out_len;
+    if (chunked) {
+        long n = dechunk(start, end, out);
+        if (n < 0) {
+            free(out);
+            return false;
+        }
+        out_len = (size_t) n;
+    } else if (content_length >= 0) {
+        if ((unsigned long long) content_length > avail) {
+            free(out);
+            return false; // The connection closed before the body was complete
+        }
+        out_len = (size_t) content_length;
+        memcpy(out, start, out_len);
+    } else {
+        out_len = avail;
+        memcpy(out, start, out_len);
+    }
+    out[out_len] = '\0';
+    *status = code;
+    *body = out;
+    if (body_len)
+        *body_len = out_len;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// How this copy was installed (Linux)
+// ---------------------------------------------------------------------------
+
+static bool ends_with(const char *s, const char *suffix) {
+    size_t ls = strlen(s), lx = strlen(suffix);
+    return lx <= ls && strcmp(s + (ls - lx), suffix) == 0;
+}
+
+UpdateInstallSource update_install_source(const UpdateInstallFacts *facts) {
+    if (!facts)
+        return UPDATE_SOURCE_PORTABLE;
+    switch (facts->owner) {
+        case UPDATE_OWNER_DPKG:
+            return facts->apt_repo ? UPDATE_SOURCE_APT_REPO : UPDATE_SOURCE_DEB_FILE;
+        case UPDATE_OWNER_RPM:
+            return facts->dnf_repo ? UPDATE_SOURCE_DNF_REPO : UPDATE_SOURCE_RPM_FILE;
+        case UPDATE_OWNER_PACMAN:
+            // AUR packages are named for how they build; the repository's is
+            // plain "npad", so the name wins even with [npad] configured
+            if (facts->package &&
+                (ends_with(facts->package, "-bin") || ends_with(facts->package, "-git")))
+                return UPDATE_SOURCE_AUR;
+            return facts->pacman_repo ? UPDATE_SOURCE_PACMAN_REPO : UPDATE_SOURCE_PACMAN_FILE;
+        case UPDATE_OWNER_NONE:
+        default:
+            return UPDATE_SOURCE_PORTABLE;
+    }
+}
+
+const char *update_install_advice(UpdateInstallSource source) {
+    switch (source) {
+        case UPDATE_SOURCE_APT_REPO:
+            return "npad came from the npad apt repository, so it updates with the rest of your "
+                   "system. Use your system's updater, or run:\n"
+                   "sudo apt update && sudo apt upgrade";
+        case UPDATE_SOURCE_DNF_REPO:
+            return "npad came from the npad dnf repository, so it updates with the rest of your "
+                   "system. Use your system's updater, or run:\n"
+                   "sudo dnf upgrade npad";
+        case UPDATE_SOURCE_PACMAN_REPO:
+            return "npad came from the npad pacman repository, so it updates with the rest of "
+                   "your system:\n"
+                   "sudo pacman -Syu";
+        case UPDATE_SOURCE_AUR:
+            return "npad came from the AUR. Update it with your AUR helper, for example:\n"
+                   "yay -Syu";
+        case UPDATE_SOURCE_DEB_FILE:
+            return "npad was installed from a downloaded .deb, without the npad repository, so "
+                   "it does not update with your system. Download the new .deb from the release "
+                   "page, or add the repository once to get updates with the rest of your "
+                   "system:\n"
+                   "curl -fsSL https://pkg.npad.dev/install.sh | sudo sh";
+        case UPDATE_SOURCE_RPM_FILE:
+            return "npad was installed from a downloaded rpm, without the npad repository, so it "
+                   "does not update with your system. Download the new rpm from the release "
+                   "page, or on Fedora add the repository once to get updates with the rest of "
+                   "your system:\n"
+                   "curl -fsSL https://pkg.npad.dev/install.sh | sudo sh";
+        case UPDATE_SOURCE_PACMAN_FILE:
+            return "npad was installed with pacman, but not from the npad repository. If it came "
+                   "from the AUR, update it with your AUR helper; otherwise download the new "
+                   "package from the release page, or add the [npad] repository described at:\n"
+                   "https://pkg.npad.dev";
+        case UPDATE_SOURCE_PORTABLE:
+        default:
+            return "This copy of npad was not installed by a package manager (a portable copy, "
+                   "or built from source), so nothing updates it. Download the new release "
+                   "from:\n"
+                   "https://github.com/platima/npad/releases/latest";
+    }
+}
+
+bool update_exe_may_be_packaged(const char *exe_path) {
+    if (!exe_path)
+        return false;
+    const char *name = NULL;
+    if (strncmp(exe_path, "/usr/bin/", 9) == 0)
+        name = exe_path + 9;
+    else if (strncmp(exe_path, "/bin/", 5) == 0)
+        name = exe_path + 5;
+    return name && name[0] && !strchr(name, '/');
+}
+
+// Calls match(line, end) for each line of text that is not blank or a
+// comment, with leading whitespace skipped; stops at the first true
+static bool any_live_line(const char *text, bool (*match)(const char *, const char *)) {
+    if (!text)
+        return false;
+    const char *p = text;
+    while (*p) {
+        const char *eol = strchr(p, '\n');
+        if (!eol)
+            eol = p + strlen(p);
+        const char *s = p;
+        while (s < eol && (*s == ' ' || *s == '\t'))
+            s++;
+        if (s < eol && *s != '#' && *s != ';' && match(s, eol))
+            return true;
+        p = *eol ? eol + 1 : eol;
+    }
+    return false;
+}
+
+static bool names_npad_host(const char *line, const char *end) {
+    return span_contains_ci(line, end, "pkg.npad.dev");
+}
+
+static bool is_npad_section(const char *line, const char *end) {
+    static const char section[] = "[npad]";
+    size_t n = sizeof(section) - 1;
+    if ((size_t) (end - line) < n || strncmp(line, section, n) != 0)
+        return false;
+    for (const char *p = line + n; p < end && *p != '#'; p++) {
+        if (*p != ' ' && *p != '\t' && *p != '\r')
+            return false; // "[npad]x" is some other line
+    }
+    return true;
+}
+
+bool update_repo_text_names_npad(const char *text) {
+    return any_live_line(text, names_npad_host);
+}
+
+bool update_pacman_conf_has_npad(const char *text) {
+    return any_live_line(text, is_npad_section);
+}
+
+static bool is_package_char(char c) {
+    return isalnum((unsigned char) c) || c == '+' || c == '-' || c == '.' || c == '_' || c == '@';
+}
+
+bool update_parse_owner_output(UpdatePackageOwner owner, const char *output, char *pkg,
+                               size_t pkg_cap) {
+    if (!output || !pkg || pkg_cap == 0 || owner == UPDATE_OWNER_NONE)
+        return false;
+    const char *p = output;
+    while (*p) {
+        const char *eol = strchr(p, '\n');
+        if (!eol)
+            eol = p + strlen(p);
+        const char *s = p;
+        while (s < eol && (*s == ' ' || *s == '\t'))
+            s++;
+        p = *eol ? eol + 1 : eol;
+        if (s == eol || *s == '\r')
+            continue;
+        // dpkg -S reports diversions on lines of their own before the owner
+        if (owner == UPDATE_OWNER_DPKG && strncmp(s, "diversion by ", 13) == 0)
+            continue;
+        if (owner == UPDATE_OWNER_DPKG && strncmp(s, "dpkg-query:", 11) == 0)
+            return false; // "dpkg-query: no path found matching pattern ..."
+
+        // The name runs to the first character a package name cannot hold.
+        // For dpkg that must be the "pkg: path" separator (an arch qualifier
+        // such as "npad:amd64: path" is skipped); rpm and pacman print the
+        // name alone, so anything else after it means a message, not a name.
+        size_t n = 0;
+        while (s + n < eol && is_package_char(s[n]))
+            n++;
+        const char *rest = s + n;
+        if (owner == UPDATE_OWNER_DPKG) {
+            const char *colon = rest;
+            if (*colon == ':' && colon[1] != ' ') { // ":amd64"
+                colon++;
+                while (colon < eol && is_package_char(*colon))
+                    colon++;
+            }
+            if (*colon != ':' && *colon != ',')
+                return false;
+        } else {
+            while (rest < eol && (*rest == ' ' || *rest == '\t' || *rest == '\r'))
+                rest++;
+            if (rest != eol)
+                return false; // "file ... is not owned by any package", "error: ..."
+        }
+        if (n == 0 || n >= pkg_cap)
+            return false;
+        memcpy(pkg, s, n);
+        pkg[n] = '\0';
+        return true;
+    }
+    return false;
+}
+
 bool update_is_newer_unskipped(const char *current, const char *latest, const char *skipped) {
     if (!latest || !latest[0])
         return false;

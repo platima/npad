@@ -1225,7 +1225,10 @@ static void create_menu(Window *window) {
     add_check(window, view, "_Status Bar", NPAD_CMD_VIEW_STATUS_BAR, 0, NONE);
 
     GtkWidget *help = add_top_menu(bar, "_Help", 4);
-    // No Check for Updates: on Linux npad updates through the package manager
+    window->help_item = gtk_menu_get_attach_widget(GTK_MENU(help));
+    // Checks and says how to update; never installs (ui_gtk_update.c)
+    add_item(window, help, "Check for _Updates...", NPAD_CMD_HELP_CHECK_UPDATES, 0, NONE);
+    add_separator(help);
     add_item(window, help, "_About npad", NPAD_CMD_HELP_ABOUT, 0, NONE);
 
     // Shortcuts without a menu item of their own, or second keys for one
@@ -1483,6 +1486,9 @@ void npad_gtk_handle_command(Window *window, NpadCommand command) {
             settings_save(); // Persist and propagate to the other windows
             ui_notify_settings_changed();
             break;
+        case NPAD_CMD_HELP_CHECK_UPDATES:
+            npad_gtk_update_command(window);
+            break;
         case NPAD_CMD_HELP_ABOUT:
             ui_show_about_dialog(window);
             break;
@@ -1516,6 +1522,9 @@ void npad_gtk_reload_and_apply_settings(Window *window) {
         set_status_bar_visible(window, status);
     apply_counts_pref(window);
     update_status_bar(window);
+    // Another window's check, a skip or a mode change moves the Help dot
+    npad_gtk_update_apply_indicator(window);
+    npad_gtk_prefs_updates_refresh();
 }
 
 // ---------------------------------------------------------------------------
@@ -1578,6 +1587,9 @@ static gboolean on_startup_timer(gpointer data) {
     window->startup_timer = 0;
     startup_prof_mark("deferred tasks");
     ui_post_event(UI_EVENT_STARTUP_DEFERRED, window, NULL);
+    // Optional launch-time update check (off by default): once, after the
+    // first paint, and silent on failure
+    npad_gtk_update_launch_check(window);
     return G_SOURCE_REMOVE;
 }
 
@@ -1715,6 +1727,7 @@ Window *ui_platform_create_main_window(void) {
 
     npad_gtk_edit_init(window);
     npad_gtk_lists_init(window);
+    npad_gtk_update_apply_indicator(window); // An update a previous check found
 
     apply_word_wrap(window);
     apply_theme(window);

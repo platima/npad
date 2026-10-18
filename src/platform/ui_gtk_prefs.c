@@ -4,9 +4,10 @@
  * The Preferences dialog is a GtkNotebook with the same pages, wording, keys
  * and defaults as the Win32 property sheet (prefs_*_proc in ui_win32.c is the
  * reference): General, Appearance, Defaults, Markdown, Backup, and the hidden
- * Debug page. Windows-only pages are replaced rather than ported: there is no
- * Updates page (Linux updates through apt / dnf) and Associations becomes a
- * single "Make npad the default text editor" action.
+ * Debug page. Windows-only parts are replaced rather than ported: Updates has
+ * no install mode and no Install Now (npad on Linux says how to update through
+ * the package manager instead) and Associations becomes a single "Make npad
+ * the default text editor" action.
  *
  * OK, Cancel and Apply work as in the property sheet. A control only stages
  * its change; Apply writes the staged keys, saves, tells the other instances
@@ -36,6 +37,7 @@
 #include "../core/session.h"
 #include "../core/settings.h"
 #include "../core/startup_prof.h"
+#include "../core/update_check.h"
 #include "../main.h"
 
 // The desktop file `xdg-mime default` needs (must match the app id)
@@ -61,14 +63,25 @@ static const char *const INDENT_FORMAT_LABELS[] = {
 #define INDENT_FORMAT_COUNT ((int) (sizeof(INDENT_FORMAT_LABELS) / sizeof(INDENT_FORMAT_LABELS[0])))
 #define INDENT_FORMAT_CUSTOM 6
 
+// Updates: how a found update surfaces (update_mode). The Windows build's
+// fourth mode, "auto" (download and install), has no Linux equivalent; a
+// settings file that has it shows, and behaves, as "prompt".
+static const char *const UPDATE_MODE_KEYS[] = { "off", "notify", "prompt" };
+static const char *const UPDATE_MODE_LABELS[] = { "Do nothing (check manually from the Help menu)",
+                                                  "Notify silently (a dot on the Help menu)",
+                                                  "Tell me, with how to update" };
+#define UPDATE_MODE_COUNT ((int) (sizeof(UPDATE_MODE_KEYS) / sizeof(UPDATE_MODE_KEYS[0])))
+
 #define MAX_RECENT_PREF 10
 
+// Same order as the Windows property sheet
 enum {
     PAGE_GENERAL,
     PAGE_APPEARANCE,
     PAGE_DEFAULTS,
     PAGE_MARKDOWN,
     PAGE_BACKUP,
+    PAGE_UPDATES,
     PAGE_ASSOC,
     PAGE_DEBUG
 };
@@ -101,6 +114,10 @@ static struct {
     // Markdown
     GtkWidget *md_check, *indent_combo, *custom_entry, *brackets_check;
     GtkWidget *paste_primary[3], *paste_alt[3];
+    // Updates
+    GtkWidget *upd_latest, *upd_last_checked, *upd_spinner, *upd_check, *upd_skip;
+    GtkWidget *upd_mode, *upd_advice;
+    bool upd_seen; // The Updates page has been shown (the advice is wanted)
     // Associations
     GtkWidget *assoc_status;
     // Debug
@@ -502,6 +519,15 @@ static void load_widgets(void) {
         GTK_TOGGLE_BUTTON(P.paste_primary[(primary < 0 || primary > 2) ? 1 : primary]), TRUE);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(P.paste_alt[(alt < 0 || alt > 2) ? 0 : alt]),
                                  TRUE);
+
+    char *mode = settings_get_string("update_mode", "off");
+    int mode_index = (mode && strcmp(mode, "auto") == 0) ? 2 : 0; // auto = prompt here
+    for (int i = 0; i < UPDATE_MODE_COUNT; i++) {
+        if (mode && strcmp(mode, UPDATE_MODE_KEYS[i]) == 0)
+            mode_index = i;
+    }
+    free(mode);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(P.upd_mode), mode_index);
 
     P.loading = false;
     sync_sensitivity();
@@ -1005,6 +1031,140 @@ static void build_backup(GtkWidget *notebook) {
 }
 
 // ---------------------------------------------------------------------------
+// Updates page: check and advise (ui_gtk_update.c); nothing here installs
+// ---------------------------------------------------------------------------
+
+static void on_update_mode_changed(GtkComboBox *combo, gpointer data) {
+    (void) data;
+    int index = gtk_combo_box_get_active(combo);
+    if (P.loading || index < 0 || index >= UPDATE_MODE_COUNT)
+        return;
+    stage_string("update_mode", UPDATE_MODE_KEYS[index], "off");
+}
+
+// Check Now and Skip act at once, as on Windows; the result reaches this page
+// through npad_gtk_prefs_updates_refresh
+static void on_check_now_clicked(GtkButton *button, gpointer data) {
+    (void) button;
+    (void) data;
+    if (P.owner)
+        npad_gtk_update_check(P.owner, true);
+    npad_gtk_prefs_updates_refresh();
+}
+
+static void on_skip_clicked(GtkButton *button, gpointer data) {
+    (void) button;
+    (void) data;
+    char *latest = settings_get_string("update_latest_version", "");
+    if (latest && latest[0]) {
+        settings_set_string("update_skipped_version", latest);
+        settings_save();
+        ui_notify_settings_changed();
+        npad_gtk_update_apply_indicator(P.owner);
+    }
+    free(latest);
+    npad_gtk_prefs_updates_refresh();
+}
+
+// The advice needs the install source, which costs a dpkg / rpm / pacman
+// query: only ask once the page has been looked at
+static void on_switch_page(GtkNotebook *notebook, GtkWidget *page, guint index, gpointer data) {
+    (void) notebook;
+    (void) page;
+    (void) data;
+    if (index == PAGE_UPDATES && !P.upd_seen) {
+        P.upd_seen = true;
+        npad_gtk_prefs_updates_refresh();
+    }
+}
+
+void npad_gtk_prefs_updates_refresh(void) {
+    if (!P.dialog || !P.upd_latest)
+        return;
+    char cur[32];
+    npad_gtk_update_current_version(cur, sizeof(cur));
+    char *latest = settings_get_string("update_latest_version", "");
+    char *skipped = settings_get_string("update_skipped_version", "");
+    char *last = settings_get_string("update_last_checked", "");
+    gtk_label_set_text(GTK_LABEL(P.upd_latest), (latest && latest[0]) ? latest : "unknown");
+    gtk_label_set_text(GTK_LABEL(P.upd_last_checked), (last && last[0]) ? last : "never");
+    // Skip only makes sense while a newer, non-skipped version is known
+    gtk_widget_set_sensitive(P.upd_skip, update_is_newer_unskipped(cur, latest, skipped));
+    free(latest);
+    free(skipped);
+    free(last);
+
+    bool busy = npad_gtk_update_busy();
+    gtk_widget_set_sensitive(P.upd_check, !busy);
+    gtk_widget_set_visible(P.upd_spinner, busy);
+    if (busy)
+        gtk_spinner_start(GTK_SPINNER(P.upd_spinner));
+    else
+        gtk_spinner_stop(GTK_SPINNER(P.upd_spinner));
+
+    if (P.upd_seen) {
+        const char *advice = npad_gtk_update_advice(); // Starts the detection
+        gtk_label_set_text(GTK_LABEL(P.upd_advice),
+                           advice ? advice : "Finding out how npad was installed...");
+    }
+}
+
+// "Label:  value" in the version grid
+static GtkWidget *add_info_row(GtkWidget *grid, int row, const char *caption, const char *value) {
+    GtkWidget *label = gtk_label_new(caption);
+    gtk_label_set_xalign(GTK_LABEL(label), 0.0f);
+    gtk_grid_attach(GTK_GRID(grid), label, 0, row, 1, 1);
+    GtkWidget *text = gtk_label_new(value);
+    gtk_label_set_xalign(GTK_LABEL(text), 0.0f);
+    gtk_grid_attach(GTK_GRID(grid), text, 1, row, 1, 1);
+    return text;
+}
+
+static void build_updates(GtkWidget *notebook) {
+    GtkWidget *page = new_page(notebook, "Updates");
+
+    GtkWidget *grid = gtk_grid_new();
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 12);
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 4);
+    char cur[32];
+    npad_gtk_update_current_version(cur, sizeof(cur));
+    add_info_row(grid, 0, "Current version:", cur);
+    P.upd_latest = add_info_row(grid, 1, "Latest version:", "");
+    P.upd_last_checked = add_info_row(grid, 2, "Last checked:", "");
+    gtk_box_pack_start(GTK_BOX(page), grid, FALSE, FALSE, 0);
+
+    GtkWidget *buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    P.upd_check = gtk_button_new_with_mnemonic("Check _Now");
+    g_signal_connect(P.upd_check, "clicked", G_CALLBACK(on_check_now_clicked), NULL);
+    P.upd_skip = gtk_button_new_with_mnemonic("_Skip This Version");
+    g_signal_connect(P.upd_skip, "clicked", G_CALLBACK(on_skip_clicked), NULL);
+    // Shown only while a check runs, so a slow one is visibly in progress
+    P.upd_spinner = gtk_spinner_new();
+    gtk_widget_set_no_show_all(P.upd_spinner, TRUE);
+    gtk_box_pack_start(GTK_BOX(buttons), P.upd_check, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(buttons), P.upd_skip, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(buttons), P.upd_spinner, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(page), buttons, FALSE, FALSE, 0);
+
+    P.upd_mode = new_combo(page, "When an _update is found:", NULL, 0, UPDATE_MODE_LABELS,
+                           UPDATE_MODE_COUNT);
+    g_signal_connect(P.upd_mode, "changed", G_CALLBACK(on_update_mode_changed), NULL);
+    add_check(page, "Check for updates on _launch", "update_check_on_launch", false);
+    add_note(page, "Off by default, mirroring classic Notepad. npad never checks in the "
+                   "background; a launch check (when enabled) runs once, after the window "
+                   "appears. On Linux npad never downloads or installs anything: it tells you "
+                   "how to update.");
+
+    GtkWidget *frame = gtk_frame_new("How this copy updates");
+    GtkWidget *fbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_container_set_border_width(GTK_CONTAINER(fbox), 8);
+    gtk_container_add(GTK_CONTAINER(frame), fbox);
+    P.upd_advice = add_note(fbox, "");
+    gtk_label_set_selectable(GTK_LABEL(P.upd_advice), TRUE);
+    gtk_box_pack_start(GTK_BOX(page), frame, FALSE, FALSE, 0);
+}
+
+// ---------------------------------------------------------------------------
 // Associations page: the Linux stand-in is one explicit action
 // ---------------------------------------------------------------------------
 
@@ -1189,7 +1349,8 @@ static void read_pending_spins(void) {
         gtk_spin_button_update(GTK_SPIN_BUTTON(P.spins[i]));
 }
 
-void npad_gtk_show_preferences(Window *window, bool show_debug) {
+// start_page: the page to open on; show_debug adds the hidden Debug page
+static void show_preferences(Window *window, bool show_debug, int start_page) {
     if (!window)
         return;
     if (P.dialog) {
@@ -1218,15 +1379,18 @@ void npad_gtk_show_preferences(Window *window, bool show_debug) {
     build_defaults(notebook);
     build_markdown(notebook);
     build_backup(notebook);
+    build_updates(notebook);
     build_associations(notebook);
     if (show_debug)
         build_debug(notebook);
     P.loading = false;
 
     load_widgets();
+    npad_gtk_prefs_updates_refresh();
 
     gtk_widget_show_all(P.dialog);
-    gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), show_debug ? PAGE_DEBUG : PAGE_GENERAL);
+    g_signal_connect(notebook, "switch-page", G_CALLBACK(on_switch_page), NULL);
+    gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), start_page);
 
     update_apply_button(); // Nothing to apply yet
 
@@ -1254,4 +1418,12 @@ void npad_gtk_show_preferences(Window *window, bool show_debug) {
     gtk_widget_destroy(P.dialog);
     g_hash_table_destroy(P.staged);
     memset(&P, 0, sizeof(P));
+}
+
+void npad_gtk_show_preferences(Window *window, bool show_debug) {
+    show_preferences(window, show_debug, show_debug ? PAGE_DEBUG : PAGE_GENERAL);
+}
+
+void npad_gtk_show_preferences_updates(Window *window) {
+    show_preferences(window, false, PAGE_UPDATES);
 }
