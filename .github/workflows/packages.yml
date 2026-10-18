@@ -1,15 +1,15 @@
 name: Linux packages
 
-# Builds the .deb and .rpm for every Linux architecture npad ships - amd64,
-# arm64 and riscv64 (the rpm names them x86_64, aarch64, riscv64) - with nfpm
-# (packaging/linux/nfpm.yaml), plus the portable tarball
-# (npad-v<version>-linux-<arch>.tar.gz, the same binary with a README), and
-# proves each installs, or for the tarball runs, on the distros it is meant
-# for. release.yml calls it with the release tag (which must match the
+# Builds the .deb, .rpm and Arch .pkg.tar.zst for every Linux architecture npad
+# ships - amd64, arm64 and riscv64 (the rpm and the Arch package name them
+# x86_64, aarch64, riscv64) - with nfpm (packaging/linux/nfpm.yaml), plus the
+# portable tarball (npad-v<version>-linux-<arch>.tar.gz, the same binary with a
+# README), and proves each installs, or for the tarball runs, on the distros it
+# is meant for. release.yml calls it with the release tag (which must match the
 # version in src/main.h) and attaches the artifacts to the release; it is
 # attached there, not here, so a plain CI run never needs write access. The
-# signed apt/dnf repositories at pkg.npad.dev are built from those release
-# assets by platima/npad-packages.
+# signed apt/dnf/pacman repositories at pkg.npad.dev are built from those
+# release assets by platima/npad-packages.
 #
 # The binary is compiled inside a distro container (scripts/ci-linux-build.sh)
 # and packaged on the host, where nfpm runs:
@@ -106,15 +106,18 @@ jobs:
           fi
           make deb DEB_VERSION="$version" PKG_ARCH="$ARCH"
           make rpm DEB_VERSION="$version" PKG_ARCH="$ARCH"
+          make pacman DEB_VERSION="$version" PKG_ARCH="$ARCH"
           make tarball DEB_VERSION="$version" PKG_ARCH="$ARCH"
         else
           make deb PKG_ARCH="$ARCH"
           make rpm PKG_ARCH="$ARCH"
+          make pacman PKG_ARCH="$ARCH"
           make tarball PKG_ARCH="$ARCH"
         fi
         ls -la dist/
         deb=$(ls dist/npad_*_"$ARCH".deb)
         rpm=$(ls dist/npad-*-1."$RPM_ARCH".rpm)
+        pkg=$(ls dist/npad-*-1-"$RPM_ARCH".pkg.tar.zst)
         tarball=$(ls dist/npad-v*-linux-"$ARCH".tar.gz)
         if [ -n "$RELEASE_TAG" ] && [ "$(basename "$deb")" != "npad_${RELEASE_TAG#v}_${ARCH}.deb" ]; then
           echo "ERROR: built $(basename "$deb") but the tag is $RELEASE_TAG"
@@ -122,6 +125,10 @@ jobs:
         fi
         if [ -n "$RELEASE_TAG" ] && [ "$(basename "$tarball")" != "npad-${RELEASE_TAG}-linux-${ARCH}.tar.gz" ]; then
           echo "ERROR: built $(basename "$tarball") but the tag is $RELEASE_TAG"
+          exit 1
+        fi
+        if [ -n "$RELEASE_TAG" ] && [ "$(basename "$pkg")" != "npad-${RELEASE_TAG#v}-1-${RPM_ARCH}.pkg.tar.zst" ]; then
+          echo "ERROR: built $(basename "$pkg") but the tag is $RELEASE_TAG"
           exit 1
         fi
         [ "$(dpkg-deb -f "$deb" Architecture)" = "$ARCH" ] || { echo "ERROR: $deb is not Architecture: $ARCH"; exit 1; }
@@ -135,6 +142,14 @@ jobs:
         tar -C check/tar -xzf "$tarball"
         cmp check/deb/usr/bin/npad "check/tar/$top/npad" || { echo "ERROR: the tarball's npad differs from the .deb's"; exit 1; }
         sh scripts/elf-arch.sh "check/tar/$top/npad" "$ARCH"
+        # The Arch package: the same binary, pacman's own spelling of the
+        # architecture, and the dependencies Arch needs
+        mkdir check/pkg
+        tar --zstd -xf "$pkg" -C check/pkg
+        cat check/pkg/.PKGINFO
+        cmp check/deb/usr/bin/npad check/pkg/usr/bin/npad || { echo "ERROR: the Arch package's npad differs from the .deb's"; exit 1; }
+        grep -qx "arch = $RPM_ARCH" check/pkg/.PKGINFO || { echo "ERROR: $pkg is not arch = $RPM_ARCH"; exit 1; }
+        grep -qx 'depend = gtk3>=3.24' check/pkg/.PKGINFO || { echo "ERROR: $pkg does not depend on gtk3"; exit 1; }
         rm -rf check
 
     - name: Check the libc floor
@@ -174,7 +189,7 @@ jobs:
         RPM_ARCH: ${{ matrix.rpm_arch }}
       run: |
         cd dist
-        for f in npad_*_"$ARCH".deb npad-*."$RPM_ARCH".rpm npad-v*-linux-"$ARCH".tar.gz; do sha256sum "$f" > "$f.sha256"; done
+        for f in npad_*_"$ARCH".deb npad-*."$RPM_ARCH".rpm npad-*-1-"$RPM_ARCH".pkg.tar.zst npad-v*-linux-"$ARCH".tar.gz; do sha256sum "$f" > "$f.sha256"; done
         cat *.sha256
 
     - uses: actions/upload-artifact@v7
@@ -183,6 +198,7 @@ jobs:
         path: |
           dist/npad_*_${{ matrix.arch }}.deb
           dist/npad-*.${{ matrix.rpm_arch }}.rpm
+          dist/npad-*-1-${{ matrix.rpm_arch }}.pkg.tar.zst
           dist/npad-v*-linux-${{ matrix.arch }}.tar.gz
           dist/*.sha256
         retention-days: 7
@@ -192,7 +208,10 @@ jobs:
   # these cover them. arm64 runs natively on an arm runner; riscv64 runs under
   # QEMU, on the distros that publish riscv64 images and are new enough for
   # its glibc floor (Fedora publishes none, so openSUSE Tumbleweed tests the
-  # riscv64 rpm). The `tarball` rows install only GTK 3 and run the portable
+  # riscv64 rpm). Arch publishes an official image for x86_64 only: arm64 and
+  # riscv64 run in an image imported from Arch Linux ARM's and the Arch RISC-V
+  # port's own rootfs tarballs (scripts/ci-arch-rootfs.sh, which verifies the
+  # former's signature and pins the latter's hash), the `rootfs` rows. The `tarball` rows install only GTK 3 and run the portable
   # download in place: on each architecture's oldest supported distro, and on
   # Arch, which is who the tarball is for (no .deb or .rpm there).
   install-test:
@@ -216,6 +235,9 @@ jobs:
         - { arch: riscv64, runner: ubuntu-latest,    image: "debian:trixie",       kind: deb,    qemu: true }
         - { arch: riscv64, runner: ubuntu-latest,    image: "ubuntu:24.04",        kind: deb,    qemu: true }
         - { arch: riscv64, runner: ubuntu-latest,    image: "opensuse/tumbleweed", kind: zypper, qemu: true }
+        - { arch: amd64,   runner: ubuntu-latest,    image: "archlinux:latest",    kind: pacman }
+        - { arch: arm64,   runner: ubuntu-24.04-arm, image: "npad-arch-alarm",      kind: pacman,  rootfs: alarm }
+        - { arch: riscv64, runner: ubuntu-latest,    image: "npad-arch-riscv",      kind: pacman,  rootfs: archriscv, qemu: true }
         - { arch: amd64,   runner: ubuntu-latest,    image: "ubuntu:22.04",        kind: tarball }
         - { arch: amd64,   runner: ubuntu-latest,    image: "archlinux:latest",    kind: tarball }
         - { arch: arm64,   runner: ubuntu-24.04-arm, image: "debian:12",           kind: tarball }
@@ -234,8 +256,26 @@ jobs:
       with:
         platforms: ${{ matrix.arch }}
 
+    - name: Import the Arch rootfs (${{ matrix.rootfs }})
+      if: matrix.rootfs
+      run: sh scripts/ci-arch-rootfs.sh "${{ matrix.rootfs }}" "${{ matrix.image }}"
+
     - name: Install and check
       run: |
         ls -la pkgs
         docker run --rm --platform "linux/${{ matrix.arch }}" \
           -v "$PWD:/w" -w /w "${{ matrix.image }}" sh scripts/ci-linux-install-test.sh "${{ matrix.kind }}"
+
+  # The AUR package (packaging/arch/aur/npad-bin) is only text until a release
+  # ships, so check what can be checked without one, in a real Arch: that
+  # .SRCINFO is what makepkg makes of the PKGBUILD, and that
+  # scripts/aur-update.sh rewrites both consistently (with made-up sums from a
+  # local asset directory instead of a release).
+  aur-check:
+    name: aur-check (PKGBUILD, .SRCINFO, aur-update.sh)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Check in an archlinux container
+      run: docker run --rm -v "$PWD:/src:ro" archlinux:latest sh /src/scripts/ci-aur-check.sh

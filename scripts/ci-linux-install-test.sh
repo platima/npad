@@ -1,8 +1,13 @@
 #!/bin/sh
 # CI: install the package in pkgs/ on this distro and check every shared
 # library resolves. packages.yml runs it as
-#   docker run --platform linux/<arch> -v "$PWD:/w" -w /w <image> sh scripts/ci-linux-install-test.sh <deb|dnf|zypper|tarball>
+#   docker run --platform linux/<arch> -v "$PWD:/w" -w /w <image> sh scripts/ci-linux-install-test.sh <deb|dnf|zypper|pacman|tarball>
 # pkgs/ holds one architecture's packages, the one the container runs.
+# pacman: refresh the keyring, bring the image up to date (Arch supports no
+# partial upgrades, and these images can be months old), then install the
+# .pkg.tar.zst with `pacman -U` as a user would. The Arch Linux ARM and Arch
+# RISC-V images are imported from their projects' rootfs tarballs by
+# scripts/ci-arch-rootfs.sh; amd64 uses the official archlinux image.
 # tarball: install nothing of npad's, only GTK 3 (what the portable
 # download's README.txt asks for), then unpack the tarball, run ./npad in
 # place and follow the README's ~/.local steps. --version is handled before
@@ -73,21 +78,47 @@ deb)
 dnf)
 	dnf install -y ./pkgs/npad-*.rpm
 	;;
+pacman)
+	# A rootfs imported from a tarball has no keyring yet; the official image
+	# does, and populating it again is harmless
+	pacman-key --init
+	pacman-key --populate
+	# Containers (and QEMU's user mode, which lacks landlock) cannot do what
+	# pacman's download sandbox and free-space check need
+	sed -i 's/^CheckSpace/#CheckSpace/' /etc/pacman.conf
+	if pacman --help | grep -q -e --disable-sandbox; then
+		set -- --disable-sandbox
+	else
+		set --
+	fi
+	pacman -Syu --noconfirm "$@"
+	pacman -U --noconfirm "$@" ./pkgs/npad-*.pkg.tar.zst
+	pacman -Qi npad
+	pacman -Qk npad
+	;;
 zypper)
 	# The rpm is unsigned (the signed copy lives in the dnf repository at
 	# pkg.npad.dev); zypper refuses unsigned local files unless told
 	zypper --non-interactive install --allow-unsigned-rpm ./pkgs/npad-*.rpm
 	;;
 *)
-	echo "kind must be deb, dnf or zypper" >&2
+	echo "kind must be deb, dnf, zypper, pacman or tarball" >&2
 	exit 2
 	;;
 esac
 
 test -x /usr/bin/npad
 test -f /usr/share/applications/io.github.platima.npad.desktop
+test -f /usr/share/icons/hicolor/48x48/apps/io.github.platima.npad.png
 if ldd /usr/bin/npad | grep 'not found'; then
 	echo "ERROR: unresolved libraries"
 	exit 1
 fi
+# --version is handled before GTK is initialised, so it needs no display
+out=$(env -u DISPLAY -u WAYLAND_DISPLAY /usr/bin/npad --version)
+printf '%s\n' "$out"
+printf '%s\n' "$out" | head -n1 | grep -q '^npad version ' || {
+	echo "ERROR: npad --version did not print its version"
+	exit 1
+}
 echo "OK: $(uname -m), $(. /etc/os-release && echo "$PRETTY_NAME")"

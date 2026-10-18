@@ -35,6 +35,10 @@ questions need answers then:
 
 - **Linux portable tarball** - in progress for 0.35.1 (per-arch
   `npad-v<v>-linux-<arch>.tar.gz`; needs GTK 3 installed).
+- **Arch Linux** - package, pacman repository and `npad-bin` PKGBUILD done for
+  0.35.1; left for the maintainer: create the AUR account and first push
+  (`packaging/arch/README.md`), then optionally the `AUR_SSH_KEY` secret so
+  releases update it.
 - **Flatpak / Flathub** - reaches Arch, Fedora Silverblue / Bazzite and
   SteamOS. Inside the sandbox files open only through the portal file
   chooser, and the D-Bus instance names must live under the app id

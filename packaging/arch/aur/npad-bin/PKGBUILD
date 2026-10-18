@@ -1,0 +1,49 @@
+# Maintainer: Platima <13729856+platima@users.noreply.github.com>
+#
+# npad-bin: npad built by the project's CI, repackaged for the AUR.
+# The sources are the release's portable tarballs (npad-v<ver>-linux-<arch>),
+# the very binary the .deb, .rpm and Arch packages carry. Do not edit pkgver or
+# the sums by hand: scripts/aur-update.sh <tag> rewrites them from the release's
+# published .sha256 files and regenerates .SRCINFO. See packaging/arch/README.md.
+pkgname=npad-bin
+_name=npad
+pkgver=0.35.1
+pkgrel=1
+pkgdesc='Lightweight Notepad-style text editor (GTK 3), prebuilt binary'
+arch=('x86_64' 'aarch64' 'riscv64')
+url='https://npad.dev'
+license=('MIT')
+# The libraries npad links directly; gtk3 pulls in the rest
+depends=('glibc' 'gtk3' 'glib2' 'cairo' 'pango')
+provides=("$_name=$pkgver")
+conflicts=("$_name")
+# Already stripped by the release build, and a riscv64 or aarch64 binary is not
+# something an x86_64 strip should be asked about
+options=('!strip' '!debug')
+_rel="https://github.com/platima/npad/releases/download/v$pkgver"
+source=("$_name-$pkgver-LICENSE::https://raw.githubusercontent.com/platima/npad/v$pkgver/LICENSE")
+source_x86_64=("npad-v$pkgver-linux-amd64.tar.gz::$_rel/npad-v$pkgver-linux-amd64.tar.gz")
+source_aarch64=("npad-v$pkgver-linux-arm64.tar.gz::$_rel/npad-v$pkgver-linux-arm64.tar.gz")
+source_riscv64=("npad-v$pkgver-linux-riscv64.tar.gz::$_rel/npad-v$pkgver-linux-riscv64.tar.gz")
+sha256sums=('45a1f63f08f4438286cb1d6f9824fa150c9b5e7dcb33a492e2d8249fd6cdd71e')
+sha256sums_x86_64=('0000000000000000000000000000000000000000000000000000000000000000')
+sha256sums_aarch64=('0000000000000000000000000000000000000000000000000000000000000000')
+sha256sums_riscv64=('0000000000000000000000000000000000000000000000000000000000000000')
+
+package() {
+	case $CARCH in
+	x86_64) _debarch=amd64 ;;
+	aarch64) _debarch=arm64 ;;
+	riscv64) _debarch=riscv64 ;;
+	esac
+	cd "$srcdir/npad-v$pkgver-linux-$_debarch"
+
+	install -Dm755 npad "$pkgdir/usr/bin/npad"
+	# share/ is laid out as under /usr/share: the launcher, the hicolor icons
+	# and the AppStream metainfo
+	install -dm755 "$pkgdir/usr/share"
+	cp -r --no-preserve=ownership share/. "$pkgdir/usr/share/"
+	find "$pkgdir/usr/share" -type d -exec chmod 755 {} +
+	find "$pkgdir/usr/share" -type f -exec chmod 644 {} +
+	install -Dm644 "$srcdir/$_name-$pkgver-LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -9,6 +9,12 @@
 # option -"). Always LF.
 *.sh text eol=lf
 
+# makepkg and the AUR read these on Arch (a CR would end up in pkgver), and gpg is
+# fed the armored key
+PKGBUILD text eol=lf
+.SRCINFO text eol=lf
+*.asc text eol=lf
+
 # Explicit binaries
 *.ico binary
 *.png binary

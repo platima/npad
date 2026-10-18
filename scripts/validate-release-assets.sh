@@ -1,7 +1,8 @@
 #!/bin/sh
 # Check that <dir> holds a complete, consistent set of release assets for
 # <tag> (e.g. v0.35.0): every Windows deliverable for x64 and arm64, every
-# Linux package and portable tarball for amd64, arm64 and riscv64, each with
+# Linux package (.deb, .rpm, Arch .pkg.tar.zst) and portable tarball for amd64,
+# arm64 and riscv64, each with
 # a .sha256 that verifies, each plausibly sized, and the portable exes and
 # tarballs built for the architecture their names claim. Also proves the in-app updater can find its
 # download on this release, for every architecture it knows.
@@ -73,16 +74,37 @@ for arch in x64 arm64; do
 done
 
 # Linux: the packages keep their native names - Debian's architecture names
-# for the .deb, rpm's for the .rpm
+# for the .deb, rpm's for the .rpm and the Arch package
 for pair in amd64:x86_64 arm64:aarch64 riscv64:riscv64; do
 	deb_arch=${pair%%:*}
 	rpm_arch=${pair##*:}
 	check "npad_${version}_${deb_arch}.deb" 30000
 	check "npad-${version}-1.${rpm_arch}.rpm" 30000
+	check "npad-${version}-1-${rpm_arch}.pkg.tar.zst" 30000
 	deb=$dir/npad_${version}_${deb_arch}.deb
 	if [ -f "$deb" ] && command -v dpkg-deb >/dev/null 2>&1; then
 		got=$(dpkg-deb -f "$deb" Architecture)
 		[ "$got" = "$deb_arch" ] || fail "$(basename "$deb") says Architecture: $got"
+	fi
+	# The Arch package says its architecture in .PKGINFO; the name alone proves
+	# nothing, so read it, and read the ELF header of what it installs
+	pkg=$dir/npad-${version}-1-${rpm_arch}.pkg.tar.zst
+	if [ -f "$pkg" ]; then
+		x=$(mktemp -d)
+		if ! tar --zstd -xf "$pkg" -C "$x" .PKGINFO usr/bin/npad; then
+			fail "$(basename "$pkg") has no .PKGINFO and usr/bin/npad (or tar cannot read zstd)"
+		else
+			got=$(sed -n 's/^arch = //p' "$x/.PKGINFO")
+			[ "$got" = "$rpm_arch" ] || fail "$(basename "$pkg") says arch = $got, expected $rpm_arch"
+			if ! got=$(sh scripts/elf-arch.sh "$x/usr/bin/npad" 2>&1); then
+				fail "$(basename "$pkg"): $got"
+			elif [ "$got" != "$deb_arch" ]; then
+				fail "$(basename "$pkg"): its npad is $got, not $deb_arch"
+			else
+				echo "OK: $(basename "$pkg"): its npad is $got"
+			fi
+		fi
+		rm -rf "$x"
 	fi
 	# The portable tarball is named like the Windows downloads (tag
 	# spelling) with the .deb's architecture names. Its name claims an
