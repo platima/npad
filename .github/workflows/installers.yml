@@ -186,11 +186,21 @@ jobs:
 
       - name: Build installers (x64)
         shell: pwsh
-        run: pwsh -NoProfile -File installer/build-installers.ps1 -Arch x64 -SignCmd "$env:NPAD_SIGN_CMD"
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        # Files carry the tag's spelling (v0.36.0-rc1 for a pre-release); the
+        # version inside the installers stays the numeric one from src/main.h
+        run: |
+          $extra = if ($env:RELEASE_TAG) { @("-FileVersion", ($env:RELEASE_TAG -replace '^v', '')) } else { @() }
+          pwsh -NoProfile -File installer/build-installers.ps1 -Arch x64 -SignCmd "$env:NPAD_SIGN_CMD" @extra
 
       - name: Build installers (arm64)
         shell: pwsh
-        run: pwsh -NoProfile -File installer/build-installers.ps1 -Arch arm64 -NpadExe build/arm64-input/npad-arm64.exe -SignCmd "$env:NPAD_SIGN_CMD"
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $extra = if ($env:RELEASE_TAG) { @("-FileVersion", ($env:RELEASE_TAG -replace '^v', '')) } else { @() }
+          pwsh -NoProfile -File installer/build-installers.ps1 -Arch arm64 -NpadExe build/arm64-input/npad-arm64.exe -SignCmd "$env:NPAD_SIGN_CMD" @extra
 
       - name: Check every deliverable is there
         shell: pwsh

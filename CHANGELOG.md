@@ -113,6 +113,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   previous page, wrapping round at either end, as in the Windows property
   sheet. GTK's notebook only binds Ctrl+PageUp / PageDown, and only while
   focus is on its tabs, so Ctrl+Tab just moved the focus.
+- **Release: a pre-release tag now builds a complete release.** The Windows
+  installer, MSI and portable exe took their file names from `src/main.h`
+  (`npad-v0.36.0-...`) while every Linux file and the validation used the
+  tag (`v0.36.0-rc1`), so `v0.36.0-rc1` failed validation and published no
+  `CHECKSUMS.txt`. `build-installers.ps1 -FileVersion` (passed the tag by
+  installers.yml) now names the files; the version inside them stays the
+  numeric one MSI and Inno Setup require.
 
 ## [0.35.0] - 2026-10-17
 
