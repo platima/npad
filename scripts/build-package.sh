@@ -59,6 +59,16 @@ arch)
 	out=$outdir/npad-${version}-1-${rpm_arch}.pkg.tar.zst
 	release=1
 	packager=archlinux
+	# pkgver may not contain a hyphen, and nfpm reads "0.36.0-rc2" as version
+	# 0.36.0 plus a pre-release that its archlinux packager drops, leaving a
+	# pkgver of 0.36.0 that pacman would treat as the final release. Arch
+	# spells a pre-release as a suffix on the version (0.36.0rc2 sorts before
+	# 0.36.0 and after 0.35.0 under vercmp), so give nfpm that; the file name
+	# keeps the tag's spelling, as release.yml and validation expect
+	base=${version%%-*}
+	pre=${version#"$base"}
+	pre=$(printf '%s' "${pre#-}" | tr '-' '.')
+	nfpm_version=$base$pre
 	;;
 tar)
 	name=npad-v${version}-linux-${arch}
@@ -119,7 +129,7 @@ if [ "$packager" = archlinux ]; then
 		{ skip = 0; print }' packaging/linux/nfpm.yaml >"$config"
 fi
 
-NPAD_VERSION=$version NPAD_RELEASE=$release NPAD_GLIBC=$glibc NPAD_STAGE=$stage NPAD_ARCH=$arch \
+NPAD_VERSION=${nfpm_version:-$version} NPAD_RELEASE=$release NPAD_GLIBC=$glibc NPAD_STAGE=$stage NPAD_ARCH=$arch \
 	nfpm package --packager "$packager" --config "$config" --target "$out"
 rm -rf "$stage" "$stage.nfpm.yaml"
 echo "Built $out (libc floor $glibc)"

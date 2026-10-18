@@ -29,3 +29,14 @@ grep -q '^pkgver=9.9.9$' packaging/arch/aur/npad-bin/PKGBUILD
 grep -q 'pkgver = 9.9.9$' packaging/arch/aur/npad-bin/.SRCINFO
 grep -q "sha256sums_riscv64 = $(printf %064d 7)" packaging/arch/aur/npad-bin/.SRCINFO
 echo "OK: aur-update.sh rewrote the PKGBUILD and .SRCINFO"
+
+# The Arch package's pre-release versions (build-package.sh arch: v0.36.0-rc2
+# becomes pkgver 0.36.0rc2) must sort the way a release candidate should:
+# after the previous release, rc1 before rc2, and before the final release
+vc() { [ "$(vercmp "$1" "$2")" = "$3" ] || { echo "ERROR: vercmp $1 $2 is not $3"; exit 1; }; }
+vc 0.35.0 0.36.0rc2 -1
+vc 0.36.0rc1 0.36.0rc2 -1
+vc 0.36.0rc2 0.36.0rc10 -1
+vc 0.36.0rc2 0.36.0 -1
+vc 0.36.0 0.36.1rc1 -1
+echo "OK: pre-release pkgver values sort before their final release"
