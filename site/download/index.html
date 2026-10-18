@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Download - npad</title>
-<meta name="description" content="Download npad for Windows: signed installer, MSI or portable .exe. Linux apt and dnf repositories are coming soon. Free and open source.">
+<meta name="description" content="Download npad for Windows (installer, MSI, portable; x64 and Arm) or Linux (apt, dnf, .deb, .rpm; amd64, arm64, riscv64). Free and open source.">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#17181b" media="(prefers-color-scheme: dark)">
@@ -15,7 +15,7 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="npad">
 <meta property="og:title" content="Download npad">
-<meta property="og:description" content="Download npad for Windows: signed installer, MSI or portable .exe. Linux apt and dnf repositories are coming soon. Free and open source.">
+<meta property="og:description" content="Download npad for Windows (installer, MSI, portable; x64 and Arm) or Linux (apt, dnf, .deb, .rpm; amd64, arm64, riscv64). Free and open source.">
 <meta property="og:url" content="https://npad.dev/download/">
 <meta property="og:image" content="https://npad.dev/assets/og.png">
 <meta property="og:image:width" content="1200">
@@ -23,11 +23,11 @@
 <meta property="og:image:alt" content="The npad notepad icon next to the word npad and the tagline: a fast, native, Notepad-faithful text editor">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Download npad">
-<meta name="twitter:description" content="Download npad for Windows: signed installer, MSI or portable .exe. Linux apt and dnf repositories are coming soon. Free and open source.">
+<meta name="twitter:description" content="Download npad for Windows (installer, MSI, portable; x64 and Arm) or Linux (apt, dnf, .deb, .rpm; amd64, arm64, riscv64). Free and open source.">
 <meta name="twitter:image" content="https://npad.dev/assets/og.png">
 <link rel="stylesheet" href="/style.css">
 <script src="/theme.js"></script>
-<script src="/gallery.js" defer></script>
+<script src="/download.js" defer></script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -49,77 +49,139 @@
 
 <div class="page-head"><div class="wrap">
   <h1>Download npad</h1>
-  <p>Free and open source. Every release is published on GitHub, and all three Windows downloads install for the current user with no admin rights.</p>
+  <p>Free and open source for Windows and Linux, on x64 and Arm. Every release is published on GitHub, and all three Windows downloads install for the current user with no admin rights.</p>
 </div></div>
 <section>
   <div class="wrap">
-    <div class="os-block" id="windows">
-      <div class="os-title"><h2>Windows</h2><span class="badge ok">Available</span><span class="badge">x64</span></div>
-      <div class="cards">
-        <article class="card tint t1">
-          <h3>Installer</h3>
-          <p>The recommended choice. Adds npad to your PATH and to &ldquo;Open with&rdquo;. File associations (text files ticked by default, the rest optional), the <code>notepad</code> alias (ticked by default) and the bundled fonts are choices in setup.</p>
-          <pre><code>npad-v&lt;version&gt;-setup-win-x64.exe</code></pre>
-          <p>Silent install: <code>/VERYSILENT</code></p>
-          <a class="btn primary" href="https://github.com/platima/npad/releases/latest" target="_blank" rel="noopener noreferrer">Get the installer<span class="sr-only"> (opens in a new tab)</span></a>
-        </article>
-        <article class="card tint t5">
-          <h3>MSI</h3>
-          <p>For managed and silent deployment.</p>
-          <pre><code>msiexec /i npad-v&lt;version&gt;-msi-win-x64.msi /qn</code></pre>
-          <p>Add <code>ALLUSERS=1</code> for a machine-wide install.</p>
-          <a class="btn" href="https://github.com/platima/npad/releases/latest" target="_blank" rel="noopener noreferrer">Get the MSI<span class="sr-only"> (opens in a new tab)</span></a>
-        </article>
-        <article class="card tint t2">
-          <h3>Portable</h3>
-          <p>Download and run it from anywhere. No installation required.</p>
-          <pre><code>npad-v&lt;version&gt;-portable-win-x64.exe</code></pre>
-          <a class="btn" href="https://github.com/platima/npad/releases/latest" target="_blank" rel="noopener noreferrer">Get the portable .exe<span class="sr-only"> (opens in a new tab)</span></a>
-        </article>
-      </div>
-      <p class="note"><strong>Choose the file for your platform on the release page.</strong> File names include the version number, so the button takes you to the latest release and its asset list.</p>
-      <p class="note" id="smartscreen"><strong>SmartScreen warning?</strong> Releases are code-signed (check Properties &rarr; Digital Signatures), but Microsoft SmartScreen builds a publisher&rsquo;s reputation over time and may still warn. Right-click the downloaded file, choose <em>Properties</em>, tick <em>Unblock</em> and click <em>Apply</em> (or choose &ldquo;More info&rdquo; then &ldquo;Run anyway&rdquo;). To check the download, compare its SHA-256 with <code>CHECKSUMS.txt</code> on the release page. Full details are in the <a href="https://github.com/platima/npad/blob/main/DOCUMENTATION.md#installation-windows" target="_blank" rel="noopener noreferrer">installation reference<span class="sr-only"> (opens in a new tab)</span></a>.</p>
-    </div>
+    <div class="tabbox" id="downloads">
 
-    <div class="os-block" id="linux">
-      <div class="os-title"><h2>Linux</h2><span class="badge ok">Available</span><span class="badge">x64</span></div>
-      <p class="intro" style="margin-bottom:1.25rem">The GTK&nbsp;3 desktop build, one binary for X11 and Wayland, first released in v0.34.0. Editing, open and save with each file&rsquo;s encoding and line endings kept, Find / Replace / Go To and printing are in. Preferences, the font picker and the Markdown tools are still being ported. There is no update checker on Linux by design: updates arrive through apt or dnf with the rest of your system. Follow progress in <a href="https://github.com/platima/npad/blob/main/LINUX_PORT.md" target="_blank" rel="noopener noreferrer">LINUX_PORT.md<span class="sr-only"> (opens in a new tab)</span></a>.</p>
-      <div class="cards">
-        <article class="card tint t3 wide">
-          <h3>apt (Debian, Ubuntu, Mint) <span class="badge ok">Recommended</span></h3>
-          <p>Debian 12 and 13, Ubuntu 22.04 and newer, Mint 21 and newer, LMDE. The repository at <code>pkg.npad.dev</code> is signed with the npad packaging key, and npad then updates with the rest of your system.</p>
-          <pre><code>sudo install -d -m 0755 /etc/apt/keyrings
-sudo curl -fsSL https://pkg.npad.dev/npad.asc -o /etc/apt/keyrings/npad.asc
-sudo curl -fsSL https://pkg.npad.dev/npad.sources -o /etc/apt/sources.list.d/npad.sources
-sudo apt update &amp;&amp; sudo apt install npad</code></pre>
-          <p class="fine">Or let one script set up whichever of apt or dnf you have: <code>curl -fsSL https://pkg.npad.dev/install.sh | sudo sh</code></p>
-        </article>
-        <article class="card tint t4">
-          <h3>dnf (Fedora)</h3>
-          <p>The same signed repository serves the RPM:</p>
-          <pre><code>sudo curl -fsSL https://pkg.npad.dev/npad.repo -o /etc/yum.repos.d/npad.repo
-sudo dnf install npad</code></pre>
-        </article>
-        <article class="card tint t8">
-          <h3>.deb and .rpm</h3>
-          <p>Every release also attaches the packages themselves: <code>sudo apt install ./npad_&lt;version&gt;_amd64.deb</code> or <code>sudo dnf install ./npad-&lt;version&gt;-1.x86_64.rpm</code>. These do not update themselves.</p>
-          <a class="btn" href="https://github.com/platima/npad/releases/latest" target="_blank" rel="noopener noreferrer">Latest release<span class="sr-only"> (opens in a new tab)</span></a>
-        </article>
-      </div>
-    </div>
+      <div class="tabpanel" id="windows" data-label="Windows">
+        <h2>Windows</h2>
+        <div class="stack">
+          <div class="box quick">
+            <span class="label">Recommended</span>
+            <h3>Installer</h3>
+            <p>Adds npad to your PATH and to &ldquo;Open with&rdquo;. File associations (text files ticked by default, the rest optional), the <code>notepad</code> alias (ticked by default) and the bundled fonts are choices in setup. Silent install: <code>/VERYSILENT</code></p>
+            <ul class="files">
+              <li><span class="arch">x64</span><span><code>npad-v&lt;version&gt;-setup-win-x64.exe</code></span></li>
+              <li><span class="arch">arm64</span><span><code>npad-v&lt;version&gt;-setup-win-arm64.exe</code> <span class="where">Windows on Arm</span></span></li>
+            </ul>
+            <p class="actions"><a class="btn primary" href="https://github.com/platima/npad/releases/latest" target="_blank" rel="noopener noreferrer">Open the latest release<span class="sr-only"> (opens in a new tab)</span></a></p>
+            <p class="note">File names include the version number, so the button takes you to the latest release and its asset list. Pick the file for your platform there.</p>
+          </div>
 
+          <div class="box">
+            <h3>MSI</h3>
+            <p>For managed and silent deployment.</p>
+            <ul class="files">
+              <li><span class="arch">x64</span><span><code>npad-v&lt;version&gt;-msi-win-x64.msi</code></span></li>
+              <li><span class="arch">arm64</span><span><code>npad-v&lt;version&gt;-msi-win-arm64.msi</code></span></li>
+            </ul>
+            <div class="code"><pre><code>msiexec /i npad-v&lt;version&gt;-msi-win-x64.msi /qn</code></pre></div>
+            <p class="note">Add <code>ALLUSERS=1</code> for a machine-wide install.</p>
+          </div>
+
+          <div class="box">
+            <h3>Portable</h3>
+            <p>Download and run it from anywhere. No installation required.</p>
+            <ul class="files">
+              <li><span class="arch">x64</span><span><code>npad-v&lt;version&gt;-portable-win-x64.exe</code></span></li>
+              <li><span class="arch">arm64</span><span><code>npad-v&lt;version&gt;-portable-win-arm64.exe</code></span></li>
+            </ul>
+          </div>
+
+          <p class="fine" id="smartscreen"><strong>SmartScreen warning?</strong> Releases are code-signed (check Properties &rarr; Digital Signatures), but Microsoft SmartScreen builds a publisher&rsquo;s reputation over time and may still warn. Right-click the downloaded file, choose <em>Properties</em>, tick <em>Unblock</em> and click <em>Apply</em> (or choose &ldquo;More info&rdquo; then &ldquo;Run anyway&rdquo;). To check the download, compare its SHA-256 with <code>CHECKSUMS.txt</code> on the release page. Full details are in the <a href="https://github.com/platima/npad/blob/main/DOCUMENTATION.md#installation-windows" target="_blank" rel="noopener noreferrer">installation reference<span class="sr-only"> (opens in a new tab)</span></a>.</p>
+        </div>
+      </div>
+
+      <div class="tabpanel" id="linux" data-label="Linux">
+        <h2>Linux</h2>
+        <p class="lede">The GTK&nbsp;3 desktop build, one binary for X11 and Wayland, on amd64, arm64 and riscv64. There is no update checker on Linux by design: updates arrive through apt or dnf with the rest of your system. Follow progress in <a href="https://github.com/platima/npad/blob/main/LINUX_PORT.md" target="_blank" rel="noopener noreferrer">LINUX_PORT.md<span class="sr-only"> (opens in a new tab)</span></a>.</p>
+        <div class="stack">
+          <div class="box quick">
+            <span class="label">Quickest</span>
+            <h3>Install in one step</h3>
+            <p>Detects apt or dnf, adds the signed repository at <code>pkg.npad.dev</code> and its key, and installs npad.</p>
+            <div class="code copyable"><pre class="wrapped"><code>curl -fsSL https://pkg.npad.dev/<wbr>install.sh | sudo sh</code></pre></div>
+            <p class="note">Add <code>-s -- --repo-only</code> after <code>sh</code> to add the repository without installing. <a href="https://pkg.npad.dev/install.sh" target="_blank" rel="noopener noreferrer">Read the script<span class="sr-only"> (opens in a new tab)</span></a> first if you prefer.</p>
+          </div>
+
+          <p class="group">Or set it up yourself</p>
+
+          <div class="box">
+            <h3>apt <span class="where">Debian, Ubuntu, Mint</span></h3>
+            <p>Debian 12 and 13, Ubuntu 22.04 and newer, Mint 21 and newer, LMDE.</p>
+            <div class="code copyable"><pre><code>sudo install -d -m 0755 /etc/apt/keyrings
+sudo curl -fsSL https://pkg.npad.dev/npad.asc \
+  -o /etc/apt/keyrings/npad.asc
+sudo curl -fsSL https://pkg.npad.dev/npad.sources \
+  -o /etc/apt/sources.list.d/npad.sources
+sudo apt update &amp;&amp; sudo apt install npad</code></pre></div>
+          </div>
+
+          <div class="box">
+            <h3>dnf <span class="where">Fedora</span></h3>
+            <div class="code copyable"><pre><code>sudo curl -fsSL https://pkg.npad.dev/npad.repo \
+  -o /etc/yum.repos.d/npad.repo
+sudo dnf install npad</code></pre></div>
+            <p class="note">apt and dnf pick your machine&rsquo;s own architecture. riscv64 needs Debian 13, Ubuntu 24.04 or newer.</p>
+          </div>
+
+          <p class="group">Or download a package</p>
+
+          <div class="split">
+            <div class="box">
+              <h3>.deb <span class="where">Debian, Ubuntu, Mint</span></h3>
+              <ul class="files">
+                <li><span class="arch">amd64</span><span><code>npad_&lt;version&gt;_amd64.deb</code> <span class="where">Debian 12, Ubuntu 22.04</span></span></li>
+                <li><span class="arch">arm64</span><span><code>npad_&lt;version&gt;_arm64.deb</code> <span class="where">Debian 12, Ubuntu 22.04</span></span></li>
+                <li><span class="arch">riscv64</span><span><code>npad_&lt;version&gt;_riscv64.deb</code> <span class="where">Debian 13, Ubuntu 24.04</span></span></li>
+              </ul>
+              <div class="code"><pre><code>sudo apt install ./npad_&lt;version&gt;_amd64.deb</code></pre></div>
+            </div>
+            <div class="box">
+              <h3>.rpm <span class="where">Fedora</span></h3>
+              <ul class="files">
+                <li><span class="arch">x86_64</span><span><code>npad-&lt;version&gt;-1.x86_64.rpm</code></span></li>
+                <li><span class="arch">aarch64</span><span><code>npad-&lt;version&gt;-1.aarch64.rpm</code></span></li>
+                <li><span class="arch">riscv64</span><span><code>npad-&lt;version&gt;-1.riscv64.rpm</code></span></li>
+              </ul>
+              <div class="code"><pre><code>sudo dnf install ./npad-&lt;version&gt;-1.x86_64.rpm</code></pre></div>
+            </div>
+          </div>
+          <p class="fine">Packages are attached to every <a href="https://github.com/platima/npad/releases/latest" target="_blank" rel="noopener noreferrer">GitHub release<span class="sr-only"> (opens in a new tab)</span></a>; file names include the version number. They do not update themselves. The oldest supported systems are Debian 12 and Ubuntu 22.04 (riscv64: Debian 13 and Ubuntu 24.04). Not sure which you need? <code>dpkg --print-architecture</code> or <code>uname -m</code> tells you.</p>
+
+          <!-- Boxes for the portable tarball and the Arch (pacman) repository go here once those ship. -->
+        </div>
+      </div>
+
+      <div class="tabpanel" id="macos" data-label="macOS">
+        <h2>macOS</h2>
+        <div class="stack">
+          <div class="box">
+            <h3>Not available yet <span class="badge soon">Planned</span></h3>
+            <p>A native Cocoa build is on the roadmap, but there is no macOS download today. Progress is tracked in the open on GitHub.</p>
+            <p class="actions"><a class="btn" href="https://github.com/platima/npad#roadmap" target="_blank" rel="noopener noreferrer">See the roadmap<span class="sr-only"> (opens in a new tab)</span></a></p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section class="alt tight">
+  <div class="wrap">
     <div class="os-block" id="source">
       <div class="os-title"><h2>Build from source</h2><span class="badge">C99</span></div>
-      <div class="cards">
-        <article class="card tint t6 wide">
-          <p>npad is plain C on native platform APIs with no dependencies beyond system libraries. You need a C compiler and <code>make</code>; the Linux build also needs <code>pkg-config</code> and the GTK&nbsp;3 development files.</p>
-          <pre><code>git clone https://github.com/platima/npad.git
+      <div class="box">
+        <p>npad is plain C on native platform APIs with no dependencies beyond system libraries. You need a C compiler and <code>make</code>; the Linux build also needs <code>pkg-config</code> and the GTK&nbsp;3 development files.</p>
+        <div class="code"><pre><code>git clone https://github.com/platima/npad.git
 cd npad
 make windows   # Windows x64 with MinGW-w64 (cross or native)
 make linux-gtk # Linux GTK 3 build, produces ./npad-linux
-make test      # unit tests</code></pre>
-          <p>See the <a href="https://github.com/platima/npad#compile-yourself" target="_blank" rel="noopener noreferrer">build instructions<span class="sr-only"> (opens in a new tab)</span></a> and <a href="https://github.com/platima/npad/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener noreferrer">CONTRIBUTING.md<span class="sr-only"> (opens in a new tab)</span></a>.</p>
-        </article>
+make test      # unit tests</code></pre></div>
+        <p class="note">See the <a href="https://github.com/platima/npad#compile-yourself" target="_blank" rel="noopener noreferrer">build instructions<span class="sr-only"> (opens in a new tab)</span></a> and <a href="https://github.com/platima/npad/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener noreferrer">CONTRIBUTING.md<span class="sr-only"> (opens in a new tab)</span></a>.</p>
       </div>
     </div>
   </div>
@@ -159,7 +221,7 @@ make test      # unit tests</code></pre>
         </ul>
       </div>
     </div>
-    <p class="legal">This site is plain HTML and CSS with two small optional scripts (theme toggle, screenshot viewer): no trackers, no cookies, no third-party fonts or CDNs. <span class="legal-credit">Solarized colours by <a href="https://ethanschoonover.com/solarized/" target="_blank" rel="noopener noreferrer">Ethan Schoonover<span class="sr-only"> (opens in a new tab)</span></a>.</span></p>
+    <p class="legal">This site is plain HTML and CSS with a few small optional scripts (theme toggle, screenshot viewer, download tabs): no trackers, no cookies, no third-party fonts or CDNs. <span class="legal-credit">Solarized colours by <a href="https://ethanschoonover.com/solarized/" target="_blank" rel="noopener noreferrer">Ethan Schoonover<span class="sr-only"> (opens in a new tab)</span></a>.</span></p>
   </div>
 </footer>
 </body>
