@@ -5,9 +5,15 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.35.1] - Unreleased
+## [0.36.0] - Unreleased
 
 ### ✨ Highlights
+- **Tab can insert spaces instead of a tab character** (Windows and Linux).
+  Turn on *Tab key inserts spaces up to the next tab stop* in Preferences >
+  General and Tab types just the spaces that reach the next stop (width 1-16,
+  default 4), so text lines up whatever it follows. Off by default, as in
+  Notepad; a selection is replaced, one Tab is one undo step, Shift+Tab is
+  untouched, and the Markdown Spaces indent follows the same width.
 - **A portable Linux download.** Each release now has
   `npad-v<version>-linux-amd64.tar.gz` (and `-arm64`, `-riscv64`) beside the
   .deb and .rpm: unpack it and run `./npad`, on any glibc distro with GTK 3,
@@ -18,6 +24,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Linux: Ctrl+Tab switches Preferences pages**, as it does on Windows.
 
 ### 🆕 Features
+- **Tab inserts spaces** (Windows and Linux; `tab_inserts_spaces`, default
+  off, and `tab_width`, default 4, range 1-16). With it on, a plain Tab
+  types the spaces up to the next multiple of the width, measured in
+  characters from the start of the line - not a fixed count - and a tab
+  character already on the line advances to the next stop like any other.
+  A selection is replaced, exactly as Notepad replaces it with a tab. One
+  press is one undo step. Ctrl, Alt and Shift+Tab are left alone. It is a
+  general editing option, so it sits on the General page rather than
+  Markdown, and works without Basic Markdown support. The arithmetic is in
+  `core/tab_stops` with unit tests, shared by both builds; both apply it
+  live to every open instance.
+- **The Markdown tools' Spaces indent uses the same width** while Tab
+  inserts spaces is on (Tab on a selection, Ctrl+] / Ctrl+[ and the Indent
+  menu), so Tab and the list tools agree. With it off the Spaces format is
+  four spaces as before. Marker nesting stays two spaces and the *Tab*
+  format stays a tab character.
 - **Linux: portable tarball** (`make tarball`, `scripts/build-package.sh
   tar`). It unpacks to `npad-v<version>-linux-<arch>/` with `npad`,
   `README.txt` and `share/` (the launcher, hicolor icons and AppStream
