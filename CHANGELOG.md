@@ -108,6 +108,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lists it), release validation checks each tarball's ELF architecture, and
   the release notes list it under Linux downloads.
 
+### 🔄 Changed
+- **Preferences gain an Editor page** (Windows and Linux): *Fill Find with
+  the selected text*, *Wrap around by default* (Find and Replace) and the
+  Tab key's *Insert spaces* and width, gathered from General and Defaults.
+  *Auto-update defaults in real time* moves to Appearance beside *Sync
+  view*, the two view-sharing options. The settings keys are unchanged.
+- **Windows: Appearance spacing.** The application icon choices are one per
+  row at an even spacing, and the checkboxes above them no longer leave
+  uneven gaps.
+- **Linux: About matches Windows** - the author is named in the text, and
+  GTK's Credits button, which the Windows About box has no counterpart for,
+  is gone.
+
 ### 🐛 Fixed
 - **Arch package: a pre-release no longer looks like the final release.**
   nfpm's archlinux packager dropped the pre-release from `pkgver`, so

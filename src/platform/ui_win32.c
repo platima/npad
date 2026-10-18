@@ -4808,12 +4808,6 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
             CheckDlgButton(page, ID_PREF_WATCH_FILE,
                            settings_get_bool("watch_file_changes", false) ? BST_CHECKED
                                                                           : BST_UNCHECKED);
-            CheckDlgButton(page, ID_PREF_FIND_SEED,
-                           find_seed_enabled() ? BST_CHECKED : BST_UNCHECKED);
-            CheckDlgButton(page, ID_PREF_TAB_SPACES,
-                           tab_inserts_spaces_enabled() ? BST_CHECKED : BST_UNCHECKED);
-            SetDlgItemInt(page, ID_PREF_TAB_WIDTH, (UINT) tab_width_setting(), FALSE);
-            EnableWindow(GetDlgItem(page, ID_PREF_TAB_WIDTH), tab_inserts_spaces_enabled());
             EnableWindow(GetDlgItem(page, ID_PREF_AUTOSAVE_INTERVAL),
                          editor_is_auto_save_enabled());
             EnableWindow(GetDlgItem(page, ID_PREF_SESSION_INTERVAL),
@@ -4826,12 +4820,10 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
             // Enable Apply when a value control changes (not the action buttons)
             if ((code == BN_CLICKED &&
                  (id == ID_PREF_AUTOSAVE_ENABLED || id == ID_PREF_SESSION_ENABLED ||
-                  id == ID_PREF_CTRL_N_WINDOW || id == ID_PREF_WATCH_FILE ||
-                  id == ID_PREF_FIND_SEED || id == ID_PREF_TAB_SPACES)) ||
+                  id == ID_PREF_CTRL_N_WINDOW || id == ID_PREF_WATCH_FILE)) ||
                 (code == EN_CHANGE &&
                  (id == ID_PREF_AUTOSAVE_INTERVAL || id == ID_PREF_LARGE_FILE_MB ||
-                  id == ID_PREF_RECENT_MAX || id == ID_PREF_SESSION_INTERVAL ||
-                  id == ID_PREF_TAB_WIDTH))) {
+                  id == ID_PREF_RECENT_MAX || id == ID_PREF_SESSION_INTERVAL))) {
                 mark_prefs_dirty(page);
             }
 
@@ -4843,11 +4835,6 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
             if (id == ID_PREF_SESSION_ENABLED) {
                 EnableWindow(GetDlgItem(page, ID_PREF_SESSION_INTERVAL),
                              IsDlgButtonChecked(page, ID_PREF_SESSION_ENABLED) == BST_CHECKED);
-                return TRUE;
-            }
-            if (id == ID_PREF_TAB_SPACES) {
-                EnableWindow(GetDlgItem(page, ID_PREF_TAB_WIDTH),
-                             IsDlgButtonChecked(page, ID_PREF_TAB_SPACES) == BST_CHECKED);
                 return TRUE;
             }
             if (id == ID_PREF_RECENT_CLEAR) {
@@ -4906,11 +4893,72 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                 settings_set_bool("watch_file_changes",
                                   IsDlgButtonChecked(page, ID_PREF_WATCH_FILE) == BST_CHECKED);
 
+                settings_save(); // Apply button: persist + propagate immediately
+                ui_platform_notify_settings_changed();
+
+                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                return TRUE;
+            }
+            break;
+        }
+    }
+    return FALSE;
+}
+
+// Preferences: Editor page - how typing and Find behave (Fill Find from the
+// selection, Find / Replace wrap-around, Tab inserts spaces)
+static INT_PTR CALLBACK prefs_editor_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
+    switch (msg) {
+        case WM_INITDIALOG:
+            CheckDlgButton(page, ID_PREF_FIND_SEED,
+                           find_seed_enabled() ? BST_CHECKED : BST_UNCHECKED);
+            // Seeded from the live flag, not the file: the Find dialog writes
+            // g_wrap_around without persisting on some paths, so the file can
+            // lag behind what searching actually does. Showing the file's value
+            // would contradict observed behaviour and then write it back.
+            CheckDlgButton(page, ID_PREF_FIND_WRAP, g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
+            CheckDlgButton(page, ID_PREF_TAB_SPACES,
+                           tab_inserts_spaces_enabled() ? BST_CHECKED : BST_UNCHECKED);
+            SetDlgItemInt(page, ID_PREF_TAB_WIDTH, (UINT) tab_width_setting(), FALSE);
+            EnableWindow(GetDlgItem(page, ID_PREF_TAB_WIDTH), tab_inserts_spaces_enabled());
+            return TRUE;
+
+        case WM_COMMAND: {
+            WORD code = HIWORD(wparam);
+            WORD id = LOWORD(wparam);
+            if ((code == BN_CLICKED && (id == ID_PREF_FIND_SEED || id == ID_PREF_FIND_WRAP ||
+                                        id == ID_PREF_TAB_SPACES)) ||
+                (code == EN_CHANGE && id == ID_PREF_TAB_WIDTH)) {
+                mark_prefs_dirty(page);
+            }
+            if (id == ID_PREF_TAB_SPACES) {
+                EnableWindow(GetDlgItem(page, ID_PREF_TAB_WIDTH),
+                             IsDlgButtonChecked(page, ID_PREF_TAB_SPACES) == BST_CHECKED);
+                return TRUE;
+            }
+            break;
+        }
+
+        case WM_NOTIFY: {
+            const NMHDR *nmhdr = (const NMHDR *) lparam;
+            if (nmhdr->code == PSN_APPLY) {
                 settings_set_bool(FIND_SEED_KEY,
                                   IsDlgButtonChecked(page, ID_PREF_FIND_SEED) == BST_CHECKED);
 
+                // Find wrap-around is also toggled from the Find/Replace
+                // dialog, so update the live flag and, if that dialog happens
+                // to be open, its checkbox - otherwise closing it would write
+                // the stale value straight back over this one.
+                g_wrap_around = IsDlgButtonChecked(page, ID_PREF_FIND_WRAP) == BST_CHECKED;
+                settings_set_bool("find_wrap_around", g_wrap_around);
+                if (g_find_dialog) {
+                    CheckDlgButton(g_find_dialog, ID_FIND_WRAP,
+                                   g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
+                }
+
                 settings_set_bool(TAB_INSERTS_SPACES_KEY,
                                   IsDlgButtonChecked(page, ID_PREF_TAB_SPACES) == BST_CHECKED);
+                BOOL ok = FALSE;
                 UINT tab_width = GetDlgItemInt(page, ID_PREF_TAB_WIDTH, &ok, FALSE);
                 if (ok) {
                     // Out-of-range input is clamped, and the box shows what was kept
@@ -4967,6 +5015,9 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
             CheckDlgButton(page, ID_PREF_SYNC_VIEW,
                            settings_get_bool("sync_view_state", false) ? BST_CHECKED
                                                                        : BST_UNCHECKED);
+            CheckDlgButton(page, ID_PREF_AUTO_DEFAULTS,
+                           settings_get_bool("auto_update_defaults", false) ? BST_CHECKED
+                                                                            : BST_UNCHECKED);
             CheckDlgButton(page, ID_PREF_STATUS_COUNTS,
                            settings_get_bool("status_show_counts", false) ? BST_CHECKED
                                                                           : BST_UNCHECKED);
@@ -4993,7 +5044,8 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
             WORD id = LOWORD(wparam);
             if ((code == BN_CLICKED &&
                  (id == ID_PREF_OPENDYSLEXIC || id == ID_PREF_STATUSBAR ||
-                  id == ID_PREF_SYNC_VIEW || id == ID_PREF_STATUS_COUNTS ||
+                  id == ID_PREF_SYNC_VIEW || id == ID_PREF_AUTO_DEFAULTS ||
+                  id == ID_PREF_STATUS_COUNTS ||
                   (id >= ID_PREF_ICON_SYSTEM && id <= ID_PREF_ICON_CLASSIC))) ||
                 (code == CBN_SELCHANGE && id == ID_PREF_SCHEME)) {
                 mark_prefs_dirty(page);
@@ -5046,6 +5098,8 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
 
                 bool sync_view = IsDlgButtonChecked(page, ID_PREF_SYNC_VIEW) == BST_CHECKED;
                 settings_set_bool("sync_view_state", sync_view);
+                settings_set_bool("auto_update_defaults",
+                                  IsDlgButtonChecked(page, ID_PREF_AUTO_DEFAULTS) == BST_CHECKED);
 
                 settings_set_bool("status_show_counts",
                                   IsDlgButtonChecked(page, ID_PREF_STATUS_COUNTS) == BST_CHECKED);
@@ -5425,15 +5479,6 @@ static INT_PTR CALLBACK prefs_defaults_proc(HWND page, UINT msg, WPARAM wparam, 
             SetDlgItemInt(page, ID_PREF_DEFAULT_ZOOM, (UINT) settings_get_int("default_zoom", 100),
                           FALSE);
 
-            CheckDlgButton(page, ID_PREF_AUTO_DEFAULTS,
-                           settings_get_bool("auto_update_defaults", false) ? BST_CHECKED
-                                                                            : BST_UNCHECKED);
-
-            // Seeded from the live flag, not the file: the Find dialog writes
-            // g_wrap_around without persisting on some paths, so the file can
-            // lag behind what searching actually does. Showing the file's value
-            // would contradict observed behaviour and then write it back.
-            CheckDlgButton(page, ID_PREF_FIND_WRAP, g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
             {
                 // Header/footer codes match notepad.exe; see DOCUMENTATION.md
                 char *hdr = settings_get_string("print_header", "&f");
@@ -5457,8 +5502,7 @@ static INT_PTR CALLBACK prefs_defaults_proc(HWND page, UINT msg, WPARAM wparam, 
                  (id == ID_PREF_DEFAULT_ENCODING || id == ID_PREF_DEFAULT_EOL ||
                   id == ID_PREF_DEFAULT_FONT_TYPE)) ||
                 (code == EN_CHANGE && (id == ID_PREF_DEFAULT_ZOOM || id == ID_PREF_PRINT_HEADER ||
-                                       id == ID_PREF_PRINT_FOOTER)) ||
-                (code == BN_CLICKED && (id == ID_PREF_AUTO_DEFAULTS || id == ID_PREF_FIND_WRAP))) {
+                                       id == ID_PREF_PRINT_FOOTER))) {
                 mark_prefs_dirty(page);
             }
             if (id == ID_PREF_USE_CURRENT) {
@@ -5504,19 +5548,6 @@ static INT_PTR CALLBACK prefs_defaults_proc(HWND page, UINT msg, WPARAM wparam, 
                     settings_set_int("default_zoom", (int) zoom);
                 }
 
-                settings_set_bool("auto_update_defaults",
-                                  IsDlgButtonChecked(page, ID_PREF_AUTO_DEFAULTS) == BST_CHECKED);
-
-                // Find wrap-around is also toggled from the Find/Replace
-                // dialog, so update the live flag and, if that dialog happens
-                // to be open, its checkbox - otherwise closing it would write
-                // the stale value straight back over this one.
-                g_wrap_around = IsDlgButtonChecked(page, ID_PREF_FIND_WRAP) == BST_CHECKED;
-                settings_set_bool("find_wrap_around", g_wrap_around);
-                if (g_find_dialog) {
-                    CheckDlgButton(g_find_dialog, ID_FIND_WRAP,
-                                   g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
-                }
                 {
                     wchar_t whdr[256] = L"", wftr[256] = L"";
                     GetDlgItemTextW(page, ID_PREF_PRINT_HEADER, whdr, 256);
@@ -6019,7 +6050,7 @@ static INT_PTR CALLBACK prefs_lists_proc(HWND page, UINT msg, WPARAM wparam, LPA
 }
 
 // Preferences page indices (Updates before the hidden Debug page)
-#define PREFS_PAGE_UPDATES 5
+#define PREFS_PAGE_UPDATES 6
 
 // start_page: a page index to open on, or -1 for the default (page 0, or the
 // Debug page when show_debug). show_debug appends the hidden diagnostics page.
@@ -6027,7 +6058,7 @@ static void show_preferences_dialog(const Window *window, int start_page, bool s
     if (!window)
         return;
 
-    PROPSHEETPAGEW pages[8];
+    PROPSHEETPAGEW pages[9];
     ZeroMemory(pages, sizeof(pages));
 
     pages[0].dwSize = sizeof(PROPSHEETPAGEW);
@@ -6037,41 +6068,46 @@ static void show_preferences_dialog(const Window *window, int start_page, bool s
 
     pages[1].dwSize = sizeof(PROPSHEETPAGEW);
     pages[1].hInstance = g_hinstance;
-    pages[1].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_APPEARANCE);
-    pages[1].pfnDlgProc = prefs_appearance_proc;
+    pages[1].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_EDITOR);
+    pages[1].pfnDlgProc = prefs_editor_proc;
 
     pages[2].dwSize = sizeof(PROPSHEETPAGEW);
     pages[2].hInstance = g_hinstance;
-    pages[2].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_DEFAULTS);
-    pages[2].pfnDlgProc = prefs_defaults_proc;
+    pages[2].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_APPEARANCE);
+    pages[2].pfnDlgProc = prefs_appearance_proc;
 
     pages[3].dwSize = sizeof(PROPSHEETPAGEW);
     pages[3].hInstance = g_hinstance;
-    pages[3].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_LISTS);
-    pages[3].pfnDlgProc = prefs_lists_proc;
+    pages[3].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_DEFAULTS);
+    pages[3].pfnDlgProc = prefs_defaults_proc;
 
     pages[4].dwSize = sizeof(PROPSHEETPAGEW);
     pages[4].hInstance = g_hinstance;
-    pages[4].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_BACKUP);
-    pages[4].pfnDlgProc = prefs_backup_proc;
+    pages[4].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_LISTS);
+    pages[4].pfnDlgProc = prefs_lists_proc;
 
     pages[5].dwSize = sizeof(PROPSHEETPAGEW);
     pages[5].hInstance = g_hinstance;
-    pages[5].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_UPDATES);
-    pages[5].pfnDlgProc = prefs_updates_proc;
+    pages[5].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_BACKUP);
+    pages[5].pfnDlgProc = prefs_backup_proc;
 
     pages[6].dwSize = sizeof(PROPSHEETPAGEW);
     pages[6].hInstance = g_hinstance;
-    pages[6].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_ASSOC);
-    pages[6].pfnDlgProc = prefs_assoc_proc;
+    pages[6].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_UPDATES);
+    pages[6].pfnDlgProc = prefs_updates_proc;
+
+    pages[7].dwSize = sizeof(PROPSHEETPAGEW);
+    pages[7].hInstance = g_hinstance;
+    pages[7].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_ASSOC);
+    pages[7].pfnDlgProc = prefs_assoc_proc;
 
     // Hidden diagnostics page: only present when opened via Ctrl+Shift+.
     // or a Shift+click on the Preferences menu item. It stays LAST, so the
     // count below is all that hides it.
-    pages[7].dwSize = sizeof(PROPSHEETPAGEW);
-    pages[7].hInstance = g_hinstance;
-    pages[7].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_DEBUG);
-    pages[7].pfnDlgProc = prefs_debug_proc;
+    pages[8].dwSize = sizeof(PROPSHEETPAGEW);
+    pages[8].hInstance = g_hinstance;
+    pages[8].pszTemplate = MAKEINTRESOURCEW(IDD_PREFS_DEBUG);
+    pages[8].pfnDlgProc = prefs_debug_proc;
 
     PROPSHEETHEADERW psh;
     ZeroMemory(&psh, sizeof(psh));
@@ -6081,8 +6117,8 @@ static void show_preferences_dialog(const Window *window, int start_page, bool s
     psh.hwndParent = window->hwnd;
     psh.hInstance = g_hinstance;
     psh.pszCaption = L"Preferences";
-    psh.nPages = show_debug ? 8 : 7;
-    psh.nStartPage = (start_page >= 0) ? (UINT) start_page : (show_debug ? 7 : 0);
+    psh.nPages = show_debug ? 9 : 8;
+    psh.nStartPage = (start_page >= 0) ? (UINT) start_page : (show_debug ? 8 : 0);
     psh.ppsp = pages;
 
     PropertySheetW(&psh);

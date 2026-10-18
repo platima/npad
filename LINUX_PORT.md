@@ -438,8 +438,8 @@ version.
       including when the dialog is already open
 
 ### Batch B - Preferences and Font (new `ui_gtk_prefs.c`) - done in v0.35.0
-- [x] GtkNotebook dialog with the General, Appearance, Defaults, Markdown,
-      Backup and Associations pages, and the hidden Debug page (Ctrl+Shift+.
+- [x] GtkNotebook dialog with the General, Editor, Appearance, Defaults,
+      Markdown, Backup, Updates and Associations pages, and the hidden Debug page (Ctrl+Shift+.
       or Shift+click Preferences)
 - [x] OK / Cancel / Apply; Apply writes only the changed keys, saves and calls
       `ui_notify_settings_changed()`
