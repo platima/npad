@@ -32,6 +32,7 @@
 #include "../core/session.h"
 #include "../core/settings.h"
 #include "../core/startup_prof.h"
+#include "../core/tab_stops.h"
 #include "assoc_win32.h"
 #include "print_win32.h"
 #include "../core/update_check.h"
@@ -369,6 +370,7 @@ static void show_convert_delim_dialog(Window *window);
 static bool show_custom_indent_dialog(Window *window);
 static void list_do(const Window *window, int op, int arg);
 static void list_indent_default(Window *window, bool unindent);
+static char *list_extract(HWND e, LONG cpMin, LONG cpMax);
 static char *get_custom_indent(void);
 static void apply_new_window_pref(Window *window);
 static void launch_new_window(void);
@@ -915,6 +917,43 @@ static bool handle_markdown_tab(HWND hwnd) {
     return false; // Plain Tab types a tab, classic Notepad behavior
 }
 
+// "Tab inserts spaces" (Preferences > General; a general editing preference,
+// not a Markdown one): a plain Tab types the spaces that reach the next tab
+// stop instead of a tab character. The column is counted in characters from
+// the start of the line by core/tab_stops, from the line's text converted to
+// UTF-8, so a surrogate pair is one column (the status bar's Col counts UTF-16
+// units). A selection is replaced, as a tab character would replace it. One
+// Tab is one EM_REPLACESEL, which RichEdit records as one undo step. Shift+Tab
+// and Ctrl/Alt chords are left alone. Runs after handle_markdown_tab, so the
+// list tools' Tab-over-a-selection indent still wins when they are on.
+static bool handle_tab_spaces(HWND hwnd) {
+    if (!g_main_window || hwnd != g_main_window->edit_hwnd)
+        return false;
+    if (!tab_inserts_spaces_enabled())
+        return false;
+    if (GetKeyState(VK_CONTROL) < 0 || GetKeyState(VK_SHIFT) < 0 || GetKeyState(VK_MENU) < 0)
+        return false;
+
+    CHARRANGE sel = { 0, 0 };
+    SendMessageW(hwnd, EM_EXGETSEL, 0, (LPARAM) &sel);
+    LONG line_start = 0, line_end = 0;
+    get_paragraph_bounds(hwnd, sel.cpMin, &line_start, &line_end);
+    char *prefix = list_extract(hwnd, line_start, sel.cpMin);
+    if (!prefix)
+        return false; // Fall back to the control's own tab
+    int count = tab_spaces_for_line_prefix(prefix, strlen(prefix), tab_width_setting());
+    free(prefix);
+
+    wchar_t spaces[TAB_WIDTH_MAX + 1];
+    for (int i = 0; i < count; i++)
+        spaces[i] = L' ';
+    spaces[count] = L'\0';
+    g_swallow_tab_char = true; // The WM_CHAR TranslateMessage queued is not wanted
+    SendMessageW(hwnd, EM_REPLACESEL, TRUE, (LPARAM) spaces);
+    SendMessageW(hwnd, EM_SCROLLCARET, 0, 0);
+    return true;
+}
+
 // Length of the bullet marker at s: the custom marker body first, then the
 // built-in "* " / "- ". allow_bare also accepts the space-less marker when
 // the text ends right after it (empty bullets, pre-0.13 documents).
@@ -1101,7 +1140,7 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, L
     // keys never reach the control. A consumed key still has its WM_CHAR
     // already queued by TranslateMessage, so that gets eaten too.
     if (msg == WM_KEYDOWN) {
-        if (wparam == VK_TAB && handle_markdown_tab(hwnd)) {
+        if (wparam == VK_TAB && (handle_markdown_tab(hwnd) || handle_tab_spaces(hwnd))) {
             g_swallow_tab_keyup = true;
             return 0;
         }
@@ -4769,6 +4808,10 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                                                                           : BST_UNCHECKED);
             CheckDlgButton(page, ID_PREF_FIND_SEED,
                            find_seed_enabled() ? BST_CHECKED : BST_UNCHECKED);
+            CheckDlgButton(page, ID_PREF_TAB_SPACES,
+                           tab_inserts_spaces_enabled() ? BST_CHECKED : BST_UNCHECKED);
+            SetDlgItemInt(page, ID_PREF_TAB_WIDTH, (UINT) tab_width_setting(), FALSE);
+            EnableWindow(GetDlgItem(page, ID_PREF_TAB_WIDTH), tab_inserts_spaces_enabled());
             EnableWindow(GetDlgItem(page, ID_PREF_AUTOSAVE_INTERVAL),
                          editor_is_auto_save_enabled());
             EnableWindow(GetDlgItem(page, ID_PREF_SESSION_INTERVAL),
@@ -4782,10 +4825,11 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
             if ((code == BN_CLICKED &&
                  (id == ID_PREF_AUTOSAVE_ENABLED || id == ID_PREF_SESSION_ENABLED ||
                   id == ID_PREF_CTRL_N_WINDOW || id == ID_PREF_WATCH_FILE ||
-                  id == ID_PREF_FIND_SEED)) ||
+                  id == ID_PREF_FIND_SEED || id == ID_PREF_TAB_SPACES)) ||
                 (code == EN_CHANGE &&
                  (id == ID_PREF_AUTOSAVE_INTERVAL || id == ID_PREF_LARGE_FILE_MB ||
-                  id == ID_PREF_RECENT_MAX || id == ID_PREF_SESSION_INTERVAL))) {
+                  id == ID_PREF_RECENT_MAX || id == ID_PREF_SESSION_INTERVAL ||
+                  id == ID_PREF_TAB_WIDTH))) {
                 mark_prefs_dirty(page);
             }
 
@@ -4797,6 +4841,11 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
             if (id == ID_PREF_SESSION_ENABLED) {
                 EnableWindow(GetDlgItem(page, ID_PREF_SESSION_INTERVAL),
                              IsDlgButtonChecked(page, ID_PREF_SESSION_ENABLED) == BST_CHECKED);
+                return TRUE;
+            }
+            if (id == ID_PREF_TAB_SPACES) {
+                EnableWindow(GetDlgItem(page, ID_PREF_TAB_WIDTH),
+                             IsDlgButtonChecked(page, ID_PREF_TAB_SPACES) == BST_CHECKED);
                 return TRUE;
             }
             if (id == ID_PREF_RECENT_CLEAR) {
@@ -4857,6 +4906,17 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
 
                 settings_set_bool(FIND_SEED_KEY,
                                   IsDlgButtonChecked(page, ID_PREF_FIND_SEED) == BST_CHECKED);
+
+                settings_set_bool(TAB_INSERTS_SPACES_KEY,
+                                  IsDlgButtonChecked(page, ID_PREF_TAB_SPACES) == BST_CHECKED);
+                UINT tab_width = GetDlgItemInt(page, ID_PREF_TAB_WIDTH, &ok, FALSE);
+                if (ok) {
+                    // Out-of-range input is clamped, and the box shows what was kept
+                    int kept = tab_clamp_width(tab_width > TAB_WIDTH_MAX ? TAB_WIDTH_MAX
+                                                                         : (int) tab_width);
+                    settings_set_int(TAB_WIDTH_KEY, kept);
+                    SetDlgItemInt(page, ID_PREF_TAB_WIDTH, (UINT) kept, FALSE);
+                }
 
                 settings_save(); // Apply button: persist + propagate immediately
                 ui_platform_notify_settings_changed();
@@ -6614,8 +6674,10 @@ static void list_do(const Window *window, int op, int arg) {
             // The custom prefix is passed for every format, so lines carrying
             // a custom bullet still deepen/unindent under a built-in format
             char *custom = get_custom_indent();
-            out = (op == 2) ? list_indent_lines(text, (ListIndentFormat) arg, custom)
-                            : list_unindent_lines(text, (ListIndentFormat) arg, custom);
+            // The Spaces format steps by the tab width when Tab inserts spaces
+            int width = tab_list_indent_width();
+            out = (op == 2) ? list_indent_lines_w(text, (ListIndentFormat) arg, custom, width)
+                            : list_unindent_lines_w(text, (ListIndentFormat) arg, custom, width);
             free(custom);
             break;
         }

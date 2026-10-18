@@ -154,8 +154,9 @@ The Linux desktop build (GTK 3; one binary for X11 and Wayland) has every
 feature of the Windows build and is in beta while it is tested on real
 desktops. It shares the settings keys and behaviour described here; its
 status, and the deliberate differences (window position on Wayland,
-colour schemes against a dark GTK theme, the Text Documents filter, no Check
-for Updates), are tracked in [LINUX_PORT.md](LINUX_PORT.md).
+colour schemes against a dark GTK theme, the Text Documents filter, a Check
+for Updates that notifies but never installs), are tracked in
+[LINUX_PORT.md](LINUX_PORT.md).
 
 Find, Find Next / Previous, Replace, Replace All and Go To Line (Ctrl+F,
 F3, Shift+F3, Ctrl+H, Ctrl+G, or a click on Ln/Col) behave as described
@@ -168,8 +169,8 @@ beside a term edge that is itself a letter, digit or underscore.
 
 Edit > Preferences (Ctrl+,) opens a dialog with the same pages, wording,
 settings keys and defaults as the Windows build: General, Appearance,
-Defaults, Markdown and Backup, plus the hidden Debug page (Ctrl+Shift+., or
-Shift+click Preferences). Differences:
+Defaults, Markdown, Backup, Updates and Associations, plus the hidden Debug
+page (Ctrl+Shift+., or Shift+click Preferences). Differences:
 
 - **OK / Cancel / Apply, as on Windows.** Changes are held until you press
   Apply (the dialog stays open) or OK (apply and close); Cancel, Esc or the
@@ -180,7 +181,8 @@ Shift+click Preferences). Differences:
   Import, the xdg-mime button and Reset All Preferences act immediately.
   Reset keeps the same things as on Windows and closes the dialog; Import
   Settings refuses a file that is not a JSON object.
-- **No Updates page.** Linux installs update through apt or dnf.
+- **Updates checks and advises; it never installs.** See
+  [Check for Updates on Linux](#check-for-updates-on-linux).
 - **Associations** is one explicit action, *Make npad the default text
   editor*, which runs `xdg-mime default io.github.platima.npad.desktop
   text/plain` for your account. Nothing runs until you click it, and the page
@@ -204,6 +206,39 @@ Shift+click Preferences). Differences:
   type the window is showing (monospace, proportional or OpenDyslexic) and
   the shared size, weight and italic keys, exactly as on Windows; Appearance
   has buttons for the monospace and proportional fonts directly.
+
+### Check for Updates on Linux
+
+Help > Check for Updates and Preferences > Updates work as on Windows, with
+the same settings keys and defaults (all off: npad makes no network request
+until you ask or opt in), except that npad on Linux never downloads or
+installs anything. When a newer release exists, the dialog - and the "How
+this copy updates" box on the Updates page - says how to update the way this
+copy was installed:
+
+| How npad was installed | What npad suggests |
+|---|---|
+| From the npad apt repository (pkg.npad.dev) | Your system's updater, or `sudo apt update && sudo apt upgrade` |
+| From the npad dnf repository | Your system's updater, or `sudo dnf upgrade npad` |
+| From the `[npad]` pacman repository | `sudo pacman -Syu` |
+| From the AUR (`npad-bin`, `npad-git`) | Your AUR helper, e.g. `yay -Syu` |
+| A downloaded .deb or rpm, no npad repository | The new package from the release page, or adding the repository once: `curl -fsSL https://pkg.npad.dev/install.sh \| sudo sh` |
+| An Arch package installed by hand | The new package, or the `[npad]` repository (see <https://pkg.npad.dev>) |
+| The portable tarball, or built from source | The release page, <https://github.com/platima/npad/releases/latest> |
+
+npad finds this out without root and without blocking the window: it asks
+`dpkg -S`, `rpm -qf` or `pacman -Qqo` which package owns its executable (only
+when it runs from `/usr/bin`), and reads the apt sources, `/etc/yum.repos.d`
+or `/etc/pacman.conf` for the npad repository. The dialog offers *View the
+Release Notes*, *Skip This Version* and *Close*; there is no Install Now and
+no "Download and install automatically" mode (a settings file that has
+`update_mode` set to `auto`, say imported from Windows, behaves as `prompt`).
+The launch check runs only from the first npad window you open, since each
+Linux window is its own process. The check uses GLib's TLS support, which
+comes from the glib-networking package (installed on practically every
+desktop); without it Help > Check for Updates says to install it (the launch
+check, as on Windows, fails silently).
+
 ### Editing behaviours on Linux
 
 These match the Windows build; the differences are noted.
@@ -336,7 +371,8 @@ release.
   with"; README.txt also lists the commands that remove it. If GTK 3 is
   missing, install `libgtk-3-0t64` (Debian 13 / Ubuntu 24.04 and newer),
   `libgtk-3-0` (Debian 12 / Ubuntu 22.04, openSUSE) or `gtk3` (Fedora, Arch).
-  A portable copy never updates itself; the repositories below do. `make
+  A portable copy never updates itself; the repositories below do (Help >
+  Check for Updates still tells you when there is a new release). `make
   tarball` builds one into `dist/`.
 - **apt / dnf / pacman repository (recommended; updates arrive with the rest
   of the system).** The repositories at <https://pkg.npad.dev> are rebuilt from
@@ -437,6 +473,8 @@ File handling: saving, opening, recent files, recovery, and what happens when a 
 | `session_interval` | int | `30` | Snapshot period in seconds (minimum 5). |
 | `ctrl_n_new_window` | bool | `false` | Swap Ctrl+N / Ctrl+Shift+N between "New" (clear this window) and "New Window" (open another instance). |
 | `find_seed_selection` | bool | `true` | **Fill Find with the selected text.** Opening (or re-focusing) Find or Replace with Ctrl+F / Ctrl+H puts the current selection in "Find what", selected so typing replaces it. On by default because Windows 10 notepad.exe (1809+) does exactly this, so it is the behaviour a Notepad user expects. Only a non-empty selection that contains no line break and is at most 255 characters seeds the box; anything else leaves the last search term as it was. The same key and rule apply on every platform. Unlike the other `find_` keys it is a preference, so Reset All Preferences resets it. |
+| `tab_inserts_spaces` | bool | `false` | **Tab key inserts spaces up to the next tab stop.** Off by default, because Windows 10 notepad.exe types a tab character. See *Tab inserts spaces* in the behaviour notes. Same key and wording on every platform; independent of Basic Markdown support. |
+| `tab_width` | int | `4` | Distance between tab stops, in columns (1-16; anything outside is clamped). Used when `tab_inserts_spaces` is on, and then also as the step of the Markdown tools' Spaces indent format. |
 
 ### Appearance (Preferences > Appearance)
 
@@ -494,8 +532,8 @@ Updates** always works; these settings govern any *automatic* surfacing.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `update_mode` | string | `"off"` | How a found update surfaces: `off` (manual only), `notify` (a **●** on the Help menu title + an "Update Available" item, no dialog), `prompt` (show the update dialog), `auto` (download + SHA-256-verify silently, then one confirmation before installing). |
-| `update_check_on_launch` | bool | `false` | Run a single check once after the window first paints (primary window only). Automatic/launch checks fail silently. |
+| `update_mode` | string | `"off"` | How a found update surfaces: `off` (manual only), `notify` (a **●** on the Help menu title + an "Update Available" item, no dialog), `prompt` (show the update dialog), `auto` (download + SHA-256-verify silently, then one confirmation before installing; Windows only - Linux treats it as `prompt`). |
+| `update_check_on_launch` | bool | `false` | Run a single check once after the window first paints (primary window only; on Linux, the first npad window open). Automatic/launch checks fail silently. |
 | `update_skipped_version` | string | (unset) | A version the user chose to **Skip**; suppresses the dot/prompt for exactly that version until a newer release appears. |
 | `update_latest_version` | string | (unset) | Read-only state: the latest release tag seen by the last successful check (shown on the Updates tab). |
 | `update_last_checked` | string | (unset) | Read-only state: local `YYYY-MM-DD HH:MM` of the last check (shown on the Updates tab). |
@@ -613,7 +651,8 @@ propagates live to all open npad windows.
 | Ctrl+Plus / Ctrl+Minus / Ctrl+0 | Zoom in / out / reset (this window; Ctrl+Scroll also zooms) |
 | Ctrl+, | Preferences |
 | Ctrl+Shift+. | Preferences opened on the hidden Debug page (also: Shift+click the Preferences menu item) |
-| Tab / Shift+Tab | Indent / Unindent (Markdown tools). Tab indents any selection; without one it types a tab. Shift+Tab always unindents - the selected lines, or the current line. A preference switches this binding to Ctrl+] / Ctrl+[. |
+| Tab | Types a tab character (as Notepad does) - or, with *Tab key inserts spaces* on, the spaces up to the next tab stop, replacing any selection. The Markdown tools' indent on a selection takes precedence over that while they are on. |
+| Tab / Shift+Tab | Indent / Unindent (Markdown tools). Tab indents any selection; without one it types a tab (or spaces, see above). Shift+Tab always unindents - the selected lines, or the current line. A preference switches this binding to Ctrl+] / Ctrl+[. |
 | Ctrl+X (no selection) | Cut the whole current line (Markdown tools); Ctrl+V then pastes that line above the current line, keeping the caret in place, until the clipboard changes |
 | Enter (on a list line) | Continue the list: the new line starts with the same indent + marker (Markdown tools). On an empty bullet, removes the marker and inserts a plain newline (ends the list). |
 
@@ -738,6 +777,26 @@ Window does). Not intended for direct use.
 - **Emoji & mixed scripts**: characters the configured font lacks (emoji,
   CJK, etc.) render via Windows font fallback - when typed, when a file is
   opened, and across font or theme changes.
+- **Tab inserts spaces** (Preferences > General, `tab_inserts_spaces`, off by
+  default; width `tab_width`, 4 unless changed, 1-16): a plain Tab types the
+  spaces that reach the next tab stop instead of a tab character. The stop is
+  the next multiple of the width counted in characters from the start of the
+  line, so at width 4 a Tab types four spaces on an empty line, three after
+  one character, one after three and a whole four again after four. A tab
+  character already on the line advances to the next stop too, and each
+  character counts as one column whatever its UTF-8 / UTF-16 length (an emoji
+  is one). Wide East Asian glyphs are still one column each, since the rule
+  is about characters, not about how wide the font draws them; the on-screen
+  width of a literal tab character is the editor's own and `tab_width` does
+  not change it. Over a selection Tab replaces the selection with the spaces,
+  as Notepad replaces it with a tab. One press is one undo step. Shift+Tab
+  (outside the Markdown tools), Ctrl+Tab and Alt+Tab are not touched. With the
+  Markdown list tools on, Tab over a selection still indents the selected
+  lines (it does not replace them), exactly as before; and with this option on
+  their *Spaces* indent format steps by `tab_width` instead of four (Tab and
+  Ctrl+] / Ctrl+[ then agree), while the nesting step of marker formats
+  stays two spaces and the *Tab* format stays a tab character. Changing
+  either setting applies to every open window at once.
 - **Markdown list tools** (Preferences > Markdown, off by default): add a
   **Markdown** menu and right-click items.
   - *Sort / Unique* treat each line as an entry. If the selection spans more
@@ -761,7 +820,7 @@ Window does). Not intended for direct use.
     line that already has its marker adds two spaces instead of a second
     marker (markdown-style nesting); unindent removes one unit - two nesting
     spaces, then the marker itself. Whitespace formats add/remove a tab or
-    up to four spaces. Each operation is a single undo step. Line scoping
+    up to four spaces (up to `tab_width` spaces while *Tab inserts spaces* is on). Each operation is a single undo step. Line scoping
     follows logical lines, so word wrap does not fragment the target.
   - *Enter continues lists*: pressing Enter on a line starting with a marker
     (`* `, `- `, or the custom prefix, at any nesting depth) starts the next

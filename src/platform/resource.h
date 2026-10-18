@@ -143,6 +143,8 @@
 #define ID_PREF_ASSOC_NOTE 3175
 #define ID_PREF_ASSOC_DEFAULTS 3176
 #define ID_PREF_FIND_SEED 3177
+#define ID_PREF_TAB_SPACES 3178
+#define ID_PREF_TAB_WIDTH 3179
 
 // Static text controls
 #define IDC_STATIC -1

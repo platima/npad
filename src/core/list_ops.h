@@ -60,6 +60,20 @@ char *list_replace_all(const char *text, const char *from, const char *to);
 char *list_indent_lines(const char *text, ListIndentFormat fmt, const char *custom_prefix);
 char *list_unindent_lines(const char *text, ListIndentFormat fmt, const char *custom_prefix);
 
+// The width of one indent step in the Spaces format when nothing says
+// otherwise: four spaces.
+#define LIST_INDENT_SPACES_DEFAULT_WIDTH 4
+
+// As above, with the Spaces format's unit set to space_width spaces (clamped
+// to 1..16): indent prepends that many, unindent strips up to that many. Used
+// when "Tab inserts spaces" is on, so a list indents by the same width as the
+// Tab key. Every other format ignores space_width (marker nesting stays two
+// spaces, Tab stays a tab character, custom stays what the user typed).
+char *list_indent_lines_w(const char *text, ListIndentFormat fmt, const char *custom_prefix,
+                          int space_width);
+char *list_unindent_lines_w(const char *text, ListIndentFormat fmt, const char *custom_prefix,
+                            int space_width);
+
 // The list-bullet marker for a format as a fresh malloc'd string (caller
 // frees), e.g. "- ", "* ", or the custom prefix. Whitespace formats (spaces,
 // tab, or a whitespace-only custom prefix) are not bullets, so "- " is

@@ -14,8 +14,8 @@
 
 // Version Information (keep in sync with src/main.h)
 1 VERSIONINFO
-FILEVERSION 0,35,1,0
-PRODUCTVERSION 0,35,1,0
+FILEVERSION 0,36,0,0
+PRODUCTVERSION 0,36,0,0
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0x0L
 FILEOS VOS__WINDOWS32
@@ -28,12 +28,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Platima"
             VALUE "FileDescription", "npad - Lightweight Text Editor"
-            VALUE "FileVersion", "0.35.1.0"
+            VALUE "FileVersion", "0.36.0.0"
             VALUE "InternalName", "npad"
             VALUE "LegalCopyright", "Copyright © 2025-2026 Platima"
             VALUE "OriginalFilename", "npad.exe"
             VALUE "ProductName", "npad"
-            VALUE "ProductVersion", "0.35.1.0"
+            VALUE "ProductVersion", "0.36.0.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -134,7 +134,7 @@ BEGIN
 END
 
 // Preferences: General page
-IDD_PREFS_GENERAL DIALOGEX 0, 0, 240, 218
+IDD_PREFS_GENERAL DIALOGEX 0, 0, 240, 236
 STYLE DS_SETFONT | DS_FIXEDSYS | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "General"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
@@ -142,17 +142,20 @@ BEGIN
     CONTROL         "Enable &auto-save", ID_PREF_AUTOSAVE_ENABLED, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 10, 12, 150, 10
     LTEXT           "Auto-save &interval (seconds):", IDC_STATIC, 22, 30, 120, 8
     EDITTEXT        ID_PREF_AUTOSAVE_INTERVAL, 150, 28, 44, 13, ES_AUTOHSCROLL | ES_NUMBER
-    LTEXT           "&Large file warning threshold (MB):", IDC_STATIC, 10, 52, 130, 8
-    EDITTEXT        ID_PREF_LARGE_FILE_MB, 150, 50, 44, 13, ES_AUTOHSCROLL | ES_NUMBER
-    LTEXT           "Ma&x recent files (0-10):", IDC_STATIC, 10, 74, 130, 8
-    EDITTEXT        ID_PREF_RECENT_MAX, 150, 72, 44, 13, ES_AUTOHSCROLL | ES_NUMBER
-    PUSHBUTTON      "&Clear Recent Files Now", ID_PREF_RECENT_CLEAR, 10, 90, 110, 14
-    CONTROL         "Enable &session resume / crash recovery", ID_PREF_SESSION_ENABLED, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 114, 220, 18
-    LTEXT           "Snapshot i&nterval (seconds):", IDC_STATIC, 22, 138, 120, 8
-    EDITTEXT        ID_PREF_SESSION_INTERVAL, 150, 136, 44, 13, ES_AUTOHSCROLL | ES_NUMBER
-    CONTROL         "Ctrl+N opens a new win&dow (Ctrl+Shift+N clears the current one)", ID_PREF_CTRL_N_WINDOW, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 160, 220, 20
-    CONTROL         "Tell me when an open file is changed by another program", ID_PREF_WATCH_FILE, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 180, 220, 14
-    CONTROL         "&Fill Find with the selected text", ID_PREF_FIND_SEED, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 198, 220, 14
+    LTEXT           "&Large file warning threshold (MB):", IDC_STATIC, 10, 50, 130, 8
+    EDITTEXT        ID_PREF_LARGE_FILE_MB, 150, 48, 44, 13, ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "Ma&x recent files (0-10):", IDC_STATIC, 10, 70, 130, 8
+    EDITTEXT        ID_PREF_RECENT_MAX, 150, 68, 44, 13, ES_AUTOHSCROLL | ES_NUMBER
+    PUSHBUTTON      "&Clear Recent Files Now", ID_PREF_RECENT_CLEAR, 10, 84, 110, 14
+    CONTROL         "Enable &session resume / crash recovery", ID_PREF_SESSION_ENABLED, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 104, 220, 14
+    LTEXT           "Snapshot i&nterval (seconds):", IDC_STATIC, 22, 126, 120, 8
+    EDITTEXT        ID_PREF_SESSION_INTERVAL, 150, 124, 44, 13, ES_AUTOHSCROLL | ES_NUMBER
+    CONTROL         "Ctrl+N opens a new win&dow (Ctrl+Shift+N clears the current one)", ID_PREF_CTRL_N_WINDOW, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 144, 220, 20
+    CONTROL         "Tell me when an open file is changed by another program", ID_PREF_WATCH_FILE, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 168, 220, 14
+    CONTROL         "&Fill Find with the selected text", ID_PREF_FIND_SEED, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 186, 220, 14
+    CONTROL         "&Tab key inserts spaces up to the next tab stop", ID_PREF_TAB_SPACES, "Button", BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 10, 204, 220, 12
+    LTEXT           "Tab &width (columns, 1-16):", IDC_STATIC, 22, 220, 120, 8
+    EDITTEXT        ID_PREF_TAB_WIDTH, 150, 218, 44, 13, ES_AUTOHSCROLL | ES_NUMBER
 END
 
 // Preferences: Appearance page

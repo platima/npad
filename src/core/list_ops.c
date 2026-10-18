@@ -330,10 +330,19 @@ char *list_replace_all(const char *text, const char *from, const char *to) {
 
 // --- Indent / unindent -----------------------------------------------------
 
-static const char *indent_prefix(ListIndentFormat fmt) {
+#define MAX_SPACE_WIDTH 16
+static const char SPACE_RUN[MAX_SPACE_WIDTH + 1] = "                "; // 16 spaces
+
+// The spaces format's indent unit: space_width spaces, clamped to 1..16
+// (LIST_INDENT_SPACES_DEFAULT_WIDTH is the historic four).
+static int clamp_space_width(int w) {
+    return w < 1 ? 1 : (w > MAX_SPACE_WIDTH ? MAX_SPACE_WIDTH : w);
+}
+
+static const char *indent_prefix(ListIndentFormat fmt, int space_width) {
     switch (fmt) {
         case LIST_INDENT_SPACES:
-            return "    ";
+            return SPACE_RUN + (MAX_SPACE_WIDTH - clamp_space_width(space_width));
         case LIST_INDENT_TAB:
             return "\t";
         case LIST_INDENT_ASTERISK:
@@ -352,10 +361,10 @@ static const char *indent_prefix(ListIndentFormat fmt) {
 
 // The prefix actually in effect: the custom string for LIST_INDENT_CUSTOM,
 // otherwise the built-in table above.
-static const char *effective_prefix(ListIndentFormat fmt, const char *custom) {
+static const char *effective_prefix(ListIndentFormat fmt, const char *custom, int space_width) {
     if (fmt == LIST_INDENT_CUSTOM)
         return custom ? custom : "";
-    return indent_prefix(fmt);
+    return indent_prefix(fmt, space_width);
 }
 
 static bool prefix_is_whitespace(const char *p) {
@@ -382,8 +391,9 @@ static bool is_marker_format(ListIndentFormat fmt, const char *custom) {
 // rich-text paste converter to stamp pasted list items in the user's style.
 // NULL on OOM.
 char *list_bullet_marker(ListIndentFormat fmt, const char *custom_prefix) {
-    const char *p =
-        is_marker_format(fmt, custom_prefix) ? effective_prefix(fmt, custom_prefix) : "- ";
+    const char *p = is_marker_format(fmt, custom_prefix)
+                        ? effective_prefix(fmt, custom_prefix, LIST_INDENT_SPACES_DEFAULT_WIDTH)
+                        : "- ";
     size_t n = strlen(p);
     char *out = malloc(n + 1);
     if (!out)
@@ -439,10 +449,10 @@ static bool line_has_bullet(const char *line, size_t len, const char *custom) {
 
 // Build a transformed document by applying fn(line,len,out,fmt,custom) per line.
 typedef size_t (*LineXform)(const char *line, size_t len, char *out, ListIndentFormat fmt,
-                            const char *custom);
+                            const char *custom, int space_width);
 
 static char *apply_per_line(const char *text, ListIndentFormat fmt, const char *custom,
-                            LineXform fn, size_t max_grow) {
+                            int space_width, LineXform fn, size_t max_grow) {
     if (!text)
         return NULL;
     size_t count;
@@ -460,7 +470,7 @@ static char *apply_per_line(const char *text, ListIndentFormat fmt, const char *
 
     size_t o = 0;
     for (size_t i = 0; i < count; i++) {
-        o += fn(lines[i].start, lines[i].len, out + o, fmt, custom);
+        o += fn(lines[i].start, lines[i].len, out + o, fmt, custom, space_width);
         if (i + 1 < count)
             out[o++] = '\n';
     }
@@ -472,7 +482,7 @@ static char *apply_per_line(const char *text, ListIndentFormat fmt, const char *
 }
 
 static size_t indent_line(const char *line, size_t len, char *out, ListIndentFormat fmt,
-                          const char *custom) {
+                          const char *custom, int space_width) {
     if (is_marker_format(fmt, custom) && line_has_bullet(line, len, custom)) {
         // Already a bullet (of any marker style): deepen with nesting
         // spaces, keep the single marker it has
@@ -480,7 +490,7 @@ static size_t indent_line(const char *line, size_t len, char *out, ListIndentFor
         memcpy(out + strlen(NEST), line, len);
         return strlen(NEST) + len;
     }
-    const char *p = effective_prefix(fmt, custom);
+    const char *p = effective_prefix(fmt, custom, space_width);
     size_t pl = strlen(p);
     memcpy(out, p, pl);
     memcpy(out + pl, line, len);
@@ -488,7 +498,7 @@ static size_t indent_line(const char *line, size_t len, char *out, ListIndentFor
 }
 
 static size_t unindent_line(const char *line, size_t len, char *out, ListIndentFormat fmt,
-                            const char *custom) {
+                            const char *custom, int space_width) {
     if (is_marker_format(fmt, custom)) {
         // Marker-aware: act on whatever bullet the line actually carries,
         // not just the configured format's marker
@@ -526,9 +536,11 @@ static size_t unindent_line(const char *line, size_t len, char *out, ListIndentF
             return len - 1;
         }
     }
-    // Spaces (or a tab line with leading spaces): remove up to four leading spaces
+    // Spaces (or a tab line with leading spaces): remove up to one unit
+    // (four by default) of leading spaces
+    size_t unit = (size_t) clamp_space_width(space_width);
     size_t strip = 0;
-    while (strip < 4 && strip < len && line[strip] == ' ')
+    while (strip < unit && strip < len && line[strip] == ' ')
         strip++;
     memcpy(out, line + strip, len - strip);
     return len - strip;
@@ -546,17 +558,27 @@ static char *copy_text(const char *text) {
     return out;
 }
 
-char *list_indent_lines(const char *text, ListIndentFormat fmt, const char *custom_prefix) {
+char *list_indent_lines_w(const char *text, ListIndentFormat fmt, const char *custom_prefix,
+                          int space_width) {
     if (fmt == LIST_INDENT_CUSTOM && (!custom_prefix || !*custom_prefix))
         return copy_text(text);
     // Growth per line is the full prefix (NEST is shorter); keep the historic
     // 4-byte floor for the built-in formats
-    size_t pl = strlen(effective_prefix(fmt, custom_prefix));
-    return apply_per_line(text, fmt, custom_prefix, indent_line, pl > 4 ? pl : 4);
+    size_t pl = strlen(effective_prefix(fmt, custom_prefix, space_width));
+    return apply_per_line(text, fmt, custom_prefix, space_width, indent_line, pl > 4 ? pl : 4);
+}
+
+char *list_unindent_lines_w(const char *text, ListIndentFormat fmt, const char *custom_prefix,
+                            int space_width) {
+    if (fmt == LIST_INDENT_CUSTOM && (!custom_prefix || !*custom_prefix))
+        return copy_text(text);
+    return apply_per_line(text, fmt, custom_prefix, space_width, unindent_line, 0);
+}
+
+char *list_indent_lines(const char *text, ListIndentFormat fmt, const char *custom_prefix) {
+    return list_indent_lines_w(text, fmt, custom_prefix, LIST_INDENT_SPACES_DEFAULT_WIDTH);
 }
 
 char *list_unindent_lines(const char *text, ListIndentFormat fmt, const char *custom_prefix) {
-    if (fmt == LIST_INDENT_CUSTOM && (!custom_prefix || !*custom_prefix))
-        return copy_text(text);
-    return apply_per_line(text, fmt, custom_prefix, unindent_line, 0);
+    return list_unindent_lines_w(text, fmt, custom_prefix, LIST_INDENT_SPACES_DEFAULT_WIDTH);
 }
