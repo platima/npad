@@ -177,8 +177,8 @@ sudo pacman -Syu npad</code></pre></div>
           <p class="fine">Packages are attached to every <a href="https://github.com/platima/npad/releases/latest" target="_blank" rel="noopener noreferrer">GitHub release<span class="sr-only"> (opens in a new tab)</span></a>; file names include the version number. They do not update themselves. The oldest supported systems are Debian 12 and Ubuntu 22.04 (riscv64: Debian 13 and Ubuntu 24.04). Not sure which you need? <code>uname -m</code> tells you.</p>
 
           <div class="box">
-            <h3>Portable <span class="where">any glibc distribution with GTK&nbsp;3</span></h3>
-            <p>The same binary the packages install, with its launcher, icons and a README. Unpack it and run it in place: nothing needs root, and it does not update itself.</p>
+            <h3>Portable <span class="where">for distributions without a package</span></h3>
+            <p>The same binary the packages install, with its launcher, icons and a README. Unpack it and run it in place: nothing needs root, and it does not update itself. It needs what the packages need: GTK&nbsp;3.24 and a system at least as new as Debian&nbsp;12 or Ubuntu&nbsp;22.04 (riscv64: Debian&nbsp;13 or Ubuntu&nbsp;24.04), which any current rolling distribution such as Arch is.</p>
             <ul class="files">
               <li><span class="arch">x86_64</span><span><code>npad-v&lt;version&gt;-portable-linux-x86_64.tar.gz</code></span></li>
               <li><span class="arch">aarch64</span><span><code>npad-v&lt;version&gt;-portable-linux-aarch64.tar.gz</code></span></li>
