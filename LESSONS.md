@@ -686,6 +686,29 @@ keycode == keyval, so Ctrl+Shift+letter does not resolve to the accelerator
 GTK would match on a real keymap; call `gtk_accel_groups_activate(window,
 lowercase_key, state)` for those.
 
+**`dpkg -S` answers for the path the package lists, not the file you ran.** On
+a merged-/usr system `dpkg -S /usr/bin/ls` finds nothing, because coreutils
+registers `/bin/ls`; the probe looked like a broken ownership query. npad's
+package ships `/usr/bin/npad` and `/proc/self/exe` resolves the `/bin`
+symlink to it, so asking about the resolved path is right for npad - but test
+the query against a file a package registers under `/usr/bin` (`/usr/bin/dpkg`).
+Strip a trailing ` (deleted)` from `/proc/self/exe` too: a package upgrade under
+a running npad leaves the old inode with that suffix.
+
+**"The first npad window" on the session bus includes other people's
+windows.** The Linux launch check runs only when no other npad instance is on
+the bus (each window is its own process, standing in for Windows' primary
+window). In WSL every session shares one bus, so a launch check in Broadway
+silently stood down because sibling sessions had npads open on other
+displays. -> Test it under `dbus-run-session -- npad-linux`.
+
+**A `GtkMessageDialog` heading is bold only when there is secondary text, and
+the secondary text is centred as a block.** A label added to the message area
+under the secondary text sits a few pixels left of it, and dropping the
+secondary text for labels of your own makes the heading plain. -> Own labels
+with `xalign 0` for the body, and bold/larger markup on the heading
+(`gtk_message_dialog_set_markup`).
+
 **GtkNotebook does not take Ctrl+Tab.** A notebook looks like a Windows
 property sheet, where Ctrl+Tab / Ctrl+Shift+Tab change page from anywhere in
 it. GTK binds only Ctrl+PageUp / PageDown, and only while focus is on the
@@ -879,6 +902,22 @@ the app was gone). → Use your own display number (`:7` serves 8087) and run
 renamed copies of `broadwayd` and the binary so a sibling's `pkill` cannot
 match them. Also: the pane's screenshot trails the last action by a frame, and
 the `type` action does not reach GTK widgets (use `key`).
+
+**Moving a Broadway dialog's `<canvas>` moves only the picture.** Clicks still
+go to where GTK thinks the window is (often at negative coordinates), so a
+click on a button you moved into view lands elsewhere. Press it by its
+mnemonic (Alt+S for "_Skip This Version") instead. Ctrl+Page Down did not
+switch GtkNotebook pages there either; open a page from code (Help > Update
+Available opens Preferences on Updates).
+
+**The Makefile's binaries do not depend on headers.** Editing only
+`src/main.h` (say, to number a test build lower than the latest release) and
+running `make linux-gtk` keeps the old binary, which still reports the old
+version. -> `rm` the binary first.
+
+**`make format-check` covers `src/` only.** Running clang-format over a test
+file reflows lines that were never formatted, which then show up in the diff
+as changes you did not make; format only `src/`, or only your new lines.
 
 **A user-local Xvfb (`apt-get download` + `dpkg -x`) cannot start.** It runs
 the keymap compiler from a path compiled into the binary (`/usr/bin/xkbcomp`)

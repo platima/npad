@@ -15,6 +15,7 @@
  *   ui_gtk_lists.c    - the optional Markdown list tools: menu, transforms, list
  *                       continuation, cut-a-line, rich-text paste
  *   ui_gtk_prefs.c    - Preferences and Format > Font
+ *   ui_gtk_update.c   - Check for Updates (notifies and advises; never installs)
  *   ui_gtk_instance.c - cross-instance messaging over D-Bus: settings sync,
  *                       view sync, Close All, instance counting
  *
@@ -104,6 +105,7 @@ typedef enum {
     NPAD_CMD_VIEW_ZOOM_OUT,
     NPAD_CMD_VIEW_ZOOM_RESET,
     NPAD_CMD_VIEW_STATUS_BAR,
+    NPAD_CMD_HELP_CHECK_UPDATES, // Or "Update Available": opens Preferences > Updates
     NPAD_CMD_HELP_ABOUT,
     // Markdown list tools (ui_gtk_lists.c)
     NPAD_CMD_LIST_SORT_ASC,
@@ -141,7 +143,9 @@ struct Window {
     // Menu items whose label, check state or sensitivity changes
     GtkWidget *command_items[NPAD_CMD_COUNT];
     GtkWidget *recent_menu;
-    bool syncing_menu; // Set while code (not the user) flips a check item
+    GtkWidget *help_item;       // The Help title: gains a dot while an update waits
+    bool update_item_available; // Check for Updates currently reads "Update Available"
+    bool syncing_menu;          // Set while code (not the user) flips a check item
 
     // View state. Word wrap and the status bar are shared settings; font
     // type and zoom are per-window, seeded from the Defaults preferences.
@@ -298,8 +302,13 @@ bool npad_gtk_lists_paste(Window *window, NpadPasteKind kind);
 // --- ui_gtk_prefs.c ----------------------------------------------------------
 
 // The modal Preferences dialog; show_debug adds the hidden Debug page and
-// opens on it. Every control saves and broadcasts as it changes.
+// opens on it. Controls stage their changes until Apply or OK.
 void npad_gtk_show_preferences(Window *window, bool show_debug);
+// The same dialog, opened on the Updates page (Help > Update Available)
+void npad_gtk_show_preferences_updates(Window *window);
+// Re-read the Updates page's labels and buttons, when it is open (a check
+// started or finished, the install source became known, settings reloaded)
+void npad_gtk_prefs_updates_refresh(void);
 // Format > Font: GtkFontChooserDialog writing the font keys for the font type
 // this window is showing
 void npad_gtk_show_font_dialog(Window *window);
@@ -309,6 +318,27 @@ char *npad_gtk_theme_diagnostics(void);
 
 // The icon name for windows and the About dialog (ui_gtk.c)
 const char *npad_gtk_app_icon_name(void);
+
+// --- ui_gtk_update.c ---------------------------------------------------------
+
+// Check for Updates: look up the latest release in a worker and report it.
+// manual = the user asked (results and errors are shown); otherwise it is the
+// launch check, which obeys update_mode and the skip and fails silently.
+// False when a check is already running.
+bool npad_gtk_update_check(Window *window, bool manual);
+// The Help item: a check, or the Updates page while an update is waiting
+void npad_gtk_update_command(Window *window);
+// The optional launch check (update_check_on_launch), first window only
+void npad_gtk_update_launch_check(Window *window);
+// The Help-menu dot and the item's label, from the settings
+void npad_gtk_update_apply_indicator(Window *window);
+// Whether a check is running (the Updates page greys Check Now)
+bool npad_gtk_update_busy(void);
+// How to update this copy, from how it was installed; NULL until known (the
+// first call starts the detection, and the Updates page refreshes when done)
+const char *npad_gtk_update_advice(void);
+// This build's version as releases tag it: "vMAJOR.MINOR.PATCH"
+void npad_gtk_update_current_version(char *out, size_t cap);
 
 // --- ui_gtk_instance.c -------------------------------------------------------
 

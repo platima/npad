@@ -10,6 +10,7 @@
 #include "test_framework.h"
 #include "../src/core/update_check.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 TEST_CASE(extract_tag_basic) {
@@ -237,6 +238,235 @@ TEST_CASE(find_asset_arm64_never_falls_back_to_x64) {
                 "no arm64 digest on an x64-only release");
 }
 
+// --- HTTP responses (the Linux check) ---------------------------------------
+
+static bool parse(const char *raw, int *status, char **body, size_t *len) {
+    return update_http_parse_response(raw, strlen(raw), status, body, len);
+}
+
+TEST_CASE(http_plain_body) {
+    int status = 0;
+    char *body = NULL;
+    size_t len = 0;
+    TEST_ASSERT(parse("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"tag_name\":"
+                      "\"v0.36.0\"}",
+                      &status, &body, &len),
+                "a body read to the close parses");
+    TEST_ASSERT_EQ(200, status, "status code");
+    TEST_ASSERT_STR_EQ("{\"tag_name\":\"v0.36.0\"}", body, "body is everything after the headers");
+    TEST_ASSERT_EQ(22, (int) len, "body length");
+    free(body);
+}
+
+TEST_CASE(http_content_length) {
+    int status = 0;
+    char *body = NULL;
+    TEST_ASSERT(
+        parse("HTTP/1.1 200 OK\r\ncontent-length: 5\r\n\r\nhello trailing", &status, &body, NULL),
+        "Content-Length (any case) is honoured");
+    TEST_ASSERT_STR_EQ("hello", body, "body cut to Content-Length");
+    free(body);
+    TEST_ASSERT(!parse("HTTP/1.1 200 OK\r\nContent-Length: 50\r\n\r\nshort", &status, &body, NULL),
+                "a body shorter than Content-Length is a failure");
+    TEST_ASSERT(body == NULL, "no body on failure");
+}
+
+TEST_CASE(http_chunked) {
+    int status = 0;
+    char *body = NULL;
+    size_t len = 0;
+    TEST_ASSERT(parse("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+                      "4\r\n{\"ta\r\n"
+                      "f;ext=1\r\ng_name\":\"v1.0.0\r\n"
+                      "2\r\n\"}\r\n"
+                      "0\r\n\r\n",
+                      &status, &body, &len),
+                "chunked body parses");
+    TEST_ASSERT_STR_EQ("{\"tag_name\":\"v1.0.0\"}", body, "chunks joined, extension ignored");
+    TEST_ASSERT_EQ(21, (int) len, "de-chunked length");
+    free(body);
+
+    TEST_ASSERT(!parse("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n10\r\nshort", &status,
+                       &body, NULL),
+                "a chunk cut short fails");
+    TEST_ASSERT(
+        !parse("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\nabc\r\n0\r\n\r\n",
+               &status, &body, NULL),
+        "a malformed chunk size fails");
+    TEST_ASSERT(!parse("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+                       "FFFFFFFFFFFFFFFFFFFF\r\nabc\r\n0\r\n\r\n",
+                       &status, &body, NULL),
+                "a huge chunk size fails rather than overflowing");
+}
+
+TEST_CASE(http_status_and_garbage) {
+    int status = 0;
+    char *body = NULL;
+    TEST_ASSERT(parse("HTTP/1.1 403 rate limit exceeded\r\n\r\n{}", &status, &body, NULL),
+                "an error status still parses");
+    TEST_ASSERT_EQ(403, status, "error status reported");
+    free(body);
+    TEST_ASSERT(!parse("SSH-2.0-OpenSSH\r\n\r\n", &status, &body, NULL), "not HTTP fails");
+    TEST_ASSERT(!parse("HTTP/1.1 200 OK\r\nServer: x\r\n", &status, &body, NULL),
+                "headers that never end fail");
+    TEST_ASSERT(!parse("HTTP/1.1 2x0 OK\r\n\r\n", &status, &body, NULL), "bad status fails");
+    TEST_ASSERT(!update_http_parse_response(NULL, 0, &status, &body, NULL), "NULL fails");
+}
+
+// --- How this copy was installed --------------------------------------------
+
+static UpdateInstallSource source_of(UpdatePackageOwner owner, const char *package, bool apt,
+                                     bool dnf, bool pacman) {
+    UpdateInstallFacts facts = { owner, package, apt, dnf, pacman };
+    return update_install_source(&facts);
+}
+
+TEST_CASE(install_source_decision) {
+    TEST_ASSERT_EQ(UPDATE_SOURCE_APT_REPO, source_of(UPDATE_OWNER_DPKG, "npad", true, false, false),
+                   "dpkg + apt source = apt repo");
+    TEST_ASSERT_EQ(UPDATE_SOURCE_DEB_FILE, source_of(UPDATE_OWNER_DPKG, "npad", false, true, false),
+                   "dpkg without the apt source = a downloaded .deb (a dnf file is irrelevant)");
+    TEST_ASSERT_EQ(UPDATE_SOURCE_DNF_REPO, source_of(UPDATE_OWNER_RPM, "npad", false, true, false),
+                   "rpm + dnf repo = dnf repo");
+    TEST_ASSERT_EQ(UPDATE_SOURCE_RPM_FILE, source_of(UPDATE_OWNER_RPM, "npad", true, false, false),
+                   "rpm without the dnf repo = a downloaded rpm");
+    TEST_ASSERT_EQ(UPDATE_SOURCE_PACMAN_REPO,
+                   source_of(UPDATE_OWNER_PACMAN, "npad", false, false, true),
+                   "pacman + [npad] = pacman repo");
+    TEST_ASSERT_EQ(UPDATE_SOURCE_PACMAN_FILE,
+                   source_of(UPDATE_OWNER_PACMAN, "npad", false, false, false),
+                   "pacman without [npad] = installed by hand");
+    TEST_ASSERT_EQ(UPDATE_SOURCE_AUR,
+                   source_of(UPDATE_OWNER_PACMAN, "npad-bin", false, false, true),
+                   "npad-bin is the AUR even with [npad] configured");
+    TEST_ASSERT_EQ(UPDATE_SOURCE_AUR,
+                   source_of(UPDATE_OWNER_PACMAN, "npad-git", false, false, false),
+                   "npad-git is the AUR");
+    TEST_ASSERT_EQ(UPDATE_SOURCE_PACMAN_FILE,
+                   source_of(UPDATE_OWNER_PACMAN, NULL, false, false, false),
+                   "unknown pacman package name is not assumed to be the AUR");
+    TEST_ASSERT_EQ(UPDATE_SOURCE_PORTABLE, source_of(UPDATE_OWNER_NONE, NULL, true, true, true),
+                   "not owned = portable, whatever repos exist");
+    TEST_ASSERT_EQ(UPDATE_SOURCE_PORTABLE, update_install_source(NULL), "NULL = portable");
+}
+
+TEST_CASE(install_advice_ends_with_the_command) {
+    struct {
+        UpdateInstallSource source;
+        const char *last_line;
+    } cases[] = {
+        { UPDATE_SOURCE_APT_REPO, "sudo apt update && sudo apt upgrade" },
+        { UPDATE_SOURCE_DNF_REPO, "sudo dnf upgrade npad" },
+        { UPDATE_SOURCE_PACMAN_REPO, "sudo pacman -Syu" },
+        { UPDATE_SOURCE_AUR, "yay -Syu" },
+        { UPDATE_SOURCE_DEB_FILE, "curl -fsSL https://pkg.npad.dev/install.sh | sudo sh" },
+        { UPDATE_SOURCE_RPM_FILE, "curl -fsSL https://pkg.npad.dev/install.sh | sudo sh" },
+        { UPDATE_SOURCE_PACMAN_FILE, "https://pkg.npad.dev" },
+        { UPDATE_SOURCE_PORTABLE, "https://github.com/platima/npad/releases/latest" },
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        const char *advice = update_install_advice(cases[i].source);
+        const char *nl = advice ? strrchr(advice, '\n') : NULL;
+        TEST_ASSERT(nl != NULL, "advice has a command line");
+        TEST_ASSERT_STR_EQ(cases[i].last_line, nl ? nl + 1 : "", "advice's last line");
+        TEST_ASSERT(strstr(advice, "Npad") == NULL && strstr(advice, "NPAD") == NULL,
+                    "the name is always lowercase");
+    }
+}
+
+TEST_CASE(exe_may_be_packaged) {
+    TEST_ASSERT(update_exe_may_be_packaged("/usr/bin/npad"), "/usr/bin");
+    TEST_ASSERT(update_exe_may_be_packaged("/bin/npad"), "/bin (unmerged /usr)");
+    TEST_ASSERT(!update_exe_may_be_packaged("/usr/local/bin/npad"), "make install");
+    TEST_ASSERT(!update_exe_may_be_packaged("/home/me/.local/bin/npad"), "~/.local/bin");
+    TEST_ASSERT(!update_exe_may_be_packaged("/home/me/npad-v0.35.1-linux-amd64/npad"), "tarball");
+    TEST_ASSERT(!update_exe_may_be_packaged("/usr/bin/sub/npad"), "below /usr/bin");
+    TEST_ASSERT(!update_exe_may_be_packaged("/usr/bin/"), "no file name");
+    TEST_ASSERT(!update_exe_may_be_packaged(NULL), "NULL");
+}
+
+TEST_CASE(repo_text_names_npad) {
+    TEST_ASSERT(
+        update_repo_text_names_npad("Types: deb\nURIs: https://pkg.npad.dev/apt\n"
+                                    "Suites: stable\nSigned-By: /etc/apt/keyrings/npad.asc\n"),
+        "deb822 .sources");
+    TEST_ASSERT(
+        update_repo_text_names_npad("deb [signed-by=/k.asc] https://pkg.npad.dev/apt stable "
+                                    "main\r\n"),
+        "one-line .list, CRLF");
+    TEST_ASSERT(update_repo_text_names_npad("[npad]\nname=npad\nbaseurl=https://PKG.npad.dev/rpm/"
+                                            "$basearch\n"),
+                "dnf .repo, host case-insensitive");
+    TEST_ASSERT(!update_repo_text_names_npad("# deb https://pkg.npad.dev/apt stable main\n"),
+                "commented out");
+    TEST_ASSERT(!update_repo_text_names_npad("  ; baseurl=https://pkg.npad.dev/rpm\n"),
+                "ini comment");
+    TEST_ASSERT(!update_repo_text_names_npad("deb http://deb.debian.org/debian bookworm main\n"),
+                "another repository");
+    TEST_ASSERT(!update_repo_text_names_npad(""), "empty");
+    TEST_ASSERT(!update_repo_text_names_npad(NULL), "NULL");
+}
+
+TEST_CASE(pacman_conf_has_npad) {
+    TEST_ASSERT(update_pacman_conf_has_npad("[options]\nArchitecture = auto\n\n[core]\n"
+                                            "Include = /etc/pacman.d/mirrorlist\n\n[npad]\n"
+                                            "Server = https://pkg.npad.dev/arch/$arch\n"),
+                "[npad] section");
+    TEST_ASSERT(update_pacman_conf_has_npad("  [npad]   # npad's own repo\r\n"),
+                "indented, trailing comment, CRLF");
+    TEST_ASSERT(!update_pacman_conf_has_npad("#[npad]\n#Server = https://pkg.npad.dev/arch\n"),
+                "commented out");
+    TEST_ASSERT(!update_pacman_conf_has_npad("[npad-testing]\n"), "a different section");
+    TEST_ASSERT(!update_pacman_conf_has_npad("[core]\n"), "no section");
+    TEST_ASSERT(!update_pacman_conf_has_npad(NULL), "NULL");
+}
+
+TEST_CASE(owner_output_parsing) {
+    char pkg[64];
+    TEST_ASSERT(
+        update_parse_owner_output(UPDATE_OWNER_DPKG, "npad: /usr/bin/npad\n", pkg, sizeof(pkg)),
+        "dpkg -S");
+    TEST_ASSERT_STR_EQ("npad", pkg, "dpkg package name");
+    TEST_ASSERT(update_parse_owner_output(UPDATE_OWNER_DPKG, "npad:amd64: /usr/bin/npad\n", pkg,
+                                          sizeof(pkg)),
+                "dpkg -S with an arch qualifier");
+    TEST_ASSERT_STR_EQ("npad", pkg, "qualifier dropped");
+    TEST_ASSERT(update_parse_owner_output(UPDATE_OWNER_DPKG,
+                                          "diversion by foo from: /usr/bin/npad\n"
+                                          "diversion by foo to: /usr/bin/npad.real\n"
+                                          "npad, foo: /usr/bin/npad\n",
+                                          pkg, sizeof(pkg)),
+                "dpkg -S with diversions and two owners");
+    TEST_ASSERT_STR_EQ("npad", pkg, "first owner");
+    TEST_ASSERT(!update_parse_owner_output(
+                    UPDATE_OWNER_DPKG, "dpkg-query: no path found matching pattern /usr/bin/npad\n",
+                    pkg, sizeof(pkg)),
+                "dpkg not owned");
+
+    TEST_ASSERT(update_parse_owner_output(UPDATE_OWNER_RPM, "npad", pkg, sizeof(pkg)),
+                "rpm --queryformat, no newline");
+    TEST_ASSERT_STR_EQ("npad", pkg, "rpm package name");
+    TEST_ASSERT(!update_parse_owner_output(UPDATE_OWNER_RPM,
+                                           "file /usr/bin/npad is not owned by any package\n", pkg,
+                                           sizeof(pkg)),
+                "rpm not owned");
+
+    TEST_ASSERT(update_parse_owner_output(UPDATE_OWNER_PACMAN, "npad-bin\n", pkg, sizeof(pkg)),
+                "pacman -Qqo");
+    TEST_ASSERT_STR_EQ("npad-bin", pkg, "pacman package name");
+    TEST_ASSERT(!update_parse_owner_output(UPDATE_OWNER_PACMAN,
+                                           "error: No package owns /usr/bin/npad\n", pkg,
+                                           sizeof(pkg)),
+                "pacman not owned");
+
+    TEST_ASSERT(!update_parse_owner_output(UPDATE_OWNER_RPM, "", pkg, sizeof(pkg)), "empty");
+    TEST_ASSERT(!update_parse_owner_output(UPDATE_OWNER_NONE, "npad", pkg, sizeof(pkg)),
+                "no owner kind");
+    char tiny[3];
+    TEST_ASSERT(!update_parse_owner_output(UPDATE_OWNER_RPM, "npad", tiny, sizeof(tiny)),
+                "name longer than the buffer");
+}
+
 int main(void) {
     TEST_INIT();
 
@@ -255,6 +485,16 @@ int main(void) {
     RUN_TEST(build_arch_matches_compiler_target);
     RUN_TEST(find_asset_picks_the_builds_architecture);
     RUN_TEST(find_asset_arm64_never_falls_back_to_x64);
+    RUN_TEST(http_plain_body);
+    RUN_TEST(http_content_length);
+    RUN_TEST(http_chunked);
+    RUN_TEST(http_status_and_garbage);
+    RUN_TEST(install_source_decision);
+    RUN_TEST(install_advice_ends_with_the_command);
+    RUN_TEST(exe_may_be_packaged);
+    RUN_TEST(repo_text_names_npad);
+    RUN_TEST(pacman_conf_has_npad);
+    RUN_TEST(owner_output_parsing);
 
     TEST_SUMMARY();
     return 0;

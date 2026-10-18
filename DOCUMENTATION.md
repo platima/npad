@@ -154,8 +154,9 @@ The Linux desktop build (GTK 3; one binary for X11 and Wayland) has every
 feature of the Windows build and is in beta while it is tested on real
 desktops. It shares the settings keys and behaviour described here; its
 status, and the deliberate differences (window position on Wayland,
-colour schemes against a dark GTK theme, the Text Documents filter, no Check
-for Updates), are tracked in [LINUX_PORT.md](LINUX_PORT.md).
+colour schemes against a dark GTK theme, the Text Documents filter, a Check
+for Updates that notifies but never installs), are tracked in
+[LINUX_PORT.md](LINUX_PORT.md).
 
 Find, Find Next / Previous, Replace, Replace All and Go To Line (Ctrl+F,
 F3, Shift+F3, Ctrl+H, Ctrl+G, or a click on Ln/Col) behave as described
@@ -168,8 +169,8 @@ beside a term edge that is itself a letter, digit or underscore.
 
 Edit > Preferences (Ctrl+,) opens a dialog with the same pages, wording,
 settings keys and defaults as the Windows build: General, Appearance,
-Defaults, Markdown and Backup, plus the hidden Debug page (Ctrl+Shift+., or
-Shift+click Preferences). Differences:
+Defaults, Markdown, Backup, Updates and Associations, plus the hidden Debug
+page (Ctrl+Shift+., or Shift+click Preferences). Differences:
 
 - **OK / Cancel / Apply, as on Windows.** Changes are held until you press
   Apply (the dialog stays open) or OK (apply and close); Cancel, Esc or the
@@ -180,7 +181,8 @@ Shift+click Preferences). Differences:
   Import, the xdg-mime button and Reset All Preferences act immediately.
   Reset keeps the same things as on Windows and closes the dialog; Import
   Settings refuses a file that is not a JSON object.
-- **No Updates page.** Linux installs update through apt or dnf.
+- **Updates checks and advises; it never installs.** See
+  [Check for Updates on Linux](#check-for-updates-on-linux).
 - **Associations** is one explicit action, *Make npad the default text
   editor*, which runs `xdg-mime default io.github.platima.npad.desktop
   text/plain` for your account. Nothing runs until you click it, and the page
@@ -204,6 +206,39 @@ Shift+click Preferences). Differences:
   type the window is showing (monospace, proportional or OpenDyslexic) and
   the shared size, weight and italic keys, exactly as on Windows; Appearance
   has buttons for the monospace and proportional fonts directly.
+
+### Check for Updates on Linux
+
+Help > Check for Updates and Preferences > Updates work as on Windows, with
+the same settings keys and defaults (all off: npad makes no network request
+until you ask or opt in), except that npad on Linux never downloads or
+installs anything. When a newer release exists, the dialog - and the "How
+this copy updates" box on the Updates page - says how to update the way this
+copy was installed:
+
+| How npad was installed | What npad suggests |
+|---|---|
+| From the npad apt repository (pkg.npad.dev) | Your system's updater, or `sudo apt update && sudo apt upgrade` |
+| From the npad dnf repository | Your system's updater, or `sudo dnf upgrade npad` |
+| From the `[npad]` pacman repository | `sudo pacman -Syu` |
+| From the AUR (`npad-bin`, `npad-git`) | Your AUR helper, e.g. `yay -Syu` |
+| A downloaded .deb or rpm, no npad repository | The new package from the release page, or adding the repository once: `curl -fsSL https://pkg.npad.dev/install.sh \| sudo sh` |
+| An Arch package installed by hand | The new package, or the `[npad]` repository (see <https://pkg.npad.dev>) |
+| The portable tarball, or built from source | The release page, <https://github.com/platima/npad/releases/latest> |
+
+npad finds this out without root and without blocking the window: it asks
+`dpkg -S`, `rpm -qf` or `pacman -Qqo` which package owns its executable (only
+when it runs from `/usr/bin`), and reads the apt sources, `/etc/yum.repos.d`
+or `/etc/pacman.conf` for the npad repository. The dialog offers *View the
+Release Notes*, *Skip This Version* and *Close*; there is no Install Now and
+no "Download and install automatically" mode (a settings file that has
+`update_mode` set to `auto`, say imported from Windows, behaves as `prompt`).
+The launch check runs only from the first npad window you open, since each
+Linux window is its own process. The check uses GLib's TLS support, which
+comes from the glib-networking package (installed on practically every
+desktop); without it Help > Check for Updates says to install it (the launch
+check, as on Windows, fails silently).
+
 ### Editing behaviours on Linux
 
 These match the Windows build; the differences are noted.
@@ -318,7 +353,8 @@ you have; the apt and dnf repositories pick the right one by themselves.
   with"; README.txt also lists the commands that remove it. If GTK 3 is
   missing, install `libgtk-3-0t64` (Debian 13 / Ubuntu 24.04 and newer),
   `libgtk-3-0` (Debian 12 / Ubuntu 22.04, openSUSE) or `gtk3` (Fedora, Arch).
-  A portable copy never updates itself; the repositories below do. `make
+  A portable copy never updates itself; the repositories below do (Help >
+  Check for Updates still tells you when there is a new release). `make
   tarball` builds one into `dist/`.
 - **apt / dnf repository (recommended; updates arrive with the rest of the
   system).** The repositories at <https://pkg.npad.dev> are rebuilt from the
@@ -461,8 +497,8 @@ Updates** always works; these settings govern any *automatic* surfacing.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `update_mode` | string | `"off"` | How a found update surfaces: `off` (manual only), `notify` (a **●** on the Help menu title + an "Update Available" item, no dialog), `prompt` (show the update dialog), `auto` (download + SHA-256-verify silently, then one confirmation before installing). |
-| `update_check_on_launch` | bool | `false` | Run a single check once after the window first paints (primary window only). Automatic/launch checks fail silently. |
+| `update_mode` | string | `"off"` | How a found update surfaces: `off` (manual only), `notify` (a **●** on the Help menu title + an "Update Available" item, no dialog), `prompt` (show the update dialog), `auto` (download + SHA-256-verify silently, then one confirmation before installing; Windows only - Linux treats it as `prompt`). |
+| `update_check_on_launch` | bool | `false` | Run a single check once after the window first paints (primary window only; on Linux, the first npad window open). Automatic/launch checks fail silently. |
 | `update_skipped_version` | string | (unset) | A version the user chose to **Skip**; suppresses the dot/prompt for exactly that version until a newer release appears. |
 | `update_latest_version` | string | (unset) | Read-only state: the latest release tag seen by the last successful check (shown on the Updates tab). |
 | `update_last_checked` | string | (unset) | Read-only state: local `YYYY-MM-DD HH:MM` of the last check (shown on the Updates tab). |
