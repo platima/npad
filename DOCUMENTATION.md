@@ -367,7 +367,7 @@ release.
   curl -fsSL https://pkg.npad.dev/npad.asc -o /tmp/npad.asc
   sudo pacman-key --add /tmp/npad.asc
   sudo pacman-key --lsign-key "$(gpg --show-keys --with-colons /tmp/npad.asc | awk -F: '$1=="fpr"{print $10; exit}')"
-  printf '\n[npad]\nServer = https://pkg.npad.dev/arch/$arch\n' | sudo tee -a /etc/pacman.conf
+  printf '\n[npad]\nSigLevel = Required DatabaseRequired\nServer = https://pkg.npad.dev/arch/$arch\n' | sudo tee -a /etc/pacman.conf
   sudo pacman -Sy npad
   ```
 

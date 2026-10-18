@@ -83,16 +83,14 @@ pacman)
 	# does, and populating it again is harmless
 	pacman-key --init
 	pacman-key --populate
-	# Containers (and QEMU's user mode, which lacks landlock) cannot do what
-	# pacman's download sandbox and free-space check need
-	sed -i 's/^CheckSpace/#CheckSpace/' /etc/pacman.conf
-	if pacman --help | grep -q -e --disable-sandbox; then
-		set -- --disable-sandbox
-	else
-		set --
-	fi
-	pacman -Syu --noconfirm "$@"
-	pacman -U --noconfirm "$@" ./pkgs/npad-*.pkg.tar.zst
+	# Containers, and QEMU's user mode above all, lack what pacman's download
+	# sandbox needs (Landlock, seccomp filters: "restricting filesystem access
+	# failed"), and the free-space check cannot read a container's mounts.
+	# Neither is under test, so switch them off; pacman.conf lists the
+	# options commented out
+	sed -i -e 's/^#DisableSandbox/DisableSandbox/' -e 's/^CheckSpace/#CheckSpace/' /etc/pacman.conf
+	pacman -Syu --noconfirm
+	pacman -U --noconfirm ./pkgs/npad-*.pkg.tar.zst
 	pacman -Qi npad
 	pacman -Qk npad
 	;;

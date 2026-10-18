@@ -20,11 +20,11 @@ cd "$HOME/npad"
 (cd packaging/arch/aur/npad-bin && makepkg --printsrcinfo | diff -u .SRCINFO -)
 echo "OK: .SRCINFO matches the PKGBUILD"
 
-mkdir assets
+mkdir aur-assets
 for a in amd64 arm64 riscv64; do
-	echo "$(printf %064d 7)  npad-v9.9.9-linux-$a.tar.gz" >"assets/npad-v9.9.9-linux-$a.tar.gz.sha256"
+	echo "$(printf %064d 7)  npad-v9.9.9-linux-$a.tar.gz" >"aur-assets/npad-v9.9.9-linux-$a.tar.gz.sha256"
 done
-sh scripts/aur-update.sh v9.9.9 assets
+sh scripts/aur-update.sh v9.9.9 aur-assets
 grep -q '^pkgver=9.9.9$' packaging/arch/aur/npad-bin/PKGBUILD
 grep -q 'pkgver = 9.9.9$' packaging/arch/aur/npad-bin/.SRCINFO
 grep -q "sha256sums_riscv64 = $(printf %064d 7)" packaging/arch/aur/npad-bin/.SRCINFO
