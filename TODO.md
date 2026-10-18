@@ -7,6 +7,47 @@ this file is for open loops.
 
 ---
 
+## 🗺️ Planned - decided, not started (2026-10-18)
+
+### Next: the terminal build
+
+The user wants npad in the terminal as a replacement for vim, their
+current go-to terminal editor. Stubs exist: `src/platform/ui_ncurses.c`
+(Linux and other Unix-like systems) and `ui_win32_terminal.c` (Windows
+Console API). As with GTK, this needs a foundation round first, and these
+questions need answers then:
+- **Why vim today?** Get the user's reasons first, because they set the
+  priorities: SSH sessions, `$EDITOR` / `git commit` / `sudoedit`, speed,
+  being everywhere.
+- **Backend:** ncurses (a system library, so within the zero-dependency
+  rule), or raw termios with VT sequences.
+- **Notepad keys in a terminal:** Ctrl+S / Ctrl+Q are XON/XOFF flow control
+  unless `IXON` is turned off. Ctrl+Z suspends the process. Alt+letter
+  arrives as an escape-prefixed key. A menu bar is needed on F10 / Alt.
+- **The rest:** mouse; clipboard (OSC 52 over SSH, `wl-copy` / `xclip`
+  locally); dialogs for Open, Save As, Find and Go To; wide characters and
+  emoji; terminal resize.
+- **Shared behaviour:** the same `settings.json` and the same Notepad
+  defaults; a `+line` argument and blocking until exit, so it works as
+  `$EDITOR`.
+
+### Distribution formats (after the terminal build)
+
+- **Linux portable tarball** - in progress for 0.35.1 (per-arch
+  `npad-v<v>-linux-<arch>.tar.gz`; needs GTK 3 installed).
+- **Flatpak / Flathub** - reaches Arch, Fedora Silverblue / Bazzite and
+  SteamOS. Inside the sandbox files open only through the portal file
+  chooser, and the D-Bus instance names must live under the app id
+  `io.github.platima.npad`. The AppStream metainfo Flathub needs already
+  exists.
+- **Snap** - the Ubuntu Snap Store. Strict confinement raises the same file
+  access questions as Flatpak; classic confinement needs store approval.
+- **AppImage** - bundles GTK, so it runs without GTK installed but weighs
+  about 30-40 MB against npad's ~300 KB. Do it only if someone asks.
+- **WebAssembly** - the core is portable C, so Emscripten can build it, but
+  it needs a new browser UI backend behind `ui_interface`. Decide the purpose
+  first: a try-it demo on npad.dev, or a real app.
+
 ## 🧪 Needs testing - v0.35.0 Linux Markdown list tools (on Mint / Debian 13)
 
 Verified with a harness in Broadway only (which cannot paint popup menus or
