@@ -1193,7 +1193,7 @@ static void read_pending_spins(void) {
 // as they do in the Windows property sheet. GtkNotebook only binds
 // Ctrl+PageUp / PageDown, and only while focus is inside it; Ctrl+Tab would
 // otherwise just move the keyboard focus out of the page.
-static gboolean on_prefs_key(GtkWidget *widget, GdkEventKey *event, gpointer data) {
+static gboolean on_prefs_key(GtkWidget *widget, const GdkEventKey *event, gpointer data) {
     (void) widget;
     GdkModifierType mods = event->state & gtk_accelerator_get_default_mod_mask();
     bool tab = event->keyval == GDK_KEY_Tab || event->keyval == GDK_KEY_KP_Tab ||
