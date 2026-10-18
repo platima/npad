@@ -504,6 +504,19 @@ version.
       pkg.npad.dev apt repository publishes `binary-amd64`, `binary-arm64`
       and `binary-riscv64`, and the dnf repository all three rpm
       architectures.
+- [x] Portable tarball (v0.35.1): `npad-v<version>-linux-<arch>.tar.gz` for
+      amd64, arm64 and riscv64, the counterpart of the Windows portable exe.
+      The same binary as the .deb (CI compares them byte for byte) with
+      `share/` (launcher, icons, metainfo) and a README.txt
+      (`packaging/linux/README-portable.txt`: GTK 3 and glibc floor, run in
+      place or copy under `~/.local`, pkg.npad.dev for updates); built by
+      `make tarball` / `scripts/build-package.sh tar` on the host beside the
+      packages. Release validation checks each tarball's ELF architecture;
+      install-test unpacks it with only GTK 3 installed and runs
+      `./npad --version` (parsed before GTK starts, so no display) on Ubuntu
+      22.04 and Arch (amd64), Debian 12 (arm64) and Debian 13 (riscv64).
+      Deliberately not static (GTK cannot usefully be) and not an AppImage
+      (bundling GTK is against npad's lightness)
 - [ ] Not verified on real Fedora / Mint hardware: installs are only tested in
       CI containers (no display), so launching the app from the .rpm is unseen.
       Likewise arm64 and riscv64 have only been installed in containers, not

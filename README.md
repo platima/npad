@@ -209,6 +209,11 @@ installer reference (tasks, features, fonts, the Windows 11 notepad alias).
 - 🐧 **`npad-<version>-1.x86_64.rpm`** - Linux (Fedora):
   `sudo dnf install ./npad-<version>-1.x86_64.rpm`. Also `.aarch64.rpm` and
   `.riscv64.rpm`.
+- 📦 **`npad-v<version>-linux-amd64.tar.gz`** - Linux portable, for any glibc
+  distro with GTK 3 (Arch and others without .deb/.rpm): unpack and run
+  `./npad`; its `README.txt` gives the commands to add a menu entry under
+  `~/.local`. The same binary as the packages, without automatic updates.
+  Also `-linux-arm64` and `-linux-riscv64`.
   From source instead: `make linux-gtk && sudo make install` (honours `PREFIX`
   and `DESTDIR`; `sudo make uninstall` removes it).
 

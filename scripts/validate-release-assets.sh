@@ -1,9 +1,9 @@
 #!/bin/sh
 # Check that <dir> holds a complete, consistent set of release assets for
 # <tag> (e.g. v0.35.0): every Windows deliverable for x64 and arm64, every
-# Linux package for amd64, arm64 and riscv64, each with a .sha256 that
-# verifies, each plausibly sized, and the portable exes built for the
-# architecture their names claim. Also proves the in-app updater can find its
+# Linux package and portable tarball for amd64, arm64 and riscv64, each with
+# a .sha256 that verifies, each plausibly sized, and the portable exes and
+# tarballs built for the architecture their names claim. Also proves the in-app updater can find its
 # download on this release, for every architecture it knows.
 # Usage: scripts/validate-release-assets.sh <dir> <tag>   (run from the repo root)
 # release.yml runs it on the published release's assets, and on the build
@@ -83,6 +83,24 @@ for pair in amd64:x86_64 arm64:aarch64 riscv64:riscv64; do
 	if [ -f "$deb" ] && command -v dpkg-deb >/dev/null 2>&1; then
 		got=$(dpkg-deb -f "$deb" Architecture)
 		[ "$got" = "$deb_arch" ] || fail "$(basename "$deb") says Architecture: $got"
+	fi
+	# The portable tarball is named like the Windows downloads (tag
+	# spelling) with the .deb's architecture names. Its name claims an
+	# architecture; the binary's ELF header is the proof.
+	top=npad-$tag-linux-$deb_arch
+	check "$top.tar.gz" 50000
+	if [ -f "$dir/$top.tar.gz" ]; then
+		x=$(mktemp -d)
+		if ! tar -C "$x" -xzf "$dir/$top.tar.gz" "$top/npad" "$top/README.txt"; then
+			fail "$top.tar.gz has no $top/npad and $top/README.txt"
+		elif ! got=$(sh scripts/elf-arch.sh "$x/$top/npad" 2>&1); then
+			fail "$top.tar.gz: $got"
+		elif [ "$got" != "$deb_arch" ]; then
+			fail "$top.tar.gz: its npad is $got, not $deb_arch"
+		else
+			echo "OK: $top.tar.gz: its npad is $got"
+		fi
+		rm -rf "$x"
 	fi
 done
 

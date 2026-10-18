@@ -98,7 +98,8 @@ jobs:
   # installers carry - for x64 and for arm64. One build per architecture, one
   # (optional) signature, one checksum set. ci.yml still cross-compiles both
   # Windows targets on Linux, so that path stays tested; it just is not what
-  # ships. Linux ships as the .deb and .rpm from build-packages below; the
+  # ships. Linux ships as the .deb, .rpm and portable tarball from
+  # build-packages below; the
   # terminal variants are unimplemented stubs and are not published.
   # In a dry run release_tag is empty, so the deliverables stay artifacts.
   build-installers:
@@ -114,7 +115,8 @@ jobs:
 
   # Linux: the .deb (Debian, Ubuntu, Mint) and .rpm (Fedora, openSUSE) for
   # amd64, arm64 and riscv64, compiled in Debian containers and packaged with
-  # nfpm, then install-tested on each distro by packages.yml. The artifact
+  # nfpm, plus the portable npad-v<version>-linux-<arch>.tar.gz of the same
+  # binary, then install-tested on each distro by packages.yml. The artifact
   # names differ from the ones CI's own call uses: names must be unique within
   # a run, and ci-validation above builds the packages too.
   build-packages:
@@ -142,11 +144,13 @@ jobs:
         files: |
           pkgs/npad_*.deb
           pkgs/npad-*.rpm
+          pkgs/npad-v*-linux-*.tar.gz
           pkgs/*.sha256
 
   # Nothing releasable can execute on this runner, so validation asserts the
   # complete expected asset set is there, with plausible sizes, checksums that
-  # verify, the right architecture in each portable exe and .deb, and every
+  # verify, the right architecture in each portable exe, .deb and Linux
+  # tarball, and every
   # installer the in-app updater can ask for (scripts/validate-release-assets.sh).
   # A release checks what was actually published; a dry run checks the
   # artifacts that would have been.

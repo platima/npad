@@ -390,7 +390,7 @@ clean:
 	find src tests -name '*.o' -delete 2>/dev/null || true
 	rm -f src/platform/npad.res
 	rm -rf build
-	rm -rf dist/npad_* dist/npad-*.rpm
+	rm -rf dist/npad_* dist/npad-*.rpm dist/npad-v*-linux-*.tar.gz
 	rm -f tests/test_file_ops tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md tests/test_undo tests/test_find_seed
 	rm -f tests/test_file_ops.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe tests/test_html_md.exe tests/test_undo.exe tests/test_find_seed.exe
 
@@ -464,6 +464,12 @@ endif
 rpm: $(LINUX_GTK_TARGET)
 	sh scripts/build-package.sh rpm $(DEB_VERSION) $(LINUX_GTK_TARGET) dist $(PKG_ARCH)
 
+# The portable download: dist/npad-v<version>-linux-<arch>.tar.gz, the same
+# binary plus the launcher entry, icons, metainfo and a README.txt, to run in
+# place or copy under ~/.local. Needs no nfpm.
+tarball: $(LINUX_GTK_TARGET)
+	sh scripts/build-package.sh tar $(DEB_VERSION) $(LINUX_GTK_TARGET) dist $(PKG_ARCH)
+
 # Help
 help:
 	@echo "npad build system"
@@ -494,6 +500,7 @@ help:
 	@echo "  uninstall        - Remove from PREFIX"
 	@echo "  deb              - Build dist/npad_<version>_<arch>.deb (Linux; nfpm or dpkg-deb)"
 	@echo "  rpm              - Build dist/npad-<version>-1.<arch>.rpm (Linux; needs nfpm)"
+	@echo "  tarball          - Build dist/npad-v<version>-linux-<arch>.tar.gz (Linux portable)"
 	@echo "  help             - Show this help"
 	@echo ""
 	@echo "Variables:"
@@ -504,4 +511,4 @@ help:
 	@echo "  DEBUG=1          - Enable debug build"
 	@echo "  VERSION          - Version string (auto-detected from git)"
 
-.PHONY: all windows windows-gui windows-arm64 windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo help detect-platform
+.PHONY: all windows windows-gui windows-arm64 windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm tarball lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo help detect-platform

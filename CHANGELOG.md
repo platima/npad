@@ -5,6 +5,34 @@ All notable changes to npad will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.35.1] - Unreleased
+
+### ✨ Highlights
+- **A portable Linux download.** Each release now has
+  `npad-v<version>-linux-amd64.tar.gz` (and `-arm64`, `-riscv64`) beside the
+  .deb and .rpm: unpack it and run `./npad`, on any glibc distro with GTK 3,
+  including ones with no .deb or .rpm such as Arch. Its README.txt gives the
+  commands to add npad to your applications menu under `~/.local`. It is the
+  same binary the packages install; for automatic updates, the apt and dnf
+  repositories at <https://pkg.npad.dev> remain the recommended route.
+
+### 🆕 Features
+- **Linux: portable tarball** (`make tarball`, `scripts/build-package.sh
+  tar`). It unpacks to `npad-v<version>-linux-<arch>/` with `npad`,
+  `README.txt` and `share/` (the launcher, hicolor icons and AppStream
+  metainfo, laid out as under `/usr/share`), and is built reproducibly (fixed
+  order, owner and timestamps). No static build and no AppImage: GTK cannot
+  usefully be linked statically, and bundling it is against npad's lightness.
+  The README states the GTK 3 requirement and the glibc floor (Debian 12 /
+  Ubuntu 22.04 for amd64 and arm64, Debian 13 / Ubuntu 24.04 for riscv64).
+- CI builds it beside the .deb and .rpm for each architecture, checks that its
+  binary is byte for byte the .deb's, and install-tests it on Ubuntu 22.04 and
+  Arch (amd64), Debian 12 (arm64) and Debian 13 (riscv64) with only GTK 3
+  installed: it runs `./npad --version` in place and follows the README's
+  `~/.local` steps. Releases attach it with a `.sha256` (so `CHECKSUMS.txt`
+  lists it), release validation checks each tarball's ELF architecture, and
+  the release notes list it under Linux downloads.
+
 ## [0.35.0] - 2026-10-17
 
 ### ✨ Highlights
