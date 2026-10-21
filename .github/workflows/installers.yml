@@ -154,19 +154,13 @@ jobs:
           ls -la npad.exe
           OBJDUMP=objdump sh scripts/ci-check-imports.sh npad.exe
 
-      # The unit tests, built by the compiler that built the exe that ships
+      # The unit tests, built by the compiler that built the exe that ships.
+      # On Windows make test-windows builds and runs every suite itself, and
+      # runs test_assoc_win32 (a registry sandbox; this runner is throwaway)
+      # through its own NPAD_ALLOW_REGISTRY_TESTS gate
       - name: Unit tests with the shipping compiler
         shell: msys2 {0}
-        run: |
-          set -e
-          make test-windows WERROR=1
-          for t in tests/*.exe; do
-            echo "== $t"
-            case $t in
-            */test_assoc_win32.exe) NPAD_ALLOW_REGISTRY_TESTS=1 "$t" ;;
-            *) "$t" ;;
-            esac
-          done
+        run: NPAD_ALLOW_REGISTRY_TESTS=1 make test-windows WERROR=1
 
       - name: Install WiX
         shell: pwsh

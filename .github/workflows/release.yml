@@ -279,7 +279,8 @@ jobs:
         gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,url,publishedAt
 
   # A dry run checks the artifacts that would have been released, and writes
-  # (but keeps) the CHECKSUMS.txt the release would have had
+  # and verifies the CHECKSUMS.txt the release would have had, keeping it as
+  # the npad-dry-run-checksums artifact for the maintainer to inspect
   validate-dry-run:
     runs-on: ubuntu-latest
     needs: [meta, build-installers, build-packages]
@@ -313,6 +314,14 @@ jobs:
         mv CHECKSUMS.txt assets/
         cat assets/CHECKSUMS.txt
         sh scripts/ci-checksums.sh verify assets
+
+    - name: Keep the dry run's CHECKSUMS.txt
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: npad-dry-run-checksums
+        path: assets/CHECKSUMS.txt
+        if-no-files-found: error
+        retention-days: 7
 
   # Tell npad-packages a release is ready so it rebuilds the signed apt/dnf
   # repositories at pkg.npad.dev. Runs once the release is published, so every

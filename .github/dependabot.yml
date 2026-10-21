@@ -2,10 +2,14 @@
 # signing job runs with a token that signs as the project). Dependabot keeps
 # those pins current: it proposes the new SHA, with the release in the
 # trailing "# vX.Y.Z" comment, as a pull request to review like any other.
+# The pull requests go to the integration branch, not main: main takes only
+# releases and Windows fixes, and the bumps reach it with the next release.
+# Keep target-branch in step if the integration branch is renamed.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
+    target-branch: linux
     schedule:
       interval: weekly
     groups:
