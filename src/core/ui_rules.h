@@ -128,7 +128,9 @@ typedef struct {
 } UiRect;
 
 // Move a restored window at (*x, *y) of the given width so its title bar can
-// still be reached on work (the work area of the monitor it is on or nearest):
+// still be reached on work (the work area of the monitor its caption strip is
+// on or nearest - not the monitor holding most of the window, which on a mixed
+// layout can be a neighbour whose work area starts lower):
 // the top edge is kept between the work area's top and caption pixels above its
 // bottom, and at least grip pixels of the window's width stay inside it
 // horizontally. A window that already satisfies this is not moved, so a

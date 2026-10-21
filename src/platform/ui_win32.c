@@ -1718,17 +1718,28 @@ void ui_platform_set_window_position(Window *window, int x, int y) {
         // produce) overlaps the monitor but cannot be dragged. Bring the
         // caption back onto the nearest work area; a window that can already
         // be grabbed is left exactly where it was.
+        //
+        // The monitor is chosen from the caption strip, not the whole window
+        // (MonitorFromWindow picks the largest overlap): on a mixed layout the
+        // caption can sit on one monitor while most of the body hangs over a
+        // neighbour whose work area starts lower, and fitting against that
+        // neighbour would push a perfectly grabbable window down. A caption
+        // under a top taskbar or off-screen still maps to the nearest monitor.
         RECT wr;
-        HMONITOR mon = MonitorFromWindow(window->hwnd, MONITOR_DEFAULTTONEAREST);
-        MONITORINFO mi;
-        ZeroMemory(&mi, sizeof(mi));
-        mi.cbSize = sizeof(mi);
-        if (mon && GetMonitorInfoW(mon, &mi) && GetWindowRect(window->hwnd, &wr)) {
+        if (GetWindowRect(window->hwnd, &wr)) {
             int dpi = (int) get_window_dpi(window->hwnd);
+            int caption = MulDiv(32, dpi, 96);
+            RECT cap = { wr.left, wr.top, wr.right, wr.top + caption };
+            HMONITOR mon = MonitorFromRect(&cap, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO mi;
+            ZeroMemory(&mi, sizeof(mi));
+            mi.cbSize = sizeof(mi);
+            if (!mon || !GetMonitorInfoW(mon, &mi))
+                return;
             UiRect work = { mi.rcWork.left, mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom };
             int nx = wr.left, ny = wr.top;
-            if (ui_fit_title_bar(&nx, &ny, wr.right - wr.left, MulDiv(32, dpi, 96),
-                                 MulDiv(120, dpi, 96), &work)) {
+            if (ui_fit_title_bar(&nx, &ny, wr.right - wr.left, caption, MulDiv(120, dpi, 96),
+                                 &work)) {
                 SetWindowPos(window->hwnd, NULL, nx, ny, 0, 0,
                              SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
             }

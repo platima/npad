@@ -184,6 +184,29 @@ TEST_CASE(fit_title_bar_pulls_the_caption_back) {
     TEST_ASSERT_EQ(1800, x, "off the right: grip pixels brought back");
 }
 
+TEST_CASE(fit_title_bar_caption_on_one_monitor_body_on_another) {
+    // Monitor A at y=0 on the left, monitor B at y=200 on the right. The
+    // window's caption lies wholly on A while most of its width is over B.
+    // The caller fits against the caption's monitor (A), where it is left
+    // alone; fitting against B (the largest-overlap monitor) would push it
+    // down, which is the regression the caption-strip choice avoids.
+    const UiRect work_a = { 0, 0, 1920, 1040 };
+    const UiRect work_b = { 1920, 200, 3840, 1240 };
+    int x = 1500, y = 50;
+    TEST_ASSERT(!ui_fit_title_bar(&x, &y, 1000, 32, 120, &work_a), "caption's monitor: not moved");
+    TEST_ASSERT_EQ(1500, x, "x kept");
+    TEST_ASSERT_EQ(50, y, "y kept");
+    TEST_ASSERT(ui_fit_title_bar(&x, &y, 1000, 32, 120, &work_b), "body's monitor would move it");
+    TEST_ASSERT_EQ(200, y, "pushed down to B's top");
+
+    // Stacked monitors: caption on the upper one, body mostly on the lower
+    const UiRect upper = { 0, 0, 1920, 1080 };
+    x = 100;
+    y = 1000;
+    TEST_ASSERT(!ui_fit_title_bar(&x, &y, 800, 32, 120, &upper), "stacked: caption on upper kept");
+    TEST_ASSERT_EQ(1000, y, "y kept");
+}
+
 TEST_CASE(fit_title_bar_degenerate_inputs) {
     int x = 5, y = 5;
     const UiRect empty = { 0, 0, 0, 0 };
@@ -212,6 +235,7 @@ int main(void) {
     RUN_TEST(goto_line_parse);
     RUN_TEST(fit_title_bar_leaves_reachable_windows_alone);
     RUN_TEST(fit_title_bar_pulls_the_caption_back);
+    RUN_TEST(fit_title_bar_caption_on_one_monitor_body_on_another);
     RUN_TEST(fit_title_bar_degenerate_inputs);
 
     TEST_SUMMARY();
