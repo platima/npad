@@ -4,8 +4,13 @@
   keyboard or mouse input.
 
 .DESCRIPTION
-  Starts its own npad (minimized, then shown without activation, so it never
-  takes focus) against a throwaway profile, opens Preferences / Find / Replace
+  Starts its own npad against a throwaway profile, minimized and without
+  activation (SW_SHOWMINNOACTIVE), then restores it with SW_SHOWNOACTIVATE.
+  The sheet and dialogs it opens are activated within that npad as usual;
+  Windows' foreground lock normally keeps them from taking the foreground
+  from the window you are using, but that is Windows' policy, not something
+  this script can promise. Run it where focus changes do not matter (a VM
+  or an idle desktop). It opens Preferences / Find / Replace
   by posting WM_COMMAND to that npad's own main window, walks the property
   sheet with PSM_SETCURSEL, captures each page with PrintWindow, and closes
   everything again: the sheet with PSM_PRESSBUTTON(PSBTN_CANCEL), the dialogs
@@ -17,14 +22,21 @@
   folder are not touched (see probe-common.ps1).
 
 .EXAMPLE
-  .\probe-prefs.ps1 -Exe .\npad.exe -OutDir $env:TEMP\npad-shots -FindCmd 2003 -ReplaceCmd 2004
+  .\probe-prefs.ps1 -Exe .\npad.exe -OutDir $env:TEMP\npad-shots
+
+.EXAMPLE
+  .\probe-prefs.ps1 -Exe .\npad.exe -OutDir $env:TEMP\npad-shots -FindCmd 0 -ReplaceCmd 0
+  Preferences only (0 skips a dialog).
 #>
 param(
     [Parameter(Mandatory)][string]$Exe,
     [Parameter(Mandatory)][string]$OutDir,
+    # Menu command IDs from src/platform/ui_win32.c: ID_FILE_PREFERENCES,
+    # ID_EDIT_FIND and ID_EDIT_REPLACE. Never pass a File command such as
+    # ID_FILE_SAVE (2003): Save writes the document, Save As opens a dialog.
     [int]$PrefsCmd = 2007,
-    [int]$FindCmd = 0,
-    [int]$ReplaceCmd = 0,
+    [int]$FindCmd = 2107,
+    [int]$ReplaceCmd = 2108,
     # A profile folder to reuse (kept afterwards); default is a fresh temp one
     [string]$ProfileDir
 )
@@ -45,7 +57,7 @@ $ownProfile = -not $ProfileDir
 $probeProfile = New-ProbeProfile $ProfileDir
 "profile: $probeProfile"
 
-$probe = Start-ProbeProcess -FilePath $Exe -ProfileDir $probeProfile -WindowStyle Minimized
+$probe = Start-ProbeProcess -FilePath $Exe -ProfileDir $probeProfile -WindowStyle MinimizedNoActivate
 $main = Wait-ProbeWindow $probe 'NpadMainWindow' -TimeoutMs 30000
 if (-not $main) {
     "no main window from PID $($probe.Id)"

@@ -32,7 +32,38 @@ using System.Collections.Generic;
 namespace NpadProbe {
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
   [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] public struct STARTUPINFO {
+    public int cb; public string lpReserved, lpDesktop, lpTitle;
+    public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
+    public short wShowWindow, cbReserved2;
+    public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
+  }
+  [StructLayout(LayoutKind.Sequential)] public struct PROCESS_INFORMATION { public IntPtr hProcess, hThread; public int dwProcessId, dwThreadId; }
   public static class Win32 {
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool CreateProcess(string app, StringBuilder cmd, IntPtr pa, IntPtr ta, bool inherit, uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
+    [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
+
+    // Process handles StartNoActivate keeps open for the life of this
+    // PowerShell session, so a probe's PID cannot be recycled under it
+    static readonly List<IntPtr> Held = new List<IntPtr>();
+
+    // Start a process whose first ShowWindow is SW_SHOWMINNOACTIVE (7):
+    // minimized without being activated. Start-Process cannot ask for that
+    // (its Minimized is SW_SHOWMINIMIZED, which activates the window). The
+    // child inherits this process's environment. Returns the new PID.
+    public static int StartNoActivate(string app, string cmdLine, string cwd) {
+      var si = new STARTUPINFO();
+      si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
+      si.dwFlags = 0x1; // STARTF_USESHOWWINDOW
+      si.wShowWindow = 7; // SW_SHOWMINNOACTIVE
+      PROCESS_INFORMATION pi;
+      if (!CreateProcess(app, new StringBuilder(cmdLine), IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero, cwd, ref si, out pi))
+        throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+      CloseHandle(pi.hThread);
+      Held.Add(pi.hProcess);
+      return pi.dwProcessId;
+    }
+
     public delegate bool EnumProc(IntPtr h, IntPtr l);
     [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc p, IntPtr l);
     [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr h, EnumProc p, IntPtr l);
@@ -73,6 +104,11 @@ namespace NpadProbe {
   }
 }
 "@
+}
+if (-not [NpadProbe.Win32].GetMethod('StartNoActivate')) {
+    # An older copy of this helper type was loaded earlier in this session;
+    # .NET cannot replace a loaded type
+    throw "This PowerShell session holds an older NpadProbe helper. Run the probe in a new PowerShell session."
 }
 
 $script:WM_CLOSE = 0x0010
@@ -146,17 +182,34 @@ function Get-ProbeFileHash([string]$Path) {
     return $null
 }
 
+# Quote one command-line argument the way the C runtime's argv parser reads
+# it back: backslashes double only before a quote or the closing quote.
+function ConvertTo-ProbeArgument([string]$Arg) {
+    if ($Arg -and $Arg -notmatch '[\s"]') { return $Arg }
+    return '"' + (($Arg -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"'
+}
+
 # Start a process the probe then owns. With -ProfileDir, the child gets that
 # folder as USERPROFILE (plus matching APPDATA / LOCALAPPDATA); this process's
-# own environment is restored straight afterwards. Returns a probe record:
-# Process, Id, StartTime, ProfileDir.
+# own environment is restored straight afterwards. -WindowStyle
+# MinimizedNoActivate starts it minimized without activating it (through
+# CreateProcess; Start-Process's Minimized activates the window). Returns a
+# probe record: Process, Id, StartTime, ProfileDir.
 function Start-ProbeProcess {
     param(
         [Parameter(Mandatory)][string]$FilePath,
         [string[]]$ArgumentList,
         [string]$ProfileDir,
-        [ValidateSet('Normal', 'Minimized', 'Maximized', 'Hidden')][string]$WindowStyle = 'Normal'
+        [ValidateSet('Normal', 'Minimized', 'MinimizedNoActivate', 'Maximized', 'Hidden')][string]$WindowStyle = 'Normal'
     )
+    if ($WindowStyle -eq 'MinimizedNoActivate') {
+        # CreateProcess resolves relative paths against the process's current
+        # directory, not PowerShell's location, so hand it absolute ones
+        $app = (Resolve-Path -LiteralPath $FilePath -ErrorAction Stop).ProviderPath
+        $loc = Get-Location
+        $cwd = if ($loc.Provider.Name -eq 'FileSystem') { $loc.ProviderPath } else { $null }
+        $cmdLine = (@($app) + @($ArgumentList | Where-Object { $null -ne $_ }) | ForEach-Object { ConvertTo-ProbeArgument $_ }) -join ' '
+    }
     $vars = @{}
     if ($ProfileDir) {
         $vars['USERPROFILE'] = $ProfileDir
@@ -169,11 +222,20 @@ function Start-ProbeProcess {
         [Environment]::SetEnvironmentVariable($k, $vars[$k])
     }
     try {
-        $sp = @{ FilePath = $FilePath; PassThru = $true; WindowStyle = $WindowStyle }
-        if ($ArgumentList) { $sp['ArgumentList'] = $ArgumentList }
-        $p = Start-Process @sp
+        if ($WindowStyle -eq 'MinimizedNoActivate') {
+            $newId = [NpadProbe.Win32]::StartNoActivate($app, $cmdLine, $cwd)
+        } else {
+            $sp = @{ FilePath = $FilePath; PassThru = $true; WindowStyle = $WindowStyle }
+            if ($ArgumentList) { $sp['ArgumentList'] = $ArgumentList }
+            $p = Start-Process @sp
+        }
     } finally {
         foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+    }
+    if ($WindowStyle -eq 'MinimizedNoActivate') {
+        # StartNoActivate holds the process handle, so this PID is still ours
+        $p = Get-Process -Id $newId -ErrorAction SilentlyContinue
+        if (-not $p) { throw "$app (PID $newId) exited as soon as it started." }
     }
     $null = $p.Handle # Hold a handle: ExitCode and StartTime stay readable after it exits
     return [pscustomobject]@{ Process = $p; Id = $p.Id; StartTime = $p.StartTime; ProfileDir = $ProfileDir }

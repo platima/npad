@@ -236,7 +236,7 @@ $(LINUX_GTK_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_GTK_SOURCES) $(LI
 # installed: the stub does nothing yet, so it is not worth a missing package
 # failing the command README gives. `make linux-terminal` still requires them.
 linux: linux-gtk
-	@if printf '#include <$(NCURSES_HEADER)>\n' | $(CC) -E -x c - >/dev/null 2>&1; then \
+	@if printf '#include <$(NCURSES_HEADER)>\n' | $(CC) $(CFLAGS) -E -x c - >/dev/null 2>&1; then \
 		$(MAKE) --no-print-directory linux-terminal; \
 	else \
 		echo "Skipping $(LINUX_TERMINAL_TARGET) (the unimplemented ncurses stub): $(NCURSES_HEADER) not found."; \
@@ -255,7 +255,7 @@ endif
 linux-terminal: $(LINUX_TERMINAL_TARGET)
 
 $(LINUX_TERMINAL_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_TERMINAL_SOURCES) src/main.c
-	@printf '#include <$(NCURSES_HEADER)>\n' | $(CC) -E -x c - >/dev/null 2>&1 || { echo "ncurses development files not found ($(NCURSES_HEADER)). Install with: sudo apt-get install libncurses-dev"; exit 1; }
+	@printf '#include <$(NCURSES_HEADER)>\n' | $(CC) $(CFLAGS) -E -x c - >/dev/null 2>&1 || { echo "ncurses development files not found ($(NCURSES_HEADER)). Install with: sudo apt-get install libncurses-dev"; exit 1; }
 	$(CC) $(CFLAGS) -o $@ $^ $(LINUX_TERMINAL_LIBS) $(LDFLAGS)
 	@echo "Linux Terminal build complete: $(LINUX_TERMINAL_TARGET)"
 
