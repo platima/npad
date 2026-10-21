@@ -1232,7 +1232,8 @@ static void create_menu(Window *window) {
     add_item(window, help, "_About npad", NPAD_CMD_HELP_ABOUT, 0, NONE);
 
     // Shortcuts without a menu item of their own, or second keys for one
-    add_hidden_accel(window, GDK_KEY_e, C, NPAD_CMD_FORMAT_EOL_CYCLE);
+    // No Ctrl+E: it cycled the line ending, a file-changing action undo
+    // cannot reverse, on the key Windows 10 Notepad gives to Search with Bing
     // Ctrl+Shift+. : GTK matches the shifted symbol on most layouts, the
     // unshifted key on the rest
     add_hidden_accel(window, GDK_KEY_period, CS, NPAD_CMD_EDIT_PREFERENCES_DEBUG);
@@ -1469,9 +1470,6 @@ void npad_gtk_handle_command(Window *window, NpadCommand command) {
                 editor_set_line_ending(eol);
             break;
         }
-        case NPAD_CMD_FORMAT_EOL_CYCLE:
-            editor_set_line_ending((LineEnding) ((editor_get_line_ending() + 1) % 3));
-            break;
         case NPAD_CMD_VIEW_ZOOM_IN:
             set_zoom(window, window->zoom + 10);
             break;

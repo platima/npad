@@ -606,6 +606,10 @@ bool settings_add_recent_file(const char *filepath) {
 }
 
 char **settings_get_recent_files(int *count) {
+    return settings_get_recent_files_ex(count, true);
+}
+
+char **settings_get_recent_files_ex(int *count, bool only_existing) {
     if (!count)
         return NULL;
 
@@ -622,7 +626,7 @@ char **settings_get_recent_files(int *count) {
         snprintf(key, sizeof(key), "recent_file_%d", i);
 
         char *filepath = settings_get_string(key, NULL);
-        if (filepath && *count < limit && file_exists(filepath)) {
+        if (filepath && *count < limit && (!only_existing || file_exists(filepath))) {
             files[*count] = filepath;
             (*count)++;
         } else if (filepath) {

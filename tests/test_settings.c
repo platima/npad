@@ -349,6 +349,43 @@ TEST_CASE(init_reads_old_settings_when_xdg_location_is_empty) {
 }
 #endif
 
+// The Win32 Recent Files menu is rebuilt when it opens; an existence check per
+// entry there could block for the SMB timeout on a sleeping NAS, so it reads
+// the stored list as it is. The filtered call keeps its old behaviour.
+TEST_CASE(recent_files_stored_list_skips_the_existence_check) {
+    const char *present = "test_recent_present.txt";
+    const char *missing = "test_recent_missing_no_such_file.txt";
+    FILE *f = fopen(present, "wb");
+    TEST_ASSERT_NOT_NULL(f, "setup: create a file");
+    fclose(f);
+    remove(missing);
+
+    settings_clear_all();
+    settings_set_string("recent_file_0", missing);
+    settings_set_string("recent_file_1", present);
+
+    int count = 0;
+    char **files = settings_get_recent_files_ex(&count, false);
+    TEST_ASSERT_EQ(2, count, "both stored entries, reachable or not");
+    TEST_ASSERT_STR_EQ(missing, files[0], "in stored order");
+    TEST_ASSERT_STR_EQ(present, files[1], "second entry");
+    settings_free_recent_files(files, count);
+
+    files = settings_get_recent_files(&count);
+    TEST_ASSERT_EQ(1, count, "the filtered list still drops the missing one");
+    TEST_ASSERT_STR_EQ(present, files[0], "and keeps the one that exists");
+    settings_free_recent_files(files, count);
+
+    settings_set_int("recent_files_max", 1);
+    files = settings_get_recent_files_ex(&count, false);
+    TEST_ASSERT_EQ(1, count, "the Recent Files limit still applies");
+    TEST_ASSERT_STR_EQ(missing, files[0], "to the stored order");
+    settings_free_recent_files(files, count);
+
+    settings_clear_all();
+    remove(present);
+}
+
 int main(void) {
     thread_safety_init();
     TEST_INIT();
@@ -361,6 +398,7 @@ int main(void) {
     RUN_TEST(roundtrip_preserves_quotes_and_tabs);
     RUN_TEST(oversized_value_is_dropped_on_load);
     RUN_TEST(oversized_file_is_salvaged_not_discarded);
+    RUN_TEST(recent_files_stored_list_skips_the_existence_check);
 #ifndef _WIN32
     RUN_TEST(config_dir_prefers_absolute_xdg);
     RUN_TEST(init_reads_old_settings_when_xdg_location_is_empty);

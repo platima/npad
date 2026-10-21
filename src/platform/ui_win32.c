@@ -20,6 +20,7 @@
 #include <bcrypt.h>
 #include <objbase.h>
 #include <shlobj.h>
+#include <tom.h>
 
 #include "../ui_interface.h"
 #include "../main.h"
@@ -33,6 +34,7 @@
 #include "../core/settings.h"
 #include "../core/startup_prof.h"
 #include "../core/tab_stops.h"
+#include "../core/text_scan.h"
 #include "assoc_win32.h"
 #include "print_win32.h"
 #include "../core/update_check.h"
@@ -212,7 +214,6 @@ static double qpc_ms(void) {
 #define ID_FORMAT_EOL_CRLF 2211 // 2211..2213, order matches the LineEnding enum
 #define ID_FORMAT_EOL_LF 2212
 #define ID_FORMAT_EOL_CR 2213
-#define ID_FORMAT_EOL_CYCLE 2214
 #define ID_ENCODING_BASE 2221 // 2221..2225, order matches the TextEncoding enum
 #define ID_VIEW_STATUS_BAR 2301
 #define ID_VIEW_DARK_MODE 2302
@@ -264,6 +265,17 @@ struct Window {
     bool applied_dark;
     bool font_applied;
     CHARFORMAT2W applied_font;
+    // The edit control's Text Object Model document, fetched once (see
+    // tom_document) and released when the control is destroyed
+    ITextDocument *tom;
+    bool tom_unavailable;
+    // Default tab stop for the applied font, in points (see apply_tab_stops);
+    // 0 until a font has been applied
+    float tab_stop_points;
+    bool tab_check_pending; // NPAD_WM_REAPPLY_TABS posted and not yet handled
+    // File > Recent Files exactly as the menu last showed it, so a click opens
+    // the entry the user saw even if the stored list changed since
+    char *recent_paths[MAX_RECENT_MENU_FILES];
     // Last text sent per status part; skip identical sends. Sized to hold the
     // longest part-0 counts line in full - a short cache would compare equal on
     // a shared prefix and silently skip the update.
@@ -394,6 +406,9 @@ static void preview_retheme_active(void);
 static void apply_font(Window *window);
 static void apply_font_default(Window *window);
 static void refresh_font_binding(Window *window);
+static void apply_tab_stops(Window *window);
+static void tom_release(Window *window);
+static void replace_sel_one_step(HWND edit, const wchar_t *text);
 static void apply_word_wrap(Window *window);
 static void update_menu_states(Window *window);
 static void rebuild_recent_menu(Window *window);
@@ -923,7 +938,7 @@ static bool handle_markdown_tab(HWND hwnd) {
 // the start of the line by core/tab_stops, from the line's text converted to
 // UTF-8, so a surrogate pair is one column (the status bar's Col counts UTF-16
 // units). A selection is replaced, as a tab character would replace it. One
-// Tab is one EM_REPLACESEL, which RichEdit records as one undo step. Shift+Tab
+// Tab is one undo step (replace_sel_one_step). Shift+Tab
 // and Ctrl/Alt chords are left alone. Runs after handle_markdown_tab, so the
 // list tools' Tab-over-a-selection indent still wins when they are on.
 static bool handle_tab_spaces(HWND hwnd) {
@@ -949,7 +964,7 @@ static bool handle_tab_spaces(HWND hwnd) {
         spaces[i] = L' ';
     spaces[count] = L'\0';
     g_swallow_tab_char = true; // The WM_CHAR TranslateMessage queued is not wanted
-    SendMessageW(hwnd, EM_REPLACESEL, TRUE, (LPARAM) spaces);
+    replace_sel_one_step(hwnd, spaces);
     SendMessageW(hwnd, EM_SCROLLCARET, 0, 0);
     return true;
 }
@@ -1047,10 +1062,10 @@ static bool handle_markdown_return(HWND hwnd) {
     bool handled = true;
     if (end - start == prefix_len) {
         // Empty bullet: end the list - drop the marker, keep the newline
-        // (single EM_REPLACESEL, one undo unit)
+        // (one replacement, one undo unit)
         CHARRANGE r = { start, caret };
         SendMessageW(hwnd, EM_EXSETSEL, 0, (LPARAM) &r);
-        SendMessageW(hwnd, EM_REPLACESEL, TRUE, (LPARAM) L"\r");
+        replace_sel_one_step(hwnd, L"\r");
     } else {
         // Splitting right before an existing bullet must not mint another
         // marker ("- item |- second" would become "- - second"): the text
@@ -1085,7 +1100,7 @@ static bool handle_markdown_return(HWND hwnd) {
             ins[0] = L'\r';
             memcpy(ins + 1, buf, (size_t) prefix_len * sizeof(wchar_t));
             ins[1 + prefix_len] = L'\0';
-            SendMessageW(hwnd, EM_REPLACESEL, TRUE, (LPARAM) ins);
+            replace_sel_one_step(hwnd, ins);
         }
     }
     free(wbody);
@@ -1111,6 +1126,11 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, L
     if (msg == WM_MOUSEACTIVATE) {
         SetFocus(hwnd);
         return MA_ACTIVATE;
+    }
+
+    // Let go of the TOM document while the control it belongs to still exists
+    if (msg == WM_DESTROY && g_main_window && g_main_window->edit_hwnd == hwnd) {
+        tom_release(g_main_window);
     }
 
 #if NPAD_SCROLL_TELEMETRY
@@ -1561,6 +1581,7 @@ void ui_platform_destroy_window(Window *window) {
         window->haccel = NULL;
     }
 
+    tom_release(window); // Before the control goes (a no-op if it already has)
     if (window->hwnd) {
         DestroyWindow(window->hwnd);
         window->hwnd = NULL;
@@ -1570,6 +1591,8 @@ void ui_platform_destroy_window(Window *window) {
         g_main_window = NULL;
     }
 
+    for (int i = 0; i < MAX_RECENT_MENU_FILES; i++)
+        free(window->recent_paths[i]);
     free(window);
 }
 
@@ -1692,6 +1715,110 @@ void ui_platform_get_default_window_rect(int *x, int *y, int *width, int *height
         *x = work.left + (work_w - w) / 2;
     if (y)
         *y = work.top + (work_h - h) / 2;
+}
+
+// ---------------------------------------------------------------------------
+// Text Object Model, chunked reads, one-step replacements
+// ---------------------------------------------------------------------------
+//
+// RichEdit's TOM interface does three things no window message does: it
+// suspends undo recording around a programmatic re-set (refresh_font_binding),
+// reports which end of a selection is active, and answers "which paragraph,
+// starting where" without the text being copied out (Ln/Col with Word Wrap
+// on). It also sets the default tab stop. Fetched once per window, released
+// when the control is destroyed; every caller has a fallback for when it is
+// unavailable.
+
+// IID_ITextDocument, defined here because not every MinGW libuuid exports it
+static const GUID npad_iid_text_document = {
+    0x8CC497C0, 0xA1DF, 0x11CE, { 0x80, 0x98, 0x00, 0xAA, 0x00, 0x47, 0xBE, 0x5D }
+};
+
+static ITextDocument *tom_document(Window *window) {
+    if (!window || !window->edit_hwnd)
+        return NULL;
+    if (window->tom || window->tom_unavailable)
+        return window->tom;
+    IUnknown *ole = NULL;
+    SendMessageW(window->edit_hwnd, EM_GETOLEINTERFACE, 0, (LPARAM) &ole);
+    // EM_GETOLEINTERFACE wrote through the pointer (and AddRef'd what it gave)
+    // cppcheck-suppress knownConditionTrueFalse
+    if (ole) {
+        ITextDocument *doc = NULL;
+        if (SUCCEEDED(ole->lpVtbl->QueryInterface(ole, &npad_iid_text_document, (void **) &doc)) &&
+            doc) {
+            window->tom = doc;
+        }
+        ole->lpVtbl->Release(ole);
+    }
+    if (!window->tom)
+        window->tom_unavailable = true; // Do not ask again on every caret move
+    return window->tom;
+}
+
+static void tom_release(Window *window) {
+    if (window && window->tom) {
+        window->tom->lpVtbl->Release(window->tom);
+        window->tom = NULL;
+    }
+}
+
+// Stop RichEdit recording undo while npad changes the document's internals
+// (not its text). True when suspended; pair with tom_resume_undo.
+static bool tom_suspend_undo(ITextDocument *doc) {
+    return doc && SUCCEEDED(doc->lpVtbl->Undo(doc, tomSuspend, NULL));
+}
+
+static void tom_resume_undo(ITextDocument *doc) {
+    if (doc)
+        doc->lpVtbl->Undo(doc, tomResume, NULL);
+}
+
+// Units read per EM_GETTEXTRANGE when the text has to be scanned: a fixed
+// buffer instead of a copy of everything up to the position asked about
+#define TEXT_SCAN_CHUNK 32768
+
+// Feed the control's text [0, end) to the given scans (either may be NULL), a
+// chunk at a time. Stops early once an astral-only scan has its answer.
+static void scan_text(HWND e, LONG end, LineScan *lines, AstralScan *astral) {
+    if (end <= 0 || (!lines && !astral))
+        return;
+    wchar_t *buf = malloc(((size_t) TEXT_SCAN_CHUNK + 1) * sizeof(wchar_t));
+    if (!buf)
+        return;
+    LONG from = 0;
+    while (from < end) {
+        LONG to = (end - from > TEXT_SCAN_CHUNK) ? from + TEXT_SCAN_CHUNK : end;
+        TEXTRANGEW tr;
+        tr.chrg.cpMin = from;
+        tr.chrg.cpMax = to;
+        tr.lpstrText = buf;
+        LRESULT got = SendMessageW(e, EM_GETTEXTRANGE, 0, (LPARAM) &tr);
+        if (got <= 0)
+            break;
+        // wchar_t is a 16-bit unsigned code unit on Windows
+        const uint16_t *units = (const uint16_t *) buf;
+        if (lines)
+            line_scan_feed(lines, units, (size_t) got);
+        if (astral) {
+            astral_scan_feed(astral, units, (size_t) got);
+            if (astral->found && !lines)
+                break;
+        }
+        from += (LONG) got;
+    }
+    free(buf);
+}
+
+// Replace the selection as exactly one undo step. EM_REPLACESEL with TRUE is
+// undoable, but RichEdit merges a short replacement with the typing around it,
+// so the one-space Tab or the newline that ends a Markdown list would undo
+// together with the next word typed. Closing the typing group on both sides
+// keeps the programmatic edit its own step, as DOCUMENTATION.md promises.
+static void replace_sel_one_step(HWND edit, const wchar_t *text) {
+    SendMessageW(edit, EM_STOPGROUPTYPING, 0, 0);
+    SendMessageW(edit, EM_REPLACESEL, TRUE, (LPARAM) text);
+    SendMessageW(edit, EM_STOPGROUPTYPING, 0, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -1848,10 +1975,18 @@ static wchar_t *read_clipboard_text(HWND owner) {
     if (h) {
         const wchar_t *src = GlobalLock(h);
         if (src) {
-            size_t len = wcslen(src);
+            // The block is another process's data: bound the scan by its
+            // allocated size, since nothing guarantees a terminator inside
+            // it, and always terminate the copy
+            size_t cap = GlobalSize(h) / sizeof(wchar_t);
+            size_t len = 0;
+            while (len < cap && src[len] != L'\0')
+                len++;
             copy = malloc((len + 1) * sizeof(wchar_t));
-            if (copy)
-                memcpy(copy, src, (len + 1) * sizeof(wchar_t));
+            if (copy) {
+                memcpy(copy, src, len * sizeof(wchar_t));
+                copy[len] = L'\0';
+            }
             GlobalUnlock(h);
         }
     }
@@ -1983,7 +2118,7 @@ static void paste_insert_converted(const Window *window, const char *utf8) {
     free(crlf);
     if (!wide)
         return;
-    SendMessageW(e, EM_REPLACESEL, TRUE, (LPARAM) wide);
+    replace_sel_one_step(e, wide);
     SendMessageW(e, EM_SCROLLCARET, 0, 0);
     free(wide);
 }
@@ -2030,7 +2165,7 @@ static void do_paste(Window *window, int mode) {
 
                 CHARRANGE at = { line_start, line_start };
                 SendMessageW(e, EM_EXSETSEL, 0, (LPARAM) &at);
-                SendMessageW(e, EM_REPLACESEL, TRUE, (LPARAM) ins);
+                replace_sel_one_step(e, ins);
                 // Measure the inserted length from the control: RichEdit
                 // stores each break as one cp, not the two chars we sent
                 CHARRANGE after = { 0, 0 };
@@ -2626,6 +2761,10 @@ static void set_status_message(Window *window, const char *message) {
 // Posted from WM_ACTIVATE so the external-change dialog runs after the
 // activation completes rather than inside it
 #define NPAD_WM_CHECK_EXTERNAL (WM_APP + 4)
+// Posted from EN_CHANGE after a programmatic text replacement (a load, a
+// reload, a font rebind) so apply_tab_stops runs once that call has finished.
+// Numbered clear of the block above so new neighbours there cannot collide.
+#define NPAD_WM_REAPPLY_TABS (WM_APP + 32)
 
 typedef struct {
     bool ok;
@@ -3252,7 +3391,10 @@ static void prompt_external_change(Window *window) {
 
     switch (choice) {
         case 101:
-            editor_reload_from_disk();
+            // Declined or failed (the core has said why): treat it as Keep
+            // editing, or the same prompt returns on the next activation
+            if (!editor_reload_from_disk())
+                editor_accept_external_change();
             break;
         case 102:
             ui_post_event(UI_EVENT_FILE_SAVE_AS, window, NULL);
@@ -4189,6 +4331,10 @@ static void apply_theme(Window *window) {
 
     SendMessageW(window->edit_hwnd, EM_SETBKGNDCOLOR, 0, (LPARAM) back);
 
+    // Colour only. A CFM_COLOR-only stamp leaves every run's face alone, so
+    // the fallback faces font binding gave emoji and CJK Extension B keep
+    // their glyphs and nothing needs rebinding (refresh_font_binding is for a
+    // face or size change, in apply_font). It also records no undo step.
     CHARFORMAT2W cf;
     ZeroMemory(&cf, sizeof(cf));
     cf.cbSize = sizeof(cf);
@@ -4196,7 +4342,10 @@ static void apply_theme(Window *window) {
     cf.crTextColor = text;
     SendMessageW(window->edit_hwnd, EM_SETCHARFORMAT, SCF_ALL, (LPARAM) &cf);
     SendMessageW(window->edit_hwnd, EM_SETCHARFORMAT, SCF_DEFAULT, (LPARAM) &cf);
-    refresh_font_binding(window); // Restamping can drop emoji fallback faces
+    // apply_font compares against what was applied; the text colour is now
+    // this, so the next broadcast does not see a "changed" font and restamp
+    if (window->font_applied)
+        window->applied_font.crTextColor = text;
 
     view_restore(window->edit_hwnd, &view);
     window->setting_text_programmatically = false;
@@ -4231,9 +4380,10 @@ void ui_platform_set_dark_mode(bool enabled) {
     settings_set_string("theme", enabled ? "dark" : "light");
     g_dark_mode = enabled;
     if (g_main_window) {
-        // Colors only: apply_theme restamps CFM_COLOR; a full font stamp
-        // would wipe the fallback faces bound to emoji/CJK runs
-        apply_font_default(g_main_window);
+        // Colours only: apply_theme stamps CFM_COLOR on the text and the
+        // default format alike. A full font stamp (apply_font_default) here
+        // restyled every run in plain-text mode and wiped the fallback faces
+        // bound to emoji/CJK runs.
         apply_theme(g_main_window);
     }
 }
@@ -4272,34 +4422,43 @@ void ui_platform_set_text_modified(Window *window, bool modified) {
 // get_paragraph_bounds already sidesteps them for exactly this reason.
 //
 // With wrap OFF display and logical lines coincide, so the cheap API is kept.
-// With wrap ON the '\r' breaks are counted directly - one text fetch and a
-// linear scan, which is the same order of work the live counts already do.
-// Returns the number of CR breaks before `end` - i.e. the 0-based logical
-// line at that position - and, via line_start, the index just after the last
-// of them, which is where that line begins. Both come from one fetch so the
-// caret path does not pay for the scan twice.
-static int count_breaks_before(HWND e, LONG end, LONG *line_start) {
+// With wrap ON a logical line is a RichEdit paragraph, and TOM answers both
+// questions - which paragraph, and where it starts - inside the control,
+// without the text being copied out (this runs on every caret move, ~30 times
+// a second while an arrow key repeats). Without TOM the '\r' breaks are
+// counted through a fixed-size buffer (core/text_scan).
+//
+// Returns the 0-based logical line at pos and, via line_start, the index that
+// line begins at.
+static int logical_line_at(Window *window, LONG pos, LONG *line_start) {
     if (line_start)
         *line_start = 0;
-    if (end <= 0)
+    if (pos <= 0)
         return 0;
-    wchar_t *buf = malloc(((size_t) end + 1) * sizeof(wchar_t));
-    if (!buf)
-        return 0;
-    TEXTRANGEW tr;
-    tr.chrg.cpMin = 0;
-    tr.chrg.cpMax = end;
-    tr.lpstrText = buf;
-    LRESULT got = SendMessageW(e, EM_GETTEXTRANGE, 0, (LPARAM) &tr);
-    if (got < 0)
-        got = 0;
-    int breaks = 0;
-    for (LRESULT i = 0; i < got; i++) {
-        if (buf[i] == L'\r')
-            breaks++;
+
+    ITextDocument *doc = tom_document(window);
+    ITextRange *range = NULL;
+    if (doc && SUCCEEDED(doc->lpVtbl->Range(doc, pos, pos, &range)) && range) {
+        LONG index = 0, delta = 0, start = 0;
+        bool ok = SUCCEEDED(range->lpVtbl->GetIndex(range, tomParagraph, &index)) && index >= 1;
+        if (ok && line_start) {
+            ok = SUCCEEDED(range->lpVtbl->StartOf(range, tomParagraph, tomMove, &delta)) &&
+                 SUCCEEDED(range->lpVtbl->GetStart(range, &start)) && start >= 0 && start <= pos;
+        }
+        range->lpVtbl->Release(range);
+        if (ok) {
+            if (line_start)
+                *line_start = start;
+            return (int) (index - 1);
+        }
     }
-    free(buf);
-    return breaks;
+
+    LineScan scan;
+    line_scan_init(&scan);
+    scan_text(window->edit_hwnd, pos, &scan, NULL);
+    if (line_start)
+        *line_start = scan.line_start;
+    return (int) scan.breaks;
 }
 
 // Character index at which 0-based logical line `line` starts, or -1 if the
@@ -4329,7 +4488,7 @@ int ui_platform_get_line_count(Window *window) {
         return (int) SendMessageW(window->edit_hwnd, EM_GETLINECOUNT, 0, 0);
     }
     LONG len = (LONG) SendMessageW(window->edit_hwnd, WM_GETTEXTLENGTH, 0, 0);
-    return count_breaks_before(window->edit_hwnd, len, NULL) + 1;
+    return logical_line_at(window, len, NULL) + 1;
 }
 
 void ui_platform_get_cursor_line_column(Window *window, int *line, int *column) {
@@ -4343,11 +4502,12 @@ void ui_platform_get_cursor_line_column(Window *window, int *line, int *column) 
     int pos = ui_platform_get_cursor_position(window);
 
     // Word wrap makes EM_EXLINEFROMCHAR count wrapped rows, so Ln would climb
-    // past the document's real line count and disagree with Go To
+    // past the document's real line count and disagree with Go To. Col counts
+    // from that logical line's start (it once came out as the offset in the
+    // whole document, because the line start was never recorded)
     if (window->word_wrap_enabled) {
         LONG start = 0;
-        int breaks = count_breaks_before(window->edit_hwnd, pos, &start);
-        *line = breaks + 1;
+        *line = logical_line_at(window, pos, &start) + 1;
         *column = pos - (int) start + 1;
         return;
     }
@@ -4591,10 +4751,14 @@ static void build_char_format(const Window *window, CHARFORMAT2W *cf) {
     free(face);
 }
 
-// Refresh only the control's default character format. Existing runs keep
-// their formatting - in particular the fallback faces RichEdit's font
-// binding gave emoji/CJK runs, which a blanket SCF_ALL face stamp would
-// replace with a face that has no glyphs for them (showing boxes).
+// Stamp the configured font on the control's default character format, for
+// text about to be inserted: ui_platform_set_text calls this right before
+// EM_SETTEXTEX, which then binds fallback faces as it inserts. It is NOT a
+// harmless refresh of an existing document: in plain-text mode an
+// SCF_DEFAULT stamp that carries CFM_FACE restyles every run, replacing the
+// fallback faces font binding gave emoji/CJK runs with one that has no glyphs
+// for them (boxes). So nothing else calls it on a loaded document; a font
+// change goes through apply_font, which rebinds afterwards.
 static void apply_font_default(Window *window) {
     if (!window || !window->edit_hwnd)
         return;
@@ -4605,22 +4769,44 @@ static void apply_font_default(Window *window) {
 }
 
 // The control runs in plain-text mode, where the whole document shares one
-// character format: a document-wide format change (font or theme) discards
-// the fallback faces RichEdit's font binding gave emoji and other non-BMP
-// characters, leaving placeholder boxes. Binding only re-runs when text is
-// inserted, so when the document contains astral characters, re-set the
-// identical text through EM_SETTEXTEX to re-trigger it. Caret, scroll and
-// modified state are preserved; the undo stack is kept via ST_KEEPUNDO.
+// character format: a face or size change discards the fallback faces
+// RichEdit's font binding gave emoji and other non-BMP characters, leaving
+// placeholder boxes. (A colour-only change does not - apply_theme needs no
+// rebind.) Binding only re-runs when text is inserted, so when the document
+// contains astral characters, re-set the identical text through EM_SETTEXTEX
+// to re-trigger it.
+//
+// The re-set must be invisible to the user's history. ST_KEEPUNDO alone
+// RECORDS it: every font change then added an undo step holding a full copy
+// of the document, wiped Redo, and the next Ctrl+Z "undid" nothing visible
+// while marking an unchanged file modified and stripping the emoji faces
+// again. So undo recording is suspended around it (TOM tomSuspend); without
+// TOM the rebind is skipped - boxes until the next load are a cosmetic
+// fault, a corrupted undo history is not. Caret (including which end of a
+// selection is active), scroll, zoom and modified state are preserved.
 // Callers hold setting_text_programmatically while this runs.
 static void refresh_font_binding(Window *window) {
     if (!window || !window->edit_hwnd)
         return;
+    HWND e = window->edit_hwnd;
 
     GETTEXTLENGTHEX gtl;
     gtl.flags = GTL_NUMCHARS | GTL_PRECISE;
     gtl.codepage = 1200;
-    LRESULT len = SendMessageW(window->edit_hwnd, EM_GETTEXTLENGTHEX, (WPARAM) &gtl, 0);
+    LRESULT len = SendMessageW(e, EM_GETTEXTLENGTHEX, (WPARAM) &gtl, 0);
     if (len <= 0)
+        return;
+
+    // Look before copying: most documents hold no astral character, and for
+    // those a font change must not cost a second copy of the whole document
+    AstralScan astral;
+    astral_scan_init(&astral);
+    scan_text(e, (LONG) len, NULL, &astral);
+    if (!astral.found)
+        return; // Nothing the configured font could not render itself
+
+    ITextDocument *doc = tom_document(window);
+    if (!doc)
         return;
 
     wchar_t *buf = malloc(((size_t) len + 1) * sizeof(wchar_t));
@@ -4632,49 +4818,52 @@ static void refresh_font_binding(Window *window) {
     gt.cb = (DWORD) (((size_t) len + 1) * sizeof(wchar_t));
     gt.flags = GT_DEFAULT;
     gt.codepage = 1200;
-    LRESULT got = SendMessageW(window->edit_hwnd, EM_GETTEXTEX, (WPARAM) &gt, (LPARAM) buf);
-    if (got <= 0) {
+    LRESULT got = SendMessageW(e, EM_GETTEXTEX, (WPARAM) &gt, (LPARAM) buf);
+    if (got <= 0 || !tom_suspend_undo(doc)) {
         free(buf);
-        return;
-    }
-
-    bool has_astral = false;
-    for (LRESULT i = 0; i + 1 < got; i++) {
-        if (IS_HIGH_SURROGATE(buf[i]) && IS_LOW_SURROGATE(buf[i + 1])) {
-            has_astral = true;
-            break;
-        }
-    }
-    if (!has_astral) {
-        free(buf); // Nothing the configured font could not render itself
         return;
     }
 
 #if NPAD_SCROLL_TELEMETRY
     g_tel.rebinds++;
 #endif
+    // EM_EXGETSEL normalises the range, so a backward selection (made with
+    // Shift+Left or by dragging up) would come back forward with its caret at
+    // the other end. TOM says which end is active.
     CHARRANGE saved_sel = { 0, 0 };
-    SendMessageW(window->edit_hwnd, EM_EXGETSEL, 0, (LPARAM) &saved_sel);
-    LRESULT first_line = SendMessageW(window->edit_hwnd, EM_GETFIRSTVISIBLELINE, 0, 0);
+    SendMessageW(e, EM_EXGETSEL, 0, (LPARAM) &saved_sel);
+    LONG anchor = saved_sel.cpMin, active = saved_sel.cpMax;
+    ITextSelection *sel = NULL;
+    if (SUCCEEDED(doc->lpVtbl->GetSelection(doc, &sel)) && sel) {
+        LONG flags = 0;
+        if (SUCCEEDED(sel->lpVtbl->GetFlags(sel, &flags)) && (flags & tomSelStartActive)) {
+            anchor = saved_sel.cpMax;
+            active = saved_sel.cpMin;
+        }
+        sel->lpVtbl->Release(sel);
+    }
+    LRESULT first_line = SendMessageW(e, EM_GETFIRSTVISIBLELINE, 0, 0);
     POINT scroll_pos = { 0, 0 };
-    SendMessageW(window->edit_hwnd, EM_GETSCROLLPOS, 0, (LPARAM) &scroll_pos);
+    SendMessageW(e, EM_GETSCROLLPOS, 0, (LPARAM) &scroll_pos);
     WPARAM zoom_num = 0;
     LPARAM zoom_den = 0;
-    SendMessageW(window->edit_hwnd, EM_GETZOOM, (WPARAM) &zoom_num, (LPARAM) &zoom_den);
-    SendMessageW(window->edit_hwnd, WM_SETREDRAW, FALSE, 0);
+    SendMessageW(e, EM_GETZOOM, (WPARAM) &zoom_num, (LPARAM) &zoom_den);
+    SendMessageW(e, WM_SETREDRAW, FALSE, 0);
 
     SETTEXTEX st;
-    st.flags = ST_KEEPUNDO;
+    st.flags = ST_KEEPUNDO; // Keep the user's history; suspended, so nothing is added to it
     st.codepage = 1200;
-    SendMessageW(window->edit_hwnd, EM_SETTEXTEX, (WPARAM) &st, (LPARAM) buf);
+    SendMessageW(e, EM_SETTEXTEX, (WPARAM) &st, (LPARAM) buf);
+    tom_resume_undo(doc);
 
     // EM_GETZOOM wrote through the pointers; EM_SETTEXTEX resets the ratio
     // cppcheck-suppress knownConditionTrueFalse
     if (zoom_num && zoom_den) {
-        SendMessageW(window->edit_hwnd, EM_SETZOOM, zoom_num, zoom_den);
+        SendMessageW(e, EM_SETZOOM, zoom_num, zoom_den);
     }
-    SendMessageW(window->edit_hwnd, EM_EXSETSEL, 0, (LPARAM) &saved_sel);
-    SendMessageW(window->edit_hwnd, EM_SETSCROLLPOS, 0, (LPARAM) &scroll_pos);
+    // EM_SETSEL takes (anchor, active), so a backward selection stays backward
+    SendMessageW(e, EM_SETSEL, (WPARAM) anchor, (LPARAM) active);
+    SendMessageW(e, EM_SETSCROLLPOS, 0, (LPARAM) &scroll_pos);
     SendMessageW(window->edit_hwnd, WM_SETREDRAW, TRUE, 0);
     // The pixel position is a best effort across a full text reset; the first
     // visible line is what the user sees, so settle on that. And RedrawWindow,
@@ -4686,6 +4875,72 @@ static void refresh_font_binding(Window *window) {
     RedrawWindow(window->edit_hwnd, NULL, NULL,
                  RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
     free(buf);
+}
+
+// Notepad's tab stops are those of an Edit control: one every eight average
+// character widths of the font, so a tab is 8 columns in a monospace face at
+// any size. RichEdit's default is a fixed half inch, which at Consolas 11 pt
+// is about 5.95 columns and changes with the font size.
+#define NOTEPAD_TAB_COLUMNS 8
+
+// The tab stop spacing for cf's font, in points (0 if it cannot be measured).
+// Measured at 1440 pixels per inch - a font whose em is cf->yHeight pixels -
+// so the widths come out in twips with no screen-DPI rounding, and the
+// result holds on every monitor and at every zoom (RichEdit scales tab
+// positions with the text).
+static float tab_stop_points_for(const CHARFORMAT2W *cf) {
+    LOGFONTW lf;
+    ZeroMemory(&lf, sizeof(lf));
+    lf.lfHeight = -(LONG) cf->yHeight;
+    lf.lfWeight = cf->wWeight;
+    lf.lfItalic = (cf->dwEffects & CFE_ITALIC) ? TRUE : FALSE;
+    lf.lfCharSet = DEFAULT_CHARSET;
+    wcsncpy(lf.lfFaceName, cf->szFaceName, LF_FACESIZE - 1);
+    lf.lfFaceName[LF_FACESIZE - 1] = L'\0';
+
+    HFONT font = CreateFontIndirectW(&lf);
+    if (!font)
+        return 0.0f;
+    float points = 0.0f;
+    HDC hdc = GetDC(NULL);
+    if (hdc) {
+        HGDIOBJ old = SelectObject(hdc, font);
+        static const wchar_t sample[] = L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        SIZE extent = { 0, 0 };
+        if (GetTextExtentPoint32W(hdc, sample, 52, &extent) && extent.cx > 0) {
+            // GdiGetCharDimensions' average, which is what an Edit control
+            // (and so Notepad) spaces its default tab stops by
+            LONG average = (extent.cx / 26 + 1) / 2;
+            points = (float) (NOTEPAD_TAB_COLUMNS * average) / 20.0f;
+        }
+        SelectObject(hdc, old);
+        ReleaseDC(NULL, hdc);
+    }
+    DeleteObject(font);
+    return points;
+}
+
+// Put the default tab stop where tab_stop_points says. Idempotent and cheap
+// when nothing changed, because it also runs after every programmatic text
+// replacement (NPAD_WM_REAPPLY_TABS): RichEdit is free to reset document
+// properties when EM_SETTEXTEX replaces everything, as it does the zoom.
+static void apply_tab_stops(Window *window) {
+    if (!window || window->tab_stop_points <= 0.0f)
+        return;
+    ITextDocument *doc = tom_document(window);
+    if (!doc)
+        return;
+    float want = window->tab_stop_points;
+    float now = 0.0f;
+    if (SUCCEEDED(doc->lpVtbl->GetDefaultTabStop(doc, &now)) && now > want - 0.05f &&
+        now < want + 0.05f)
+        return;
+    // A document property, not an edit; keep it out of the undo history even
+    // if RichEdit would record it
+    bool suspended = tom_suspend_undo(doc);
+    doc->lpVtbl->SetDefaultTabStop(doc, want);
+    if (suspended)
+        tom_resume_undo(doc);
 }
 
 // Apply the configured font to the document. In plain-text mode setting the
@@ -4700,15 +4955,24 @@ static void apply_font(Window *window) {
     build_char_format(window, &cf);
 
     // Same reasoning as apply_theme: this runs on every settings broadcast,
-    // and re-applying an unchanged font still reflows the document
-    if (window->font_applied && memcmp(&cf, &window->applied_font, sizeof(cf)) == 0) {
+    // and re-applying an unchanged font still reflows the document. The text
+    // colour is apply_theme's to apply (colour only, which keeps the emoji
+    // faces), so it is left out of the comparison: a scheme change used to
+    // count as a font change here, restamping and rebinding the whole
+    // document once in each function.
+    if (window->font_applied) {
+        CHARFORMAT2W same_colour = cf;
+        same_colour.crTextColor = window->applied_font.crTextColor;
+        if (memcmp(&same_colour, &window->applied_font, sizeof(cf)) == 0) {
 #if NPAD_SCROLL_TELEMETRY
-        g_tel.restamps_skipped++;
+            g_tel.restamps_skipped++;
 #endif
-        return;
+            return;
+        }
     }
     window->font_applied = true;
     window->applied_font = cf;
+    window->tab_stop_points = tab_stop_points_for(&cf);
 #if NPAD_SCROLL_TELEMETRY
     g_tel.restamps++;
 #endif
@@ -4719,6 +4983,7 @@ static void apply_font(Window *window) {
     view_save(window->edit_hwnd, &view);
     SendMessageW(window->edit_hwnd, EM_SETCHARFORMAT, SCF_DEFAULT, (LPARAM) &cf);
     refresh_font_binding(window);
+    apply_tab_stops(window); // After the rebind, which re-sets the text
     view_restore(window->edit_hwnd, &view);
     window->setting_text_programmatically = false;
     SendMessageW(window->edit_hwnd, EM_SETMODIFY, (WPARAM) was_modified, 0);
@@ -6265,7 +6530,7 @@ static void insert_time_date(Window *window) {
     _snwprintf(combined, 131, L"%s %s", time_str, date_str);
     combined[131] = L'\0';
 
-    SendMessageW(window->edit_hwnd, EM_REPLACESEL, TRUE, (LPARAM) combined);
+    replace_sel_one_step(window->edit_hwnd, combined);
 }
 
 // (Re)build the accelerator table. The Ctrl+N / Ctrl+Shift+N pair maps to
@@ -6298,7 +6563,10 @@ static void build_accelerators(Window *window) {
                       { FCONTROL | FVIRTKEY, 'M', ID_FORMAT_MONOSPACE },
                       { FCONTROL | FVIRTKEY, 'P', ID_FILE_PRINT },
                       { FCONTROL | FSHIFT | FVIRTKEY, 'P', ID_FILE_PRINT_PREVIEW },
-                      { FCONTROL | FVIRTKEY, 'E', ID_FORMAT_EOL_CYCLE },
+                      // No Ctrl+E: it cycled the line ending, a file-changing
+                      // action undo cannot reverse, on the key Windows 10
+                      // Notepad gives to Search with Bing. Format > Line
+                      // Ending and the status bar still change it.
                       { FCONTROL | FVIRTKEY, VK_OEM_COMMA, ID_FILE_PREFERENCES },
                       // Hidden: Preferences opened on the Debug diagnostics page
                       { FCONTROL | FSHIFT | FVIRTKEY, VK_OEM_PERIOD, ID_FILE_PREFERENCES_DEBUG },
@@ -6663,7 +6931,7 @@ static void list_replace(const Window *window, LONG cpMin, LONG cpMax, const cha
 
     CHARRANGE target = { cpMin, cpMax };
     SendMessageW(e, EM_EXSETSEL, 0, (LPARAM) &target);
-    SendMessageW(e, EM_REPLACESEL, TRUE, (LPARAM) wide); // TRUE = single undo unit
+    replace_sel_one_step(e, wide);
     free(wide);
 
     CHARRANGE after = { 0, 0 };
@@ -7987,7 +8255,13 @@ static void create_menu(Window *window) {
     apply_update_indicator(window); // After Markdown, so Help is still last
 }
 
-// Rebuild the File > Recent Files submenu from settings
+// Rebuild the File > Recent Files submenu from settings.
+//
+// From the stored list as it is, with no existence check: this runs when the
+// submenu opens and after every settings broadcast, and _waccess on a path
+// whose NAS is asleep blocks the UI thread for the SMB timeout (20-40 s). A
+// missing file is reported when it is clicked, like any failed open. The
+// paths are kept with the menu, so a click opens the entry the user saw.
 static void rebuild_recent_menu(Window *window) {
     if (!window || !window->recent_menu)
         return;
@@ -7995,9 +8269,13 @@ static void rebuild_recent_menu(Window *window) {
     while (RemoveMenu(window->recent_menu, 0, MF_BYPOSITION)) {
         // Remove all existing items
     }
+    for (int i = 0; i < MAX_RECENT_MENU_FILES; i++) {
+        free(window->recent_paths[i]);
+        window->recent_paths[i] = NULL;
+    }
 
     int count = 0;
-    char **files = settings_get_recent_files(&count);
+    char **files = settings_get_recent_files_ex(&count, false);
 
     if (count == 0) {
         AppendMenuW(window->recent_menu, MF_STRING | MF_GRAYED, 0, L"(Empty)");
@@ -8009,6 +8287,8 @@ static void rebuild_recent_menu(Window *window) {
             if (wide) {
                 AppendMenuW(window->recent_menu, MF_STRING, ID_FILE_RECENT_BASE + (UINT) i, wide);
                 free(wide);
+                window->recent_paths[i] = files[i]; // The menu owns it now
+                files[i] = NULL;
             }
         }
         AppendMenuW(window->recent_menu, MF_SEPARATOR, 0, NULL);
@@ -8193,14 +8473,18 @@ static void set_status_bar_visible(Window *window, bool visible) {
 static void handle_command(Window *window, WORD command) {
     // Recent file entries occupy a reserved ID range
     if (command >= ID_FILE_RECENT_BASE && command < ID_FILE_RECENT_BASE + MAX_RECENT_MENU_FILES) {
-        int index = command - ID_FILE_RECENT_BASE;
-        int count = 0;
-        char **files = settings_get_recent_files(&count);
-        if (files && index < count) {
-            ui_post_event(UI_EVENT_FILE_DROPPED, window, files[index]);
-        }
-        if (files) {
-            settings_free_recent_files(files, count);
+        // The entry the menu showed, not whatever sits at that index after a
+        // re-read. Copied: the open runs prompts whose message loops can take
+        // a settings broadcast, which rebuilds the menu and frees its paths.
+        const char *shown = window->recent_paths[command - ID_FILE_RECENT_BASE];
+        if (shown) {
+            size_t n = strlen(shown) + 1;
+            char *path = malloc(n);
+            if (path) {
+                memcpy(path, shown, n);
+                ui_post_event(UI_EVENT_FILE_DROPPED, window, path);
+                free(path);
+            }
         }
         return;
     }
@@ -8395,9 +8679,6 @@ static void handle_command(Window *window, WORD command) {
         case ID_FORMAT_EOL_LF:
         case ID_FORMAT_EOL_CR:
             editor_set_line_ending((LineEnding) (command - ID_FORMAT_EOL_CRLF));
-            break;
-        case ID_FORMAT_EOL_CYCLE:
-            editor_set_line_ending((LineEnding) ((editor_get_line_ending() + 1) % 3));
             break;
         case ID_FORMAT_FONT: {
             const char *def = DEFAULT_MONO_FONT;
@@ -8765,7 +9046,12 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         case WM_INITMENUPOPUP: {
             if (window) {
                 update_menu_states(window);
-                rebuild_recent_menu(window);
+                // Only for the Recent Files submenu itself. TranslateAccelerator
+                // sends this for every shortcut that matches a menu item
+                // (Ctrl+S, Ctrl+V, F3...), and each other popup too; the list
+                // is also rebuilt whenever settings change.
+                if ((HMENU) wparam == window->recent_menu)
+                    rebuild_recent_menu(window);
             }
             return 0;
         }
@@ -8798,6 +9084,11 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                         if (!window->setting_text_programmatically) {
                             window->is_modified = true;
                             ui_post_event(UI_EVENT_TEXT_CHANGED, window, NULL);
+                        } else if (!window->tab_check_pending) {
+                            // The whole text may just have been replaced
+                            // (EM_SETTEXTEX); re-check the tab stop after it
+                            window->tab_check_pending = true;
+                            PostMessageW(hwnd, NPAD_WM_REAPPLY_TABS, 0, 0);
                         }
                     }
                 } else {
@@ -8952,6 +9243,13 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
             prompt_external_change(window);
             return 0;
 
+        case NPAD_WM_REAPPLY_TABS:
+            if (window) {
+                window->tab_check_pending = false;
+                apply_tab_stops(window);
+            }
+            return 0;
+
         case WM_SETTINGCHANGE: {
             // Windows broadcasts this with "ImmersiveColorSet" when the
             // light/dark setting changes. There was no handler at all before,
@@ -8976,11 +9274,13 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                                  suggested_rect->bottom - suggested_rect->top,
                                  SWP_NOZORDER | SWP_NOACTIVATE);
                 }
-                // Char formats are in twips (DPI-independent), so existing
-                // runs - including font-bound emoji - keep their formatting;
-                // only the default needs a refresh
-                apply_font_default(window);
-                apply_edit_margins(window); // Pixel margins must rescale too
+                // Char formats and the tab stop are in twips/points
+                // (DPI-independent), so the text needs no restamp at all.
+                // Stamping the default format here used to restyle every run
+                // (plain-text mode), turning emoji into boxes whenever the
+                // window crossed to a monitor with another scale. Only the
+                // pixel-sized things below change.
+                apply_edit_margins(window); // Pixel margins must rescale
                 resize_controls(window);
                 // The icon slots are sized in pixels, so they need re-picking
                 // at the new DPI - this previously refreshed font and layout

@@ -56,7 +56,10 @@ typedef enum {
 EditorExternalChange editor_check_external_change(void);
 void editor_accept_external_change(void); // Stop reporting this one
 void editor_suppress_change_prompt(void); // For this file, this session only
-bool editor_reload_from_disk(void);       // Discards unsaved edits deliberately
+// Discards unsaved edits deliberately. Asks Open's binary and large-file
+// questions first and reports a read failure itself; false (declined or
+// failed) leaves the document and its baseline untouched.
+bool editor_reload_from_disk(void);
 bool editor_save_file(void);
 bool editor_save_file_as(const char *filename);
 bool editor_close_file(void);
