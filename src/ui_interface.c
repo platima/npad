@@ -37,7 +37,8 @@ extern bool ui_platform_is_window_maximized(const Window *window);
 extern void ui_platform_get_default_window_rect(int *x, int *y, int *width, int *height);
 
 // Platform text functions
-extern void ui_platform_set_text(Window *window, const char *text);
+extern bool ui_platform_set_text(Window *window, const char *text);
+extern bool ui_platform_text_altered_by_load(Window *window);
 extern char *ui_platform_get_text(Window *window);
 extern void ui_platform_clear_text(Window *window);
 extern bool ui_platform_has_selection(Window *window);
@@ -164,8 +165,12 @@ void ui_get_default_window_rect(int *x, int *y, int *width, int *height) {
     ui_platform_get_default_window_rect(x, y, width, height);
 }
 
-void ui_set_text(Window *window, const char *text) {
-    ui_platform_set_text(window, text);
+bool ui_set_text(Window *window, const char *text) {
+    return ui_platform_set_text(window, text);
+}
+
+bool ui_text_altered_by_load(Window *window) {
+    return ui_platform_text_altered_by_load(window);
 }
 
 char *ui_get_text(Window *window) {

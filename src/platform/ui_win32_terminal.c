@@ -82,9 +82,15 @@ void ui_platform_invalidate_window(Window *window) {
     (void) window;
 }
 
-void ui_platform_set_text(Window *window, const char *text) {
+bool ui_platform_set_text(Window *window, const char *text) {
     (void) window;
     (void) text;
+    return false; // No text view: nothing was loaded
+}
+
+bool ui_platform_text_altered_by_load(Window *window) {
+    (void) window;
+    return false;
 }
 
 char *ui_platform_get_text(Window *window) {

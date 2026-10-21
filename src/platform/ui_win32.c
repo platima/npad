@@ -35,6 +35,7 @@
 #include "../core/tab_stops.h"
 #include "assoc_win32.h"
 #include "print_win32.h"
+#include "richedit_text.h"
 #include "../core/update_check.h"
 #include "resource.h"
 #include <stdio.h>
@@ -247,6 +248,7 @@ struct Window {
     HMENU recent_menu;
     HACCEL haccel;
     bool is_modified;
+    bool text_altered; // The last load could not be held exactly (see richedit_text.h)
     bool setting_text_programmatically; // Suppress EN_CHANGE during programmatic changes
     bool word_wrap_enabled;
     bool status_bar_visible;
@@ -1504,9 +1506,7 @@ Window *ui_platform_create_main_window(void) {
     }
 
     // Plain text mode, effectively unlimited length, deep undo, small margins
-    SendMessageW(window->edit_hwnd, EM_SETTEXTMODE, TM_PLAINTEXT, 0);
-    SendMessageW(window->edit_hwnd, EM_EXLIMITTEXT, 0, 0x7FFFFFFE);
-    SendMessageW(window->edit_hwnd, EM_SETUNDOLIMIT, 100000, 0);
+    richedit_configure_plain_text(window->edit_hwnd);
     apply_edit_margins(window);
     SendMessageW(window->edit_hwnd, EM_SETEVENTMASK, 0, ENM_CHANGE | ENM_SELCHANGE);
     SetWindowSubclass(window->edit_hwnd, edit_subclass_proc, 1, 0);
@@ -1698,23 +1698,27 @@ void ui_platform_get_default_window_rect(int *x, int *y, int *width, int *height
 // Text access
 // ---------------------------------------------------------------------------
 
-void ui_platform_set_text(Window *window, const char *text) {
+// Returns false, with the control untouched, if the text could not be
+// converted (too large, or out of memory): the caller must then treat the
+// open as failed. A load RichEdit could not hold exactly still returns true
+// and sets text_altered (ui_platform_text_altered_by_load).
+bool ui_platform_set_text(Window *window, const char *text) {
     if (!window || !window->edit_hwnd || !text)
-        return;
+        return false;
 
-    wchar_t *wide = utf8_to_wide(text);
+    // Line breaks normalised to the control's own CR first: CR CR LF would
+    // otherwise be deleted as a soft-break marker (see richedit_text.h)
+    size_t len = 0;
+    bool replaced = false;
+    wchar_t *wide = richedit_text_from_utf8(text, &len, &replaced);
     if (!wide)
-        return;
+        return false;
 
     // Refresh the default character format first so the incoming text adopts
     // the configured font/colour, then insert via EM_SETTEXTEX: unlike a
     // SetWindowTextW + SCF_ALL restamp, this leaves RichEdit's font binding
     // free to give emoji/CJK characters a fallback face with real glyphs.
     apply_font_default(window);
-
-    SETTEXTEX st;
-    st.flags = ST_DEFAULT;
-    st.codepage = 1200; // UTF-16
 
     // EM_SETTEXTEX resets the zoom ratio; this window's zoom is view state
     // that must survive loading a file
@@ -1723,9 +1727,10 @@ void ui_platform_set_text(Window *window, const char *text) {
     SendMessageW(window->edit_hwnd, EM_GETZOOM, (WPARAM) &zoom_num, (LPARAM) &zoom_den);
 
     window->setting_text_programmatically = true;
-    SendMessageW(window->edit_hwnd, EM_SETTEXTEX, (WPARAM) &st, (LPARAM) wide);
+    bool exact = richedit_load_text(window->edit_hwnd, wide, len);
     window->setting_text_programmatically = false;
     free(wide);
+    window->text_altered = replaced || !exact;
 
     // EM_GETZOOM wrote through the pointers; 0/0 means default (100%)
     // cppcheck-suppress knownConditionTrueFalse
@@ -1739,37 +1744,24 @@ void ui_platform_set_text(Window *window, const char *text) {
     SendMessageW(window->edit_hwnd, EM_SETSEL, 0, 0);
     window->is_modified = false;
     update_status_bar(window);
+    return true;
+}
+
+bool ui_platform_text_altered_by_load(Window *window) {
+    return window && window->text_altered;
 }
 
 char *ui_platform_get_text(Window *window) {
     if (!window || !window->edit_hwnd)
         return NULL;
 
-    GETTEXTLENGTHEX gtl;
-    gtl.flags = GTL_USECRLF | GTL_NUMCHARS | GTL_PRECISE;
-    gtl.codepage = 1200; // UTF-16
-    LRESULT length = SendMessageW(window->edit_hwnd, EM_GETTEXTLENGTHEX, (WPARAM) &gtl, 0);
-    if (length < 0) {
-        return NULL;
-    }
-
-    wchar_t *wide = malloc(((size_t) length + 1) * sizeof(wchar_t));
-    if (!wide) {
+    // NULL rather than a partial copy: a save of a fragment would replace the
+    // whole file with it
+    char *utf8 = richedit_get_text_utf8(window->edit_hwnd);
+    if (!utf8) {
         NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, 0, "Text retrieval",
-                         "Failed to allocate memory for text buffer");
-        return NULL;
+                         "Could not read the document text from the edit control");
     }
-
-    GETTEXTEX gt;
-    memset(&gt, 0, sizeof(gt));
-    gt.cb = (DWORD) (((size_t) length + 1) * sizeof(wchar_t));
-    gt.flags = GT_USECRLF;
-    gt.codepage = 1200;
-    SendMessageW(window->edit_hwnd, EM_GETTEXTEX, (WPARAM) &gt, (LPARAM) wide);
-    wide[length] = L'\0';
-
-    char *utf8 = wide_to_utf8(wide);
-    free(wide);
     return utf8;
 }
 
@@ -2020,6 +2012,8 @@ static void do_paste(Window *window, int mode) {
                     ins[n++] = L'\n';
                 }
                 ins[n] = L'\0';
+                // A CR CR LF in the clipboard text would be deleted on insert
+                richedit_normalize_breaks(ins, n);
 
                 CHARRANGE sel = { 0, 0 };
                 SendMessageW(e, EM_EXGETSEL, 0, (LPARAM) &sel);
@@ -8863,7 +8857,8 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                         TextFileInfo info;
                         char *content = file_read_text_ex(utf8, &info);
                         if (content) {
-                            wchar_t *wide = utf8_to_wide(content);
+                            // Breaks normalised, or a CR CR LF would be deleted
+                            wchar_t *wide = richedit_text_from_utf8(content, NULL, NULL);
                             if (wide) {
                                 SendMessageW(window->edit_hwnd, EM_REPLACESEL, TRUE, (LPARAM) wide);
                                 free(wide);
