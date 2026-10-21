@@ -62,6 +62,7 @@ extern char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams
 extern char *ui_platform_show_save_dialog(Window *parent, FileDialogParams *params);
 extern bool ui_platform_show_message_box(Window *parent, const char *title, const char *message,
                                          bool is_question);
+extern UiAnswer ui_platform_ask_question(Window *parent, const char *title, const char *message);
 extern SavePromptResult ui_platform_show_save_prompt(Window *parent, const char *filename);
 extern void ui_platform_show_about_dialog(Window *parent);
 extern UiOpenChoice ui_platform_prompt_binary_open(Window *parent, const char *filename);
@@ -88,7 +89,7 @@ extern void ui_platform_set_auto_save_timer(Window *window, int seconds);
 extern void ui_platform_set_session_timer(Window *window, int seconds);
 extern void ui_platform_launch_recovery_instance(const char *slot_id, int cascade_index);
 extern void ui_platform_notify_settings_changed(void);
-extern bool ui_platform_pid_is_running(long pid);
+extern bool ui_platform_pid_is_running(long pid, long long *start_time);
 
 // Platform-specific helpers
 extern void *ui_platform_get_native_handle(Window *window);
@@ -236,6 +237,10 @@ bool ui_show_message_box(Window *parent, const char *title, const char *message,
     return ui_platform_show_message_box(parent, title, message, is_question);
 }
 
+UiAnswer ui_ask_question(Window *parent, const char *title, const char *message) {
+    return ui_platform_ask_question(parent, title, message);
+}
+
 SavePromptResult ui_show_save_prompt(Window *parent, const char *filename) {
     return ui_platform_show_save_prompt(parent, filename);
 }
@@ -324,8 +329,10 @@ void ui_notify_settings_changed(void) {
     ui_platform_notify_settings_changed();
 }
 
-bool ui_pid_is_running(long pid) {
-    return ui_platform_pid_is_running(pid);
+bool ui_pid_is_running(long pid, long long *start_time) {
+    if (start_time)
+        *start_time = -1;
+    return ui_platform_pid_is_running(pid, start_time);
 }
 
 void *ui_get_native_handle(Window *window) {

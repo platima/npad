@@ -374,7 +374,7 @@ static void create_directory_recursive(const char *path) {
 #ifdef _WIN32
             CreateDirectory(copy, NULL);
 #else
-            mkdir(copy, 0755);
+            mkdir(copy, 0700); // Private: settings and recovery snapshots live here
 #endif
             *p = saved;
         }
@@ -383,7 +383,7 @@ static void create_directory_recursive(const char *path) {
 #ifdef _WIN32
     CreateDirectory(copy, NULL);
 #else
-    mkdir(copy, 0755);
+    mkdir(copy, 0700);
 #endif
     free(copy);
 }
@@ -407,6 +407,11 @@ bool settings_save(void) {
     // never truncate or corrupt the existing settings file
     bool result = file_write_text_atomic(g_settings_file_path, content);
     free(content);
+#ifndef _WIN32
+    // Recent paths and Find history are nobody else's business
+    if (result)
+        chmod(g_settings_file_path, 0600);
+#endif
 
     return result;
 }

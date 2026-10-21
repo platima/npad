@@ -224,6 +224,14 @@ bool ui_platform_show_message_box(Window *parent, const char *title, const char 
     return false;
 }
 
+// No way to ask yet: report the question as unanswered, which callers treat
+// as "not now" (crash-recovery snapshots stay for the next launch)
+UiAnswer ui_platform_ask_question(Window *parent, const char *title, const char *message) {
+    (void) parent;
+    printf("Question: %s - %s\n", title ? title : "npad", message ? message : "");
+    return UI_ANSWER_DISMISSED;
+}
+
 void ui_platform_show_about_dialog(Window *parent) {
     (void) parent;
 }
@@ -317,8 +325,10 @@ void ui_platform_launch_recovery_instance(const char *slot_id, int cascade_index
 void ui_platform_notify_settings_changed(void) {
 }
 
-bool ui_platform_pid_is_running(long pid) {
+bool ui_platform_pid_is_running(long pid, long long *start_time) {
     (void) pid;
+    if (start_time)
+        *start_time = -1;
     return false;
 }
 

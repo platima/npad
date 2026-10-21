@@ -135,6 +135,14 @@ bool ui_can_redo(const Window *window);
 char *ui_show_open_dialog(Window *parent, const FileDialogParams *params);
 char *ui_show_save_dialog(Window *parent, FileDialogParams *params);
 bool ui_show_message_box(Window *parent, const char *title, const char *message, bool is_question);
+
+// Answer to a Yes/No question. DISMISSED is everything that is not an explicit
+// choice: Esc or the close box, the dialog ended by a quit or by its parent
+// going away, or a dialog that could not be shown at all. A caller about to do
+// something irreversible on No must treat DISMISSED as "not now", never as No.
+typedef enum { UI_ANSWER_DISMISSED = 0, UI_ANSWER_YES, UI_ANSWER_NO } UiAnswer;
+UiAnswer ui_ask_question(Window *parent, const char *title, const char *message);
+
 SavePromptResult ui_show_save_prompt(Window *parent, const char *filename);
 void ui_show_about_dialog(Window *parent);
 
@@ -190,8 +198,11 @@ void ui_launch_recovery_instance(const char *slot_id, int cascade_index);
 void ui_notify_settings_changed(void);
 
 // Whether the given pid is a still-running npad process. Used to skip the
-// live recovery snapshots of other running instances at startup.
-bool ui_pid_is_running(long pid);
+// live recovery snapshots of other running instances at startup. When
+// start_time is not NULL it receives when that process started, as Unix
+// seconds, or -1 when the platform cannot tell: a pid is recycled, so the
+// caller compares it with the time recorded in the slot id.
+bool ui_pid_is_running(long pid, long long *start_time);
 
 // Platform-specific helpers (implemented per platform)
 void *ui_get_native_handle(Window *window);

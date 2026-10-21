@@ -124,16 +124,53 @@ char *ui_platform_show_save_dialog(Window *parent, FileDialogParams *params) {
     return result;
 }
 
-bool ui_platform_show_message_box(Window *parent, const char *title, const char *message,
-                                  bool is_question) {
+// Run a dialog and destroy it, unless it was destroyed while running (its
+// parent went, with DESTROY_WITH_PARENT): gtk_dialog_run then returns
+// GTK_RESPONSE_NONE and the widget may already be freed, which the weak
+// pointer reports by clearing `dialog`
+static gint run_and_destroy(GtkWidget *dialog) {
+    g_object_add_weak_pointer(G_OBJECT(dialog), (gpointer *) &dialog);
+    gint response = gtk_dialog_run(GTK_DIALOG(dialog));
+    if (dialog) {
+        g_object_remove_weak_pointer(G_OBJECT(dialog), (gpointer *) &dialog);
+        gtk_widget_destroy(dialog);
+    }
+    return response;
+}
+
+UiAnswer ui_platform_ask_question(Window *parent, const char *title, const char *message) {
     GtkWidget *dialog = gtk_message_dialog_new(
         parent_window(parent), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
-        is_question ? GTK_MESSAGE_QUESTION : GTK_MESSAGE_INFO,
-        is_question ? GTK_BUTTONS_YES_NO : GTK_BUTTONS_OK, "%s", message ? message : "");
+        GTK_MESSAGE_QUESTION, GTK_BUTTONS_YES_NO, "%s", message ? message : "");
     gtk_window_set_title(GTK_WINDOW(dialog), title ? title : "npad");
-    gint response = gtk_dialog_run(GTK_DIALOG(dialog));
-    gtk_widget_destroy(dialog);
-    return is_question ? (response == GTK_RESPONSE_YES) : true;
+    gint response = run_and_destroy(dialog);
+
+    // Only the two buttons are answers. Esc and the close box come back as
+    // GTK_RESPONSE_DELETE_EVENT and mean "not now" - unlike Windows, where a
+    // Yes/No box has neither - so a caller about to delete something on No
+    // must not do it for them. A destroyed dialog (GTK_RESPONSE_NONE) is not
+    // an answer either.
+    switch (response) {
+        case GTK_RESPONSE_YES:
+            return UI_ANSWER_YES;
+        case GTK_RESPONSE_NO:
+            return UI_ANSWER_NO;
+        default:
+            return UI_ANSWER_DISMISSED;
+    }
+}
+
+bool ui_platform_show_message_box(Window *parent, const char *title, const char *message,
+                                  bool is_question) {
+    if (is_question)
+        return ui_platform_ask_question(parent, title, message) == UI_ANSWER_YES;
+
+    GtkWidget *dialog = gtk_message_dialog_new(
+        parent_window(parent), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, GTK_MESSAGE_INFO,
+        GTK_BUTTONS_OK, "%s", message ? message : "");
+    gtk_window_set_title(GTK_WINDOW(dialog), title ? title : "npad");
+    run_and_destroy(dialog);
+    return true;
 }
 
 // Response ids for the custom buttons (positive, so they never collide with

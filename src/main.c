@@ -165,13 +165,15 @@ int main(int argc, char *argv[]) {
 
     DEBUG_PRINT("Message loop exited with code: %d", result);
 
-    // Save window state (restored geometry plus maximized flag)
-    ui_get_window_position(main_window, &x, &y);
-    ui_get_window_size(main_window, &width, &height);
-    settings_save_window_state(x, y, width, height, ui_is_window_maximized(main_window));
-
-    // Save settings
-    settings_save();
+    // Save window state (restored geometry plus maximized flag), then settings.
+    // Not for a recovery window that closed itself unused: its cascaded
+    // position is nobody's choice, and it changed nothing worth writing.
+    if (!editor_exited_unused()) {
+        ui_get_window_position(main_window, &x, &y);
+        ui_get_window_size(main_window, &width, &height);
+        settings_save_window_state(x, y, width, height, ui_is_window_maximized(main_window));
+        settings_save();
+    }
 
     // Cleanup
     editor_cleanup();
@@ -213,9 +215,12 @@ static void parse_command_line(int argc, char *argv[]) {
             exit(1);
 #endif
         } else if (strcmp(argv[i], "--recover") == 0) {
-            // Internal: reopen a specific crash-recovery slot in this instance
-            if (i + 1 < argc) {
-                editor_set_recover_slot(argv[++i]);
+            // Internal: reopen a specific crash-recovery slot in this instance.
+            // The id names files that get renamed and deleted, so one that npad
+            // could not have made is refused, and this starts as a plain launch.
+            if (i + 1 < argc && !editor_set_recover_slot(argv[++i])) {
+                NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, argv[i],
+                                 "Ignoring invalid recovery slot: %s", argv[i]);
             }
         } else if (strcmp(argv[i], "--cascade") == 0) {
             // Internal: stagger this recovery window's position
