@@ -337,12 +337,12 @@ static RestoreResult editor_restore_claimed(const char *dir, const char *slot_id
         free(content);
         free(path);
         session_release(dir, slot_id, g_session_slot);
-        ui_show_message_box(g_editor.main_window, "npad",
-                            "npad could not show a document it kept for recovery.\n"
-                            EDITOR_SET_TEXT_FAILED "\n\n"
-                            "It has been kept, and npad will offer it again the next time it "
-                            "starts.",
-                            false);
+        char message[512];
+        snprintf(message, sizeof(message),
+                 "npad could not show a document it kept for recovery.\n%s\n\n"
+                 "It has been kept, and npad will offer it again the next time it starts.",
+                 EDITOR_SET_TEXT_FAILED);
+        ui_show_message_box(g_editor.main_window, "npad", message, false);
         return RESTORE_FAILED;
     }
     // The snapshot already holds the control's substitutes, so this load is

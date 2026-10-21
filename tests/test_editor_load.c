@@ -102,6 +102,14 @@ bool ui_show_message_box(Window *parent, const char *title, const char *message,
     return is_question; // Questions are answered Yes
 }
 
+UiAnswer ui_ask_question(Window *parent, const char *title, const char *message) {
+    (void) parent;
+    (void) title;
+    (void) message;
+    g_message_boxes++;
+    return UI_ANSWER_YES;
+}
+
 char *ui_show_save_dialog(Window *parent, FileDialogParams *params) {
     (void) parent;
     (void) params;
@@ -135,8 +143,10 @@ size_t ui_system_memory_mb(void) {
     return 0;
 }
 
-bool ui_pid_is_running(long pid) {
+bool ui_pid_is_running(long pid, long long *start_time) {
     (void) pid;
+    if (start_time)
+        *start_time = 0;
     return false;
 }
 
@@ -427,6 +437,18 @@ TEST_CASE(unreadable_text_is_reported_by_save) {
 // --- Crash recovery -------------------------------------------------------------
 
 #ifndef _WIN32
+// Write a recovery slot the way a window would, altered mark included
+static bool park_slot(const char *dir, const char *slot, const char *content, const char *path,
+                      TextEncoding enc, LineEnding eol, bool altered) {
+    SessionMeta meta;
+    memset(&meta, 0, sizeof(meta));
+    meta.encoding = enc;
+    meta.line_ending = eol;
+    meta.altered = altered;
+    meta.stamp.size = -1;
+    return session_write_ex(dir, slot, content, path, &meta);
+}
+
 TEST_CASE(failed_restore_keeps_the_snapshot) {
     reset_fakes();
     char *dir = editor_session_dir();
@@ -493,7 +515,7 @@ TEST_CASE(altered_mark_survives_snapshot_and_restore) {
     editor_set_modified(false);
     TEST_ASSERT(editor_new_file(), "new");
     const char *slot = "2-7fffffff";
-    TEST_ASSERT(session_write_ex(dir, slot, parked, path, enc, eol, altered), "re-parked");
+    TEST_ASSERT(park_slot(dir, slot, parked, path, enc, eol, altered), "re-parked");
     free(parked);
     free(path);
 
@@ -507,7 +529,7 @@ TEST_CASE(altered_mark_survives_snapshot_and_restore) {
         char *again = session_take_ex(dir, slot, NULL, NULL, NULL, &altered);
         TEST_ASSERT_NOT_NULL(again, "the failed restore kept the snapshot");
         TEST_ASSERT(altered, "with its mark");
-        TEST_ASSERT(session_write_ex(dir, slot, again, OLD_FILE, enc, eol, altered), "put back");
+        TEST_ASSERT(park_slot(dir, slot, again, OLD_FILE, enc, eol, altered), "put back");
         free(again);
     }
 

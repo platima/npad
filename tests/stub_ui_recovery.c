@@ -72,9 +72,15 @@ void ui_quit(void) {
     g_stub.quit_called = true;
 }
 
-void ui_set_text(Window *window, const char *text) {
+bool ui_set_text(Window *window, const char *text) {
     (void) window;
     stub_set_text(text);
+    return true;
+}
+
+bool ui_text_altered_by_load(Window *window) {
+    (void) window;
+    return false;
 }
 
 char *ui_get_text(Window *window) {
