@@ -125,8 +125,8 @@ static void page_setup_save(GtkPageSetup *setup, const int margins[4]) {
     settings_set_int("print_margin_right", margins[1]);
     settings_set_int("print_margin_top", margins[2]);
     settings_set_int("print_margin_bottom", margins[3]);
-    settings_save();
-    ui_notify_settings_changed(); // Other windows print with the same page setup
+    if (settings_save())
+        ui_notify_settings_changed(); // Other windows print with the same page setup
 }
 
 // ---------------------------------------------------------------------------

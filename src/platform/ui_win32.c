@@ -31,6 +31,7 @@
 #include "../core/list_ops.h"
 #include "../core/session.h"
 #include "../core/settings.h"
+#include "../core/settings_import.h"
 #include "../core/startup_prof.h"
 #include "../core/tab_stops.h"
 #include "assoc_win32.h"
@@ -4780,10 +4781,194 @@ static void show_font_dialog(Window *window, const char *font_key, const char *d
 // Preferences (tabbed property sheet)
 // ---------------------------------------------------------------------------
 
+// Save the settings and tell the other windows. A change that was not saved is
+// not broadcast: the others would only reload what is still on disk. When the
+// save fails, warn_owner (if given) tells the user it did not stick.
+static bool save_and_broadcast_settings(HWND warn_owner) {
+    if (!settings_save()) {
+        if (warn_owner) {
+            MessageBoxW(warn_owner,
+                        L"npad could not save the settings. Check that the settings folder is "
+                        L"writable, then try again.",
+                        L"npad", MB_OK | MB_ICONWARNING);
+        }
+        return false;
+    }
+    ui_platform_notify_settings_changed();
+    return true;
+}
+
 // Mark a property-sheet page dirty so the Apply button becomes enabled
 static void mark_prefs_dirty(HWND page) {
     PropSheet_Changed(GetParent(page), page);
 }
+
+// --- Preferences: write only what changed, save once ------------------------
+//
+// A property sheet sends PSN_APPLY to every page that has been CREATED, not
+// only to the ones that changed (see LESSONS.md). Pages that wrote every
+// control back therefore froze adaptive defaults (large_file_warning_mb became
+// 1/64 of today's RAM for good) and reverted whatever another window had just
+// changed. So each page snapshots its controls when it is built and on every
+// Apply writes only the controls that differ from that snapshot, the way the
+// Associations page and the GTK dialog already do.
+//
+// And instead of every page saving and broadcasting on its own (once per
+// visited page, plus once more when the sheet closed, even on Cancel), the
+// pages only stage their writes: the last page of the round saves once and
+// broadcasts once, only when something changed, and keeps the sheet open if
+// the save fails.
+
+#define PREFS_MAX_PAGES 9 // pages[] in show_preferences_dialog
+#define PREFS_SNAP_MAX 64 // Every snapshotted control of every page
+
+static struct {
+    HWND page;
+    int id;
+    wchar_t *value; // malloc'd
+} g_prefs_snap[PREFS_SNAP_MAX];
+static int g_prefs_snap_count;
+
+static struct {
+    HWND applied[PREFS_MAX_PAGES]; // Pages that have applied this round
+    int applied_count;
+    bool changed;         // A setting was written and is not saved yet
+    bool sync_view_after; // Sync view state just turned on: send it after the broadcast
+} g_prefs_txn;
+
+#define PREFS_IDS(array) (array), (int) (sizeof(array) / sizeof((array)[0]))
+
+// A control's value as text: check state, combo selection, or edit text.
+// malloc'd; NULL when the control does not exist or memory ran out.
+static wchar_t *prefs_control_value(HWND page, int id) {
+    HWND ctl = GetDlgItem(page, id);
+    if (!ctl)
+        return NULL;
+    wchar_t cls[16] = L"";
+    GetClassNameW(ctl, cls, 16);
+    if (_wcsicmp(cls, L"Button") == 0 || _wcsicmp(cls, L"ComboBox") == 0) {
+        wchar_t *out = malloc(16 * sizeof(wchar_t));
+        if (out) {
+            LRESULT v = _wcsicmp(cls, L"Button") == 0 ? SendMessageW(ctl, BM_GETCHECK, 0, 0)
+                                                      : SendMessageW(ctl, CB_GETCURSEL, 0, 0);
+            _snwprintf(out, 15, L"%ld", (long) v);
+            out[15] = L'\0';
+        }
+        return out;
+    }
+    int len = GetWindowTextLengthW(ctl);
+    wchar_t *out = malloc(((size_t) len + 1) * sizeof(wchar_t));
+    if (out) {
+        out[0] = L'\0';
+        GetWindowTextW(ctl, out, len + 1);
+    }
+    return out;
+}
+
+static int prefs_snap_find(HWND page, int id) {
+    for (int i = 0; i < g_prefs_snap_count; i++) {
+        if (g_prefs_snap[i].page == page && g_prefs_snap[i].id == id)
+            return i;
+    }
+    return -1;
+}
+
+// Record the page's current values as the baseline Apply compares against.
+// Called at the end of WM_INITDIALOG and again after each Apply.
+static void prefs_snapshot(HWND page, const int *ids, int count) {
+    for (int i = 0; i < count; i++) {
+        int slot = prefs_snap_find(page, ids[i]);
+        if (slot < 0) {
+            if (g_prefs_snap_count >= PREFS_SNAP_MAX)
+                continue; // prefs_changed then reports a change: writes, as before
+            slot = g_prefs_snap_count++;
+            g_prefs_snap[slot].page = page;
+            g_prefs_snap[slot].id = ids[i];
+            g_prefs_snap[slot].value = NULL;
+        }
+        free(g_prefs_snap[slot].value);
+        g_prefs_snap[slot].value = prefs_control_value(page, ids[i]);
+    }
+}
+
+// Did the user change this control since the page was built or last applied?
+// Unknown (no snapshot) counts as changed, which writes the value: the
+// pre-snapshot behaviour, never a lost edit.
+static bool prefs_changed(HWND page, int id) {
+    int slot = prefs_snap_find(page, id);
+    if (slot < 0 || !g_prefs_snap[slot].value)
+        return true;
+    wchar_t *now = prefs_control_value(page, id);
+    bool changed = !now || wcscmp(now, g_prefs_snap[slot].value) != 0;
+    free(now);
+    return changed;
+}
+
+// A fresh sheet: no snapshots, nothing staged
+static void prefs_session_reset(void) {
+    for (int i = 0; i < g_prefs_snap_count; i++)
+        free(g_prefs_snap[i].value);
+    g_prefs_snap_count = 0;
+    ZeroMemory(&g_prefs_txn, sizeof(g_prefs_txn));
+}
+
+// Save once and broadcast once for the whole Apply / OK, if anything changed
+static LONG_PTR prefs_commit(HWND page) {
+    if (!g_prefs_txn.changed)
+        return PSNRET_NOERROR;
+    // On failure the sheet stays open with the values still in memory, so OK
+    // can be retried; an exit save would also still write them
+    if (!save_and_broadcast_settings(GetParent(page)))
+        return PSNRET_INVALID_NOCHANGEPAGE;
+    g_prefs_txn.changed = false;
+    // Other windows turn sync on from the broadcast, then adopt this state
+    if (g_prefs_txn.sync_view_after && g_main_window)
+        on_view_state_changed(g_main_window);
+    g_prefs_txn.sync_view_after = false;
+    return PSNRET_NOERROR;
+}
+
+// Every page ends its PSN_APPLY here. changed: this page wrote a setting.
+// The round is over once every created page has applied - counted, not
+// assumed from the order the sheet happens to send them in.
+static void prefs_page_applied(HWND page, bool changed) {
+    if (changed)
+        g_prefs_txn.changed = true;
+
+    bool seen = false;
+    for (int i = 0; i < g_prefs_txn.applied_count; i++) {
+        if (g_prefs_txn.applied[i] == page)
+            seen = true;
+    }
+    if (!seen && g_prefs_txn.applied_count < PREFS_MAX_PAGES)
+        g_prefs_txn.applied[g_prefs_txn.applied_count++] = page;
+
+    HWND sheet = GetParent(page);
+    bool all = true;
+    for (int i = 0; i < PREFS_MAX_PAGES && all; i++) {
+        HWND created = PropSheet_IndexToHwnd(sheet, i); // NULL: not created yet
+        if (!created)
+            continue;
+        bool applied = false;
+        for (int j = 0; j < g_prefs_txn.applied_count; j++) {
+            if (g_prefs_txn.applied[j] == created)
+                applied = true;
+        }
+        all = applied;
+    }
+
+    LONG_PTR result = PSNRET_NOERROR;
+    if (all) {
+        g_prefs_txn.applied_count = 0;
+        result = prefs_commit(page);
+    }
+    SetWindowLongPtrW(page, DWLP_MSGRESULT, result);
+}
+
+static const int PREFS_GENERAL_IDS[] = {
+    ID_PREF_AUTOSAVE_ENABLED, ID_PREF_AUTOSAVE_INTERVAL, ID_PREF_LARGE_FILE_MB, ID_PREF_RECENT_MAX,
+    ID_PREF_SESSION_ENABLED,  ID_PREF_SESSION_INTERVAL,  ID_PREF_CTRL_N_WINDOW, ID_PREF_WATCH_FILE,
+};
 
 static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
@@ -4812,6 +4997,7 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                          editor_is_auto_save_enabled());
             EnableWindow(GetDlgItem(page, ID_PREF_SESSION_INTERVAL),
                          editor_is_session_resume_enabled());
+            prefs_snapshot(page, PREFS_IDS(PREFS_GENERAL_IDS));
             return TRUE;
 
         case WM_COMMAND: {
@@ -4839,6 +5025,9 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
             }
             if (id == ID_PREF_RECENT_CLEAR) {
                 settings_clear_recent_files();
+                // Saved and broadcast at once: otherwise another window still
+                // holding the old list writes it back when it exits
+                save_and_broadcast_settings(GetParent(page));
                 if (g_main_window) {
                     rebuild_recent_menu(g_main_window);
                 }
@@ -4851,52 +5040,81 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
             const NMHDR *nmhdr = (const NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
                 BOOL ok = FALSE;
+                bool changed = false;
 
-                editor_enable_auto_save(IsDlgButtonChecked(page, ID_PREF_AUTOSAVE_ENABLED) ==
-                                        BST_CHECKED);
-
-                UINT interval = GetDlgItemInt(page, ID_PREF_AUTOSAVE_INTERVAL, &ok, FALSE);
-                if (ok && interval > 0) {
-                    editor_set_auto_save_interval((int) interval);
+                if (prefs_changed(page, ID_PREF_AUTOSAVE_ENABLED)) {
+                    editor_enable_auto_save(IsDlgButtonChecked(page, ID_PREF_AUTOSAVE_ENABLED) ==
+                                            BST_CHECKED);
+                    changed = true;
                 }
 
-                UINT large_mb = GetDlgItemInt(page, ID_PREF_LARGE_FILE_MB, &ok, FALSE);
-                if (ok) {
-                    settings_set_int("large_file_warning_mb", (int) large_mb);
-                }
-
-                UINT recent_max = GetDlgItemInt(page, ID_PREF_RECENT_MAX, &ok, FALSE);
-                if (ok) {
-                    if (recent_max > MAX_RECENT_MENU_FILES) {
-                        recent_max = MAX_RECENT_MENU_FILES;
+                if (prefs_changed(page, ID_PREF_AUTOSAVE_INTERVAL)) {
+                    UINT interval = GetDlgItemInt(page, ID_PREF_AUTOSAVE_INTERVAL, &ok, FALSE);
+                    if (ok && interval > 0) {
+                        editor_set_auto_save_interval((int) interval);
+                        changed = true;
                     }
-                    settings_set_int("recent_files_max", (int) recent_max);
+                }
+
+                // Untouched, the threshold stays unset and keeps following
+                // this machine's RAM (editor_default_large_file_mb)
+                if (prefs_changed(page, ID_PREF_LARGE_FILE_MB)) {
+                    UINT large_mb = GetDlgItemInt(page, ID_PREF_LARGE_FILE_MB, &ok, FALSE);
+                    if (ok) {
+                        settings_set_int("large_file_warning_mb", (int) large_mb);
+                        changed = true;
+                    }
+                }
+
+                if (prefs_changed(page, ID_PREF_RECENT_MAX)) {
+                    UINT recent_max = GetDlgItemInt(page, ID_PREF_RECENT_MAX, &ok, FALSE);
+                    if (ok) {
+                        if (recent_max > MAX_RECENT_MENU_FILES) {
+                            recent_max = MAX_RECENT_MENU_FILES;
+                        }
+                        settings_set_int("recent_files_max", (int) recent_max);
+                        changed = true;
+                        if (g_main_window) {
+                            rebuild_recent_menu(g_main_window);
+                        }
+                    }
+                }
+
+                bool session_changed = prefs_changed(page, ID_PREF_SESSION_ENABLED);
+                if (prefs_changed(page, ID_PREF_SESSION_INTERVAL)) {
+                    UINT session_interval =
+                        GetDlgItemInt(page, ID_PREF_SESSION_INTERVAL, &ok, FALSE);
+                    if (ok && session_interval > 0) {
+                        settings_set_int("session_interval", (int) session_interval);
+                        session_changed = true;
+                    }
+                }
+                // Enable/disable last so the interval it reads is current (this
+                // is also what re-arms the timer for a new interval)
+                if (session_changed) {
+                    editor_enable_session_resume(
+                        IsDlgButtonChecked(page, ID_PREF_SESSION_ENABLED) == BST_CHECKED);
+                    changed = true;
+                }
+
+                if (prefs_changed(page, ID_PREF_CTRL_N_WINDOW)) {
+                    settings_set_bool("ctrl_n_new_window",
+                                      IsDlgButtonChecked(page, ID_PREF_CTRL_N_WINDOW) ==
+                                          BST_CHECKED);
+                    changed = true;
                     if (g_main_window) {
-                        rebuild_recent_menu(g_main_window);
+                        apply_new_window_pref(g_main_window);
                     }
                 }
 
-                UINT session_interval = GetDlgItemInt(page, ID_PREF_SESSION_INTERVAL, &ok, FALSE);
-                if (ok && session_interval > 0) {
-                    settings_set_int("session_interval", (int) session_interval);
-                }
-                // Enable/disable last so the interval it reads is current
-                editor_enable_session_resume(IsDlgButtonChecked(page, ID_PREF_SESSION_ENABLED) ==
-                                             BST_CHECKED);
-
-                settings_set_bool("ctrl_n_new_window",
-                                  IsDlgButtonChecked(page, ID_PREF_CTRL_N_WINDOW) == BST_CHECKED);
-                if (g_main_window) {
-                    apply_new_window_pref(g_main_window);
+                if (prefs_changed(page, ID_PREF_WATCH_FILE)) {
+                    settings_set_bool("watch_file_changes",
+                                      IsDlgButtonChecked(page, ID_PREF_WATCH_FILE) == BST_CHECKED);
+                    changed = true;
                 }
 
-                settings_set_bool("watch_file_changes",
-                                  IsDlgButtonChecked(page, ID_PREF_WATCH_FILE) == BST_CHECKED);
-
-                settings_save(); // Apply button: persist + propagate immediately
-                ui_platform_notify_settings_changed();
-
-                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                prefs_snapshot(page, PREFS_IDS(PREFS_GENERAL_IDS));
+                prefs_page_applied(page, changed); // Saves + broadcasts once per Apply
                 return TRUE;
             }
             break;
@@ -4907,6 +5125,13 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
 
 // Preferences: Editor page - how typing and Find behave (Fill Find from the
 // selection, Find / Replace wrap-around, Tab inserts spaces)
+static const int PREFS_EDITOR_IDS[] = {
+    ID_PREF_FIND_SEED,
+    ID_PREF_FIND_WRAP,
+    ID_PREF_TAB_SPACES,
+    ID_PREF_TAB_WIDTH,
+};
+
 static INT_PTR CALLBACK prefs_editor_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
         case WM_INITDIALOG:
@@ -4921,6 +5146,7 @@ static INT_PTR CALLBACK prefs_editor_proc(HWND page, UINT msg, WPARAM wparam, LP
                            tab_inserts_spaces_enabled() ? BST_CHECKED : BST_UNCHECKED);
             SetDlgItemInt(page, ID_PREF_TAB_WIDTH, (UINT) tab_width_setting(), FALSE);
             EnableWindow(GetDlgItem(page, ID_PREF_TAB_WIDTH), tab_inserts_spaces_enabled());
+            prefs_snapshot(page, PREFS_IDS(PREFS_EDITOR_IDS));
             return TRUE;
 
         case WM_COMMAND: {
@@ -4942,36 +5168,47 @@ static INT_PTR CALLBACK prefs_editor_proc(HWND page, UINT msg, WPARAM wparam, LP
         case WM_NOTIFY: {
             const NMHDR *nmhdr = (const NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
-                settings_set_bool(FIND_SEED_KEY,
-                                  IsDlgButtonChecked(page, ID_PREF_FIND_SEED) == BST_CHECKED);
+                bool changed = false;
+                if (prefs_changed(page, ID_PREF_FIND_SEED)) {
+                    settings_set_bool(FIND_SEED_KEY,
+                                      IsDlgButtonChecked(page, ID_PREF_FIND_SEED) == BST_CHECKED);
+                    changed = true;
+                }
 
                 // Find wrap-around is also toggled from the Find/Replace
                 // dialog, so update the live flag and, if that dialog happens
                 // to be open, its checkbox - otherwise closing it would write
                 // the stale value straight back over this one.
-                g_wrap_around = IsDlgButtonChecked(page, ID_PREF_FIND_WRAP) == BST_CHECKED;
-                settings_set_bool("find_wrap_around", g_wrap_around);
-                if (g_find_dialog) {
-                    CheckDlgButton(g_find_dialog, ID_FIND_WRAP,
-                                   g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
+                if (prefs_changed(page, ID_PREF_FIND_WRAP)) {
+                    g_wrap_around = IsDlgButtonChecked(page, ID_PREF_FIND_WRAP) == BST_CHECKED;
+                    settings_set_bool("find_wrap_around", g_wrap_around);
+                    if (g_find_dialog) {
+                        CheckDlgButton(g_find_dialog, ID_FIND_WRAP,
+                                       g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
+                    }
+                    changed = true;
                 }
 
-                settings_set_bool(TAB_INSERTS_SPACES_KEY,
-                                  IsDlgButtonChecked(page, ID_PREF_TAB_SPACES) == BST_CHECKED);
-                BOOL ok = FALSE;
-                UINT tab_width = GetDlgItemInt(page, ID_PREF_TAB_WIDTH, &ok, FALSE);
-                if (ok) {
-                    // Out-of-range input is clamped, and the box shows what was kept
-                    int kept = tab_clamp_width(tab_width > TAB_WIDTH_MAX ? TAB_WIDTH_MAX
-                                                                         : (int) tab_width);
-                    settings_set_int(TAB_WIDTH_KEY, kept);
-                    SetDlgItemInt(page, ID_PREF_TAB_WIDTH, (UINT) kept, FALSE);
+                if (prefs_changed(page, ID_PREF_TAB_SPACES)) {
+                    settings_set_bool(TAB_INSERTS_SPACES_KEY,
+                                      IsDlgButtonChecked(page, ID_PREF_TAB_SPACES) == BST_CHECKED);
+                    changed = true;
+                }
+                if (prefs_changed(page, ID_PREF_TAB_WIDTH)) {
+                    BOOL ok = FALSE;
+                    UINT tab_width = GetDlgItemInt(page, ID_PREF_TAB_WIDTH, &ok, FALSE);
+                    if (ok) {
+                        // Out-of-range input is clamped, and the box shows what was kept
+                        int kept = tab_clamp_width(tab_width > TAB_WIDTH_MAX ? TAB_WIDTH_MAX
+                                                                             : (int) tab_width);
+                        settings_set_int(TAB_WIDTH_KEY, kept);
+                        SetDlgItemInt(page, ID_PREF_TAB_WIDTH, (UINT) kept, FALSE);
+                        changed = true;
+                    }
                 }
 
-                settings_save(); // Apply button: persist + propagate immediately
-                ui_platform_notify_settings_changed();
-
-                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                prefs_snapshot(page, PREFS_IDS(PREFS_EDITOR_IDS));
+                prefs_page_applied(page, changed); // Saves + broadcasts once per Apply
                 return TRUE;
             }
             break;
@@ -4986,6 +5223,26 @@ static const char *const SCHEME_KEYS[] = { "system", "light", "dark", "solarized
 static const wchar_t *const SCHEME_LABELS[] = { L"Follow system", L"Light", L"Dark",
                                                 L"Solarized Light", L"Solarized Dark" };
 #define SCHEME_COUNT ((int) (sizeof(SCHEME_KEYS) / sizeof(SCHEME_KEYS[0])))
+
+static const int PREFS_ICON_IDS[] = {
+    ID_PREF_ICON_SYSTEM, ID_PREF_ICON_NPAD,    ID_PREF_ICON_LIGHT,
+    ID_PREF_ICON_DARK,   ID_PREF_ICON_CLASSIC,
+};
+
+static const int PREFS_APPEARANCE_IDS[] = {
+    ID_PREF_SCHEME,        ID_PREF_OPENDYSLEXIC,  ID_PREF_STATUSBAR,    ID_PREF_SYNC_VIEW,
+    ID_PREF_AUTO_DEFAULTS, ID_PREF_STATUS_COUNTS, ID_PREF_ICON_SYSTEM,  ID_PREF_ICON_NPAD,
+    ID_PREF_ICON_LIGHT,    ID_PREF_ICON_DARK,     ID_PREF_ICON_CLASSIC,
+};
+
+// Has any control in the list changed (a radio group, say)?
+static bool prefs_any_changed(HWND page, const int *ids, int count) {
+    for (int i = 0; i < count; i++) {
+        if (prefs_changed(page, ids[i]))
+            return true;
+    }
+    return false;
+}
 
 static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
@@ -5036,6 +5293,7 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
                 CheckRadioButton(page, ID_PREF_ICON_SYSTEM, ID_PREF_ICON_CLASSIC, which);
                 free(style);
             }
+            prefs_snapshot(page, PREFS_IDS(PREFS_APPEARANCE_IDS));
             return TRUE;
         }
 
@@ -5064,75 +5322,100 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
         case WM_NOTIFY: {
             const NMHDR *nmhdr = (const NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
-                int sel = (int) SendDlgItemMessageW(page, ID_PREF_SCHEME, CB_GETCURSEL, 0, 0);
-                if (sel < 0 || sel >= SCHEME_COUNT) {
-                    sel = 0;
-                }
-                settings_set_string("theme", SCHEME_KEYS[sel]);
+                bool changed = false;
+                bool restyle = false;
 
-                bool dyslexic = IsDlgButtonChecked(page, ID_PREF_OPENDYSLEXIC) == BST_CHECKED;
-                if (dyslexic && !font_is_installed(OPENDYSLEXIC_FONT_W)) {
-                    // Cannot enable a font that is not installed: inform the
-                    // user and revert both the setting and the checkbox.
-                    MessageBoxW(page,
-                                L"The OpenDyslexic font is not installed.\n"
-                                L"Download it from https://opendyslexic.org and install it, "
-                                L"then enable this option.",
-                                L"npad", MB_OK | MB_ICONINFORMATION);
-                    dyslexic = false;
-                    CheckDlgButton(page, ID_PREF_OPENDYSLEXIC, BST_UNCHECKED);
+                if (prefs_changed(page, ID_PREF_SCHEME)) {
+                    int sel = (int) SendDlgItemMessageW(page, ID_PREF_SCHEME, CB_GETCURSEL, 0, 0);
+                    if (sel < 0 || sel >= SCHEME_COUNT) {
+                        sel = 0;
+                    }
+                    settings_set_string("theme", SCHEME_KEYS[sel]);
+                    restyle = true;
                 }
-                settings_set_bool("opendyslexic_enabled", dyslexic);
+
+                if (prefs_changed(page, ID_PREF_OPENDYSLEXIC)) {
+                    bool dyslexic = IsDlgButtonChecked(page, ID_PREF_OPENDYSLEXIC) == BST_CHECKED;
+                    if (dyslexic && !font_is_installed(OPENDYSLEXIC_FONT_W)) {
+                        // Cannot enable a font that is not installed: inform the
+                        // user and revert both the setting and the checkbox.
+                        MessageBoxW(page,
+                                    L"The OpenDyslexic font is not installed.\n"
+                                    L"Download it from https://opendyslexic.org and install it, "
+                                    L"then enable this option.",
+                                    L"npad", MB_OK | MB_ICONINFORMATION);
+                        dyslexic = false;
+                        CheckDlgButton(page, ID_PREF_OPENDYSLEXIC, BST_UNCHECKED);
+                    }
+                    settings_set_bool("opendyslexic_enabled", dyslexic);
+                    restyle = true;
+                }
 
                 // Re-apply colors and font for the chosen scheme (also syncs g_dark_mode)
-                if (g_main_window) {
-                    apply_font(g_main_window);
-                    apply_theme(g_main_window);
-                    update_status_bar(g_main_window);
+                if (restyle) {
+                    changed = true;
+                    if (g_main_window) {
+                        apply_font(g_main_window);
+                        apply_theme(g_main_window);
+                        update_status_bar(g_main_window);
+                    }
                 }
 
-                bool show_status = IsDlgButtonChecked(page, ID_PREF_STATUSBAR) == BST_CHECKED;
-                if (g_main_window && g_main_window->status_bar_visible != show_status) {
-                    set_status_bar_visible(g_main_window, show_status);
+                if (prefs_changed(page, ID_PREF_STATUSBAR)) {
+                    bool show_status = IsDlgButtonChecked(page, ID_PREF_STATUSBAR) == BST_CHECKED;
+                    settings_set_bool("status_bar_visible", show_status);
+                    if (g_main_window && g_main_window->status_bar_visible != show_status) {
+                        set_status_bar_visible(g_main_window, show_status);
+                    }
+                    changed = true;
                 }
 
-                bool sync_view = IsDlgButtonChecked(page, ID_PREF_SYNC_VIEW) == BST_CHECKED;
-                settings_set_bool("sync_view_state", sync_view);
-                settings_set_bool("auto_update_defaults",
-                                  IsDlgButtonChecked(page, ID_PREF_AUTO_DEFAULTS) == BST_CHECKED);
-
-                settings_set_bool("status_show_counts",
-                                  IsDlgButtonChecked(page, ID_PREF_STATUS_COUNTS) == BST_CHECKED);
-                if (g_main_window) {
-                    apply_counts_pref(g_main_window);
+                if (prefs_changed(page, ID_PREF_SYNC_VIEW)) {
+                    bool sync_view = IsDlgButtonChecked(page, ID_PREF_SYNC_VIEW) == BST_CHECKED;
+                    settings_set_bool("sync_view_state", sync_view);
+                    // Enabling sync should bring the other windows into line
+                    // with this (active) window's view state right away, not
+                    // only on the next change: sent once the broadcast is out
+                    if (sync_view)
+                        g_prefs_txn.sync_view_after = true;
+                    changed = true;
+                }
+                if (prefs_changed(page, ID_PREF_AUTO_DEFAULTS)) {
+                    settings_set_bool("auto_update_defaults",
+                                      IsDlgButtonChecked(page, ID_PREF_AUTO_DEFAULTS) ==
+                                          BST_CHECKED);
+                    changed = true;
                 }
 
-                const char *icon_style = "system";
-                if (IsDlgButtonChecked(page, ID_PREF_ICON_NPAD) == BST_CHECKED)
-                    icon_style = "npad";
-                else if (IsDlgButtonChecked(page, ID_PREF_ICON_LIGHT) == BST_CHECKED)
-                    icon_style = "light";
-                else if (IsDlgButtonChecked(page, ID_PREF_ICON_DARK) == BST_CHECKED)
-                    icon_style = "dark";
-                else if (IsDlgButtonChecked(page, ID_PREF_ICON_CLASSIC) == BST_CHECKED)
-                    icon_style = "classic";
-                settings_set_string("icon_style", icon_style);
-                if (g_main_window) {
-                    apply_window_icon(g_main_window);
+                if (prefs_changed(page, ID_PREF_STATUS_COUNTS)) {
+                    settings_set_bool("status_show_counts",
+                                      IsDlgButtonChecked(page, ID_PREF_STATUS_COUNTS) ==
+                                          BST_CHECKED);
+                    changed = true;
+                    if (g_main_window) {
+                        apply_counts_pref(g_main_window);
+                    }
                 }
 
-                settings_save(); // Apply button: persist + propagate immediately
-                ui_platform_notify_settings_changed();
-
-                // Enabling sync should bring the other windows into line with
-                // this (active) window's view state right away, not only on the
-                // next change. Other windows enable sync via the settings-changed
-                // reload above, then adopt the view state posted here.
-                if (sync_view && g_main_window) {
-                    on_view_state_changed(g_main_window);
+                if (prefs_any_changed(page, PREFS_IDS(PREFS_ICON_IDS))) {
+                    const char *icon_style = "system";
+                    if (IsDlgButtonChecked(page, ID_PREF_ICON_NPAD) == BST_CHECKED)
+                        icon_style = "npad";
+                    else if (IsDlgButtonChecked(page, ID_PREF_ICON_LIGHT) == BST_CHECKED)
+                        icon_style = "light";
+                    else if (IsDlgButtonChecked(page, ID_PREF_ICON_DARK) == BST_CHECKED)
+                        icon_style = "dark";
+                    else if (IsDlgButtonChecked(page, ID_PREF_ICON_CLASSIC) == BST_CHECKED)
+                        icon_style = "classic";
+                    settings_set_string("icon_style", icon_style);
+                    changed = true;
+                    if (g_main_window) {
+                        apply_window_icon(g_main_window);
+                    }
                 }
 
-                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                prefs_snapshot(page, PREFS_IDS(PREFS_APPEARANCE_IDS));
+                prefs_page_applied(page, changed); // Saves + broadcasts once per Apply
                 return TRUE;
             }
             break;
@@ -5171,8 +5454,7 @@ static void export_settings(HWND owner) {
 
 // Replace the current settings with a user-chosen file and reload them
 static void import_settings(HWND owner) {
-    const char *dest = settings_get_file_path();
-    if (!dest)
+    if (!settings_get_file_path())
         return;
 
     wchar_t filename[MAX_PATH] = L"";
@@ -5190,32 +5472,35 @@ static void import_settings(HWND owner) {
         return;
     }
 
+    // Only an npad settings file is accepted, the previous settings are kept
+    // as settings.json.bak, and the write is atomic (see settings_import.h).
+    // Picking the wrong file used to wipe every preference and recent file.
     char *src = wide_to_utf8(filename);
-    bool ok = src && file_copy(src, dest);
+    SettingsImportResult result = src ? settings_import_file(src) : SETTINGS_IMPORT_UNREADABLE;
     free(src);
-    if (!ok) {
-        MessageBoxW(owner, L"Failed to import settings.", L"npad", MB_OK | MB_ICONWARNING);
+    wchar_t *message = utf8_to_wide(settings_import_message(result));
+    if (result != SETTINGS_IMPORT_OK) {
+        MessageBoxW(owner, message ? message : L"Failed to import settings.", L"npad",
+                    MB_OK | MB_ICONWARNING);
+        free(message);
         return;
     }
 
-    // Reload settings and re-apply what can change live
-    settings_clear_all();
-    settings_load();
-    editor_reload_prefs();
+    // Re-apply everything that can change live (the same path as a change
+    // made in another instance), then tell the other running instances
     if (g_main_window) {
-        apply_font(g_main_window);
-        apply_theme(g_main_window);
-        apply_new_window_pref(g_main_window);
-        rebuild_recent_menu(g_main_window);
-        update_status_bar(g_main_window);
+        reload_and_apply_settings(g_main_window);
     }
-    // Propagate to other running instances too
     ui_platform_notify_settings_changed();
 
-    MessageBoxW(owner,
-                L"Settings imported. A few options (window size, default encoding) "
-                L"take effect on restart.",
-                L"npad", MB_OK | MB_ICONINFORMATION);
+    MessageBoxW(owner, message ? message : L"Settings imported.", L"npad",
+                MB_OK | MB_ICONINFORMATION);
+    free(message);
+
+    // The sheet's controls still show the pre-import values, and OK would
+    // write them back over the import; close it, as Reset does. Cancel, so
+    // nothing staged on another page is applied either.
+    PropSheet_PressButton(GetParent(owner), PSBTN_CANCEL);
 }
 
 // Reset every preference to its default (Backup page). Rather than an
@@ -5247,14 +5532,22 @@ static void reset_all_preferences(HWND owner) {
     // The one find_-prefixed key that IS a preference (Preferences > General),
     // not search state: the prefix keep above would otherwise preserve it
     settings_remove_key(FIND_SEED_KEY);
-    settings_save();
+    bool saved = settings_save();
 
     // Re-apply everything that can change live (same path as a cross-instance
-    // settings change), then tell other running instances
+    // settings change), then tell other running instances. A reset that could
+    // not be saved is not applied: the reload puts back what is on disk.
     if (g_main_window) {
         reload_and_apply_settings(g_main_window);
     }
-    ui_platform_notify_settings_changed();
+    if (saved) {
+        ui_platform_notify_settings_changed();
+    } else {
+        MessageBoxW(owner,
+                    L"npad could not save the settings, so nothing was reset. Check that the "
+                    L"settings folder is writable, then try again.",
+                    L"npad", MB_OK | MB_ICONWARNING);
+    }
 
     // The sheet's controls still show pre-reset values; close it rather than
     // leave stale state on screen
@@ -5421,7 +5714,7 @@ static INT_PTR CALLBACK prefs_debug_proc(HWND page, UINT msg, WPARAM wparam, LPA
         case WM_NOTIFY: {
             const NMHDR *nmhdr = (const NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
-                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                prefs_page_applied(page, false); // Read-only page, but part of the round
                 return TRUE;
             }
             break;
@@ -5438,6 +5731,11 @@ static INT_PTR CALLBACK prefs_debug_proc(HWND page, UINT msg, WPARAM wparam, LPA
 }
 
 // Preferences: Defaults page - the initial state for new windows/files
+static const int PREFS_DEFAULTS_IDS[] = {
+    ID_PREF_DEFAULT_ENCODING, ID_PREF_DEFAULT_EOL,  ID_PREF_DEFAULT_FONT_TYPE,
+    ID_PREF_DEFAULT_ZOOM,     ID_PREF_PRINT_HEADER, ID_PREF_PRINT_FOOTER,
+};
+
 static INT_PTR CALLBACK prefs_defaults_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
         case WM_INITDIALOG: {
@@ -5492,6 +5790,7 @@ static INT_PTR CALLBACK prefs_defaults_proc(HWND page, UINT msg, WPARAM wparam, 
                 free(hdr);
                 free(ftr);
             }
+            prefs_snapshot(page, PREFS_IDS(PREFS_DEFAULTS_IDS));
             return TRUE;
         }
 
@@ -5522,50 +5821,68 @@ static INT_PTR CALLBACK prefs_defaults_proc(HWND page, UINT msg, WPARAM wparam, 
         case WM_NOTIFY: {
             const NMHDR *nmhdr = (const NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
-                LRESULT enc =
-                    SendMessageW(GetDlgItem(page, ID_PREF_DEFAULT_ENCODING), CB_GETCURSEL, 0, 0);
-                if (enc >= 0) {
-                    settings_set_int("default_encoding", (int) enc);
+                bool changed = false;
+                if (prefs_changed(page, ID_PREF_DEFAULT_ENCODING)) {
+                    LRESULT enc = SendMessageW(GetDlgItem(page, ID_PREF_DEFAULT_ENCODING),
+                                               CB_GETCURSEL, 0, 0);
+                    if (enc >= 0) {
+                        settings_set_int("default_encoding", (int) enc);
+                        changed = true;
+                    }
                 }
-                LRESULT eol =
-                    SendMessageW(GetDlgItem(page, ID_PREF_DEFAULT_EOL), CB_GETCURSEL, 0, 0);
-                if (eol >= 0) {
-                    settings_set_int("default_line_ending", (int) eol);
+                if (prefs_changed(page, ID_PREF_DEFAULT_EOL)) {
+                    LRESULT eol =
+                        SendMessageW(GetDlgItem(page, ID_PREF_DEFAULT_EOL), CB_GETCURSEL, 0, 0);
+                    if (eol >= 0) {
+                        settings_set_int("default_line_ending", (int) eol);
+                        changed = true;
+                    }
                 }
-                LRESULT font_type =
-                    SendMessageW(GetDlgItem(page, ID_PREF_DEFAULT_FONT_TYPE), CB_GETCURSEL, 0, 0);
-                if (font_type >= 0) {
-                    settings_set_bool("default_font_mono", font_type == 0);
+                if (prefs_changed(page, ID_PREF_DEFAULT_FONT_TYPE)) {
+                    LRESULT font_type = SendMessageW(GetDlgItem(page, ID_PREF_DEFAULT_FONT_TYPE),
+                                                     CB_GETCURSEL, 0, 0);
+                    if (font_type >= 0) {
+                        settings_set_bool("default_font_mono", font_type == 0);
+                        changed = true;
+                    }
                 }
 
-                BOOL ok = FALSE;
-                UINT zoom = GetDlgItemInt(page, ID_PREF_DEFAULT_ZOOM, &ok, FALSE);
-                if (ok) {
-                    if (zoom < 10)
-                        zoom = 10;
-                    if (zoom > 500)
-                        zoom = 500;
-                    settings_set_int("default_zoom", (int) zoom);
+                if (prefs_changed(page, ID_PREF_DEFAULT_ZOOM)) {
+                    BOOL ok = FALSE;
+                    UINT zoom = GetDlgItemInt(page, ID_PREF_DEFAULT_ZOOM, &ok, FALSE);
+                    if (ok) {
+                        if (zoom < 10)
+                            zoom = 10;
+                        if (zoom > 500)
+                            zoom = 500;
+                        settings_set_int("default_zoom", (int) zoom);
+                        changed = true;
+                    }
                 }
 
-                {
-                    wchar_t whdr[256] = L"", wftr[256] = L"";
+                if (prefs_changed(page, ID_PREF_PRINT_HEADER)) {
+                    wchar_t whdr[256] = L"";
                     GetDlgItemTextW(page, ID_PREF_PRINT_HEADER, whdr, 256);
-                    GetDlgItemTextW(page, ID_PREF_PRINT_FOOTER, wftr, 256);
                     char *hdr = wide_to_utf8(whdr);
-                    char *ftr = wide_to_utf8(wftr);
-                    if (hdr)
+                    if (hdr) {
                         settings_set_string("print_header", hdr);
-                    if (ftr)
-                        settings_set_string("print_footer", ftr);
+                        changed = true;
+                    }
                     free(hdr);
+                }
+                if (prefs_changed(page, ID_PREF_PRINT_FOOTER)) {
+                    wchar_t wftr[256] = L"";
+                    GetDlgItemTextW(page, ID_PREF_PRINT_FOOTER, wftr, 256);
+                    char *ftr = wide_to_utf8(wftr);
+                    if (ftr) {
+                        settings_set_string("print_footer", ftr);
+                        changed = true;
+                    }
                     free(ftr);
                 }
 
-                settings_save(); // Apply button: persist + propagate immediately
-                ui_platform_notify_settings_changed();
-
-                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                prefs_snapshot(page, PREFS_IDS(PREFS_DEFAULTS_IDS));
+                prefs_page_applied(page, changed); // Saves + broadcasts once per Apply
                 return TRUE;
             }
             break;
@@ -5596,7 +5913,7 @@ static INT_PTR CALLBACK prefs_backup_proc(HWND page, UINT msg, WPARAM wparam, LP
             const NMHDR *nmhdr = (const NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
                 // Nothing page-local to apply; export/import act immediately
-                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                prefs_page_applied(page, false);
                 return TRUE;
             }
             break;
@@ -5791,8 +6108,8 @@ static INT_PTR CALLBACK prefs_assoc_proc(HWND page, UINT msg, WPARAM wparam, LPA
                     }
                 }
 
-                assoc_page_load(page); // Re-read: the registry is the truth
-                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                assoc_page_load(page);           // Re-read: the registry is the truth
+                prefs_page_applied(page, false); // Registry, not settings.json
                 return TRUE;
             }
             break;
@@ -5800,6 +6117,8 @@ static INT_PTR CALLBACK prefs_assoc_proc(HWND page, UINT msg, WPARAM wparam, LPA
     }
     return FALSE;
 }
+
+static const int PREFS_UPDATES_IDS[] = { ID_PREF_UPD_MODE, ID_PREF_UPD_ON_LAUNCH };
 
 static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
@@ -5847,6 +6166,7 @@ static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, L
                                                                               : BST_UNCHECKED);
             prefs_updates_sync_skip(page);
             updates_page_sync_busy(); // A download may already be running
+            prefs_snapshot(page, PREFS_IDS(PREFS_UPDATES_IDS));
             return TRUE;
         }
 
@@ -5910,16 +6230,25 @@ static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, L
         case WM_NOTIFY: {
             const NMHDR *nmhdr = (const NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
-                LRESULT sel = SendMessageW(GetDlgItem(page, ID_PREF_UPD_MODE), CB_GETCURSEL, 0, 0);
-                if (sel >= 0 && sel < UPDATE_MODE_COUNT)
-                    settings_set_string("update_mode", UPDATE_MODE_KEYS[sel]);
-                settings_set_bool("update_check_on_launch",
-                                  IsDlgButtonChecked(page, ID_PREF_UPD_ON_LAUNCH) == BST_CHECKED);
-                settings_save();
-                ui_platform_notify_settings_changed();
-                if (g_main_window)
+                bool changed = false;
+                if (prefs_changed(page, ID_PREF_UPD_MODE)) {
+                    LRESULT sel =
+                        SendMessageW(GetDlgItem(page, ID_PREF_UPD_MODE), CB_GETCURSEL, 0, 0);
+                    if (sel >= 0 && sel < UPDATE_MODE_COUNT) {
+                        settings_set_string("update_mode", UPDATE_MODE_KEYS[sel]);
+                        changed = true;
+                    }
+                }
+                if (prefs_changed(page, ID_PREF_UPD_ON_LAUNCH)) {
+                    settings_set_bool("update_check_on_launch",
+                                      IsDlgButtonChecked(page, ID_PREF_UPD_ON_LAUNCH) ==
+                                          BST_CHECKED);
+                    changed = true;
+                }
+                if (changed && g_main_window)
                     apply_update_indicator(g_main_window);
-                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                prefs_snapshot(page, PREFS_IDS(PREFS_UPDATES_IDS));
+                prefs_page_applied(page, changed); // Saves + broadcasts once per Apply
                 return TRUE;
             }
             break;
@@ -5949,6 +6278,23 @@ static void prefs_lists_sync_enables(HWND page) {
     for (int id = ID_PREF_PASTE_PRIMARY_PLAIN; id <= ID_PREF_PASTE_ALT_MD; id++)
         EnableWindow(GetDlgItem(page, id), on);
 }
+
+static const int PREFS_PASTE_PRIMARY_IDS[] = {
+    ID_PREF_PASTE_PRIMARY_PLAIN,
+    ID_PREF_PASTE_PRIMARY_LISTS,
+    ID_PREF_PASTE_PRIMARY_MD,
+};
+static const int PREFS_PASTE_ALT_IDS[] = {
+    ID_PREF_PASTE_ALT_PLAIN,
+    ID_PREF_PASTE_ALT_LISTS,
+    ID_PREF_PASTE_ALT_MD,
+};
+static const int PREFS_LISTS_IDS[] = {
+    ID_PREF_LIST_ENABLED,      ID_PREF_LIST_INDENT_FORMAT,  ID_PREF_LIST_CUSTOM_TEXT,
+    ID_PREF_LIST_TAB_BRACKETS, ID_PREF_PASTE_PRIMARY_PLAIN, ID_PREF_PASTE_PRIMARY_LISTS,
+    ID_PREF_PASTE_PRIMARY_MD,  ID_PREF_PASTE_ALT_PLAIN,     ID_PREF_PASTE_ALT_LISTS,
+    ID_PREF_PASTE_ALT_MD,
+};
 
 static INT_PTR CALLBACK prefs_lists_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
@@ -5989,6 +6335,7 @@ static INT_PTR CALLBACK prefs_lists_proc(HWND page, UINT msg, WPARAM wparam, LPA
             CheckRadioButton(page, ID_PREF_PASTE_ALT_PLAIN, ID_PREF_PASTE_ALT_MD,
                              ID_PREF_PASTE_ALT_PLAIN + alt);
             prefs_lists_sync_enables(page);
+            prefs_snapshot(page, PREFS_IDS(PREFS_LISTS_IDS));
             return TRUE;
         }
 
@@ -6007,40 +6354,61 @@ static INT_PTR CALLBACK prefs_lists_proc(HWND page, UINT msg, WPARAM wparam, LPA
         case WM_NOTIFY: {
             const NMHDR *nmhdr = (const NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
-                settings_set_bool("list_tools_enabled",
-                                  IsDlgButtonChecked(page, ID_PREF_LIST_ENABLED) == BST_CHECKED);
-                LRESULT sel =
-                    SendMessageW(GetDlgItem(page, ID_PREF_LIST_INDENT_FORMAT), CB_GETCURSEL, 0, 0);
-                if (sel >= 0)
-                    settings_set_int("list_default_indent_format", (int) sel);
-                wchar_t wide_custom[128];
-                GetDlgItemTextW(page, ID_PREF_LIST_CUSTOM_TEXT, wide_custom, 128);
-                char *custom = wide_to_utf8(wide_custom);
-                if (custom) {
-                    // Stored raw (as typed); unescaped at point of use
-                    settings_set_string("list_custom_indent", custom);
-                    free(custom);
+                bool changed = false;
+                if (prefs_changed(page, ID_PREF_LIST_ENABLED)) {
+                    settings_set_bool("list_tools_enabled",
+                                      IsDlgButtonChecked(page, ID_PREF_LIST_ENABLED) ==
+                                          BST_CHECKED);
+                    changed = true;
                 }
-                settings_set_bool("list_indent_shortcut_brackets",
-                                  IsDlgButtonChecked(page, ID_PREF_LIST_TAB_BRACKETS) ==
-                                      BST_CHECKED);
-                int prim = IsDlgButtonChecked(page, ID_PREF_PASTE_PRIMARY_LISTS) == BST_CHECKED ? 1
-                           : IsDlgButtonChecked(page, ID_PREF_PASTE_PRIMARY_MD) == BST_CHECKED  ? 2
-                                                                                                : 0;
-                settings_set_int("markdown_paste_primary", prim);
-                int alt = IsDlgButtonChecked(page, ID_PREF_PASTE_ALT_LISTS) == BST_CHECKED ? 1
-                          : IsDlgButtonChecked(page, ID_PREF_PASTE_ALT_MD) == BST_CHECKED  ? 2
-                                                                                           : 0;
-                settings_set_int("markdown_paste_alt", alt);
-                settings_save();
+                if (prefs_changed(page, ID_PREF_LIST_INDENT_FORMAT)) {
+                    LRESULT sel = SendMessageW(GetDlgItem(page, ID_PREF_LIST_INDENT_FORMAT),
+                                               CB_GETCURSEL, 0, 0);
+                    if (sel >= 0) {
+                        settings_set_int("list_default_indent_format", (int) sel);
+                        changed = true;
+                    }
+                }
+                if (prefs_changed(page, ID_PREF_LIST_CUSTOM_TEXT)) {
+                    wchar_t wide_custom[128];
+                    GetDlgItemTextW(page, ID_PREF_LIST_CUSTOM_TEXT, wide_custom, 128);
+                    char *custom = wide_to_utf8(wide_custom);
+                    if (custom) {
+                        // Stored raw (as typed); unescaped at point of use
+                        settings_set_string("list_custom_indent", custom);
+                        free(custom);
+                        changed = true;
+                    }
+                }
+                if (prefs_changed(page, ID_PREF_LIST_TAB_BRACKETS)) {
+                    settings_set_bool("list_indent_shortcut_brackets",
+                                      IsDlgButtonChecked(page, ID_PREF_LIST_TAB_BRACKETS) ==
+                                          BST_CHECKED);
+                    changed = true;
+                }
+                if (prefs_any_changed(page, PREFS_IDS(PREFS_PASTE_PRIMARY_IDS))) {
+                    int prim =
+                        IsDlgButtonChecked(page, ID_PREF_PASTE_PRIMARY_LISTS) == BST_CHECKED ? 1
+                        : IsDlgButtonChecked(page, ID_PREF_PASTE_PRIMARY_MD) == BST_CHECKED  ? 2
+                                                                                             : 0;
+                    settings_set_int("markdown_paste_primary", prim);
+                    changed = true;
+                }
+                if (prefs_any_changed(page, PREFS_IDS(PREFS_PASTE_ALT_IDS))) {
+                    int alt = IsDlgButtonChecked(page, ID_PREF_PASTE_ALT_LISTS) == BST_CHECKED ? 1
+                              : IsDlgButtonChecked(page, ID_PREF_PASTE_ALT_MD) == BST_CHECKED  ? 2
+                                                                                               : 0;
+                    settings_set_int("markdown_paste_alt", alt);
+                    changed = true;
+                }
                 // Apply the enable toggle to this window right away (menu +
-                // indent accelerators), then propagate to other instances
-                if (g_main_window) {
+                // indent accelerators); the other instances follow the broadcast
+                if (changed && g_main_window) {
                     apply_list_tools_menu(g_main_window);
                     build_accelerators(g_main_window);
                 }
-                ui_platform_notify_settings_changed();
-                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                prefs_snapshot(page, PREFS_IDS(PREFS_LISTS_IDS));
+                prefs_page_applied(page, changed); // Saves + broadcasts once per Apply
                 return TRUE;
             }
             break;
@@ -6121,14 +6489,13 @@ static void show_preferences_dialog(const Window *window, int start_page, bool s
     psh.nStartPage = (start_page >= 0) ? (UINT) start_page : (show_debug ? 8 : 0);
     psh.ppsp = pages;
 
+    // Apply and OK save and broadcast once per press, only when something
+    // changed (prefs_page_applied). Closing the sheet adds nothing: it used
+    // to save and broadcast again, even on Cancel, making every other window
+    // reload for nothing.
+    prefs_session_reset();
     PropertySheetW(&psh);
-
-    // Persist all applied preference changes to disk immediately, so they
-    // survive even if this run is later killed without a clean exit
-    settings_save();
-
-    // Let other running instances pick up the change live
-    ui_platform_notify_settings_changed();
+    prefs_session_reset();
 }
 
 // Go To Line dialog (resource-based, truly modal)
@@ -7623,8 +7990,7 @@ static LRESULT CALLBACK preview_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
                     return 0;
                 }
                 case PV_ID_PAGE_SETUP:
-                    print_show_page_setup(hwnd);
-                    ui_platform_notify_settings_changed();
+                    print_show_page_setup(hwnd); // Saves and broadcasts an OK
                     preview_rebuild(pv);
                     SetFocus(hwnd);
                     return 0;
@@ -8268,6 +8634,9 @@ static void handle_command(Window *window, WORD command) {
             break;
         case ID_FILE_RECENT_CLEAR:
             settings_clear_recent_files();
+            // Saved and broadcast at once: otherwise another window still
+            // holding the old list writes it back when it exits
+            save_and_broadcast_settings(window->hwnd);
             rebuild_recent_menu(window);
             break;
         case ID_FILE_PREFERENCES:

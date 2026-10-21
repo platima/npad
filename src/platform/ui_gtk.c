@@ -1387,7 +1387,10 @@ void npad_gtk_handle_command(Window *window, NpadCommand command) {
             break;
         case NPAD_CMD_FILE_RECENT_CLEAR:
             settings_clear_recent_files();
-            settings_save();
+            // Saved AND broadcast: without the broadcast another window kept
+            // the old list in memory and wrote it back on its next save
+            if (settings_save())
+                ui_notify_settings_changed();
             rebuild_recent_menu(window);
             break;
         case NPAD_CMD_FILE_CLOSE:

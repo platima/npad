@@ -36,6 +36,7 @@
 #include "../core/find_seed.h"
 #include "../core/session.h"
 #include "../core/settings.h"
+#include "../core/settings_import.h"
 #include "../core/startup_prof.h"
 #include "../core/tab_stops.h"
 #include "../core/update_check.h"
@@ -940,29 +941,11 @@ static void on_export_clicked(GtkButton *button, gpointer data) {
     g_object_unref(native);
 }
 
-// Does the file look like a settings file (a JSON object)? Importing anything
-// else would silently reset every preference.
-static bool looks_like_settings(const char *path) {
-    gchar *contents = NULL;
-    gsize length = 0;
-    if (!g_file_get_contents(path, &contents, &length, NULL))
-        return false;
-    const char *p = contents;
-    if (g_str_has_prefix(p, "\xEF\xBB\xBF"))
-        p += 3;
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
-        p++;
-    bool ok = *p == '{' && g_utf8_validate(contents, (gssize) length, NULL);
-    g_free(contents);
-    return ok;
-}
-
 // Replace the current settings with a user-chosen file and reload them
 static void on_import_clicked(GtkButton *button, gpointer data) {
     (void) button;
     (void) data;
-    const char *dest = settings_get_file_path();
-    if (!dest)
+    if (!settings_get_file_path())
         return;
 
     GtkFileChooserNative *native = gtk_file_chooser_native_new(
@@ -975,10 +958,12 @@ static void on_import_clicked(GtkButton *button, gpointer data) {
     if (!src)
         return;
 
-    bool ok = looks_like_settings(src) && file_copy(src, dest);
+    // Only an npad settings file is accepted, the previous settings are kept
+    // as settings.json.bak, and the write is atomic (see settings_import.h)
+    SettingsImportResult result = settings_import_file(src);
     g_free(src);
-    if (!ok) {
-        show_message(GTK_WINDOW(P.dialog), GTK_MESSAGE_WARNING, "Failed to import settings.");
+    if (result != SETTINGS_IMPORT_OK) {
+        show_message(GTK_WINDOW(P.dialog), GTK_MESSAGE_WARNING, settings_import_message(result));
         return;
     }
 
@@ -989,9 +974,7 @@ static void on_import_clicked(GtkButton *button, gpointer data) {
     g_hash_table_remove_all(P.staged); // The imported file replaces pending edits
     update_apply_button();
     load_widgets();
-    show_message(GTK_WINDOW(P.dialog), GTK_MESSAGE_INFO,
-                 "Settings imported. A few options (window size, default encoding) "
-                 "take effect on restart.");
+    show_message(GTK_WINDOW(P.dialog), GTK_MESSAGE_INFO, settings_import_message(result));
 }
 
 // Reset every preference to its default. Rather than an allowlist of keys to
