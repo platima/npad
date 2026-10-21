@@ -48,6 +48,12 @@
     <Property Id="ARPPRODUCTICON" Value="npadIcon" />
     <Property Id="ARPNOMODIFY" Value="1" />
     <Property Id="ARPURLINFOABOUT" Value="https://npad.dev" />
+    <!-- Record the install folder (MsiGetProductInfo's InstallLocation). The
+         in-app updater updates through the MSI only the copy that lives here;
+         a portable copy on the same machine must not upgrade this install
+         instead of itself (msi_owns_this_copy in ui_win32.c). -->
+    <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize"
+                 Sequence="execute" />
 
     <!-- ============================ Files ============================ -->
     <StandardDirectory Id="ProgramFiles64Folder">

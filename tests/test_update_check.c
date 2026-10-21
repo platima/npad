@@ -13,32 +13,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-TEST_CASE(extract_tag_basic) {
-    char tag[32];
-    TEST_ASSERT(update_extract_tag("{\"tag_name\":\"v0.15.0\",\"name\":\"npad v0.15.0\"}", tag,
-                                   sizeof(tag)),
-                "extraction should succeed");
-    TEST_ASSERT_STR_EQ("v0.15.0", tag, "tag value extracted");
-}
-
-TEST_CASE(extract_tag_spaced) {
-    char tag[32];
-    TEST_ASSERT(update_extract_tag("{ \"tag_name\" : \"v1.2.3\" }", tag, sizeof(tag)),
-                "extraction tolerates whitespace around the colon");
-    TEST_ASSERT_STR_EQ("v1.2.3", tag, "spaced tag value extracted");
-}
-
-TEST_CASE(extract_tag_missing_or_bad) {
-    char tag[32];
-    TEST_ASSERT(!update_extract_tag("{\"name\":\"no tag here\"}", tag, sizeof(tag)),
-                "missing key fails");
-    TEST_ASSERT(!update_extract_tag("{\"tag_name\":\"\"}", tag, sizeof(tag)), "empty value fails");
-    TEST_ASSERT(!update_extract_tag(NULL, tag, sizeof(tag)), "NULL json fails");
-    char tiny[4];
-    TEST_ASSERT(!update_extract_tag("{\"tag_name\":\"v0.15.0\"}", tiny, sizeof(tiny)),
-                "value longer than the buffer fails");
-}
-
 TEST_CASE(version_compare_numeric) {
     TEST_ASSERT(update_version_compare("v0.15.0", "v0.15.1") < 0, "patch compares");
     TEST_ASSERT(update_version_compare("v0.9.0", "v0.15.0") < 0, "numeric, not lexicographic");
@@ -330,6 +304,11 @@ TEST_CASE(pick_release_tag) {
                                         sizeof(tag)),
                 "a single release object (/releases/latest)");
     TEST_ASSERT_STR_EQ("v0.36.0", tag, "the single release's tag");
+    TEST_ASSERT(update_pick_release_tag("{ \"tag_name\" : \"v1.2.3\" }", false, tag, sizeof(tag)),
+                "whitespace around the colon");
+    TEST_ASSERT_STR_EQ("v1.2.3", tag, "spaced tag value");
+    TEST_ASSERT(!update_pick_release_tag("{\"tag_name\":\"\"}", false, tag, sizeof(tag)),
+                "an empty tag");
     TEST_ASSERT(!update_pick_release_tag("[]", true, tag, sizeof(tag)), "empty list");
     TEST_ASSERT(!update_pick_release_tag("{\"message\":\"Not Found\"}", true, tag, sizeof(tag)),
                 "an error object");
@@ -401,6 +380,41 @@ TEST_CASE(windows_package_choice) {
                    "both: the setup owns this folder");
     TEST_ASSERT_EQ(UPDATE_PACKAGE_SETUP, update_windows_package(false, false),
                    "neither (portable): as before");
+}
+
+TEST_CASE(msi_feature_args) {
+    const char *installed[] = { "Main",      "PathEnv",      "OpenWith", "AssocText",
+                                "AssocData", "NotepadAlias", "Fonts" };
+    const size_t n = sizeof(installed) / sizeof(installed[0]);
+    char out[256];
+
+    const char *nothing_installed[] = { "AssocMarkdown", "AssocConfig", "AssocLog" };
+    TEST_ASSERT(!update_msi_feature_args(installed, n, nothing_installed, 3, out, sizeof(out)),
+                "unregistered groups the MSI never installed: leave the upgrade alone");
+    TEST_ASSERT_STR_EQ("", out, "nothing written");
+    TEST_ASSERT(!update_msi_feature_args(installed, n, NULL, 0, out, sizeof(out)),
+                "every group registered");
+
+    const char *drop[] = { "AssocText", "AssocMarkdown", "AssocLog" };
+    TEST_ASSERT(update_msi_feature_args(installed, n, drop, 3, out, sizeof(out)),
+                "an installed group the user unregistered");
+    TEST_ASSERT_STR_EQ(" ADDLOCAL=Main,PathEnv,OpenWith,AssocData,NotepadAlias,Fonts "
+                       "REMOVE=AssocText",
+                       out, "everything else kept, only the installed group removed");
+
+    const char *odd[] = { "Main", "Bad Name", "Main", "x;y", "AssocText" };
+    TEST_ASSERT(update_msi_feature_args(odd, 5, drop, 3, out, sizeof(out)), "odd names");
+    TEST_ASSERT_STR_EQ(" ADDLOCAL=Main REMOVE=AssocText", out,
+                       "non-identifiers ignored, duplicates once");
+
+    char tiny[20];
+    TEST_ASSERT(!update_msi_feature_args(installed, n, drop, 3, tiny, sizeof(tiny)),
+                "does not fit");
+    TEST_ASSERT_STR_EQ("", tiny, "nothing half-written");
+    const char *only_dropped[] = { "AssocText" };
+    TEST_ASSERT(!update_msi_feature_args(only_dropped, 1, drop, 3, out, sizeof(out)),
+                "nothing would be left to install");
+    TEST_ASSERT(!update_msi_feature_args(NULL, 0, drop, 3, out, sizeof(out)), "NULL list");
 }
 
 TEST_CASE(dir_holds_exe) {
@@ -672,9 +686,6 @@ TEST_CASE(owner_output_parsing) {
 int main(void) {
     TEST_INIT();
 
-    RUN_TEST(extract_tag_basic);
-    RUN_TEST(extract_tag_spaced);
-    RUN_TEST(extract_tag_missing_or_bad);
     RUN_TEST(version_compare_numeric);
     RUN_TEST(sha256_parse);
     RUN_TEST(newer_unskipped);
@@ -694,6 +705,7 @@ int main(void) {
     RUN_TEST(http_status_messages);
     RUN_TEST(msi_package_suffixes);
     RUN_TEST(windows_package_choice);
+    RUN_TEST(msi_feature_args);
     RUN_TEST(dir_holds_exe);
     RUN_TEST(signature_policy);
     RUN_TEST(http_plain_body);

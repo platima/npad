@@ -80,6 +80,14 @@ int assoc_machine_apply_changes(const wchar_t *changes);
 // string) when there is no existing Inno installation to match.
 bool assoc_installer_merge_tasks(wchar_t *out, size_t cap);
 
+// The MSI's counterpart: the installer/npad.wxs Feature Ids (AssocText,
+// AssocMarkdown, ...) of the association groups NOT registered in the hive an
+// MSI of this scope writes (HKLM when per_machine, else HKCU). An in-app MSI
+// update leaves these features out, so it does not quietly bring back a group
+// the user unticked on this page (see update_msi_feature_args). Returns how
+// many were written to out (at most cap; ASSOC_GROUP_COUNT always suffices).
+size_t assoc_msi_unregistered_features(bool per_machine, const char **out, size_t cap);
+
 // Windows Settings > Default apps, deep-linked to npad where that is supported
 void assoc_open_default_apps(HWND owner);
 

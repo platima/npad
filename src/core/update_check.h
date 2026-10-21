@@ -15,10 +15,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-// Extract the "tag_name" value (e.g. "v0.15.0") from a GitHub releases API
-// JSON response into out. Returns false when absent or too long.
-bool update_extract_tag(const char *json, char *out, size_t out_cap);
-
 // The newest release tag in a releases API response: either one release
 // object (/releases/latest) or an array of them (/releases?per_page=N).
 // Drafts are never picked; pre-releases only when include_prereleases. Tags
@@ -100,16 +96,36 @@ typedef enum {
 // update_installer_suffix for either package: the MSI's is "-msi-win-<arch>.msi"
 const char *update_package_suffix(const char *arch, UpdatePackage package, bool checksum);
 
-// Which package to run for an in-app update. The MSI only when Windows
-// Installer has npad registered and the Inno setup does not own this copy:
-// running the setup over an MSI install would add a second product to
-// Add/Remove Programs whose uninstaller deletes the other's files.
-UpdatePackage update_windows_package(bool setup_owns_this_copy, bool msi_installed);
+// Which package to run for an in-app update. The MSI only when an npad MSI
+// owns this copy (its recorded install folder is the one this npad.exe runs
+// from) and the Inno setup does not: running the setup over an MSI install
+// would add a second product to Add/Remove Programs whose uninstaller deletes
+// the other's files, and running the MSI from a portable copy would upgrade a
+// DIFFERENT install while this one stays old.
+UpdatePackage update_windows_package(bool setup_owns_this_copy, bool msi_owns_this_copy);
 
 // Whether exe_path is a file directly inside dir. Windows paths: '\\' and '/'
 // are the same separator, case is ignored (ASCII), and a trailing separator on
 // dir is optional - Inno records InstallLocation with one.
 bool update_dir_holds_exe(const char *dir, const char *exe_path);
+
+// The msiexec feature selection for an MSI update that must not bring back
+// association groups the user has since unregistered on Preferences >
+// Associations (the MSI's counterpart of setup's /MERGETASKS).
+//
+// `installed` lists the features the existing product has installed locally;
+// `drop` lists features to leave out (the unregistered groups' Assoc*
+// features). When none of `drop` is installed, nothing is written and false is
+// returned: the upgrade's own MigrateFeatureStates then carries every feature
+// over as it was. Otherwise out gets " ADDLOCAL=<installed minus drop>
+// REMOVE=<the installed ones of drop>" - the whole selection spelled out,
+// because a feature property on the command line turns MigrateFeatureStates
+// off, so naming only REMOVE would reset every other feature to its default.
+// A feature is never added that the existing product does not have. Names
+// that are not plain MSI identifiers are ignored. False, with out empty, when
+// the result does not fit.
+bool update_msi_feature_args(const char *const *installed, size_t installed_count,
+                             const char *const *drop, size_t drop_count, char *out, size_t cap);
 
 // --- Is the downloaded installer genuine? -----------------------------------
 

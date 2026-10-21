@@ -1469,7 +1469,39 @@ void ui_platform_quit(void) {
 // own registered messages are allowed; none carries a pointer, and each asks
 // no more of the window than its own user could from the menu.
 // ChangeWindowMessageFilterEx is Windows 7+, so it is looked up, not linked.
+//
+// Only an npad running ABOVE medium integrity opens the filter. Medium to
+// medium needs no exception, and opening it on every window would also let a
+// low-integrity process (a sandboxed browser renderer, say) close every npad
+// or start Close All.
+static bool runs_above_medium_integrity(void) {
+    HANDLE token = NULL;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        return false;
+    union {
+        TOKEN_MANDATORY_LABEL label;
+        BYTE bytes[sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE];
+    } info;
+    DWORD size = 0;
+    bool above = false;
+    if (GetTokenInformation(token, TokenIntegrityLevel, &info, sizeof(info), &size) &&
+        info.label.Label.Sid && IsValidSid(info.label.Label.Sid)) {
+        PUCHAR count = GetSidSubAuthorityCount(info.label.Label.Sid);
+        if (count && *count > 0) {
+            DWORD rid = *GetSidSubAuthority(info.label.Label.Sid, (DWORD) (*count - 1));
+            above = rid > SECURITY_MANDATORY_MEDIUM_RID;
+        }
+    }
+    CloseHandle(token);
+    return above;
+}
+
 static void allow_npad_messages(HWND hwnd) {
+    static int elevated = -1; // Unknown until the first window asks
+    if (elevated < 0)
+        elevated = runs_above_medium_integrity() ? 1 : 0;
+    if (!elevated)
+        return;
     typedef BOOL(WINAPI * ChangeFilterExFunc)(HWND, UINT, DWORD, void *);
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     union {
@@ -2691,8 +2723,9 @@ typedef struct {
     // process has it. What runs is therefore exactly what was verified; it
     // used to be closed after hashing and reopened by name at launch.
     HANDLE file;
-    UpdatePackage package; // Setup exe, or the MSI for an MSI-installed copy
-    bool per_machine;      // That MSI was installed for all users (ALLUSERS=1)
+    UpdatePackage package;   // Setup exe, or the MSI for an MSI-installed copy
+    bool per_machine;        // That MSI was installed for all users (ALLUSERS=1)
+    wchar_t msi_product[39]; // That MSI's ProductCode (NPAD_MSI_GUID_CHARS)
     char tag[32];
     char error[200];
 } UpdateDownloadResult;
@@ -2990,7 +3023,12 @@ static void signer_identity(PCCERT_CONTEXT cert, wchar_t *out, size_t cap) {
 // what makes the check apply to the very bytes that will run - and, when it is
 // validly signed, the signer's identity. Revocation is not checked: it needs
 // the network and stalls offline, and the release's own SHA-256 has already
-// been checked by then.
+// been checked by then. Chain building may still fetch over the network (an
+// intermediate by AIA, or a root Windows installs on demand from Windows
+// Update): this runs just after a download from github.com, so the network is
+// there, and restricting it to the cache made a correctly signed installer
+// fail with CERT_E_UNTRUSTEDROOT/CERT_E_CHAINING - reported as "not valid" -
+// on any machine that had not yet cached the signing root.
 static UpdateSignature authenticode_check(const wchar_t *path, HANDLE file, wchar_t *publisher,
                                           size_t publisher_cap) {
     if (publisher && publisher_cap)
@@ -3035,7 +3073,7 @@ static UpdateSignature authenticode_check(const wchar_t *path, HANDLE file, wcha
     data.dwUnionChoice = WTD_CHOICE_FILE;
     data.pFile = &info;
     data.dwStateAction = WTD_STATEACTION_VERIFY;
-    data.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL;
+    data.dwProvFlags = WTD_REVOCATION_CHECK_NONE;
 
     // WINTRUST_ACTION_GENERIC_VERIFY_V2 (softpub.h), spelled out so no
     // import library is needed for the GUID
@@ -3116,16 +3154,37 @@ static bool setup_owns_this_copy(const char *exe_utf8) {
     return false;
 }
 
-// Whether Windows Installer has an npad MSI registered for this user or the
-// machine, and if so whether it was installed for all users
+// msi.dll, resolved at first use like wintrust: a plain launch never loads it
 typedef UINT(WINAPI *MsiEnumRelatedProductsFunc)(LPCWSTR, DWORD, DWORD, LPWSTR);
 typedef UINT(WINAPI *MsiGetProductInfoFunc)(LPCWSTR, LPCWSTR, LPWSTR, DWORD *);
+typedef UINT(WINAPI *MsiEnumFeaturesFunc)(LPCWSTR, DWORD, LPWSTR, LPWSTR);
+typedef int(WINAPI *MsiQueryFeatureStateFunc)(LPCWSTR, LPCWSTR);
+#define NPAD_MSI_GUID_CHARS 39    // "{XXXXXXXX-...}" and its NUL
+#define NPAD_MSI_FEATURE_CHARS 39 // msi.h's MAX_FEATURE_CHARS (38) and its NUL
+#define NPAD_INSTALLSTATE_LOCAL 3 // msi.h's INSTALLSTATE_LOCAL
 
-static bool msi_installed(bool *per_machine) {
-    *per_machine = false;
+static FARPROC msi_proc(const char *name) {
     HMODULE msi = load_system_dll(L"msi.dll");
-    if (!msi)
-        return false;
+    return msi ? GetProcAddress(msi, name) : NULL;
+}
+
+// Whether an npad MSI installed THIS copy, mirroring setup_owns_this_copy: the
+// product whose recorded InstallLocation (installer/npad.wxs sets
+// ARPINSTALLLOCATION) is the directory npad.exe runs from. Every related
+// product is looked at, so a per-user and an all-users install side by side
+// are told apart, and *per_machine is the matching product's own scope.
+//
+// A product with no InstallLocation came from an MSI built before the
+// property was recorded; there is no telling where it put npad, so it is
+// trusted as before - but only when no product claims this folder outright.
+// Any other copy (a portable one beside an MSI install elsewhere) is not the
+// MSI's: it used to download and run the MSI, which upgraded the OTHER install
+// (with a UAC prompt for an all-users one) while this copy stayed old and kept
+// offering the update.
+static bool msi_owns_this_copy(const char *exe_utf8, bool *per_machine,
+                               wchar_t product_out[NPAD_MSI_GUID_CHARS]) {
+    *per_machine = false;
+    product_out[0] = L'\0';
     union {
         FARPROC proc;
         MsiEnumRelatedProductsFunc func;
@@ -3134,35 +3193,104 @@ static bool msi_installed(bool *per_machine) {
         FARPROC proc;
         MsiGetProductInfoFunc func;
     } info_fn;
-    enum_fn.proc = GetProcAddress(msi, "MsiEnumRelatedProductsW");
-    info_fn.proc = GetProcAddress(msi, "MsiGetProductInfoW");
-    if (!enum_fn.proc)
+    enum_fn.proc = msi_proc("MsiEnumRelatedProductsW");
+    info_fn.proc = msi_proc("MsiGetProductInfoW");
+    if (!enum_fn.proc || !info_fn.proc || !exe_utf8)
         return false;
-    wchar_t product[39];
-    if (enum_fn.func(NPAD_MSI_UPGRADE_CODE, 0, 0, product) != ERROR_SUCCESS)
-        return false;
-    if (info_fn.proc) {
-        wchar_t assignment[8] = L"";
-        DWORD n = 8;
-        if (info_fn.func(product, L"AssignmentType", assignment, &n) == ERROR_SUCCESS)
-            *per_machine = (assignment[0] == L'1');
+
+    wchar_t legacy[NPAD_MSI_GUID_CHARS] = L"";
+    for (DWORD i = 0; i < 64; i++) {
+        wchar_t product[NPAD_MSI_GUID_CHARS];
+        if (enum_fn.func(NPAD_MSI_UPGRADE_CODE, 0, i, product) != ERROR_SUCCESS)
+            break; // ERROR_NO_MORE_ITEMS, or the enumeration failed
+        wchar_t location[MAX_PATH + 1] = L"";
+        DWORD n = MAX_PATH + 1;
+        if (info_fn.func(product, L"InstallLocation", location, &n) != ERROR_SUCCESS)
+            continue; // Too long to be this copy's folder, or not readable
+        if (!location[0]) {
+            if (!legacy[0])
+                wcscpy(legacy, product);
+            continue;
+        }
+        char *loc = wide_to_utf8(location);
+        bool owns = loc && update_dir_holds_exe(loc, exe_utf8);
+        free(loc);
+        if (owns) {
+            wcscpy(product_out, product);
+            break;
+        }
     }
+    if (!product_out[0] && legacy[0])
+        wcscpy(product_out, legacy);
+    if (!product_out[0])
+        return false;
+
+    wchar_t assignment[8] = L"";
+    DWORD n = 8;
+    if (info_fn.func(product_out, L"AssignmentType", assignment, &n) == ERROR_SUCCESS)
+        *per_machine = (assignment[0] == L'1');
     return true;
 }
 
 // Which package to download for this copy (update_windows_package)
-static UpdatePackage detect_update_package(bool *per_machine) {
+static UpdatePackage detect_update_package(bool *per_machine,
+                                           wchar_t msi_product[NPAD_MSI_GUID_CHARS]) {
     *per_machine = false;
+    msi_product[0] = L'\0';
     wchar_t exe[MAX_PATH];
     DWORD n = GetModuleFileNameW(NULL, exe, MAX_PATH);
     char *exe_utf8 = (n > 0 && n < MAX_PATH) ? wide_to_utf8(exe) : NULL;
     bool setup = exe_utf8 && setup_owns_this_copy(exe_utf8);
+    bool msi = exe_utf8 && msi_owns_this_copy(exe_utf8, per_machine, msi_product);
     free(exe_utf8);
-    bool msi = msi_installed(per_machine);
     UpdatePackage package = update_windows_package(setup, msi);
-    if (package != UPDATE_PACKAGE_MSI)
+    if (package != UPDATE_PACKAGE_MSI) {
         *per_machine = false;
+        msi_product[0] = L'\0';
+    }
     return package;
+}
+
+// The features an installed MSI product has installed locally, as ASCII names
+// in names[0..cap). Returns how many.
+static size_t msi_local_features(const wchar_t *product, char names[][NPAD_MSI_FEATURE_CHARS],
+                                 size_t cap) {
+    union {
+        FARPROC proc;
+        MsiEnumFeaturesFunc func;
+    } enum_fn;
+    union {
+        FARPROC proc;
+        MsiQueryFeatureStateFunc func;
+    } state_fn;
+    enum_fn.proc = msi_proc("MsiEnumFeaturesW");
+    state_fn.proc = msi_proc("MsiQueryFeatureStateW");
+    if (!enum_fn.proc || !state_fn.proc || !product || !product[0])
+        return 0;
+    size_t count = 0;
+    for (DWORD i = 0; count < cap; i++) {
+        wchar_t feature[NPAD_MSI_FEATURE_CHARS], parent[NPAD_MSI_FEATURE_CHARS];
+        if (enum_fn.func(product, i, feature, parent) != ERROR_SUCCESS)
+            break; // ERROR_NO_MORE_ITEMS, or the enumeration failed
+        if (state_fn.func(product, feature) != NPAD_INSTALLSTATE_LOCAL)
+            continue;
+        // Feature Ids are ASCII identifiers; anything else is skipped here
+        // (update_msi_feature_args would refuse it anyway)
+        bool ascii = true;
+        size_t j = 0;
+        for (; j < NPAD_MSI_FEATURE_CHARS - 1 && feature[j]; j++) {
+            if (feature[j] > 0x7e) {
+                ascii = false;
+                break;
+            }
+            names[count][j] = (char) feature[j];
+        }
+        if (!ascii)
+            continue;
+        names[count][j] = '\0';
+        count++;
+    }
+    return count;
 }
 
 static DWORD WINAPI update_check_thread(LPVOID param) {
@@ -3396,7 +3524,7 @@ static DWORD WINAPI update_download_thread(LPVOID param) {
     // The package that updates this copy in place: the MSI when Windows
     // Installer put it here, the setup otherwise. Running the setup over an
     // MSI install added a second product that shares (and deletes) its files.
-    r->package = detect_update_package(&r->per_machine);
+    r->package = detect_update_package(&r->per_machine, r->msi_product);
 
     // The installer for the architecture this npad was built for: an arm64
     // build must never be handed the x64 installer, and a build of any other
@@ -3935,6 +4063,26 @@ static bool installer_command(const UpdateDownloadResult *r, wchar_t *app, size_
         _snwprintf(args, args_cap - 1, L"/i \"%ls\" /passive /norestart%ls", r->path,
                    r->per_machine ? L" ALLUSERS=1" : L"");
         args[args_cap - 1] = L'\0';
+        // The major upgrade carries every feature over, the Assoc* ones
+        // included, and reinstalling those rewrites the very keys the
+        // Associations page deletes: an update would quietly bring back the
+        // groups the user unticked there. Leave those features out, as the
+        // setup's /MERGETASKS below does for its tasks.
+        char names[32][NPAD_MSI_FEATURE_CHARS];
+        const char *installed[32];
+        size_t count = msi_local_features(r->msi_product, names, 32);
+        for (size_t i = 0; i < count; i++)
+            installed[i] = names[i];
+        const char *drop[ASSOC_GROUP_COUNT];
+        size_t drop_count =
+            assoc_msi_unregistered_features(r->per_machine, drop, ASSOC_GROUP_COUNT);
+        char features[600];
+        if (update_msi_feature_args(installed, count, drop, drop_count, features,
+                                    sizeof(features))) {
+            size_t used = wcslen(args);
+            _snwprintf(args + used, args_cap - used - 1, L"%hs", features);
+            args[args_cap - 1] = L'\0';
+        }
         return true;
     }
     _snwprintf(app, app_cap - 1, L"%ls", r->path);
@@ -3984,9 +4132,17 @@ static void report_installer_not_started(HWND owner, const UpdateDownloadResult 
 // Windows will not start it (antivirus quarantine, Smart App Control, a
 // policy), nothing has closed and the user is told why. It used to broadcast
 // the handoff first and never check the launch, so every window vanished and
-// nothing came back. Creating it is also what ends the verified file's
-// exposure: once its image is mapped it cannot be rewritten, and the handle
-// that kept it unchangeable since hashing is only closed after that.
+// nothing came back.
+//
+// The handle that has kept the verified file unchangeable since it was hashed
+// is held through the user's Yes/No, the process creation and a bounded wait
+// for the installer to start, then closed. That does NOT cover what the
+// installer reads later by name: msiexec may reopen the package, and Inno's
+// SetupLdr hands its own path to setup.tmp, which reopens the setup exe for
+// its payload after npad has let go and exited (a running image can still be
+// renamed and replaced). A process running as the same user could swap the
+// file in that window - a same-account residual, since such a process can
+// already run code as the user without npad's help.
 //
 // Returns false, with nothing closed, when the installer could not start.
 static bool install_update(Window *window, UpdateDownloadResult *r, HWND owner) {
@@ -3998,15 +4154,15 @@ static bool install_update(Window *window, UpdateDownloadResult *r, HWND owner) 
     // discarded.
     g_session_ending = true;
 
-    wchar_t app[MAX_PATH], args[MAX_PATH + 300];
-    if (!installer_command(r, app, MAX_PATH, args, MAX_PATH + 300)) {
+    wchar_t app[MAX_PATH], args[MAX_PATH + 900];
+    if (!installer_command(r, app, MAX_PATH, args, MAX_PATH + 900)) {
         g_session_ending = false;
         report_installer_not_started(owner, r, ERROR_PATH_NOT_FOUND);
         return false;
     }
-    wchar_t cmdline[2 * MAX_PATH + 320];
-    _snwprintf(cmdline, 2 * MAX_PATH + 319, L"\"%ls\" %ls", app, args);
-    cmdline[2 * MAX_PATH + 319] = L'\0';
+    wchar_t cmdline[2 * MAX_PATH + 920];
+    _snwprintf(cmdline, 2 * MAX_PATH + 919, L"\"%ls\" %ls", app, args);
+    cmdline[2 * MAX_PATH + 919] = L'\0';
 
     STARTUPINFOW si;
     ZeroMemory(&si, sizeof(si));
@@ -4033,9 +4189,10 @@ static bool install_update(Window *window, UpdateDownloadResult *r, HWND owner) 
 
     if (created) {
         ResumeThread(pi.hThread);
-        // Keep the file unchangeable until the installer has opened it:
-        // msiexec reads the package before its first window, and setup reads
-        // its own payload at start. Bounded; neither waits on npad.
+        // Keep the file unchangeable while the installer starts: msiexec
+        // reads the package before its first window, and setup begins on its
+        // own payload. Bounded; neither waits on npad, and what either reads
+        // by name after this is the same-account residual described above.
         WaitForInputIdle(pi.hProcess, r->package == UPDATE_PACKAGE_MSI ? 10000 : 3000);
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);

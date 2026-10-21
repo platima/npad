@@ -12,35 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-bool update_extract_tag(const char *json, char *out, size_t out_cap) {
-    if (!json || !out || out_cap == 0)
-        return false;
-
-    const char *key = strstr(json, "\"tag_name\"");
-    if (!key)
-        return false;
-    const char *p = key + strlen("\"tag_name\"");
-    while (*p == ' ' || *p == '\t')
-        p++;
-    if (*p != ':')
-        return false;
-    p++;
-    while (*p == ' ' || *p == '\t')
-        p++;
-    if (*p != '"')
-        return false;
-    p++;
-
-    size_t n = 0;
-    while (p[n] && p[n] != '"')
-        n++;
-    if (p[n] != '"' || n == 0 || n >= out_cap)
-        return false;
-    memcpy(out, p, n);
-    out[n] = '\0';
-    return true;
-}
-
 // ---------------------------------------------------------------------------
 // A minimal JSON walker for the releases API responses. Not a validator: it
 // only needs to know where each value starts and ends, so that a key is read
@@ -498,10 +469,83 @@ const char *update_installer_suffix(const char *arch, bool checksum) {
     return update_package_suffix(arch, UPDATE_PACKAGE_SETUP, checksum);
 }
 
-UpdatePackage update_windows_package(bool setup_owns_this_copy, bool msi_installed) {
-    // Both registered means two products already share the folder; the setup
+UpdatePackage update_windows_package(bool setup_owns_this_copy, bool msi_owns_this_copy) {
+    // Both claiming the folder means two products already share it; the setup
     // is what this updater has always run there, so keep to it
-    return (msi_installed && !setup_owns_this_copy) ? UPDATE_PACKAGE_MSI : UPDATE_PACKAGE_SETUP;
+    return (msi_owns_this_copy && !setup_owns_this_copy) ? UPDATE_PACKAGE_MSI
+                                                         : UPDATE_PACKAGE_SETUP;
+}
+
+// An MSI Feature table identifier: letters, digits, '_' and '.'. Anything else
+// would not be a feature npad's MSI has, and must not reach a command line.
+static bool msi_feature_name_ok(const char *s) {
+    if (!s || !s[0])
+        return false;
+    for (; *s; s++) {
+        if (!isalnum((unsigned char) *s) && *s != '_' && *s != '.')
+            return false;
+    }
+    return true;
+}
+
+static bool name_listed(const char *name, const char *const *list, size_t count) {
+    for (size_t i = 0; list && i < count; i++) {
+        if (list[i] && strcmp(list[i], name) == 0)
+            return true;
+    }
+    return false;
+}
+
+// Append ` <property>=a,b,...` for the valid entries of installed that are
+// (keep == false) or are not (keep == true) in drop. False when it does not fit
+// or names nothing.
+static bool append_feature_list(char *out, size_t cap, size_t *used, const char *property,
+                                const char *const *installed, size_t installed_count,
+                                const char *const *drop, size_t drop_count, bool keep) {
+    int w = snprintf(out + *used, cap - *used, " %s=", property);
+    if (w < 0 || (size_t) w >= cap - *used)
+        return false;
+    *used += (size_t) w;
+    bool any = false;
+    for (size_t i = 0; i < installed_count; i++) {
+        const char *name = installed[i];
+        if (!msi_feature_name_ok(name) || name_listed(name, drop, drop_count) == keep)
+            continue;
+        if (name_listed(name, installed, i))
+            continue; // Listed twice
+        w = snprintf(out + *used, cap - *used, "%s%s", any ? "," : "", name);
+        if (w < 0 || (size_t) w >= cap - *used)
+            return false;
+        *used += (size_t) w;
+        any = true;
+    }
+    return any;
+}
+
+bool update_msi_feature_args(const char *const *installed, size_t installed_count,
+                             const char *const *drop, size_t drop_count, char *out, size_t cap) {
+    if (!out || cap == 0)
+        return false;
+    out[0] = '\0';
+    if (!installed)
+        return false;
+
+    bool must_drop = false;
+    for (size_t i = 0; i < installed_count && !must_drop; i++)
+        must_drop =
+            msi_feature_name_ok(installed[i]) && name_listed(installed[i], drop, drop_count);
+    if (!must_drop)
+        return false; // Leave the selection to MigrateFeatureStates
+
+    size_t used = 0;
+    if (!append_feature_list(out, cap, &used, "ADDLOCAL", installed, installed_count, drop,
+                             drop_count, true) ||
+        !append_feature_list(out, cap, &used, "REMOVE", installed, installed_count, drop,
+                             drop_count, false)) {
+        out[0] = '\0';
+        return false;
+    }
+    return true;
 }
 
 static bool is_path_sep(char c) {
