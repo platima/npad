@@ -1337,8 +1337,8 @@ bool ui_platform_init(void) {
     // Off by default to match notepad.exe, whose "Wrap around" box ships
     // unchecked. It changes what a search FINDS rather than adding to it - a
     // term Notepad reports as missing would silently be found here - so by the
-    // project's own rule it is opt-in. Preferences > General turns it back on.
-    g_wrap_around = settings_get_bool("find_wrap_around", false);
+    // project's own rule it is opt-in. Preferences > Editor turns it back on.
+    g_wrap_around = settings_get_bool(FIND_WRAP_KEY, false);
     g_interpret_escapes = settings_get_bool("find_interpret_escapes", false);
     g_highlight_all = settings_get_bool("find_highlight_all", false);
 
@@ -3700,6 +3700,20 @@ static void unescape_search_buffer(wchar_t *buf, size_t cap) {
     *w = L'\0';
 }
 
+// Rebuild the effective search/replace strings from the raw ones. History and
+// the dialog keep the RAW typed text; the search machinery uses the effective
+// copies (escape-interpreted when enabled, which is inert while the Markdown
+// tools are off). Find Next uses them with the dialog closed too, so a
+// broadcast that changes escape interpretation recomputes them as well.
+static void recompute_search_effective(void) {
+    wcscpy(g_search_eff, g_search_text);
+    wcscpy(g_replace_eff, g_replace_text);
+    if (g_interpret_escapes && settings_get_bool("list_tools_enabled", false)) {
+        unescape_search_buffer(g_search_eff, sizeof(g_search_eff) / sizeof(g_search_eff[0]));
+        unescape_search_buffer(g_replace_eff, sizeof(g_replace_eff) / sizeof(g_replace_eff[0]));
+    }
+}
+
 // Read the search/replace text and option checkboxes into the globals (no
 // history push, no settings write): shared by the action buttons and the
 // live highlight-all refresh
@@ -3722,14 +3736,38 @@ static void read_search_text(HWND dialog, bool has_replace) {
     if (GetDlgItem(dialog, IDC_RADIO_UP)) {
         g_search_down = IsDlgButtonChecked(dialog, IDC_RADIO_UP) != BST_CHECKED;
     }
+    recompute_search_effective();
+}
 
-    // History and the dialog keep the RAW typed text; the search machinery
-    // uses the effective copies (escape-interpreted when enabled)
-    wcscpy(g_search_eff, g_search_text);
-    wcscpy(g_replace_eff, g_replace_text);
-    if (g_interpret_escapes) {
-        unescape_search_buffer(g_search_eff, sizeof(g_search_eff) / sizeof(g_search_eff[0]));
-        unescape_search_buffer(g_replace_eff, sizeof(g_replace_eff) / sizeof(g_replace_eff[0]));
+// Write the find options to settings.json straight away when they differ from
+// what is stored, and tell the other instances - the shared-settings model, and
+// what GTK's persist_options does. They used to be set in memory only, so the
+// next broadcast's reload (settings_clear_all) dropped them, and the open
+// dialog, re-synced from the file by reload_and_apply_settings, would then
+// show the stale value. Idempotent: unchanged options write nothing.
+static void persist_find_options(void) {
+    struct {
+        const char *key;
+        bool value;
+        bool fallback;
+    } opts[] = {
+        { "find_match_case", g_match_case, false },
+        { "find_whole_word", g_whole_word, false },
+        { FIND_WRAP_KEY, g_wrap_around, false },
+        { "find_search_down", g_search_down, true },
+        { "find_interpret_escapes", g_interpret_escapes, false },
+        { "find_highlight_all", g_highlight_all, false },
+    };
+    bool changed = false;
+    for (size_t i = 0; i < sizeof(opts) / sizeof(opts[0]); i++) {
+        if (settings_get_bool(opts[i].key, opts[i].fallback) != opts[i].value) {
+            settings_set_bool(opts[i].key, opts[i].value);
+            changed = true;
+        }
+    }
+    if (changed) {
+        settings_save();
+        ui_platform_notify_settings_changed();
     }
 }
 
@@ -3737,13 +3775,7 @@ static void read_search_text(HWND dialog, bool has_replace) {
 // them across sessions, and refresh the highlight-all overlay
 static void read_search_fields(HWND dialog, bool has_replace) {
     read_search_text(dialog, has_replace);
-
-    settings_set_bool("find_match_case", g_match_case);
-    settings_set_bool("find_whole_word", g_whole_word);
-    settings_set_bool("find_wrap_around", g_wrap_around);
-    settings_set_bool("find_search_down", g_search_down);
-    settings_set_bool("find_interpret_escapes", g_interpret_escapes);
-    settings_set_bool("find_highlight_all", g_highlight_all);
+    persist_find_options();
 
     history_push("find_hist", g_search_text);
     history_reload(GetDlgItem(dialog, ID_FIND_TEXT), "find_hist", g_search_text);
@@ -3946,6 +3978,34 @@ static void find_dialog_arm_highlight(HWND dialog) {
     SetTimer(dialog, 1, NPAD_COALESCE_MS, NULL);
 }
 
+// Show the option globals in an open dialog, keeping what is typed: the
+// counterpart of GTK's npad_gtk_find_reload_settings. A settings broadcast
+// re-reads the globals from the file, and the dialog's checkboxes are read back
+// into them on every button and on close, so a dialog left showing the old
+// state would put it straight back (another instance's Reset of wrap-around,
+// say). Idempotent - broadcasts arrive at idle windows too - so it only touches
+// a control whose state differs, and returns whether anything changed.
+static bool find_dialog_sync_options(HWND dialog) {
+    static const int ids[] = { ID_FIND_CASE, ID_FIND_WHOLE_WORD, ID_FIND_WRAP, ID_FIND_ESCAPES,
+                               ID_FIND_HIGHLIGHT };
+    const bool values[] = { g_match_case, g_whole_word, g_wrap_around, g_interpret_escapes,
+                            g_highlight_all };
+    bool changed = false;
+    for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        if ((IsDlgButtonChecked(dialog, ids[i]) == BST_CHECKED) != values[i]) {
+            CheckDlgButton(dialog, ids[i], values[i] ? BST_CHECKED : BST_UNCHECKED);
+            changed = true;
+        }
+    }
+    if (GetDlgItem(dialog, IDC_RADIO_UP) &&
+        (IsDlgButtonChecked(dialog, IDC_RADIO_UP) != BST_CHECKED) != g_search_down) {
+        CheckRadioButton(dialog, IDC_RADIO_UP, IDC_RADIO_DOWN,
+                         g_search_down ? IDC_RADIO_DOWN : IDC_RADIO_UP);
+        changed = true;
+    }
+    return changed;
+}
+
 static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, LPARAM lparam) {
     bool has_replace = GetDlgItem(dialog, ID_REPLACE_WITH) != NULL;
     Window *window = (Window *) GetWindowLongPtrW(dialog, GWLP_USERDATA);
@@ -4025,8 +4085,20 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
                 (LOWORD(wparam) == ID_FIND_HIGHLIGHT || LOWORD(wparam) == ID_FIND_CASE ||
                  LOWORD(wparam) == ID_FIND_WHOLE_WORD || LOWORD(wparam) == ID_FIND_ESCAPES)) {
                 read_search_text(dialog, has_replace);
-                settings_set_bool("find_highlight_all", g_highlight_all);
+                persist_find_options();
                 refresh_highlights(window, g_highlight_all);
+                break;
+            }
+            // Wrap and Direction change where a search goes, not what matches:
+            // no highlight refresh, but they are options like the rest, saved
+            // (and shared) as soon as they change, as on GTK. Left unread until
+            // a button, a settings broadcast's re-sync of this dialog from the
+            // file would have undone the click.
+            if (HIWORD(wparam) == BN_CLICKED &&
+                (LOWORD(wparam) == ID_FIND_WRAP || LOWORD(wparam) == IDC_RADIO_UP ||
+                 LOWORD(wparam) == IDC_RADIO_DOWN)) {
+                read_search_text(dialog, has_replace);
+                persist_find_options();
                 break;
             }
             switch (LOWORD(wparam)) {
@@ -5033,7 +5105,7 @@ static INT_PTR CALLBACK prefs_editor_proc(HWND page, UINT msg, WPARAM wparam, LP
                 // to be open, its checkbox - otherwise closing it would write
                 // the stale value straight back over this one.
                 g_wrap_around = IsDlgButtonChecked(page, ID_PREF_FIND_WRAP) == BST_CHECKED;
-                settings_set_bool("find_wrap_around", g_wrap_around);
+                settings_set_bool(FIND_WRAP_KEY, g_wrap_around);
                 if (g_find_dialog) {
                     CheckDlgButton(g_find_dialog, ID_FIND_WRAP,
                                    g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
@@ -5335,14 +5407,11 @@ static void reset_all_preferences(HWND owner) {
     settings_save();
 
     // Re-apply everything that can change live (same path as a cross-instance
-    // settings change), then tell other running instances
+    // settings change), then tell other running instances. That includes an
+    // open Find/Replace dialog's checkboxes (find_dialog_sync_options), which
+    // would otherwise put the pre-reset wrap-around back when next read.
     if (g_main_window) {
         reload_and_apply_settings(g_main_window);
-    }
-    // An open Find/Replace dialog shows wrap-around too, and would put the
-    // pre-reset value back the next time it reads its checkboxes
-    if (g_find_dialog) {
-        CheckDlgButton(g_find_dialog, ID_FIND_WRAP, g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
     }
     ui_platform_notify_settings_changed();
 
@@ -8720,9 +8789,12 @@ static void reload_and_apply_settings(Window *window) {
     g_match_case = settings_get_bool("find_match_case", false);
     g_whole_word = settings_get_bool("find_whole_word", false);
     g_search_down = settings_get_bool("find_search_down", true);
-    g_wrap_around = settings_get_bool("find_wrap_around", false);
+    g_wrap_around = settings_get_bool(FIND_WRAP_KEY, false);
     g_interpret_escapes = settings_get_bool("find_interpret_escapes", false);
     g_highlight_all = settings_get_bool("find_highlight_all", false);
+    // Escape interpretation (and Markdown support, which gates it) may have
+    // changed, and Find Next uses the effective strings with the dialog closed
+    recompute_search_effective();
     apply_font(window);
     apply_theme(window);
     apply_new_window_pref(window); // Also rebuilds accelerators (list Ctrl+]/[ gating)
@@ -8739,9 +8811,19 @@ static void reload_and_apply_settings(Window *window) {
     preview_retheme_active();
 
     // The Find dialog is modeless, so a live change to Markdown support has to
-    // reach its escapes checkbox - WM_INITDIALOG only runs once
+    // reach its escapes checkbox - WM_INITDIALOG only runs once - and the
+    // options just re-read have to reach its checkboxes, or closing it (or any
+    // button) would read the stale ones back over them
     if (g_find_dialog) {
         find_dialog_show_escapes(g_find_dialog, settings_get_bool("list_tools_enabled", false));
+        if (find_dialog_sync_options(g_find_dialog)) {
+            if (g_highlight_all) {
+                find_dialog_arm_highlight(g_find_dialog); // Coalesced; reads the box
+            } else {
+                LONG_PTR owner = GetWindowLongPtrW(g_find_dialog, GWLP_USERDATA);
+                refresh_highlights((const Window *) owner, false);
+            }
+        }
     }
 
     // Sync shared window options; per-window view state (font type, zoom)

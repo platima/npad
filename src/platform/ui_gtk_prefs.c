@@ -687,7 +687,7 @@ static void build_editor(GtkWidget *notebook) {
 
     GtkWidget *find = add_group(page, "Find and Replace");
     add_check(find, "_Fill Find with the selected text", FIND_SEED_KEY, true);
-    add_check(find, "Wrap _around by default", "find_wrap_around", false);
+    add_check(find, "Wrap _around by default", FIND_WRAP_KEY, false);
 
     GtkWidget *tab = add_group(page, "Tab key");
     P.tab_check =

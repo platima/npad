@@ -105,7 +105,7 @@ static void load_options(void) {
     g_whole_word = settings_get_bool("find_whole_word", false);
     g_search_down = settings_get_bool("find_search_down", true);
     // Off by default to match notepad.exe (see the Win32 build)
-    g_wrap_around = settings_get_bool("find_wrap_around", false);
+    g_wrap_around = settings_get_bool(FIND_WRAP_KEY, false);
     g_interpret_escapes = settings_get_bool("find_interpret_escapes", false);
     g_highlight_all = settings_get_bool("find_highlight_all", false);
     g_persisted_bits = option_bits();
@@ -194,7 +194,7 @@ static void persist_options(void) {
     settings_set_bool("find_match_case", g_match_case);
     settings_set_bool("find_whole_word", g_whole_word);
     settings_set_bool("find_search_down", g_search_down);
-    settings_set_bool("find_wrap_around", g_wrap_around);
+    settings_set_bool(FIND_WRAP_KEY, g_wrap_around);
     settings_set_bool("find_interpret_escapes", g_interpret_escapes);
     settings_set_bool("find_highlight_all", g_highlight_all);
     settings_save();
