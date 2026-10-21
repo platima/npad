@@ -3756,66 +3756,110 @@ static void read_search_fields(HWND dialog, bool has_replace) {
     refresh_highlights(window, g_highlight_all);
 }
 
-// Is the current selection exactly the current search text?
+// Is the current selection exactly a match of the current search? Asked of
+// the same search Find Next uses, run from the selection's start, rather than
+// by comparing strings: _wcsicmp folds only ASCII in the C locale, so a
+// selected "CAF<U+00C9>" that Find Next had just found for "caf<U+00E9>" was
+// refused, and Replace looped on it for ever when it was the only match. The
+// search also agrees with Find Next about line breaks (RichEdit's internal CR)
+// and Whole word.
 static bool selection_matches_search(Window *window) {
-    char *selected = ui_platform_get_selected_text(window);
-    if (!selected)
+    if (!window || !window->edit_hwnd || g_search_eff[0] == L'\0')
         return false;
-
-    wchar_t *wide = utf8_to_wide(selected);
-    free(selected);
-    if (!wide)
+    CHARRANGE sel = { 0, 0 };
+    SendMessageW(window->edit_hwnd, EM_EXGETSEL, 0, (LPARAM) &sel);
+    if (sel.cpMax <= sel.cpMin)
         return false;
-
-    bool matches;
-    if (g_match_case) {
-        matches = wcscmp(wide, g_search_eff) == 0;
-    } else {
-        matches = _wcsicmp(wide, g_search_eff) == 0;
-    }
-    free(wide);
-    return matches;
+    CHARRANGE found;
+    if (!find_in_range(window, sel.cpMin, -1, true, &found))
+        return false;
+    return found.cpMin == sel.cpMin && found.cpMax == sel.cpMax;
 }
 
 static void replace_current(Window *window) {
     if (selection_matches_search(window)) {
         SendMessageW(window->edit_hwnd, EM_REPLACESEL, TRUE, (LPARAM) g_replace_eff);
     }
-    find_next(window, g_search_down);
+    find_next(window, true); // Replace always searches down (see ID_FIND_NEXT)
 }
 
 static void replace_all(Window *window) {
     if (!window || !window->edit_hwnd || g_search_eff[0] == L'\0')
         return;
 
-    WPARAM flags = FR_DOWN;
-    if (g_match_case)
-        flags |= FR_MATCHCASE;
-    if (g_whole_word)
-        flags |= FR_WHOLEWORD;
+    HWND e = window->edit_hwnd;
 
-    int replaced = 0;
-    LONG start = 0;
-
+    // Every match first, in the text as it is (non-overlapping, top down)...
+    FindRange *matches = NULL;
+    size_t count = 0, capacity = 0;
+    bool failed = false;
+    LONG from = 0;
     for (;;) {
-        FINDTEXTEXW ft;
-        memset(&ft, 0, sizeof(ft));
-        ft.lpstrText = g_search_eff;
-        ft.chrg.cpMin = start;
-        ft.chrg.cpMax = -1;
-
-        LRESULT pos = SendMessageW(window->edit_hwnd, EM_FINDTEXTEXW, flags, (LPARAM) &ft);
-        if (pos == -1)
+        CHARRANGE found;
+        if (!find_in_range(window, from, -1, true, &found))
             break;
-
-        SendMessageW(window->edit_hwnd, EM_EXSETSEL, 0, (LPARAM) &ft.chrgText);
-        SendMessageW(window->edit_hwnd, EM_REPLACESEL, TRUE, (LPARAM) g_replace_eff);
-        start = ft.chrgText.cpMin + (LONG) wcslen(g_replace_eff);
-        replaced++;
+        if (count == capacity) {
+            size_t grown_cap = capacity ? capacity * 2 : 64;
+            FindRange *grown = realloc(matches, grown_cap * sizeof(FindRange));
+            if (!grown) {
+                failed = true;
+                break;
+            }
+            matches = grown;
+            capacity = grown_cap;
+        }
+        matches[count].start = found.cpMin;
+        matches[count].end = found.cpMax;
+        count++;
+        from = found.cpMax > found.cpMin ? found.cpMax : found.cpMin + 1;
     }
 
+    // ...then ONE edit over the span from the first match to the end of the
+    // last: RichEdit records a single EM_REPLACESEL as one undo step, so one
+    // Ctrl+Z undoes the whole Replace All (as on GTK). Replacing match by
+    // match took one Ctrl+Z per replacement, could not be fully undone past
+    // the 100,000-step undo limit, and repainted for every replacement.
+    size_t replaced = 0;
+    if (count > 0 && !failed) {
+        LONG span_start = (LONG) matches[0].start;
+        LONG span_end = (LONG) matches[count - 1].end;
+        size_t span_len = (size_t) (span_end - span_start);
+        wchar_t *span = malloc((span_len + 1) * sizeof(wchar_t));
+        wchar_t *result = NULL;
+        if (span) {
+            // The control's internal form (bare CR breaks), so the positions
+            // the search returned index it directly
+            TEXTRANGEW tr;
+            tr.chrg.cpMin = span_start;
+            tr.chrg.cpMax = span_end;
+            tr.lpstrText = span;
+            LRESULT got = SendMessageW(e, EM_GETTEXTRANGE, 0, (LPARAM) &tr);
+            if (got == (LRESULT) span_len) {
+                for (size_t i = 0; i < count; i++) {
+                    matches[i].start -= span_start;
+                    matches[i].end -= span_start;
+                }
+                result = find_replace_ranges(span, span_len, matches, count, g_replace_eff, NULL);
+            }
+            free(span);
+        }
+        if (result) {
+            CHARRANGE target = { span_start, span_end };
+            SendMessageW(e, EM_EXSETSEL, 0, (LPARAM) &target);
+            SendMessageW(e, EM_REPLACESEL, TRUE, (LPARAM) result); // TRUE: one undo step
+            SendMessageW(e, EM_SCROLLCARET, 0, 0); // Caret after the last replacement
+            free(result);
+            replaced = count;
+        } else {
+            failed = true; // Could not build it: the document is left exactly as it was
+        }
+    }
+    free(matches);
+
     char message[128];
-    if (replaced > 0) {
+    if (failed) {
+        snprintf(message, sizeof(message), "Replace All failed - the document was not changed");
+    } else if (replaced > 0) {
         char count_text[40];
         format_count_a((unsigned long) replaced, count_text, sizeof(count_text));
         snprintf(message, sizeof(message), "Replaced %s occurrence%s", count_text,
@@ -3891,6 +3935,17 @@ static bool find_dialog_seed(Window *window, wchar_t *out, size_t cap) {
     return fits;
 }
 
+// Arm the coalesced Highlight All refresh (dialog timer 1) when highlighting
+// is ticked. Coalesce, not re-arm, so highlights refresh while you keep typing
+// in the search box, not just after you stop. The timer reads the box itself,
+// so a refresh with an emptied box clears the highlights.
+static void find_dialog_arm_highlight(HWND dialog) {
+    if (g_find_hl_pending || IsDlgButtonChecked(dialog, ID_FIND_HIGHLIGHT) != BST_CHECKED)
+        return;
+    g_find_hl_pending = true;
+    SetTimer(dialog, 1, NPAD_COALESCE_MS, NULL);
+}
+
 static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, LPARAM lparam) {
     bool has_replace = GetDlgItem(dialog, ID_REPLACE_WITH) != NULL;
     Window *window = (Window *) GetWindowLongPtrW(dialog, GWLP_USERDATA);
@@ -3948,26 +4003,22 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
             // Read after every control above is set, since this reads them all.
             if (seeded)
                 read_search_text(dialog, has_replace);
-            // Highlight-all otherwise waits for the first keystroke; a seeded
-            // term should light up straight away
-            if (seeded && g_highlight_all && !g_find_hl_pending) {
-                g_find_hl_pending = true;
-                SetTimer(dialog, 1, NPAD_COALESCE_MS, NULL);
-            }
+            // Highlight-all otherwise waits for the first keystroke: the term
+            // in the box, seeded or remembered, should light up straight away
+            // (GTK refreshes on open too)
+            find_dialog_arm_highlight(dialog);
             return FALSE; // Focus set manually
         }
 
         case WM_COMMAND:
-            // Live highlight refresh: retyping the search text (debounced)
-            // and toggling any option that changes what matches
-            if (LOWORD(wparam) == ID_FIND_TEXT && HIWORD(wparam) == CBN_EDITCHANGE) {
-                // Coalesce (not re-arm) so highlights refresh while you keep
-                // typing in the search box, not just after you stop
-                if (IsDlgButtonChecked(dialog, ID_FIND_HIGHLIGHT) == BST_CHECKED &&
-                    !g_find_hl_pending) {
-                    g_find_hl_pending = true;
-                    SetTimer(dialog, 1, NPAD_COALESCE_MS, NULL);
-                }
+            // Live highlight refresh: retyping the search text (debounced),
+            // picking a term from the history list, and toggling any option
+            // that changes what matches. On CBN_SELCHANGE the edit field does
+            // not hold the picked term yet, which is fine: the timer reads the
+            // box later, once the combo box has copied it in.
+            if (LOWORD(wparam) == ID_FIND_TEXT &&
+                (HIWORD(wparam) == CBN_EDITCHANGE || HIWORD(wparam) == CBN_SELCHANGE)) {
+                find_dialog_arm_highlight(dialog);
                 break;
             }
             if (HIWORD(wparam) == BN_CLICKED &&
@@ -3981,8 +4032,11 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
             switch (LOWORD(wparam)) {
                 case ID_FIND_NEXT:
                     read_search_fields(dialog, has_replace);
+                    // Replace has no Direction group, so it always searches
+                    // down (notepad.exe's does too); the direction last chosen
+                    // in Find is kept for Find, not silently applied here
                     if (window)
-                        find_next(window, g_search_down);
+                        find_next(window, has_replace ? true : g_search_down);
                     return TRUE;
 
                 case ID_REPLACE_NEXT:
@@ -4021,15 +4075,23 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
         case WM_DESTROY: {
             KillTimer(dialog, 1);
             g_find_hl_pending = false;
+            // What is in the box when the dialog closes is the term F3 searches
+            // for afterwards, whether or not a button was pressed - the same
+            // rule as a seeded term, and the same on GTK. It used to depend on
+            // Highlight All, whose live refresh happened to read the box. The
+            // controls still exist here: children are destroyed after this.
+            read_search_text(dialog, has_replace);
             refresh_highlights(window, false); // Clear highlights with the dialog
-            // ...and the match count with them. Part 0 is otherwise only
-            // rewritten by the counts, which are off by default, so leaving it
-            // stranded "Match 3 of 7" forever in the default configuration.
+            // ...and the match count with them. Clearing the message itself,
+            // not just the bar: the counts refresh (or any settings broadcast)
+            // recomposes part 0 from status_msg, and brought a stale
+            // "Match 1 of 3" back moments after the dialog closed.
             // schedule_counts_update rather than apply_counts_pref: the latter
             // recomputes synchronously (a full document fetch) and would put a
             // hitch on closing the dialog.
             if (window) {
-                set_status_part0(window, L"");
+                window->status_msg[0] = L'\0';
+                compose_status_part0(window);
                 schedule_counts_update(window);
             }
             RECT rect;
@@ -4051,7 +4113,28 @@ static void show_find_replace_dialog(Window *parent, bool replace) {
     if (!parent)
         return;
 
-    // Only one find/replace dialog at a time, like Notepad
+    // Only one find/replace dialog at a time, like Notepad. Asking again for
+    // the one already open re-presents it, keeping what was typed (and taking
+    // a fresh seed from the selection, as opening does), like GTK. Recreating
+    // it threw away text typed but not yet searched for.
+    if (g_find_dialog && (GetDlgItem(g_find_dialog, ID_REPLACE_WITH) != NULL) == replace &&
+        (Window *) GetWindowLongPtrW(g_find_dialog, GWLP_USERDATA) == parent) {
+        HWND dialog = g_find_dialog;
+        wchar_t seed[256];
+        if (find_dialog_seed(parent, seed, 256)) {
+            SetDlgItemTextW(dialog, ID_FIND_TEXT, seed);
+            // The seed is the search from now on, as in WM_INITDIALOG
+            read_search_text(dialog, replace);
+            find_dialog_arm_highlight(dialog);
+        }
+        ShowWindow(dialog, SW_SHOW);
+        SetActiveWindow(dialog);
+        SendDlgItemMessageW(dialog, ID_FIND_TEXT, CB_SETEDITSEL, 0, MAKELPARAM(0, -1));
+        SetFocus(GetDlgItem(dialog, ID_FIND_TEXT));
+        return;
+    }
+    // Switching between Find and Replace: the old dialog's WM_DESTROY adopts
+    // the typed term, which the new one then shows (unless a seed replaces it)
     if (g_find_dialog) {
         DestroyWindow(g_find_dialog);
         g_find_dialog = NULL;
@@ -5222,9 +5305,10 @@ static void import_settings(HWND owner) {
 // allowlist of keys to remove (which silently drifts every time a new
 // Preferences tab/setting is added - and did), this resets EVERYTHING except
 // the small, stable set of preserved categories: recent files, window
-// geometry, and Find/Replace state (options + history). Any new preference
-// key is therefore reset by default; getters fall back to their defaults for
-// the now-missing keys. To keep something across a reset, add its prefix here.
+// geometry, and Find/Replace state (the dialog's options + history). Any new
+// preference key is therefore reset by default; getters fall back to their
+// defaults for the now-missing keys. To keep something across a reset, add its
+// prefix here.
 static void reset_all_preferences(HWND owner) {
     static const char *const keep_prefixes[] = {
         "recent_file_", // recent files list (recent_files_max is a pref -> reset)
@@ -5235,8 +5319,8 @@ static void reset_all_preferences(HWND owner) {
 
     if (MessageBoxW(owner,
                     L"Reset all preferences to their defaults?\n\n"
-                    L"Recent files, window position and Find/Replace options and history "
-                    L"are kept.\n"
+                    L"Find wrap-around is reset with them. Recent files, window position "
+                    L"and the other Find/Replace options and history are kept.\n"
                     L"The Preferences window will close.",
                     L"npad", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) {
         return;
@@ -5244,15 +5328,21 @@ static void reset_all_preferences(HWND owner) {
 
     settings_reset_except_prefixes(keep_prefixes,
                                    (int) (sizeof(keep_prefixes) / sizeof(keep_prefixes[0])));
-    // The one find_-prefixed key that IS a preference (Preferences > General),
-    // not search state: the prefix keep above would otherwise preserve it
-    settings_remove_key(FIND_SEED_KEY);
+    // The find_-prefixed keys that ARE preferences (both on Preferences >
+    // Editor: Fill Find from the selection, Wrap around by default), not
+    // search state: the prefix keep above would otherwise preserve them
+    find_reset_preference_keys();
     settings_save();
 
     // Re-apply everything that can change live (same path as a cross-instance
     // settings change), then tell other running instances
     if (g_main_window) {
         reload_and_apply_settings(g_main_window);
+    }
+    // An open Find/Replace dialog shows wrap-around too, and would put the
+    // pre-reset value back the next time it reads its checkboxes
+    if (g_find_dialog) {
+        CheckDlgButton(g_find_dialog, ID_FIND_WRAP, g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
     }
     ui_platform_notify_settings_changed();
 
@@ -8781,8 +8871,14 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                         // which is the lifetime it had when it simply got
                         // overwritten by the next counts refresh. Now that the
                         // two are shown side by side, retiring it has to be
-                        // explicit or it would linger for ever.
-                        window->status_msg[0] = L'\0';
+                        // explicit or it would linger for ever. Recompose
+                        // here too: with the counts off (the default) nothing
+                        // else rewrites part 0, so a cleared message stayed
+                        // on screen while the user typed.
+                        if (window->status_msg[0]) {
+                            window->status_msg[0] = L'\0';
+                            compose_status_part0(window);
+                        }
                         // Counts refresh on programmatic changes too (open,
                         // transforms), not only user edits
                         schedule_counts_update(window);

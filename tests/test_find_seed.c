@@ -1,6 +1,7 @@
 /*
  * npad - Find seeding tests
- * Which selections may pre-fill Find, and the preference that gates it
+ * Which selections may pre-fill Find, and the preference that gates it; the
+ * find_ preferences Reset All clears; Replace All's one-pass result
  *
  * Author: Platima
  * https://npad.dev
@@ -117,6 +118,104 @@ TEST_CASE(preference_defaults_on_and_follows_setting) {
     settings_clear_all();
 }
 
+// Reset All Preferences keeps the find_ prefix (search state) and then
+// removes the find_ keys a Preferences page shows - both platforms' resets
+// run exactly this sequence
+TEST_CASE(reset_clears_find_preferences_but_keeps_search_state) {
+    static const char *const keep[] = { "recent_file_", "window_", "find_", "replace_" };
+    settings_clear_all();
+    settings_set_bool(FIND_SEED_KEY, false);
+    settings_set_bool(FIND_WRAP_KEY, true);
+    settings_set_bool("find_match_case", true);
+    settings_set_bool("find_search_down", false);
+    settings_set_string("find_hist_0", "needle");
+    settings_set_string("replace_hist_0", "thread");
+    settings_set_bool("word_wrap", true);
+
+    settings_reset_except_prefixes(keep, (int) (sizeof(keep) / sizeof(keep[0])));
+    find_reset_preference_keys();
+
+    TEST_ASSERT(find_seed_enabled(), "Fill Find from the selection is back to its default (on)");
+    TEST_ASSERT(!settings_has_key(FIND_WRAP_KEY), "wrap-around preference removed");
+    TEST_ASSERT(!settings_get_bool(FIND_WRAP_KEY, false), "wrap-around back to off (notepad.exe)");
+    TEST_ASSERT(settings_get_bool("find_match_case", false), "dialog-only option kept");
+    TEST_ASSERT(!settings_get_bool("find_search_down", true), "direction kept");
+    TEST_ASSERT(!settings_has_key("word_wrap"), "an ordinary preference is reset");
+    char *hist = settings_get_string("find_hist_0", NULL);
+    TEST_ASSERT_STR_EQ("needle", hist ? hist : "(missing)", "find history kept");
+    free(hist);
+    hist = settings_get_string("replace_hist_0", NULL);
+    TEST_ASSERT_STR_EQ("thread", hist ? hist : "(missing)", "replace history kept");
+    free(hist);
+    settings_clear_all();
+}
+
+// Compare a wide result against the expected text, freeing the result
+static bool wide_result_is(wchar_t *got, size_t got_len, const wchar_t *expected) {
+    bool same = got && got_len == wcslen(expected) && wcscmp(got, expected) == 0;
+    free(got);
+    return same;
+}
+
+TEST_CASE(replace_ranges_builds_the_whole_result) {
+    const wchar_t *text = L"cat sat on the cat mat";
+    FindRange two[] = { { 0, 3 }, { 15, 18 } };
+    size_t n = 99;
+    wchar_t *r = find_replace_ranges(text, wcslen(text), two, 2, L"dog", &n);
+    TEST_ASSERT(wide_result_is(r, n, L"dog sat on the dog mat"), "same-length replacement");
+
+    r = find_replace_ranges(text, wcslen(text), two, 2, L"tiger", &n);
+    TEST_ASSERT(wide_result_is(r, n, L"tiger sat on the tiger mat"), "longer replacement");
+
+    r = find_replace_ranges(text, wcslen(text), two, 2, L"", &n);
+    TEST_ASSERT(wide_result_is(r, n, L" sat on the  mat"), "empty replacement deletes");
+
+    FindRange whole[] = { { 0, 22 } };
+    r = find_replace_ranges(text, wcslen(text), whole, 1, L"x", &n);
+    TEST_ASSERT(wide_result_is(r, n, L"x"), "a match covering the whole text");
+
+    FindRange adjacent[] = { { 0, 1 }, { 1, 2 }, { 2, 3 } };
+    r = find_replace_ranges(L"aaa", 3, adjacent, 3, L"bb", &n);
+    TEST_ASSERT(wide_result_is(r, n, L"bbbbbb"), "back-to-back matches");
+
+    FindRange at_end[] = { { 4, 7 } };
+    r = find_replace_ranges(L"the end", 7, at_end, 1, L"start", &n);
+    TEST_ASSERT(wide_result_is(r, n, L"the start"), "a match at the very end");
+
+    r = find_replace_ranges(text, wcslen(text), NULL, 0, L"dog", &n);
+    TEST_ASSERT(wide_result_is(r, n, text), "no matches copies the text");
+
+    r = find_replace_ranges(L"", 0, NULL, 0, L"dog", &n);
+    TEST_ASSERT(wide_result_is(r, n, L""), "empty text");
+}
+
+TEST_CASE(replace_ranges_keeps_line_breaks) {
+    // RichEdit's internal break is a bare CR, one position like any character
+    const wchar_t *text = L"a\rb\rc";
+    FindRange breaks[] = { { 1, 2 }, { 3, 4 } };
+    size_t n = 0;
+    wchar_t *r = find_replace_ranges(text, 5, breaks, 2, L"\r\r", &n);
+    TEST_ASSERT(wide_result_is(r, n, L"a\r\rb\r\rc"), "breaks in and out");
+}
+
+TEST_CASE(replace_ranges_rejects_bad_ranges) {
+    const wchar_t *text = L"abcdef";
+    FindRange overlap[] = { { 0, 3 }, { 2, 4 } };
+    TEST_ASSERT_NULL(find_replace_ranges(text, 6, overlap, 2, L"x", NULL), "overlapping");
+    FindRange backwards[] = { { 3, 4 }, { 0, 1 } };
+    TEST_ASSERT_NULL(find_replace_ranges(text, 6, backwards, 2, L"x", NULL), "out of order");
+    FindRange inverted[] = { { 3, 2 } };
+    TEST_ASSERT_NULL(find_replace_ranges(text, 6, inverted, 1, L"x", NULL), "end before start");
+    FindRange negative[] = { { -1, 2 } };
+    TEST_ASSERT_NULL(find_replace_ranges(text, 6, negative, 1, L"x", NULL), "negative start");
+    FindRange past[] = { { 4, 7 } };
+    TEST_ASSERT_NULL(find_replace_ranges(text, 6, past, 1, L"x", NULL), "past the end");
+    FindRange ok[] = { { 0, 1 } };
+    TEST_ASSERT_NULL(find_replace_ranges(text, 6, ok, 1, NULL, NULL), "no replacement");
+    TEST_ASSERT_NULL(find_replace_ranges(NULL, 6, ok, 1, L"x", NULL), "no text");
+    TEST_ASSERT_NULL(find_replace_ranges(text, 6, NULL, 1, L"x", NULL), "no ranges");
+}
+
 int main(void) {
     TEST_INIT();
 
@@ -130,6 +229,10 @@ int main(void) {
     RUN_TEST(escape_mode_doubles_backslashes);
     RUN_TEST(escape_mode_cap_applies_to_escaped_length);
     RUN_TEST(preference_defaults_on_and_follows_setting);
+    RUN_TEST(reset_clears_find_preferences_but_keeps_search_state);
+    RUN_TEST(replace_ranges_builds_the_whole_result);
+    RUN_TEST(replace_ranges_keeps_line_breaks);
+    RUN_TEST(replace_ranges_rejects_bad_ranges);
 
     TEST_SUMMARY();
     return 0;
