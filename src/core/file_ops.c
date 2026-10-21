@@ -9,6 +9,7 @@
 #include "file_ops.h"
 #include "error.h"
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -108,41 +109,94 @@ static FILE *open_file_utf8(const char *filename, const char *mode) {
 // UTF conversion helpers (portable, no OS dependencies, unit-testable)
 // ---------------------------------------------------------------------------
 
+// Length (1-4) of the well-formed UTF-8 sequence at p, or 0 if there is none
+// there; then *bad_len is the length of its maximal ill-formed subpart (the
+// lead byte plus any continuation bytes that were still acceptable), which is
+// what one U+FFFD replaces - the Unicode-recommended practice, and what GTK
+// and Windows do. Rejects overlongs, surrogates and code points above U+10FFFF
+// via the second-byte ranges of Unicode's table 3-7.
+static size_t utf8_sequence_length(const uint8_t *p, size_t remaining, size_t *bad_len) {
+    uint8_t byte = p[0];
+    if (byte < 0x80)
+        return 1;
+
+    size_t need;
+    uint8_t second_lo = 0x80, second_hi = 0xBF;
+    if (byte >= 0xC2 && byte <= 0xDF) {
+        need = 2;
+    } else if (byte >= 0xE0 && byte <= 0xEF) {
+        need = 3;
+        if (byte == 0xE0)
+            second_lo = 0xA0; // Overlong below U+0800
+        else if (byte == 0xED)
+            second_hi = 0x9F; // Surrogates U+D800-U+DFFF
+    } else if (byte >= 0xF0 && byte <= 0xF4) {
+        need = 4;
+        if (byte == 0xF0)
+            second_lo = 0x90; // Overlong below U+10000
+        else if (byte == 0xF4)
+            second_hi = 0x8F; // Above U+10FFFF
+    } else {
+        *bad_len = 1; // Stray continuation byte, C0/C1 or F5-FF
+        return 0;
+    }
+
+    size_t k = 1;
+    while (k < need && k < remaining) {
+        uint8_t lo = (k == 1) ? second_lo : 0x80;
+        uint8_t hi = (k == 1) ? second_hi : 0xBF;
+        if (p[k] < lo || p[k] > hi)
+            break;
+        k++;
+    }
+    if (k == need)
+        return need;
+    *bad_len = k;
+    return 0;
+}
+
 static bool utf8_is_valid(const uint8_t *data, size_t len) {
     size_t i = 0;
     while (i < len) {
-        uint8_t byte = data[i];
-        size_t remaining = len - i;
-
-        if (byte < 0x80) {
-            i++;
-        } else if ((byte & 0xE0) == 0xC0) {
-            if (remaining < 2 || (data[i + 1] & 0xC0) != 0x80 || byte < 0xC2)
-                return false; // Overlong or truncated
-            i += 2;
-        } else if ((byte & 0xF0) == 0xE0) {
-            if (remaining < 3 || (data[i + 1] & 0xC0) != 0x80 || (data[i + 2] & 0xC0) != 0x80)
-                return false;
-            uint32_t cp = ((uint32_t) (byte & 0x0F) << 12) |
-                          ((uint32_t) (data[i + 1] & 0x3F) << 6) | (data[i + 2] & 0x3F);
-            if (cp < 0x800 || (cp >= 0xD800 && cp <= 0xDFFF))
-                return false; // Overlong or surrogate
-            i += 3;
-        } else if ((byte & 0xF8) == 0xF0) {
-            if (remaining < 4 || (data[i + 1] & 0xC0) != 0x80 || (data[i + 2] & 0xC0) != 0x80 ||
-                (data[i + 3] & 0xC0) != 0x80)
-                return false;
-            uint32_t cp = ((uint32_t) (byte & 0x07) << 18) |
-                          ((uint32_t) (data[i + 1] & 0x3F) << 12) |
-                          ((uint32_t) (data[i + 2] & 0x3F) << 6) | (data[i + 3] & 0x3F);
-            if (cp < 0x10000 || cp > 0x10FFFF)
-                return false;
-            i += 4;
-        } else {
+        size_t bad_len = 0;
+        size_t n = utf8_sequence_length(data + i, len - i, &bad_len);
+        if (n == 0)
             return false;
-        }
+        i += n;
     }
     return true;
+}
+
+// Copy UTF-8 bytes into a NUL-terminated string that is guaranteed valid,
+// replacing each ill-formed subpart with U+FFFD. *lossy is set if anything was
+// replaced, since the original bytes then cannot be written back.
+static char *utf8_sanitize(const uint8_t *data, size_t len, bool *lossy) {
+    // Worst case: every byte is a lone bad byte and becomes 3 (EF BF BD)
+    if (len > (SIZE_MAX - 1) / 3)
+        return NULL;
+    char *out = malloc(len * 3 + 1);
+    if (!out)
+        return NULL;
+
+    size_t out_pos = 0;
+    size_t i = 0;
+    while (i < len) {
+        size_t bad_len = 0;
+        size_t n = utf8_sequence_length(data + i, len - i, &bad_len);
+        if (n > 0) {
+            memcpy(out + out_pos, data + i, n);
+            out_pos += n;
+            i += n;
+        } else {
+            out[out_pos++] = (char) 0xEF;
+            out[out_pos++] = (char) 0xBF;
+            out[out_pos++] = (char) 0xBD;
+            i += bad_len;
+            *lossy = true;
+        }
+    }
+    out[out_pos] = '\0';
+    return out;
 }
 
 // Append a code point to a UTF-8 buffer, returns bytes written
@@ -210,11 +264,15 @@ static void write_u16(uint8_t *p, uint16_t value, bool big_endian) {
     }
 }
 
-// Convert UTF-16 bytes (without BOM) to a NUL-terminated UTF-8 string
-static char *utf16_to_utf8(const uint8_t *data, size_t byte_len, bool big_endian) {
+// Convert UTF-16 bytes (without BOM) to a NUL-terminated UTF-8 string.
+// An unpaired surrogate, or a final byte left over from an odd byte count,
+// becomes U+FFFD and sets *lossy: UTF-8 cannot carry either, so a save could
+// not write the original bytes back.
+static char *utf16_to_utf8(const uint8_t *data, size_t byte_len, bool big_endian, bool *lossy) {
     size_t unit_count = byte_len / 2;
-    // Worst case: every UTF-16 unit becomes 3 UTF-8 bytes (surrogate pairs: 2 units -> 4 bytes)
-    char *out = malloc(unit_count * 3 + 1);
+    // Worst case: every UTF-16 unit becomes 3 UTF-8 bytes (surrogate pairs:
+    // 2 units -> 4 bytes), plus 3 for a dangling odd byte
+    char *out = malloc(unit_count * 3 + 3 + 1);
     if (!out)
         return NULL;
 
@@ -231,10 +289,12 @@ static char *utf16_to_utf8(const uint8_t *data, size_t byte_len, bool big_endian
                 i += 2;
             } else {
                 cp = 0xFFFD; // Unpaired high surrogate
+                *lossy = true;
                 i++;
             }
         } else if (unit >= 0xD800 && unit <= 0xDFFF) {
             cp = 0xFFFD; // Unpaired surrogate
+            *lossy = true;
             i++;
         } else {
             cp = unit;
@@ -244,13 +304,18 @@ static char *utf16_to_utf8(const uint8_t *data, size_t byte_len, bool big_endian
         out_pos += utf8_encode(cp, out + out_pos);
     }
 
+    if (byte_len % 2 != 0) {
+        out_pos += utf8_encode(0xFFFD, out + out_pos); // Half a code unit
+        *lossy = true;
+    }
+
     out[out_pos] = '\0';
     return out;
 }
 
-// Convert a NUL-terminated UTF-8 string to UTF-16 bytes (BOM included).
-// Returns malloc'd buffer, sets *out_len to the byte length.
-static uint8_t *utf8_to_utf16(const char *utf8, bool big_endian, size_t *out_len) {
+// Convert a NUL-terminated UTF-8 string to UTF-16 bytes, with a BOM first
+// when with_bom. Returns malloc'd buffer, sets *out_len to the byte length.
+static uint8_t *utf8_to_utf16(const char *utf8, bool big_endian, bool with_bom, size_t *out_len) {
     size_t len = strlen(utf8);
     // Worst case: every UTF-8 byte becomes one UTF-16 unit, plus BOM
     uint8_t *out = malloc(len * 2 + 4);
@@ -258,8 +323,10 @@ static uint8_t *utf8_to_utf16(const char *utf8, bool big_endian, size_t *out_len
         return NULL;
 
     size_t out_pos = 0;
-    write_u16(out, 0xFEFF, big_endian); // BOM
-    out_pos = 2;
+    if (with_bom) {
+        write_u16(out, 0xFEFF, big_endian);
+        out_pos = 2;
+    }
 
     size_t i = 0;
     while (i < len) {
@@ -279,44 +346,207 @@ static uint8_t *utf8_to_utf16(const char *utf8, bool big_endian, size_t *out_len
     return out;
 }
 
-// Convert system code page bytes to UTF-8 (used for files that are not
-// valid UTF-8). On non-Windows platforms Latin-1 is assumed.
-static char *ansi_to_utf8(const uint8_t *data, size_t len) {
+// ---------------------------------------------------------------------------
+// ANSI conversion
+// ---------------------------------------------------------------------------
+
 #ifdef _WIN32
-    int wide_len = MultiByteToWideChar(CP_ACP, 0, (const char *) data, (int) len, NULL, 0);
-    if (wide_len <= 0)
-        return NULL;
-    wchar_t *wide = malloc((size_t) wide_len * sizeof(wchar_t));
+// The code page npad reads and writes "ANSI" files in: the system's ANSI code
+// page, except when that is UTF-8 (Windows' "Beta: Use Unicode UTF-8 for
+// worldwide language support"). A file only reaches the ANSI branch because it
+// is NOT valid UTF-8, so decoding it as UTF-8 would turn every such byte into
+// U+FFFD and the save would write EF BF BD over each one. The system locale's
+// legacy ANSI code page is what such files were written in (1252 if it has
+// none).
+static UINT ansi_code_page(void) {
+    UINT acp = GetACP();
+    if (acp != CP_UTF8)
+        return acp;
+    DWORD legacy = 0;
+    if (GetLocaleInfoW(LOCALE_SYSTEM_DEFAULT, LOCALE_IDEFAULTANSICODEPAGE | LOCALE_RETURN_NUMBER,
+                       (LPWSTR) &legacy, (int) (sizeof(legacy) / sizeof(WCHAR))) > 0 &&
+        legacy != 0 && legacy != CP_UTF8 && IsValidCodePage((UINT) legacy)) {
+        return (UINT) legacy;
+    }
+    return 1252;
+}
+
+// Would saving this text in code page cp (as utf8_to_ansi does) write back
+// exactly these bytes? False on any doubt, including running out of memory.
+static bool ansi_roundtrips(UINT cp, const wchar_t *wide, int wide_len, const uint8_t *data,
+                            size_t len) {
+    BOOL used_default = FALSE;
+    int n =
+        WideCharToMultiByte(cp, WC_NO_BEST_FIT_CHARS, wide, wide_len, NULL, 0, NULL, &used_default);
+    if (n <= 0 || (size_t) n != len || used_default)
+        return false;
+    char *back = malloc((size_t) n);
+    if (!back)
+        return false;
+    bool same =
+        WideCharToMultiByte(cp, WC_NO_BEST_FIT_CHARS, wide, wide_len, back, n, NULL, NULL) == n &&
+        memcmp(back, data, len) == 0;
+    free(back);
+    return same;
+}
+
+// Decode bytes in a double-byte code page one line at a time, so an invalid
+// lead byte at the end of a line cannot swallow the CR or LF after it and
+// merge two lines. In the DBCS code pages (932, 936, 949, 950) a trail byte
+// is always 0x40 or above, so a CR or LF byte is never part of a valid
+// character, and each byte yields at most one UTF-16 unit. NULL on failure.
+static wchar_t *ansi_decode_by_line(UINT cp, const uint8_t *data, size_t len, int *out_units) {
+    wchar_t *wide = malloc(len * sizeof(wchar_t));
     if (!wide)
         return NULL;
-    MultiByteToWideChar(CP_ACP, 0, (const char *) data, (int) len, wide, wide_len);
+    size_t pos = 0;
+    size_t i = 0;
+    while (i < len) {
+        if (data[i] == '\r' || data[i] == '\n') {
+            wide[pos++] = (wchar_t) data[i++];
+            continue;
+        }
+        size_t start = i;
+        while (i < len && data[i] != '\r' && data[i] != '\n')
+            i++;
+        int n = MultiByteToWideChar(cp, 0, (const char *) data + start, (int) (i - start),
+                                    wide + pos, (int) (len - pos));
+        if (n <= 0) {
+            free(wide);
+            return NULL;
+        }
+        pos += (size_t) n;
+    }
+    *out_units = (int) pos;
+    return wide;
+}
+#else
+// Windows-1252 bytes 0x80-0x9F. Elsewhere it matches Latin-1 (U+00A0-U+00FF
+// are the same bytes), but these hold the curly quotes, dashes and euro sign
+// that Windows "ANSI" text is full of; read as Latin-1 they would become
+// invisible C1 controls. The five bytes 1252 leaves undefined map to the C1
+// control of the same value, as Windows does, so every byte round-trips.
+static const uint16_t cp1252_80_9f[32] = { 0x20AC, 0x0081, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020,
+                                           0x2021, 0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008D,
+                                           0x017D, 0x008F, 0x0090, 0x2018, 0x2019, 0x201C, 0x201D,
+                                           0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A,
+                                           0x0153, 0x009D, 0x017E, 0x0178 };
 
-    int utf8_len = WideCharToMultiByte(CP_UTF8, 0, wide, wide_len, NULL, 0, NULL, NULL);
-    char *out = malloc((size_t) utf8_len + 1);
-    if (!out) {
-        free(wide);
+// The Windows-1252 byte for a code point, or false if 1252 has none
+static bool cp1252_from_unicode(uint32_t cp, uint8_t *byte) {
+    if (cp < 0x80 || (cp >= 0xA0 && cp <= 0xFF)) {
+        *byte = (uint8_t) cp;
+        return true;
+    }
+    for (size_t k = 0; k < sizeof(cp1252_80_9f) / sizeof(cp1252_80_9f[0]); k++) {
+        if (cp1252_80_9f[k] == cp) {
+            *byte = (uint8_t) (0x80 + k);
+            return true;
+        }
+    }
+    return false;
+}
+#endif
+
+// Convert "ANSI" bytes (see TextEncoding) to UTF-8, for files that are not
+// valid UTF-8. Sets *lossy when the decoded text would not save back to the
+// same bytes (an invalid sequence in a multi-byte code page). Returns NULL and
+// sets the error on failure - never an empty string for a non-empty file,
+// which the editor would then save over the original.
+static char *ansi_to_utf8(const uint8_t *data, size_t len, bool *lossy) {
+#ifdef _WIN32
+    if (len == 0) {
+        char *empty = malloc(1);
+        if (empty)
+            empty[0] = '\0';
+        return empty;
+    }
+    // Windows' conversions count in int, so beyond INT_MAX they fail outright
+    if (len > (size_t) INT_MAX) {
+        set_error("The file is too large to convert from ANSI");
         return NULL;
     }
-    WideCharToMultiByte(CP_UTF8, 0, wide, wide_len, out, utf8_len, NULL, NULL);
-    out[utf8_len] = '\0';
+
+    UINT cp = ansi_code_page();
+    int wide_len = MultiByteToWideChar(cp, 0, (const char *) data, (int) len, NULL, 0);
+    if (wide_len <= 0) {
+        set_error("Failed to convert file contents from ANSI");
+        return NULL;
+    }
+    wchar_t *wide = malloc((size_t) wide_len * sizeof(wchar_t));
+    if (!wide) {
+        set_error("Out of memory");
+        return NULL;
+    }
+    if (MultiByteToWideChar(cp, 0, (const char *) data, (int) len, wide, wide_len) != wide_len) {
+        free(wide);
+        set_error("Failed to convert file contents from ANSI");
+        return NULL;
+    }
+
+    if (!ansi_roundtrips(cp, wide, wide_len, data, len)) {
+        *lossy = true;
+        CPINFO cp_info;
+        if (GetCPInfo(cp, &cp_info) && cp_info.MaxCharSize == 2) {
+            int line_units = 0;
+            wchar_t *by_line = ansi_decode_by_line(cp, data, len, &line_units);
+            if (by_line) {
+                free(wide);
+                wide = by_line;
+                wide_len = line_units;
+            }
+        }
+    }
+
+    // wide_len is at least 1 here: the input is non-empty and every decode
+    // above yields a unit per character
+    char *out = NULL;
+    int utf8_len = WideCharToMultiByte(CP_UTF8, 0, wide, wide_len, NULL, 0, NULL, NULL);
+    if (utf8_len <= 0) {
+        // The UTF-8 form exceeds INT_MAX (a 1.2-2 GB file of high bytes)
+        set_error("The file is too large to convert from ANSI");
+    } else {
+        out = malloc((size_t) utf8_len + 1);
+        if (!out) {
+            set_error("Out of memory");
+        } else if (WideCharToMultiByte(CP_UTF8, 0, wide, wide_len, out, utf8_len, NULL, NULL) !=
+                   utf8_len) {
+            set_error("Failed to convert file contents from ANSI");
+            free(out);
+            out = NULL;
+        } else {
+            out[utf8_len] = '\0';
+        }
+    }
     free(wide);
     return out;
 #else
-    // Latin-1 fallback: each byte maps to the same code point
-    char *out = malloc(len * 2 + 1);
-    if (!out)
+    (void) lossy; // Every Windows-1252 byte decodes to a character that encodes back to it
+    if (len > (SIZE_MAX - 1) / 3) {
+        set_error("The file is too large to convert from ANSI");
         return NULL;
+    }
+    // Worst case 3 UTF-8 bytes per byte (0x80 is U+20AC)
+    char *out = malloc(len * 3 + 1);
+    if (!out) {
+        set_error("Out of memory");
+        return NULL;
+    }
     size_t out_pos = 0;
     for (size_t i = 0; i < len; i++) {
-        out_pos += utf8_encode(data[i], out + out_pos);
+        uint8_t b = data[i];
+        uint32_t cp = (b >= 0x80 && b <= 0x9F) ? cp1252_80_9f[b - 0x80] : b;
+        out_pos += utf8_encode(cp, out + out_pos);
     }
     out[out_pos] = '\0';
     return out;
 #endif
 }
 
-// Convert UTF-8 to system code page bytes for saving ANSI files.
-// Unmappable characters degrade to the system default character.
+// Convert UTF-8 to "ANSI" bytes for saving ANSI files. Characters the code
+// page lacks become '?' - never a "best fit" look-alike (Windows would
+// otherwise write U+221E INFINITY as '8' and U+0142 as 'l', silently changing
+// the meaning), so this writes exactly what file_ansi_is_lossy warned about.
 static uint8_t *utf8_to_ansi(const char *utf8, size_t *out_len) {
 #ifdef _WIN32
     int wide_len = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
@@ -327,14 +557,24 @@ static uint8_t *utf8_to_ansi(const char *utf8, size_t *out_len) {
         return NULL;
     MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wide, wide_len);
 
-    int ansi_len = WideCharToMultiByte(CP_ACP, 0, wide, -1, NULL, 0, NULL, NULL);
+    UINT cp = ansi_code_page();
+    int ansi_len = WideCharToMultiByte(cp, WC_NO_BEST_FIT_CHARS, wide, -1, NULL, 0, NULL, NULL);
+    if (ansi_len <= 0) {
+        free(wide);
+        return NULL;
+    }
     uint8_t *out = malloc((size_t) ansi_len);
     if (!out) {
         free(wide);
         return NULL;
     }
-    WideCharToMultiByte(CP_ACP, 0, wide, -1, (char *) out, ansi_len, NULL, NULL);
+    int written =
+        WideCharToMultiByte(cp, WC_NO_BEST_FIT_CHARS, wide, -1, (char *) out, ansi_len, NULL, NULL);
     free(wide);
+    if (written != ansi_len) {
+        free(out);
+        return NULL;
+    }
     *out_len = (size_t) ansi_len - 1; // Exclude NUL
     return out;
 #else
@@ -346,7 +586,8 @@ static uint8_t *utf8_to_ansi(const char *utf8, size_t *out_len) {
     size_t i = 0;
     while (i < len) {
         uint32_t cp = utf8_decode((const uint8_t *) utf8, len, &i);
-        out[out_pos++] = (cp < 0x100) ? (uint8_t) cp : '?';
+        uint8_t byte;
+        out[out_pos++] = cp1252_from_unicode(cp, &byte) ? byte : (uint8_t) '?';
     }
     out[out_pos] = '\0';
     *out_len = out_pos;
@@ -358,8 +599,8 @@ bool file_ansi_is_lossy(const char *utf8) {
     if (!utf8)
         return false;
 #ifdef _WIN32
-    // Round-trip through the system code page and see whether any character
-    // had to fall back to the default character
+    // Convert exactly as utf8_to_ansi does and see whether any character had
+    // to fall back to the default character
     int wide_len = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
     if (wide_len <= 0)
         return false;
@@ -369,15 +610,17 @@ bool file_ansi_is_lossy(const char *utf8) {
     MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wide, wide_len);
 
     BOOL used_default = FALSE;
-    WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, wide, -1, NULL, 0, NULL, &used_default);
+    WideCharToMultiByte(ansi_code_page(), WC_NO_BEST_FIT_CHARS, wide, -1, NULL, 0, NULL,
+                        &used_default);
     free(wide);
     return used_default != FALSE;
 #else
-    // Latin-1 model (matches utf8_to_ansi): anything above U+00FF is lost
+    // Windows-1252 model (matches utf8_to_ansi)
     size_t len = strlen(utf8);
     size_t i = 0;
     while (i < len) {
-        if (utf8_decode((const uint8_t *) utf8, len, &i) > 0xFF) {
+        uint8_t byte;
+        if (!cp1252_from_unicode(utf8_decode((const uint8_t *) utf8, len, &i), &byte)) {
             return true;
         }
     }
@@ -385,26 +628,38 @@ bool file_ansi_is_lossy(const char *utf8) {
 #endif
 }
 
-// Heuristic for UTF-16 files without a BOM: mostly-ASCII text has NUL
-// bytes in every other position
+// Heuristic for UTF-16 files without a BOM. Text that is mostly ASCII or
+// Latin-1 has a zero high byte in most code units: the odd bytes for little
+// endian, the even ones for big endian: over 40% of the units must have one.
+// Units whose LOW byte is zero instead (U+0100, U+4E00, ...) are fine while
+// they are fewer, and only decide the byte order. A zero code unit never
+// appears in text but is common in binary data of this shape, so more than a
+// few of those rule UTF-16 out. An odd final byte is left to the decoder,
+// which flags it.
 static bool looks_like_utf16(const uint8_t *data, size_t len, bool *big_endian) {
-    if (len < 4 || (len % 2) != 0)
+    if (len < 4)
         return false;
 
     size_t sample = len < 512 ? len : 512;
     size_t pairs = sample / 2;
-    size_t even_nuls = 0, odd_nuls = 0;
+    size_t odd_zero = 0, even_zero = 0, zero_units = 0;
     for (size_t p = 0; p < pairs; p++) {
-        if (data[p * 2] == 0)
-            even_nuls++;
-        if (data[p * 2 + 1] == 0)
-            odd_nuls++;
+        bool even_is_zero = data[p * 2] == 0;
+        bool odd_is_zero = data[p * 2 + 1] == 0;
+        if (even_is_zero && odd_is_zero)
+            zero_units++;
+        else if (odd_is_zero)
+            odd_zero++; // U+0001-U+00FF in little endian
+        else if (even_is_zero)
+            even_zero++; // U+0001-U+00FF in big endian
     }
-    if (odd_nuls > pairs * 4 / 10 && even_nuls < pairs / 10) {
-        *big_endian = false; // ASCII chars in low byte -> little endian
+    if (zero_units * 10 >= pairs)
+        return false;
+    if (odd_zero * 10 > pairs * 4 && even_zero < odd_zero) {
+        *big_endian = false;
         return true;
     }
-    if (even_nuls > pairs * 4 / 10 && odd_nuls < pairs / 10) {
+    if (even_zero * 10 > pairs * 4 && odd_zero < even_zero) {
         *big_endian = true;
         return true;
     }
@@ -433,11 +688,23 @@ LineEnding file_detect_line_ending(const char *text) {
 
     if (crlf + lf + cr == 0)
         return NPAD_DEFAULT_LINE_ENDING; // Nothing to detect: the platform's own
-    if (lf > crlf && lf > cr)
+
+    // The majority style wins; the editor holds one kind of line break, so a
+    // file with mixed endings is saved in that style throughout. A tie goes
+    // to a style the file actually uses: the platform's own if it is one of
+    // the tied, else CRLF, LF, CR in that order. Never to one that is absent
+    // ("a\nb\r" must not become CRLF).
+    size_t max = crlf > lf ? crlf : lf;
+    if (cr > max)
+        max = cr;
+    const size_t counts[3] = { crlf, lf, cr }; // Indexed by LineEnding
+    if (counts[NPAD_DEFAULT_LINE_ENDING] == max)
+        return NPAD_DEFAULT_LINE_ENDING;
+    if (crlf == max)
+        return NPAD_EOL_CRLF;
+    if (lf == max)
         return NPAD_EOL_LF;
-    if (cr > crlf && cr > lf)
-        return NPAD_EOL_CR;
-    return NPAD_EOL_CRLF; // Majority CRLF (or a tie)
+    return NPAD_EOL_CR;
 }
 
 char *file_convert_line_endings(const char *text, LineEnding target) {
@@ -709,33 +976,48 @@ char *file_read_text_ex(const char *filename, TextFileInfo *info) {
     TextEncoding encoding;
     char *utf8 = NULL;
     bool truncated = false;
+    bool lossy = false;
+    bool no_bom = false;
+    g_last_error[0] = '\0'; // So a converter's own reason is not overwritten below
 
     if (size >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF) {
+        // The BOM is taken at its word, as notepad.exe does, but the bytes
+        // after it are not: an invalid one is shown as U+FFFD and flagged,
+        // since a save would write EF BF BD in its place
         encoding = NPAD_ENC_UTF8_BOM;
-        utf8 = malloc(size - 3 + 1);
-        if (utf8) {
-            memcpy(utf8, raw + 3, size - 3);
-            utf8[size - 3] = '\0';
+        if (utf8_is_valid(raw + 3, size - 3)) {
+            utf8 = malloc(size - 3 + 1);
+            if (utf8) {
+                memcpy(utf8, raw + 3, size - 3);
+                utf8[size - 3] = '\0';
+            }
+        } else {
+            utf8 = utf8_sanitize(raw + 3, size - 3, &lossy);
         }
     } else if (size >= 2 && raw[0] == 0xFF && raw[1] == 0xFE) {
         encoding = NPAD_ENC_UTF16_LE;
-        utf8 = utf16_to_utf8(raw + 2, size - 2, false);
+        utf8 = utf16_to_utf8(raw + 2, size - 2, false, &lossy);
     } else if (size >= 2 && raw[0] == 0xFE && raw[1] == 0xFF) {
         encoding = NPAD_ENC_UTF16_BE;
-        utf8 = utf16_to_utf8(raw + 2, size - 2, true);
+        utf8 = utf16_to_utf8(raw + 2, size - 2, true, &lossy);
     } else {
         bool big_endian;
         if (looks_like_utf16(raw, size, &big_endian)) {
             encoding = big_endian ? NPAD_ENC_UTF16_BE : NPAD_ENC_UTF16_LE;
-            utf8 = utf16_to_utf8(raw, size, big_endian);
+            no_bom = true; // Saved back without one, so the bytes round-trip
+            utf8 = utf16_to_utf8(raw, size, big_endian, &lossy);
         } else if (utf8_is_valid(raw, size)) {
+            // No length weighting, as in notepad.exe: a short GBK, UHC or Big5
+            // file whose bytes happen to form valid UTF-8 opens as UTF-8.
+            // Preferring the ANSI code page instead would misdetect genuine
+            // short UTF-8 such as "café" on CJK systems.
             encoding = NPAD_ENC_UTF8;
             truncated = raw_has_embedded_nul(raw, size, encoding);
             utf8 = (char *) raw;
             raw = NULL; // Ownership transferred (check it BEFORE handing it over)
         } else {
             encoding = NPAD_ENC_ANSI;
-            utf8 = ansi_to_utf8(raw, size);
+            utf8 = ansi_to_utf8(raw, size, &lossy);
         }
     }
 
@@ -745,14 +1027,18 @@ char *file_read_text_ex(const char *filename, TextFileInfo *info) {
     free(raw);
 
     if (!utf8) {
-        set_error("Failed to convert file contents");
+        if (g_last_error[0] == '\0')
+            set_error("Failed to convert file contents");
         return NULL;
     }
 
     if (info) {
+        memset(info, 0, sizeof(*info));
         info->encoding = encoding;
         info->line_ending = file_detect_line_ending(utf8);
         info->truncated = truncated;
+        info->decode_lossy = lossy;
+        info->utf16_no_bom = no_bom;
     }
 
     return utf8;
@@ -833,7 +1119,7 @@ bool file_write_binary(const char *filename, const void *data, size_t size) {
 // Convert UTF-8 content to the target encoding/line endings as raw bytes.
 // Returns malloc'd buffer, sets *out_len.
 static uint8_t *encode_text(const char *utf8_content, const TextFileInfo *info, size_t *out_len) {
-    TextFileInfo defaults = { NPAD_ENC_UTF8, NPAD_DEFAULT_LINE_ENDING, false };
+    TextFileInfo defaults = { .encoding = NPAD_ENC_UTF8, .line_ending = NPAD_DEFAULT_LINE_ENDING };
     if (!info)
         info = &defaults;
 
@@ -865,11 +1151,11 @@ static uint8_t *encode_text(const char *utf8_content, const TextFileInfo *info, 
         }
 
         case NPAD_ENC_UTF16_LE:
-            bytes = utf8_to_utf16(converted, false, &len);
+            bytes = utf8_to_utf16(converted, false, !info->utf16_no_bom, &len);
             break;
 
         case NPAD_ENC_UTF16_BE:
-            bytes = utf8_to_utf16(converted, true, &len);
+            bytes = utf8_to_utf16(converted, true, !info->utf16_no_bom, &len);
             break;
 
         case NPAD_ENC_ANSI:
@@ -982,6 +1268,9 @@ bool file_looks_binary(const char *filename) {
         return false; // UTF-8 BOM
     if (n >= 2 && ((buf[0] == 0xFF && buf[1] == 0xFE) || (buf[0] == 0xFE && buf[1] == 0xFF)))
         return false; // UTF-16 LE/BE BOM
+    bool big_endian;
+    if (looks_like_utf16(buf, n, &big_endian))
+        return false; // UTF-16 without a BOM: the same test the decoder applies
 
     size_t control = 0;
     for (size_t i = 0; i < n; i++) {

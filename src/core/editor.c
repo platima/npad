@@ -330,6 +330,20 @@ static void load_default_file_info(TextFileInfo *info) {
 
     info->encoding = (TextEncoding) encoding;
     info->line_ending = (LineEnding) line_ending;
+    // A new document is nobody's fragment, and is written in standard form
+    info->truncated = false;
+    info->decode_lossy = false;
+    info->utf16_no_bom = false;
+}
+
+// The user chose an encoding (status bar, menu or the Save As picker). A
+// deliberate choice gets that encoding's standard form, so a BOM-less UTF-16
+// file converted to another encoding and back gains a BOM, as in notepad.exe;
+// keeping the same encoding keeps the file's own form.
+static void editor_choose_encoding(TextEncoding encoding) {
+    if (g_editor.file_info.encoding != encoding)
+        g_editor.file_info.utf16_no_bom = false;
+    g_editor.file_info.encoding = encoding;
 }
 
 // A file with no line breaks has nothing to detect, so it takes the user's
@@ -544,6 +558,21 @@ static bool editor_confirm_lossy_ansi(const char *content) {
                                true);
 }
 
+// Ask before saving over a file npad could not decode exactly (see
+// TextFileInfo.decode_lossy): its invalid bytes are replacement characters in
+// the editor, so the save would change them. Saving elsewhere needs no
+// question - the original is not touched. Returns false if the user declines.
+static bool editor_confirm_lossy_decode(void) {
+    if (!g_editor.file_info.decode_lossy)
+        return true;
+    char message[512];
+    snprintf(message, sizeof(message),
+             "Some bytes in this file are not valid in its %s encoding, so npad cannot save "
+             "them back exactly as they were.\n\nSave over the original anyway?",
+             file_encoding_name(g_editor.file_info.encoding));
+    return ui_show_message_box(g_editor.main_window, "npad", message, true);
+}
+
 // --- External change detection --------------------------------------------
 //
 // Checked when the window is activated rather than on a timer: that is the
@@ -617,7 +646,7 @@ bool editor_save_file(void) {
             return false; // User cancelled
         }
 
-        g_editor.file_info.encoding = params.encoding; // From the dialog's picker
+        editor_choose_encoding(params.encoding); // From the dialog's picker
         bool result = editor_save_file_as(filename);
         free(filename);
         return result;
@@ -647,11 +676,14 @@ bool editor_save_file(void) {
         if (!filename)
             return false; // Cancelled - original still intact, which is the point
 
-        g_editor.file_info.encoding = params.encoding;
+        editor_choose_encoding(params.encoding);
         bool saved = editor_save_file_as(filename);
         free(filename);
         return saved;
     }
+
+    if (!editor_confirm_lossy_decode())
+        return false; // Declined - the original keeps its bytes
 
     char *content = ui_get_text(g_editor.main_window);
     if (!content)
@@ -672,6 +704,8 @@ bool editor_save_file(void) {
     free(content);
 
     if (success) {
+        // The file now holds exactly the text shown, so it decodes cleanly
+        g_editor.file_info.decode_lossy = false;
         editor_set_modified(false);
         editor_clear_session(); // Saved work no longer needs recovery
     } else {
@@ -716,6 +750,7 @@ bool editor_save_file_as(const char *filename) {
         // Whatever was loaded has now been written in full to THIS file, so it
         // is no longer a fragment of something larger and Save may overwrite it
         g_editor.file_info.truncated = false;
+        g_editor.file_info.decode_lossy = false; // Likewise: THIS file holds the text as shown
         file_get_stamp(new_path, &g_editor.file_stamp);
         g_editor.suppress_change_prompt = false; // A different file, fresh slate
 
@@ -804,7 +839,7 @@ LineEnding editor_get_line_ending(void) {
 void editor_set_encoding(TextEncoding encoding) {
     if (g_editor.file_info.encoding == encoding)
         return;
-    g_editor.file_info.encoding = encoding;
+    editor_choose_encoding(encoding);
     editor_set_modified(true);
     editor_update_status_info();
 }
@@ -963,7 +998,7 @@ bool editor_handle_event(const UIEvent *event) {
 
             char *filename = ui_show_save_dialog(g_editor.main_window, &params);
             if (filename) {
-                g_editor.file_info.encoding = params.encoding; // From the dialog's picker
+                editor_choose_encoding(params.encoding); // From the dialog's picker
                 editor_save_file_as(filename);
                 free(filename);
             }
@@ -986,7 +1021,10 @@ bool editor_handle_event(const UIEvent *event) {
                 // diverts it to Save As, and a modal file dialog raised by a
                 // timer is exactly what this path avoids. The snapshot still
                 // protects the text, and a manual save gets the explanation.
-                bool skip = g_editor.file_info.truncated;
+                // So is one npad could not decode exactly: a timer must not
+                // write replacement characters over the original bytes
+                // without the question a manual save asks.
+                bool skip = g_editor.file_info.truncated || g_editor.file_info.decode_lossy;
                 if (!skip && g_editor.file_info.encoding == NPAD_ENC_ANSI && g_editor.main_window) {
                     char *content = ui_get_text(g_editor.main_window);
                     if (content) {
