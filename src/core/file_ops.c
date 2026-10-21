@@ -93,12 +93,17 @@ static FILE *open_file_utf8(const char *filename, const char *mode) {
 #ifdef _WIN32
     wchar_t wpath[NPAD_MAX_PATH_LEN];
     wchar_t wmode[8];
-    int path_len = MultiByteToWideChar(CP_UTF8, 0, filename, -1, wpath, NPAD_MAX_PATH_LEN);
+    // MB_ERR_INVALID_CHARS: a path that is not UTF-8 (ANSI bytes from some
+    // caller) must fail here, visibly, rather than become U+FFFD and fail as
+    // "not found" - or, through a narrow fopen, name some other file
+    int path_len =
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, filename, -1, wpath, NPAD_MAX_PATH_LEN);
     int mode_len = MultiByteToWideChar(CP_UTF8, 0, mode, -1, wmode, 8);
     if (path_len > 0 && mode_len > 0) {
         return _wfopen(wpath, wmode);
     }
-    return fopen(filename, mode); // Fallback for unconvertible paths
+    errno = (GetLastError() == ERROR_NO_UNICODE_TRANSLATION) ? EILSEQ : ENAMETOOLONG;
+    return NULL;
 #else
     return fopen(filename, mode);
 #endif

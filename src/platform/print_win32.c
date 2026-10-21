@@ -261,7 +261,7 @@ static void expand_codes(const wchar_t *src, wchar_t *out, size_t out_cap, int p
         switch (*p) {
             case L'f':
             case L'F':
-                _snwprintf(buf, 127, L"%s", title ? title : L"Untitled");
+                _snwprintf(buf, 127, L"%ls", title ? title : L"Untitled");
                 break;
             case L'p':
             case L'P':

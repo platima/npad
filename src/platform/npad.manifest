@@ -6,10 +6,34 @@
     name="npad"
     type="win32" />
   <description>npad - Lightweight Text Editor</description>
+  <!-- Windows 10 and 11 (one GUID covers both). Without it Windows treats npad
+       as a Windows 8 app: version queries lie and newer behaviour is withheld. -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+  <!-- asInvoker: never elevate, and never let UAC's installer detection
+       guess. The machine-wide file type registration elevates on purpose,
+       through its own runas relaunch. -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
   <application xmlns="urn:schemas-microsoft-com:asm.v3">
     <windowsSettings>
       <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/PM</dpiAware>
       <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <!-- Paths past MAX_PATH work when Windows has long paths enabled
+           (LongPathsEnabled). The document path's buffers (dialogs, drops,
+           the command line, file_ops) are sized for them or fail cleanly
+           rather than cut a path short. activeCodePage is deliberately
+           absent: UTF-8 there would change CP_ACP, which reads and writes
+           ANSI files. -->
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
     </windowsSettings>
   </application>
   <dependency>

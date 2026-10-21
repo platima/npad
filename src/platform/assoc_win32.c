@@ -175,11 +175,11 @@ static bool reg_key_exists(HKEY root, const wchar_t *subkey) {
 // user removed read as registered again after a reinstall.
 static bool type_is_registered(HKEY root, const AssocType *t) {
     wchar_t sub[256];
-    _snwprintf(sub, 255, L"%s\\%s\\OpenWithProgids", CLASSES, t->ext);
+    _snwprintf(sub, 255, L"%ls\\%ls\\OpenWithProgids", CLASSES, t->ext);
     sub[255] = L'\0';
     if (!reg_value_exists(root, sub, t->progid))
         return false;
-    _snwprintf(sub, 255, L"%s\\%s\\shell\\open\\command", CLASSES, t->progid);
+    _snwprintf(sub, 255, L"%ls\\%ls\\shell\\open\\command", CLASSES, t->progid);
     sub[255] = L'\0';
     return reg_key_exists(root, sub);
 }
@@ -192,20 +192,20 @@ static bool type_register(HKEY root, const AssocType *t) {
     wchar_t sub[256], data[MAX_PATH + 16];
     bool ok = true;
 
-    _snwprintf(sub, 255, L"%s\\%s", CLASSES, t->progid);
+    _snwprintf(sub, 255, L"%ls\\%ls", CLASSES, t->progid);
     sub[255] = L'\0';
     ok &= reg_set_sz(root, sub, NULL, t->friendly);
 
-    _snwprintf(sub, 255, L"%s\\%s\\DefaultIcon", CLASSES, t->progid);
+    _snwprintf(sub, 255, L"%ls\\%ls\\DefaultIcon", CLASSES, t->progid);
     sub[255] = L'\0';
-    _snwprintf(data, MAX_PATH + 15, L"%s,0", exe);
+    _snwprintf(data, MAX_PATH + 15, L"%ls,0", exe);
     data[MAX_PATH + 15] = L'\0';
     ok &= reg_set_sz(root, sub, NULL, data);
 
-    _snwprintf(sub, 255, L"%s\\%s\\shell\\open\\command", CLASSES, t->progid);
+    _snwprintf(sub, 255, L"%ls\\%ls\\shell\\open\\command", CLASSES, t->progid);
     sub[255] = L'\0';
     // Always quoted: an unquoted %1 breaks on any path containing a space
-    _snwprintf(data, MAX_PATH + 15, L"\"%s\" \"%%1\"", exe);
+    _snwprintf(data, MAX_PATH + 15, L"\"%ls\" \"%%1\"", exe);
     data[MAX_PATH + 15] = L'\0';
     ok &= reg_set_sz(root, sub, NULL, data);
 
@@ -213,7 +213,7 @@ static bool type_register(HKEY root, const AssocType *t) {
     // OpenWithProgids entry (conventionally an empty string value named after
     // the ProgID) lists npad in Open With. The extension's own default value
     // is deliberately left alone - see the header.
-    _snwprintf(sub, 255, L"%s\\%s\\OpenWithProgids", CLASSES, t->ext);
+    _snwprintf(sub, 255, L"%ls\\%ls\\OpenWithProgids", CLASSES, t->ext);
     sub[255] = L'\0';
     ok &= reg_set_sz(root, sub, t->progid, L"");
 
@@ -230,12 +230,12 @@ static void type_unregister(HKEY root, const AssocType *t) {
     // the installer's ownership claim, and leaving it pointing at a ProgID we
     // are about to delete would strand the file type with no handler at all.
     // Any other app's ProgID there is left untouched.
-    _snwprintf(sub, 255, L"%s\\%s", CLASSES, t->ext);
+    _snwprintf(sub, 255, L"%ls\\%ls", CLASSES, t->ext);
     sub[255] = L'\0';
     if (reg_get_sz(root, sub, NULL, current, 256) && _wcsicmp(current, t->progid) == 0)
         reg_delete_value(root, sub, NULL);
 
-    _snwprintf(sub, 255, L"%s\\%s\\OpenWithProgids", CLASSES, t->ext);
+    _snwprintf(sub, 255, L"%ls\\%ls\\OpenWithProgids", CLASSES, t->ext);
     sub[255] = L'\0';
     reg_delete_value(root, sub, t->progid);
 
@@ -260,26 +260,26 @@ static void write_common(HKEY root) {
         return;
     wchar_t sub[256], data[MAX_PATH + 16];
 
-    _snwprintf(sub, 255, L"%s\\Applications\\npad.exe", CLASSES);
+    _snwprintf(sub, 255, L"%ls\\Applications\\npad.exe", CLASSES);
     sub[255] = L'\0';
     reg_set_sz(root, sub, L"FriendlyAppName", L"npad");
 
-    _snwprintf(sub, 255, L"%s\\Applications\\npad.exe\\DefaultIcon", CLASSES);
+    _snwprintf(sub, 255, L"%ls\\Applications\\npad.exe\\DefaultIcon", CLASSES);
     sub[255] = L'\0';
-    _snwprintf(data, MAX_PATH + 15, L"%s,0", exe);
+    _snwprintf(data, MAX_PATH + 15, L"%ls,0", exe);
     data[MAX_PATH + 15] = L'\0';
     reg_set_sz(root, sub, NULL, data);
 
-    _snwprintf(sub, 255, L"%s\\Applications\\npad.exe\\shell\\open\\command", CLASSES);
+    _snwprintf(sub, 255, L"%ls\\Applications\\npad.exe\\shell\\open\\command", CLASSES);
     sub[255] = L'\0';
-    _snwprintf(data, MAX_PATH + 15, L"\"%s\" \"%%1\"", exe);
+    _snwprintf(data, MAX_PATH + 15, L"\"%ls\" \"%%1\"", exe);
     data[MAX_PATH + 15] = L'\0';
     reg_set_sz(root, sub, NULL, data);
 
     // A SUBKEY named after the executable - the a/b/c + MRUList value shape
     // belongs under Explorer\FileExts, not here
     HKEY key = NULL;
-    _snwprintf(sub, 255, L"%s\\*\\OpenWithList\\npad.exe", CLASSES);
+    _snwprintf(sub, 255, L"%ls\\*\\OpenWithList\\npad.exe", CLASSES);
     sub[255] = L'\0';
     if (RegCreateKeyExW(root, sub, 0, NULL, 0, KEY_SET_VALUE | sam_for(root), NULL, &key, NULL) ==
         ERROR_SUCCESS) {
@@ -288,7 +288,7 @@ static void write_common(HKEY root) {
 
     reg_set_sz(root, CAPS, L"ApplicationName", L"npad");
     reg_set_sz(root, CAPS, L"ApplicationDescription", L"Lightweight cross-platform text editor");
-    _snwprintf(data, MAX_PATH + 15, L"%s,0", exe);
+    _snwprintf(data, MAX_PATH + 15, L"%ls,0", exe);
     data[MAX_PATH + 15] = L'\0';
     reg_set_sz(root, CAPS, L"ApplicationIcon", data);
     // The pointer is relative, resolved against the hive it was written to
@@ -449,7 +449,7 @@ bool assoc_apply_machine(HWND owner, const bool *before, const bool *after, bool
     for (int g = 0; g < ASSOC_GROUP_COUNT; g++) {
         if (change[g] == 0)
             continue;
-        int wrote = _snwprintf(params + used, (size_t) (255 - used), L"%s%lc%hs", any ? L"," : L"",
+        int wrote = _snwprintf(params + used, (size_t) (255 - used), L"%ls%lc%hs", any ? L"," : L"",
                                change[g] > 0 ? L'+' : L'-', GROUPS[g].token);
         if (wrote < 0)
             return false;
@@ -579,7 +579,7 @@ bool assoc_installer_merge_tasks(wchar_t *out, size_t cap) {
     for (int g = 0; g < ASSOC_GROUP_COUNT; g++) {
         if (state[g])
             continue;
-        w = _snwprintf(out + used, cap - 1 - used, L"%s!assoc\\%hs", any ? L"," : L"",
+        w = _snwprintf(out + used, cap - 1 - used, L"%ls!assoc\\%hs", any ? L"," : L"",
                        GROUPS[g].token);
         if (w < 0) {
             out[0] = L'\0';

@@ -275,6 +275,8 @@ static void write_text_file(const char *path, const char *text) {
 }
 
 TEST_CASE(init_reads_old_settings_when_xdg_location_is_empty) {
+    // This case is about HOME/XDG, so the test-hook override must be off
+    unsetenv("NPAD_TEST_CONFIG_DIR");
     // A throwaway HOME and XDG_CONFIG_HOME under the working directory
     mkdir("test_xdg_home", 0755);
     mkdir("test_xdg_home/.config", 0755);
@@ -347,6 +349,69 @@ TEST_CASE(init_reads_old_settings_when_xdg_location_is_empty) {
     remove("test_xdg_home/.config");
     remove("test_xdg_home");
 }
+
+#ifdef NPAD_TEST_HOOKS
+// The test-hook contract: $NPAD_TEST_CONFIG_DIR decides where settings live,
+// ahead of XDG_CONFIG_HOME and HOME, and the real ~/.config/npad is never
+// read, not even by the migration that reads it when the new place is empty
+TEST_CASE(test_config_dir_overrides_home_and_xdg) {
+    mkdir("test_hook_home", 0755);
+    mkdir("test_hook_home/.config", 0755);
+    mkdir("test_hook_home/.config/npad", 0755);
+    char cwd[1024];
+    TEST_ASSERT_NOT_NULL(getcwd(cwd, sizeof cwd), "cwd");
+    char home[1100], xdg[1100], conf[1100];
+    snprintf(home, sizeof home, "%s/test_hook_home", cwd);
+    snprintf(xdg, sizeof xdg, "%s/test_hook_xdg", cwd);
+    // Not created: settings_init must make it (and its parent) itself
+    snprintf(conf, sizeof conf, "%s/test_hook_conf/npad", cwd);
+
+    const char *legacy = "test_hook_home/.config/npad/settings.json";
+    write_text_file(legacy, "{\n  \"theme\": \"dark\"\n}\n");
+
+    setenv("HOME", home, 1);
+    setenv("XDG_CONFIG_HOME", xdg, 1);
+    setenv("NPAD_TEST_CONFIG_DIR", conf, 1);
+
+    settings_cleanup();
+    TEST_ASSERT(settings_init(), "init succeeds");
+    char expect[1200];
+    snprintf(expect, sizeof expect, "%s/settings.json", conf);
+    TEST_ASSERT_STR_EQ(expect, settings_get_file_path(),
+                       "settings live under NPAD_TEST_CONFIG_DIR, not XDG or HOME");
+    char *theme = settings_get_string("theme", "none");
+    TEST_ASSERT_STR_EQ("none", theme, "the HOME settings are not read, even to migrate them");
+    free(theme);
+
+    struct stat st;
+    TEST_ASSERT(stat(conf, &st) == 0 && S_ISDIR(st.st_mode),
+                "the directory is created at init, parents included");
+    settings_set_string("theme", "light");
+    TEST_ASSERT(settings_save(), "save succeeds");
+    TEST_ASSERT(file_exists(expect), "and writes there");
+    TEST_ASSERT(stat(xdg, &st) != 0, "nothing is created under XDG_CONFIG_HOME");
+
+    // An empty value is the same as unset
+    setenv("NPAD_TEST_CONFIG_DIR", "", 1);
+    settings_cleanup();
+    settings_init();
+    snprintf(expect, sizeof expect, "%s/npad/settings.json", xdg);
+    TEST_ASSERT_STR_EQ(expect, settings_get_file_path(), "empty: back to XDG_CONFIG_HOME");
+
+    settings_cleanup();
+    unsetenv("NPAD_TEST_CONFIG_DIR");
+    snprintf(expect, sizeof expect, "%s/settings.json", conf);
+    remove(expect);
+    remove(conf);
+    remove("test_hook_conf");
+    remove("test_hook_xdg/npad");
+    remove("test_hook_xdg");
+    remove(legacy);
+    remove("test_hook_home/.config/npad");
+    remove("test_hook_home/.config");
+    remove("test_hook_home");
+}
+#endif
 #endif
 
 int main(void) {
@@ -364,6 +429,9 @@ int main(void) {
 #ifndef _WIN32
     RUN_TEST(config_dir_prefers_absolute_xdg);
     RUN_TEST(init_reads_old_settings_when_xdg_location_is_empty);
+#ifdef NPAD_TEST_HOOKS
+    RUN_TEST(test_config_dir_overrides_home_and_xdg);
+#endif
 #endif
 
     TEST_SUMMARY();

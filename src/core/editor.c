@@ -1118,3 +1118,79 @@ void editor_update_title(void) {
 
     ui_set_window_title(g_editor.main_window, title);
 }
+
+// --- Inserting a file (Ctrl+drop) ------------------------------------------
+//
+// Ctrl+drop used to read any file straight into the document: a 1 GB log froze
+// the window, a PNG pasted the bytes before its first NUL, and on Windows a
+// locked file did nothing at all. It now asks the same questions Open does,
+// with the same large-file threshold.
+
+// The last component of a path, for prompts (Windows or POSIX separators)
+static const char *insert_display_name(const char *path) {
+    const char *name = path;
+    for (const char *p = path; *p; p++) {
+        if (*p == '/' || *p == '\\')
+            name = p + 1;
+    }
+    return name[0] ? name : path;
+}
+
+char *editor_read_file_for_insert(const char *filename) {
+    if (!filename || !filename[0])
+        return NULL;
+    const char *name = insert_display_name(filename);
+    char message[640];
+
+    // Binary first, as Open does. There is no "open with the default app"
+    // choice here: the user asked for this file's text in this document.
+    bool confirmed_binary = false;
+    if (file_looks_binary(filename)) {
+        snprintf(message, sizeof(message),
+                 "\"%.300s\" does not look like a text file.\n\n"
+                 "Inserting it would add unreadable characters, and npad can only insert "
+                 "the part before any binary data.\n\nInsert it anyway?",
+                 name);
+        if (!ui_show_message_box(g_editor.main_window, "npad", message, true))
+            return NULL;
+        confirmed_binary = true;
+    }
+
+    // The large-file threshold Open uses (0 turns the warning off)
+    int warn_mb = settings_get_int("large_file_warning_mb", editor_default_large_file_mb());
+    if (warn_mb > 0) {
+        size_t size = file_get_size(filename);
+        if (size > (size_t) warn_mb * 1024 * 1024) {
+            snprintf(message, sizeof(message),
+                     "\"%.300s\" is %.1f MB and may take a while to insert.\n"
+                     "Do you want to continue?",
+                     name, size / (1024.0 * 1024.0));
+            if (!ui_show_message_box(g_editor.main_window, "npad", message, true))
+                return NULL;
+        }
+    }
+
+    TextFileInfo info;
+    char *content = file_read_text_ex(filename, &info);
+    if (!content) {
+        snprintf(message, sizeof(message), "Could not insert file: %.300s\n%.150s", filename,
+                 file_get_last_error());
+        ui_show_message_box(g_editor.main_window, "npad", message, false);
+        return NULL;
+    }
+
+    // A NUL cut the text short. A binary-looking file was already confirmed on
+    // exactly that understanding; any other file is asked about now, since
+    // inserting a fragment as if it were the whole file would mislead.
+    if (info.truncated && !confirmed_binary) {
+        snprintf(message, sizeof(message),
+                 "\"%.300s\" contains binary data, so npad can only insert the part "
+                 "before it.\n\nInsert that part?",
+                 name);
+        if (!ui_show_message_box(g_editor.main_window, "npad", message, true)) {
+            free(content);
+            return NULL;
+        }
+    }
+    return content;
+}
