@@ -32,15 +32,18 @@ typedef enum {
 
 // Sort the lines. Stable; ascending unless descending. When not case_sensitive
 // the comparison is ASCII-case-insensitive (A-Z folded to a-z); other bytes
-// compare by value.
+// compare by value. O(n log n) comparisons whatever the input order.
 char *list_sort_lines(const char *text, bool descending, bool case_sensitive);
 
 // Remove duplicate lines, keeping the first occurrence (order-preserving).
+// Linear expected time (hash set).
 char *list_unique_lines(const char *text);
 
-// Interpret backslash escapes: \n \r \t \\ \0 and \uXXXX (4 hex digits). An
-// unrecognized escape yields the character following the backslash; a trailing
-// backslash is kept literally.
+// Interpret backslash escapes: \n \r \t \\ and \uXXXX (4 hex digits). A
+// surrogate pair (😀) becomes the one code point it encodes; a lone
+// surrogate or \u0000 becomes U+FFFD, so the result is always valid UTF-8 and
+// never cut short by a NUL. An unrecognized escape - \0 included - yields the
+// character following the backslash; a trailing backslash is kept literally.
 char *list_unescape(const char *s);
 
 // Replace every literal occurrence of from with to. from must be non-empty

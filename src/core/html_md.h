@@ -22,13 +22,19 @@ typedef enum {
     // all inline formatting discarded. (Rarely used directly - a "plain"
     // paste just inserts the clipboard's CF_UNICODETEXT.)
     HTML_MD_PLAIN = 0,
-    // Like PLAIN, but <ul>/<ol>/<li> become list lines using list_marker with
-    // two-space nesting per level. All other formatting is stripped.
+    // Like PLAIN, but <ul>/<ol>/<li> (and Word's mso-list paragraphs) become
+    // list lines using list_marker with two-space nesting per level. All
+    // other formatting is stripped. A fragment with no list item at all
+    // converts to an empty string: the caller then pastes the clipboard's
+    // own plain text, which keeps code indentation and table columns.
     HTML_MD_LISTS = 1,
     // Full markdown: headings (#), bold (**), italic (*), inline code (`),
-    // links [text](url), images ![alt](src), fenced code blocks (```),
-    // blockquotes (>), horizontal rules (---), and both list kinds (unordered
-    // use list_marker; ordered are numbered "1." "2." ...).
+    // links [text](url), images ![alt](src), fenced code blocks (``` - also
+    // for a <div> styled white-space:pre, as code editors and terminals
+    // copy), blockquotes (>), horizontal rules (---), GitHub-style pipe
+    // tables, and both list kinds (unordered use list_marker; ordered are
+    // numbered from the list's start=, children indented to the parent's
+    // text). Text that would read as Markdown syntax is backslash-escaped.
     HTML_MD_FULL = 2
 } HtmlMdMode;
 
@@ -38,6 +44,8 @@ typedef enum {
 //   list_marker : bullet prefix for unordered / lists-mode items, e.g. "- ".
 //                 NULL defaults to "- ". Line endings in the result are '\n'.
 // Returns a malloc'd UTF-8 string (caller frees), or NULL on NULL input / OOM.
+// An empty result means there was nothing to convert (see HTML_MD_LISTS): a
+// paste should then fall back to the plain text.
 char *html_to_markdown(const char *html_utf8, HtmlMdMode mode, const char *list_marker);
 
 // Extract the copied fragment from a raw CF_HTML clipboard blob (the UTF-8
