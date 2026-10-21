@@ -576,7 +576,7 @@ bool editor_init(void) {
         g_editor.session_interval = 5;
     }
 
-    // Unique recovery slot id for this instance (time + pid + nonce). Distinct
+    // Unique recovery slot id for this instance (time + nonce + pid). Distinct
     // across concurrently running instances so their snapshots never collide.
     session_make_slot_id(g_session_slot, sizeof(g_session_slot));
     g_leaving = false;

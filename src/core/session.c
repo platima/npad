@@ -88,7 +88,10 @@ bool session_parse_slot_id(const char *id, unsigned long long *start_time, long 
     unsigned long long t = strtoull(id, &end, 16);
     if (!end || *end != '-')
         return false;
-    unsigned long long p = strtoull(end + 1, NULL, 16);
+    // The pid is always the last part, in "<time>-<pid>" and in
+    // "<time>-<nonce>-<pid>" alike, which is where npad before 0.36 looks
+    const char *last = strrchr(id, '-');
+    unsigned long long p = strtoull(last + 1, NULL, 16);
     if (p > 0x7fffffffULL)
         return false; // Not a pid any supported platform hands out
     if (start_time)
@@ -125,8 +128,10 @@ static unsigned random_nonce(void) {
 void session_make_slot_id(char *out, size_t size) {
     if (!out || size == 0)
         return;
-    snprintf(out, size, "%lx-%x-%x", (unsigned long) time(NULL), (unsigned) session_getpid(),
-             random_nonce() & 0xffffu);
+    // Nonce in the middle, pid last: npad up to 0.36.0-rc1 takes the pid from
+    // after the last '-', so it still sees this window as alive
+    snprintf(out, size, "%lx-%x-%x", (unsigned long) time(NULL), random_nonce() & 0xffffu,
+             (unsigned) session_getpid());
 }
 
 // --- Files -------------------------------------------------------------------
@@ -142,6 +147,19 @@ static void make_private(const char *path) {
 #endif
 }
 
+// A recovery directory made 0755 by npad before 0.36 is narrowed to 0700.
+// Done on every look at the directory, not only on a write, so leftovers an
+// older npad wrote 0644 stop being readable before anything is offered.
+static void tighten_dir(const char *dir) {
+#ifndef _WIN32
+    struct stat st;
+    if (dir && stat(dir, &st) == 0 && S_ISDIR(st.st_mode) && (st.st_mode & 077) != 0)
+        chmod(dir, 0700);
+#else
+    (void) dir;
+#endif
+}
+
 static void ensure_dir(const char *dir) {
     if (!dir)
         return;
@@ -153,12 +171,8 @@ static void ensure_dir(const char *dir) {
         CreateDirectoryA(dir, NULL);
     }
 #else
-    if (mkdir(dir, 0700) != 0) {
-        // Already there - possibly made 0755 by npad before 0.36
-        struct stat st;
-        if (stat(dir, &st) == 0 && S_ISDIR(st.st_mode) && (st.st_mode & 077) != 0)
-            chmod(dir, 0700);
-    }
+    if (mkdir(dir, 0700) != 0)
+        tighten_dir(dir); // Already there - possibly made 0755 by npad before 0.36
 #endif
 }
 
@@ -632,6 +646,7 @@ char **session_list_slots(const char *dir, int *count) {
         *count = 0;
     if (!dir || !count)
         return NULL;
+    tighten_dir(dir);
 
     int entries = 0;
     char **names = list_entries(dir, &entries);
@@ -714,6 +729,7 @@ int session_recover_orphans(const char *dir, const char *own_slot_id, SessionLiv
                             void *ctx) {
     if (!dir)
         return 0;
+    tighten_dir(dir);
     int restored = 0;
     char slot[SESSION_SLOT_ID_MAX], claimer[SESSION_SLOT_ID_MAX];
 

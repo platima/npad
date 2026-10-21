@@ -26,10 +26,10 @@
 
 // Slot ids must have the shape npad generates (<time>-<pid>[-<nonce>])
 #define SLOT_A "5f000001-1a2b"
-#define SLOT_B "5f000002-1a2c-beef"
+#define SLOT_B "5f000002-beef-1a2c"
 #define SLOT_C "5f000003-99"
-#define CLAIMER_1 "6a000001-501-1"
-#define CLAIMER_2 "6a000002-502-2"
+#define CLAIMER_1 "6a000001-1-501"
+#define CLAIMER_2 "6a000002-2-502"
 
 // Remove every file in TEST_DIR, then the directory itself
 static void cleanup(void) {
@@ -273,7 +273,7 @@ TEST_CASE(session_handoff_marker_is_not_a_slot) {
 
 TEST_CASE(session_slot_id_shape) {
     TEST_ASSERT(session_is_valid_slot_id("5f000001-1a2b"), "two-part id (before 0.36)");
-    TEST_ASSERT(session_is_valid_slot_id("5f000001-1a2b-beef"), "three-part id");
+    TEST_ASSERT(session_is_valid_slot_id("5f000001-beef-1a2b"), "three-part id");
     TEST_ASSERT(!session_is_valid_slot_id(NULL), "NULL");
     TEST_ASSERT(!session_is_valid_slot_id(""), "empty");
     TEST_ASSERT(!session_is_valid_slot_id("5f000001"), "one part");
@@ -290,9 +290,11 @@ TEST_CASE(session_slot_id_shape) {
 
     unsigned long long t = 0;
     long pid = 0;
-    TEST_ASSERT(session_parse_slot_id("5f000001-1a2b-beef", &t, &pid), "parse");
+    TEST_ASSERT(session_parse_slot_id("5f000001-beef-1a2b", &t, &pid), "parse");
     TEST_ASSERT(t == 0x5f000001ULL, "time part");
-    TEST_ASSERT_EQ(0x1a2b, pid, "pid part");
+    TEST_ASSERT_EQ(0x1a2b, pid, "pid is the last part, where npad before 0.36 reads it");
+    TEST_ASSERT(session_parse_slot_id("5f000001-1a2b", &t, &pid), "parse a two-part id");
+    TEST_ASSERT_EQ(0x1a2b, pid, "pid of a two-part id");
     TEST_ASSERT(!session_parse_slot_id("../x", &t, &pid), "parse refuses a bad id");
 }
 
@@ -306,6 +308,9 @@ TEST_CASE(session_made_ids_are_valid_and_distinct) {
     TEST_ASSERT(session_parse_slot_id(a, &t, &pid), "a made id parses");
 #ifndef _WIN32
     TEST_ASSERT_EQ((long) getpid(), pid, "it carries this process's pid");
+    // What npad up to 0.36.0-rc1 does with an id: the pid after the last '-'
+    TEST_ASSERT_EQ((long) getpid(), strtol(strrchr(a, '-') + 1, NULL, 16),
+                   "an older npad finds the same pid");
 #endif
     // Same second, same pid: only the nonce tells them apart (a pid namespace
     // gives two instances that much in common). A clash is possible but rare;
@@ -658,12 +663,24 @@ TEST_CASE(session_orphans_empty_leftovers_are_removed) {
 #ifndef _WIN32
 TEST_CASE(session_files_are_private) {
     cleanup();
-    // A directory left 0755 by an older npad is tightened on the next write
+    struct stat st;
+    // A directory left 0755 by an older npad is tightened as soon as a launch
+    // looks into it, before any of its leftovers are offered
     TEST_ASSERT(mkdir(TEST_DIR, 0755) == 0, "make an old-style directory");
+    int listed = 0;
+    session_free_slots(session_list_slots(TEST_DIR, &listed), listed);
+    TEST_ASSERT(stat(TEST_DIR, &st) == 0, "stat listed dir");
+    TEST_ASSERT_EQ(0700, (int) (st.st_mode & 0777), "listing tightens the directory");
+    TEST_ASSERT(chmod(TEST_DIR, 0755) == 0, "loosen it again");
+    session_recover_orphans(TEST_DIR, NULL, NULL, NULL);
+    TEST_ASSERT(stat(TEST_DIR, &st) == 0, "stat swept dir");
+    TEST_ASSERT_EQ(0700, (int) (st.st_mode & 0777), "the orphan pass tightens the directory");
+
+    // ... and on the next write
+    TEST_ASSERT(chmod(TEST_DIR, 0755) == 0, "loosen it again");
     session_write(TEST_DIR, SLOT_A, "secret", "/a.txt", NPAD_ENC_UTF8, NPAD_EOL_CRLF);
     session_mark_handoff(TEST_DIR, SLOT_A);
 
-    struct stat st;
     TEST_ASSERT(stat(TEST_DIR, &st) == 0, "stat dir");
     TEST_ASSERT_EQ(0700, (int) (st.st_mode & 0777), "recovery directory is 0700");
     TEST_ASSERT(stat(test_path(SLOT_A ".txt"), &st) == 0, "stat txt");

@@ -38,7 +38,7 @@ static char g_files[600];
 // Slots left by instances that are gone: their pids are not in the stub's
 // table of running processes
 #define DEAD_1 "5f000001-7001"
-#define DEAD_2 "5f000002-7002-1"
+#define DEAD_2 "5f000002-1-7002"
 #define DEAD_3 "5f000003-7003"
 
 // --- Helpers ---------------------------------------------------------------------
@@ -597,7 +597,7 @@ TEST_CASE(slot_claimed_by_a_running_window_is_untouched) {
     begin();
     session_write(recovery_dir(), DEAD_1, "being restored elsewhere", NULL, NPAD_ENC_UTF8,
                   NPAD_EOL_LF);
-    session_claim(recovery_dir(), DEAD_1, NULL, "6a000001-501-1");
+    session_claim(recovery_dir(), DEAD_1, NULL, "6a000001-1-501");
     stub_set_live(0x501, 0x6a000001LL - 1);
     g_stub.answer = UI_ANSWER_NO;
     post(UI_EVENT_STARTUP_DEFERRED);

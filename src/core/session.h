@@ -21,11 +21,13 @@
 // Room for any slot id, including its terminating NUL
 #define SESSION_SLOT_ID_MAX 64
 
-// Slot ids are "<time>-<pid>" or "<time>-<pid>-<nonce>", each part 1-16 hex
-// digits: the time the owning instance started (Unix seconds), its process
-// id, and a random nonce that keeps two instances apart when a pid namespace
-// (a Flatpak sandbox, a container) gives them the same pid in the same
-// second. npad before 0.36 wrote the two-part form; both are accepted.
+// Slot ids are "<time>-<pid>" or "<time>-<nonce>-<pid>", each part 1-16 hex
+// digits: the time the owning instance started (Unix seconds), a random nonce
+// that keeps two instances apart when a pid namespace (a Flatpak sandbox, a
+// container) gives them the same pid in the same second, and its process id.
+// npad before 0.36 wrote the two-part form; both are accepted. The pid stays
+// last because older npad reads it from after the last '-' to decide whether
+// a slot's owner is still running.
 //
 // Every id that arrives from outside - the --recover option, a directory
 // listing - is checked against that shape before it becomes part of a path,
