@@ -129,6 +129,11 @@ typedef struct {
 bool file_get_stamp(const char *filename, FileStamp *out);
 bool file_stamp_equal(const FileStamp *a, const FileStamp *b);
 
+// True when both paths name one existing file, however they are spelled
+// (case, relative vs absolute, a link). False if either does not exist: a
+// path with no file behind it cannot be an existing file's other name.
+bool file_same(const char *a, const char *b);
+
 bool file_exists(const char *filename);
 bool file_is_readable(const char *filename);
 bool file_is_writable(const char *filename);

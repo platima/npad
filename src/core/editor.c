@@ -184,6 +184,28 @@ static bool editor_restore_slot(const char *dir, const char *slot_id) {
         return false;
     }
 
+    // The snapshot keeps only the encoding and line ending, but the original's
+    // protections depend on its bytes too: a file npad could load only part
+    // of (truncated) or could not decode exactly (decode_lossy) must not be
+    // overwritten without the question Save asks, and auto-save must skip it.
+    // Read the original again to learn them, rather than letting a crash
+    // quietly drop them. A file that is gone or unreadable has no bytes to lose.
+    info.truncated = false;
+    info.decode_lossy = false;
+    info.utf16_no_bom = false;
+    if (path) {
+        TextFileInfo probe;
+        char *original = file_read_text_ex(path, &probe);
+        if (original) {
+            free(original);
+            info.truncated = probe.truncated;
+            info.decode_lossy = probe.decode_lossy;
+            // A BOM-less UTF-16 file keeps its form only while it is still
+            // in that encoding; otherwise the snapshot's encoding is a choice
+            info.utf16_no_bom = probe.encoding == info.encoding && probe.utf16_no_bom;
+        }
+    }
+
     ui_set_text(g_editor.main_window, content);
     free(content);
 
@@ -560,17 +582,18 @@ static bool editor_confirm_lossy_ansi(const char *content) {
 
 // Ask before saving over a file npad could not decode exactly (see
 // TextFileInfo.decode_lossy): its invalid bytes are replacement characters in
-// the editor, so the save would change them. Saving elsewhere needs no
-// question - the original is not touched. Returns false if the user declines.
+// the editor, so the save would change them. Saving to a different file needs
+// no question - the original is not touched. Returns false if the user
+// declines. The encoding is not named: decode_lossy outlives an encoding
+// change, and the bytes were invalid in the one the file was read in, which
+// need not be the one the document has now.
 static bool editor_confirm_lossy_decode(void) {
     if (!g_editor.file_info.decode_lossy)
         return true;
-    char message[512];
-    snprintf(message, sizeof(message),
-             "Some bytes in this file are not valid in its %s encoding, so npad cannot save "
-             "them back exactly as they were.\n\nSave over the original anyway?",
-             file_encoding_name(g_editor.file_info.encoding));
-    return ui_show_message_box(g_editor.main_window, "npad", message, true);
+    return ui_show_message_box(g_editor.main_window, "npad",
+                               "Some bytes in this file could not be read, so npad cannot save "
+                               "them back exactly as they were.\n\nSave over the original anyway?",
+                               true);
 }
 
 // --- External change detection --------------------------------------------
@@ -721,6 +744,23 @@ bool editor_save_file(void) {
 bool editor_save_file_as(const char *filename) {
     if (!filename || !g_editor.main_window)
         return false;
+
+    // Save As can name the file that is already open - picked again in the
+    // dialog, perhaps from the truncated-file diversion - and that overwrites
+    // the original exactly as Save does, so it gets Save's protections. The
+    // OS "replace existing file?" prompt says nothing about lost bytes.
+    if (g_editor.current_file && file_same(filename, g_editor.current_file)) {
+        if (g_editor.file_info.truncated) {
+            ui_show_message_box(g_editor.main_window, "npad",
+                                "This is the file npad could only load part of. Saving over "
+                                "it would discard the rest, so choose a different file to "
+                                "save this text to.",
+                                false);
+            return false;
+        }
+        if (!editor_confirm_lossy_decode())
+            return false; // Declined - the original keeps its bytes
+    }
 
     char *content = ui_get_text(g_editor.main_window);
     if (!content)

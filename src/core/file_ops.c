@@ -927,6 +927,42 @@ bool file_stamp_equal(const FileStamp *a, const FileStamp *b) {
     return a->size == b->size && a->write_time == b->write_time;
 }
 
+#ifdef _WIN32
+// The volume and file index identify a file however its path is spelled
+// (case, 8.3 short names, a different drive mapping, a hard link).
+static bool file_identity(const char *filename, BY_HANDLE_FILE_INFORMATION *out) {
+    wchar_t wpath[1024];
+    if (MultiByteToWideChar(CP_UTF8, 0, filename, -1, wpath, 1024) <= 0)
+        return false;
+    // No access rights requested: only the metadata is read, so this works on
+    // a file another program holds open and never blocks it
+    HANDLE h = CreateFileW(wpath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                           OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (h == INVALID_HANDLE_VALUE)
+        return false;
+    bool ok = GetFileInformationByHandle(h, out) != 0;
+    CloseHandle(h);
+    return ok;
+}
+#endif
+
+bool file_same(const char *a, const char *b) {
+    if (!is_valid_path(a) || !is_valid_path(b))
+        return false;
+#ifdef _WIN32
+    BY_HANDLE_FILE_INFORMATION ia, ib;
+    if (!file_identity(a, &ia) || !file_identity(b, &ib))
+        return false;
+    return ia.dwVolumeSerialNumber == ib.dwVolumeSerialNumber &&
+           ia.nFileIndexHigh == ib.nFileIndexHigh && ia.nFileIndexLow == ib.nFileIndexLow;
+#else
+    struct stat sa, sb;
+    if (stat(a, &sa) != 0 || stat(b, &sb) != 0)
+        return false;
+    return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+#endif
+}
+
 bool file_rename(const char *from, const char *to) {
     if (!is_valid_path(from) || !is_valid_path(to))
         return false;
