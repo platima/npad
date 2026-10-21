@@ -16,7 +16,9 @@
  *  - Shutdown or reboot without a logout first: a logind "delay" inhibitor
  *    lock, so PrepareForShutdown arrives while there is still time to park.
  *  - SIGTERM (systemd stopping the session, `kill`), SIGHUP (the terminal npad
- *    was started from closed) and SIGINT (Ctrl+C there): park and quit.
+ *    was started from closed) and SIGINT (Ctrl+C there): park and quit. A
+ *    SIGHUP or SIGINT that npad inherited as ignored (nohup, a background
+ *    job of a script) stays ignored.
  *  - Losing the X display with no warning at all (the X server ending, a bare
  *    window manager's logout): GDK would _exit at once, so an Xlib IO error
  *    handler parks the work first and then lets GDK's handler exit.
@@ -308,10 +310,21 @@ static void hook_x_io_errors(void) {
 // Setup
 // ---------------------------------------------------------------------------
 
+// SIGHUP and SIGINT come from the terminal npad was started from. A launch
+// that set them to be ignored (`nohup npad &`, or `npad &` from a script,
+// where POSIX shells ignore SIGINT for background commands) asked npad to
+// outlive that terminal, so the inherited SIG_IGN stays in place.
+static void add_signal_unless_ignored(int sig) {
+    struct sigaction old;
+    if (sigaction(sig, NULL, &old) == 0 && old.sa_handler == SIG_IGN)
+        return;
+    g_unix_signal_add(sig, on_terminate_signal, NULL);
+}
+
 void npad_gtk_session_init(void) {
     g_unix_signal_add(SIGTERM, on_terminate_signal, NULL);
-    g_unix_signal_add(SIGHUP, on_terminate_signal, NULL);
-    g_unix_signal_add(SIGINT, on_terminate_signal, NULL);
+    add_signal_unless_ignored(SIGHUP);
+    add_signal_unless_ignored(SIGINT);
 
     hook_x_io_errors();
 

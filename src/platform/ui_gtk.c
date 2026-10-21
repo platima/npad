@@ -1637,31 +1637,9 @@ static gboolean on_delete_event(GtkWidget *widget, GdkEvent *event, gpointer dat
     return TRUE;
 }
 
-static gboolean on_configure_event(GtkWidget *widget, GdkEventConfigure *event, gpointer data) {
-    (void) event;
-    Window *window = data;
-    // Remember the restored geometry so a maximised window persists it, as
-    // GetWindowPlacement does on Win32. The position only exists on X11 (on
-    // Wayland it reads 0,0); the previous record is kept for
-    // on_window_state_event.
-    if (!window->maximized) {
-        window->prev_width = window->normal_width;
-        window->prev_height = window->normal_height;
-        gtk_window_get_size(GTK_WINDOW(widget), &window->normal_width, &window->normal_height);
-        if (display_allows_positioning()) {
-            window->prev_x = window->normal_x;
-            window->prev_y = window->normal_y;
-            gtk_window_get_position(GTK_WINDOW(widget), &window->normal_x, &window->normal_y);
-            window->normal_pos_known = true;
-        }
-    }
-    return FALSE;
-}
-
-// Whether the newest "normal" size record covers (nearly) the whole work area
-// of the window's monitor - what a maximized window measures, title bar and
-// panels allowed for
-static bool record_fills_monitor(const Window *window, GtkWidget *widget) {
+// Whether a size covers (nearly) the whole work area of the window's
+// monitor - what a maximized window measures, title bar and panels allowed for
+static bool size_fills_monitor(GtkWidget *widget, int width, int height) {
     GdkDisplay *display = gtk_widget_get_display(widget);
     GdkWindow *gdk = gtk_widget_get_window(widget);
     GdkMonitor *monitor = (display && gdk) ? gdk_display_get_monitor_at_window(display, gdk) : NULL;
@@ -1671,25 +1649,40 @@ static bool record_fills_monitor(const Window *window, GtkWidget *widget) {
     gdk_monitor_get_workarea(monitor, &work);
     if (work.width <= 0 || work.height <= 0)
         return false; // Broadway and friends: nothing to measure against
-    return window->normal_width >= work.width - 16 && window->normal_height >= work.height - 64;
+    return width >= work.width - 16 && height >= work.height - 64;
+}
+
+static gboolean on_configure_event(GtkWidget *widget, GdkEventConfigure *event, gpointer data) {
+    (void) event;
+    Window *window = data;
+    // Remember the restored geometry so a maximised window persists it, as
+    // GetWindowPlacement does on Win32. The position only exists on X11 (on
+    // Wayland it reads 0,0).
+    if (window->maximized)
+        return FALSE;
+    int width = 0, height = 0;
+    gtk_window_get_size(GTK_WINDOW(widget), &width, &height);
+    // The maximize's own configures (a WM may send several: a move, then a
+    // resize, or a real plus a synthetic ConfigureNotify) can arrive while
+    // the window still reads as restored. A size that fills the monitor is
+    // one of them, so it leaves the restored record alone; a window the user
+    // dragged to nearly full size simply keeps its previous record.
+    if (size_fills_monitor(widget, width, height))
+        return FALSE;
+    window->normal_width = width;
+    window->normal_height = height;
+    if (display_allows_positioning()) {
+        gtk_window_get_position(GTK_WINDOW(widget), &window->normal_x, &window->normal_y);
+        window->normal_pos_known = true;
+    }
+    return FALSE;
 }
 
 static gboolean on_window_state_event(GtkWidget *widget, const GdkEventWindowState *event,
                                       gpointer data) {
+    (void) widget;
     Window *window = data;
-    bool maximized = (event->new_window_state & GDK_WINDOW_STATE_MAXIMIZED) != 0;
-    if (maximized && !window->maximized && window->prev_width > 0 && window->prev_height > 0 &&
-        record_fills_monitor(window, widget)) {
-        // The maximize's own configure can arrive while the window still
-        // reads as restored, and record the maximized size and the monitor
-        // corner as "normal". A record that fills the monitor is that
-        // configure: the one before it is the restored geometry.
-        window->normal_width = window->prev_width;
-        window->normal_height = window->prev_height;
-        window->normal_x = window->prev_x;
-        window->normal_y = window->prev_y;
-    }
-    window->maximized = maximized;
+    window->maximized = (event->new_window_state & GDK_WINDOW_STATE_MAXIMIZED) != 0;
     return FALSE;
 }
 

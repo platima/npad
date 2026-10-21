@@ -187,12 +187,11 @@ struct Window {
     int requested_y;
     bool maximized;
     // X11: where the window last sat while not maximized, so a maximized
-    // window saves its restored position rather than the monitor corner. The
-    // previous record stands in when the newest one turns out to be the
-    // maximize itself (its configure can arrive before the state change).
+    // window saves its restored position rather than the monitor corner.
+    // Configures that measure the whole monitor never overwrite it (see
+    // on_configure_event).
     bool normal_pos_known;
     int normal_x, normal_y;
-    int prev_x, prev_y, prev_width, prev_height;
 
     // Status bar contents
     char status_encoding[32];
