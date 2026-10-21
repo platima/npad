@@ -683,6 +683,12 @@ bool editor_init(void) {
 
     load_default_file_info(&g_editor.file_info);
 
+    // An in-place save's safety copy of the original must survive the power
+    // cut it exists for, so it goes beside the recovery snapshots, not /tmp
+    char *backup_dir = editor_session_dir();
+    file_ops_set_backup_dir(backup_dir);
+    free(backup_dir);
+
     ui_set_event_handler(editor_handle_event);
 
     return true;

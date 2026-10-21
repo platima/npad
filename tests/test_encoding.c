@@ -11,6 +11,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #define TEST_FILE "test_encoding_temp.txt"
 
@@ -250,14 +254,28 @@ TEST_CASE(roundtrip_lf_preserved) {
 }
 
 TEST_CASE(write_failure_preserves_original) {
-    // A failed write must never delete the existing file
+    // A failed save must leave the existing file exactly as it was. This
+    // used to try only an empty path, which fails before touching any file;
+    // each stage of a real save failing is covered in test_atomic_save.c.
     write_bytes(TEST_FILE, "original", 8);
 
-    // Writing to an invalid path must fail cleanly...
+#ifndef _WIN32
+    // A save over this very file that fails (it is read-only)
+    chmod(TEST_FILE, 0444);
+    bool refused = true;
+    if (geteuid() != 0) { // root may write anyway
+        TextFileInfo info = { NPAD_ENC_UTF16_LE, NPAD_EOL_CRLF, false };
+        refused = !file_write_text_ex(TEST_FILE, "new content", &info);
+    }
+    chmod(TEST_FILE, 0644);
+    TEST_ASSERT(refused, "Saving over a read-only file should fail");
+#endif
+
+    // Writing to an invalid path must fail cleanly too
     bool result = file_write_text("", "new content");
     TEST_ASSERT(!result, "Write to empty path should fail");
 
-    // ...and the unrelated original file is intact
+    // ...and the original file is intact
     size_t size = 0;
     unsigned char *raw = read_bytes(TEST_FILE, &size);
     TEST_ASSERT_NOT_NULL(raw, "Original file should still exist");

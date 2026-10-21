@@ -297,7 +297,7 @@ format-check:
 	find src/ -name "*.c" -o -name "*.h" | xargs $(CLANG_FORMAT) --dry-run --Werror
 
 # Testing targets
-test: test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-recovery test-richedit-text test-editor-load test-editor
+test: test-file-ops test-atomic-save test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-recovery test-richedit-text test-editor-load test-editor
 	@echo "All tests completed"
 
 test-richedit-text: tests/test_richedit_text
@@ -317,6 +317,10 @@ test-editor: tests/test_editor
 test-file-ops: tests/test_file_ops
 	@echo "Running file operations tests..."
 	./tests/test_file_ops
+
+test-atomic-save: tests/test_atomic_save
+	@echo "Running atomic save tests..."
+	./tests/test_atomic_save
 
 test-error: tests/test_error
 	@echo "Running error system tests..."
@@ -393,6 +397,11 @@ tests/test_file_ops: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_f
 	@mkdir -p tests
 	$(CC) $(CFLAGS) -o $@ $^ -lpthread
 
+# Fault injection makes each stage of a save fail on demand (file_ops.h)
+tests/test_atomic_save: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_atomic_save.c
+	@mkdir -p tests
+	$(CC) $(CFLAGS) -DFILE_OPS_FAULT_INJECTION -o $@ $^ -lpthread
+
 tests/test_error: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_error.c
 	@mkdir -p tests
 	$(CC) $(CFLAGS) -o $@ $^ -lpthread
@@ -453,10 +462,10 @@ clean:
 	rm -f src/platform/npad.res
 	rm -rf build
 	rm -rf dist/npad_* dist/npad-*.rpm dist/npad-*.pkg.tar.zst dist/npad-v*-portable-linux-*.tar.gz
-	rm -f tests/test_file_ops tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md tests/test_undo tests/test_find_seed tests/test_tab_stops tests/test_recovery tests/test_richedit_text tests/test_editor_load tests/test_editor
+	rm -f tests/test_file_ops tests/test_atomic_save tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md tests/test_undo tests/test_find_seed tests/test_tab_stops tests/test_recovery tests/test_richedit_text tests/test_editor_load tests/test_editor
 	rm -f tests/test_assoc_win32.exe tests/test_richedit_boundary.exe tests/test_richedit_text.exe tests/test_editor_load.exe
 	rm -rf test_editor_home test_recovery_home
-	rm -f tests/test_file_ops.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe tests/test_html_md.exe tests/test_undo.exe tests/test_find_seed.exe tests/test_tab_stops.exe tests/test_recovery.exe tests/test_editor.exe
+	rm -f tests/test_file_ops.exe tests/test_atomic_save.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe tests/test_html_md.exe tests/test_undo.exe tests/test_find_seed.exe tests/test_tab_stops.exe tests/test_recovery.exe tests/test_editor.exe
 
 # Installation (Linux). PREFIX defaults to /usr/local; DESTDIR stages the tree
 # for packaging. Only the GTK desktop app is installed: the ncurses variant is
@@ -582,4 +591,4 @@ help:
 	@echo "  DEBUG=1          - Enable debug build"
 	@echo "  VERSION          - Version string (auto-detected from git)"
 
-.PHONY: all windows windows-gui windows-arm64 windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm pacman tarball lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-recovery test-richedit-text test-editor-load test-editor help detect-platform
+.PHONY: all windows windows-gui windows-arm64 windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm pacman tarball lint format format-check test test-file-ops test-atomic-save test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-recovery test-richedit-text test-editor-load test-editor help detect-platform

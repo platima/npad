@@ -45,9 +45,21 @@ static bool stderr_missing(void) {
 void npad_error_log_stderr(const npad_error_info_t *error) {
     if (!error)
         return;
+
+    // Logging must not change the error being reported: callers often read
+    // errno (or GetLastError) after logging, and a write to a missing stderr
+    // sets it to EBADF - which then turned every "Could not open file" in the
+    // Windows GUI into "Bad file descriptor"
+    int saved_errno = errno;
 #ifdef _WIN32
-    if (stderr_missing())
+    DWORD saved_last_error = GetLastError();
+    // A GUI (-mwindows) process started from Explorer has no stderr at all:
+    // there is nowhere to write
+    if (stderr_missing()) {
+        SetLastError(saved_last_error);
+        errno = saved_errno;
         return;
+    }
 #endif
 
     // Get current timestamp
@@ -74,6 +86,11 @@ void npad_error_log_stderr(const npad_error_info_t *error) {
 
     // Flush stderr to ensure immediate output
     fflush(stderr);
+
+#ifdef _WIN32
+    SetLastError(saved_last_error);
+#endif
+    errno = saved_errno;
 }
 
 void npad_error_init(void) {
