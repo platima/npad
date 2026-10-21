@@ -176,6 +176,15 @@ void ui_set_text_modified(Window *window, bool modified) {
     (void) modified;
 }
 
+void ui_set_status_message(Window *window, const char *message) {
+    (void) window;
+    (void) message;
+}
+
+void ui_append_time_date_line(Window *window) {
+    (void) window;
+}
+
 void ui_set_status_info(Window *window, const char *encoding_name, const char *eol_name) {
     (void) window;
     (void) encoding_name;

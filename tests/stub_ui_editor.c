@@ -64,11 +64,17 @@ void stub_type(const char *text) {
 
 // --- Text -----------------------------------------------------------------
 
-void ui_set_text(Window *window, const char *text) {
+bool ui_set_text(Window *window, const char *text) {
     (void) window;
     free(g_stub.text);
     g_stub.text = copy_string(text ? text : "");
     g_stub.text_modified = false; // Like the platforms: fresh content is unmodified
+    return true;
+}
+
+bool ui_text_altered_by_load(Window *window) {
+    (void) window;
+    return false; // The stub holds any text exactly
 }
 
 char *ui_get_text(Window *window) {
@@ -195,6 +201,11 @@ bool ui_show_message_box(Window *parent, const char *title, const char *message,
     return g_stub.default_answer;
 }
 
+// The tri-state question: the scripted answers, Yes or No (never dismissed)
+UiAnswer ui_ask_question(Window *parent, const char *title, const char *message) {
+    return ui_show_message_box(parent, title, message, true) ? UI_ANSWER_YES : UI_ANSWER_NO;
+}
+
 char *ui_show_save_dialog(Window *parent, FileDialogParams *params) {
     (void) parent;
     g_stub.save_dialogs++;
@@ -252,8 +263,10 @@ size_t ui_system_memory_mb(void) {
     return 0; // Unknown: the editor falls back to its fixed large-file threshold
 }
 
-bool ui_pid_is_running(long pid) {
+bool ui_pid_is_running(long pid, long long *start_time) {
     (void) pid;
+    if (start_time)
+        *start_time = 0;
     return false;
 }
 
