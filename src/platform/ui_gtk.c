@@ -731,6 +731,10 @@ void npad_gtk_set_status_message(Window *window, const char *message) {
     compose_status_message(window);
 }
 
+void ui_platform_set_status_message(Window *window, const char *message) {
+    npad_gtk_set_status_message(window, message);
+}
+
 static void update_status_bar(Window *window) {
     if (!window || !window->status_bar || !window->status_bar_visible)
         return;
@@ -1281,12 +1285,14 @@ static void print_document(Window *window, bool preview) {
     free(face);
 }
 
-// Notepad's F5 stamp: the locale's short time (no seconds) then short date
-static void insert_time_date(Window *window) {
+// Notepad's F5 stamp: the locale's short time (no seconds) then short date.
+// Returns false (out empty) when the local time is unavailable.
+static bool format_time_date(char *stamp, size_t size) {
+    stamp[0] = '\0';
     time_t now = time(NULL);
     struct tm local;
     if (!localtime_r(&now, &local))
-        return;
+        return false;
 
     // The locale's time format minus its seconds field, e.g. "%I:%M:%S %p" ->
     // "%I:%M %p" (and "%H:%M:%S" -> "%H:%M" in the C locale)
@@ -1308,9 +1314,31 @@ static void insert_time_date(Window *window) {
         strftime(time_text, sizeof(time_text), time_fmt, &local);
     strftime(date_text, sizeof(date_text), "%x", &local);
 
+    snprintf(stamp, size, "%s %s", time_text, date_text);
+    return true;
+}
+
+static void insert_time_date(Window *window) {
     char stamp[132];
-    snprintf(stamp, sizeof(stamp), "%s %s", time_text, date_text);
-    npad_gtk_replace_selection(window, stamp);
+    if (format_time_date(stamp, sizeof(stamp)))
+        npad_gtk_replace_selection(window, stamp);
+}
+
+// A .LOG file just opened: stamp a new line at the end, as Notepad does. One
+// user action, so it is one undo step and marks the document modified.
+void ui_platform_append_time_date_line(Window *window) {
+    if (!window)
+        return;
+    char stamp[132];
+    if (!format_time_date(stamp, sizeof(stamp)))
+        return;
+    char line[140];
+    snprintf(line, sizeof(line), "\n%s\n", stamp);
+    GtkTextIter end;
+    gtk_text_buffer_get_end_iter(window->buffer, &end);
+    gtk_text_buffer_place_cursor(window->buffer, &end);
+    npad_gtk_replace_selection(window, line);
+    update_status_bar(window);
 }
 
 void npad_gtk_replace_selection(Window *window, const char *text) {

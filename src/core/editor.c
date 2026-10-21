@@ -22,8 +22,10 @@
 
 #ifdef _WIN32
 #include <process.h>
+#include <windows.h>
 #define npad_getpid _getpid
 #else
+#include <sys/stat.h>
 #include <unistd.h>
 #define npad_getpid getpid
 #endif
@@ -46,6 +48,24 @@ char *g_startup_file = NULL;
 static char g_session_slot[64] = { 0 };
 static char *g_recover_slot = NULL;
 
+// Modal UI raised from this file that is still open. The platform keeps
+// dispatching timers while a modal box or file dialog runs its own loop, so
+// the auto-save tick can arrive in the middle of "Save changes?", the Save As
+// dialog or the "changed by another program" question - and writing then
+// would make Don't Save, Cancel or No meaningless.
+static int g_modal_depth = 0;
+
+// The auto-save note currently in the status bar, so success clears only
+// what auto-save itself put there (the area is shared with other messages)
+static bool g_auto_save_notice = false;
+
+// The timer intervals last handed to the platform (-1: none yet, so the next
+// apply always arms). Every settings broadcast from another instance re-reads
+// the preferences, and re-arming an unchanged timer restarted its countdown -
+// a busy machine could keep pushing the next auto-save away indefinitely.
+static int g_armed_auto_save = -1;
+static int g_armed_session = -1;
+
 static char *duplicate_string(const char *str) {
     if (!str)
         return NULL;
@@ -64,20 +84,43 @@ static void editor_update_status_info(void) {
     }
 }
 
-// Apply the auto-save settings to the platform timer
+// Apply the auto-save settings to the platform timer, only when they changed
 static void editor_apply_auto_save_timer(void) {
-    if (g_editor.main_window) {
-        ui_set_auto_save_timer(g_editor.main_window,
-                               g_editor.auto_save_enabled ? g_editor.auto_save_interval : 0);
-    }
+    if (!g_editor.main_window)
+        return;
+    int seconds = g_editor.auto_save_enabled ? g_editor.auto_save_interval : 0;
+    if (seconds == g_armed_auto_save)
+        return;
+    g_armed_auto_save = seconds;
+    ui_set_auto_save_timer(g_editor.main_window, seconds);
 }
 
-// Apply the session-recovery settings to the platform timer
+// Apply the session-recovery settings to the platform timer, only when they
+// changed
 static void editor_apply_session_timer(void) {
-    if (g_editor.main_window) {
-        ui_set_session_timer(g_editor.main_window,
-                             g_editor.session_resume_enabled ? g_editor.session_interval : 0);
-    }
+    if (!g_editor.main_window)
+        return;
+    int seconds = g_editor.session_resume_enabled ? g_editor.session_interval : 0;
+    if (seconds == g_armed_session)
+        return;
+    g_armed_session = seconds;
+    ui_set_session_timer(g_editor.main_window, seconds);
+}
+
+// Wrappers for the modal UI this file raises, so the auto-save tick can tell
+// that one is open (see g_modal_depth)
+static bool editor_ask(const char *message, bool is_question) {
+    g_modal_depth++;
+    bool answer = ui_show_message_box(g_editor.main_window, "npad", message, is_question);
+    g_modal_depth--;
+    return answer;
+}
+
+static char *editor_run_save_dialog(FileDialogParams *params) {
+    g_modal_depth++;
+    char *filename = ui_show_save_dialog(g_editor.main_window, params);
+    g_modal_depth--;
+    return filename;
 }
 
 // The directory recovery snapshots live in (a subdirectory of the config
@@ -92,9 +135,15 @@ char *editor_session_dir(void) {
     return dir;
 }
 
-// Write a crash-recovery snapshot of the current unsaved document
+// Write a crash-recovery snapshot of the current unsaved document. Only when
+// something changed since the last one: the snapshot is the whole document,
+// written and read back on the UI thread, so rewriting an unchanged large file
+// every interval froze the window for nothing. A failed write leaves the flag
+// set, so the next tick tries again.
 static void editor_snapshot_session(void) {
     if (!g_editor.session_resume_enabled || !g_editor.is_modified || !g_editor.main_window)
+        return;
+    if (!g_editor.snapshot_dirty)
         return;
 
     char *dir = editor_session_dir();
@@ -103,8 +152,10 @@ static void editor_snapshot_session(void) {
 
     char *content = ui_get_text(g_editor.main_window);
     if (content) {
-        session_write(dir, g_session_slot, content, g_editor.current_file,
-                      g_editor.file_info.encoding, g_editor.file_info.line_ending);
+        if (session_write(dir, g_session_slot, content, g_editor.current_file,
+                          g_editor.file_info.encoding, g_editor.file_info.line_ending)) {
+            g_editor.snapshot_dirty = false;
+        }
         free(content);
     }
     free(dir);
@@ -345,6 +396,11 @@ static void apply_default_eol_if_no_breaks(TextFileInfo *info, const char *conte
 
 bool editor_init(void) {
     memset(&g_editor, 0, sizeof(EditorState));
+    g_editor.file_stamp.size = -1; // Nothing stamped yet
+    g_modal_depth = 0;
+    g_auto_save_notice = false;
+    g_armed_auto_save = -1;
+    g_armed_session = -1;
 
     // Notepad-alignment defaults: auto-save is destructive (overwrites the
     // file from a timer) so it is opt-in; crash-recovery snapshots never
@@ -404,6 +460,9 @@ void editor_set_main_window(Window *window) {
     g_editor.main_window = window;
     editor_update_title();
     editor_update_status_info();
+    // A new window has no timers yet, whatever an earlier one had
+    g_armed_auto_save = -1;
+    g_armed_session = -1;
     editor_apply_auto_save_timer();
     editor_apply_session_timer();
     // The crash-recovery scan runs via UI_EVENT_STARTUP_DEFERRED (shortly
@@ -426,6 +485,10 @@ bool editor_new_file(void) {
     }
 
     load_default_file_info(&g_editor.file_info);
+    g_editor.file_stamp.size = -1;
+    g_editor.file_stamp.write_time = 0;
+    g_editor.auto_save_held = false;
+    g_editor.suppress_change_prompt = false;
 
     editor_set_modified(false);
     editor_update_status_info();
@@ -445,6 +508,91 @@ int editor_default_large_file_mb(void) {
     return mb;
 }
 
+// The final path component (borrowed pointer into path)
+static const char *path_base_name(const char *path) {
+    const char *slash = strrchr(path, '/');
+    const char *backslash = strrchr(path, '\\');
+    const char *separator = slash;
+    if (!separator || (backslash && backslash > separator))
+        separator = backslash;
+    return separator ? separator + 1 : path;
+}
+
+static bool ascii_iequal(const char *a, const char *b) {
+    for (; *a && *b; a++, b++) {
+        char ca = (*a >= 'A' && *a <= 'Z') ? (char) (*a - 'A' + 'a') : *a;
+        char cb = (*b >= 'A' && *b <= 'Z') ? (char) (*b - 'A' + 'a') : *b;
+        if (ca != cb)
+            return false;
+    }
+    return *a == *b;
+}
+
+bool editor_is_program_file(const char *filename) {
+    if (!filename)
+        return false;
+
+    // By name: what Windows or a Linux desktop runs, installs or follows
+    // rather than opens as a document
+    static const char *const k_program_extensions[] = {
+        "exe",        "com",  "bat",       "cmd",         "ps1",      "psm1",       "psd1",
+        "vbs",        "vbe",  "js",        "jse",         "wsf",      "wsh",        "ws",
+        "msc",        "msi",  "msp",       "mst",         "scr",      "pif",        "cpl",
+        "hta",        "lnk",  "reg",       "jar",         "inf",      "scf",        "url",
+        "chm",        "sct",  "gadget",    "application", "appx",     "appxbundle", "msix",
+        "msixbundle", "xbap", "appref-ms", "sh",          "bash",     "zsh",        "csh",
+        "ksh",        "fish", "command",   "run",         "appimage", "desktop",    "py",
+        "pyw",        "pl",   "rb"
+    };
+    const char *base = path_base_name(filename);
+    const char *dot = strrchr(base, '.');
+    if (dot && dot[1]) {
+        for (size_t i = 0; i < sizeof(k_program_extensions) / sizeof(k_program_extensions[0]);
+             i++) {
+            if (ascii_iequal(dot + 1, k_program_extensions[i]))
+                return true;
+        }
+    }
+
+#ifndef _WIN32
+    // Anything marked executable is run by some file managers' default action
+    struct stat st;
+    if (stat(filename, &st) == 0 && S_ISREG(st.st_mode) && (st.st_mode & 0111))
+        return true;
+#endif
+
+    // By content, so a renamed program is still recognised: a PE image ("MZ"),
+    // an ELF binary, or a script with an interpreter line. strncmp stops at
+    // the terminator of a shorter file.
+    char *head = file_read_text_limited(filename, 4);
+    if (!head)
+        return false;
+    bool program = (head[0] == 'M' && head[1] == 'Z') ||
+                   ((unsigned char) head[0] == 0x7F && strncmp(head + 1, "ELF", 3) == 0) ||
+                   (head[0] == '#' && head[1] == '!');
+    free(head);
+    return program;
+}
+
+// "Open with the default app" on something that would run rather than open:
+// say so before handing it over. Returns true to go ahead.
+static bool editor_confirm_run_program(const char *filename) {
+    char message[512];
+    snprintf(message, sizeof(message),
+             "\"%.300s\" is a program, script or shortcut.\n\n"
+             "Opening it with the default app may run it. Do you want to run it?",
+             path_base_name(filename));
+    return editor_ask(message, true);
+}
+
+// Notepad's .LOG: a document whose first line is exactly ".LOG" (upper case,
+// nothing else on that line) gets the time and date on a new line at its end
+// every time it is opened
+static bool text_starts_log(const char *text) {
+    return text && strncmp(text, ".LOG", 4) == 0 &&
+           (text[4] == '\0' || text[4] == '\r' || text[4] == '\n');
+}
+
 bool editor_open_file(const char *filename) {
     if (!filename)
         return false;
@@ -455,10 +603,15 @@ bool editor_open_file(const char *filename) {
     // A binary-looking file is usually a mistake: offer the system's own
     // handler for it instead of a wall of control characters
     if (file_looks_binary(filename)) {
+        g_modal_depth++;
         UiOpenChoice choice = ui_prompt_binary_open(g_editor.main_window, filename);
+        g_modal_depth--;
         if (choice == UI_OPEN_CANCEL)
             return false;
         if (choice == UI_OPEN_WITH_DEFAULT) {
+            // The default app for a program is the program itself
+            if (editor_is_program_file(filename) && !editor_confirm_run_program(filename))
+                return false;
             ui_open_with_default_app(filename);
             return false; // Current document stays untouched
         }
@@ -474,7 +627,7 @@ bool editor_open_file(const char *filename) {
                      "The file is %.1f MB and may take a while to open.\n"
                      "Do you want to continue?",
                      size / (1024.0 * 1024.0));
-            if (!ui_show_message_box(g_editor.main_window, "npad", message, true)) {
+            if (!editor_ask(message, true)) {
                 return false;
             }
         }
@@ -492,7 +645,7 @@ bool editor_open_file(const char *filename) {
         char error_msg[512];
         snprintf(error_msg, sizeof(error_msg), "Could not open file: %.300s\n%.150s", filename,
                  file_get_last_error());
-        ui_show_message_box(g_editor.main_window, "npad", error_msg, false);
+        editor_ask(error_msg, false);
         return false;
     }
 
@@ -504,18 +657,20 @@ bool editor_open_file(const char *filename) {
         return false;
     }
 
-    apply_default_eol_if_no_breaks(&info, content); // Before content is freed
+    // Both need the text, so before it is freed. A fragment of a binary file
+    // is not a log, and stamping it would only mark it modified.
+    apply_default_eol_if_no_breaks(&info, content);
+    bool log_file = !info.truncated && text_starts_log(content);
     if (g_editor.main_window) {
         ui_set_text(g_editor.main_window, content);
     }
-    // Needs the text, so before it is freed
-    apply_default_eol_if_no_breaks(&info, content);
     free(content);
 
     // Baseline for external-change detection, and a fresh slate for the
-    // per-file "don't ask again" choice
+    // per-file "don't ask again" choice and the auto-save hold
     file_get_stamp(filename, &g_editor.file_stamp);
     g_editor.suppress_change_prompt = false;
+    g_editor.auto_save_held = false;
 
     if (g_editor.current_file) {
         free(g_editor.current_file);
@@ -528,28 +683,90 @@ bool editor_open_file(const char *filename) {
     editor_set_modified(false);
     editor_update_status_info();
 
+    // Last, once the document is fully this file: the stamp is an edit like
+    // any other (undoable, modified, protected by the recovery snapshot)
+    if (log_file && g_editor.main_window) {
+        ui_append_time_date_line(g_editor.main_window);
+        if (!g_editor.is_modified)
+            editor_set_modified(true); // In case the platform sent no change event
+    }
+
     return true;
+}
+
+bool editor_open_startup_file(const char *filename) {
+    if (!filename)
+        return false;
+
+    if (!file_exists(filename)) {
+        // Only when the folder is there: a mistyped folder is an error, as in
+        // Notepad ("The system cannot find the path specified"), which the
+        // ordinary open reports
+        char *dir = file_get_directory(filename);
+        bool folder_exists = dir && file_exists(dir);
+        free(dir);
+
+        if (folder_exists) {
+            char message[600];
+            snprintf(message, sizeof(message),
+                     "Cannot find the %.400s file.\n\nDo you want to create a new file?", filename);
+            if (!editor_ask(message, true))
+                return false; // No: an Untitled document, as in Notepad
+
+            // Notepad creates it there and then, so it exists under that name
+            // from the start and Save goes straight back to it
+            TextFileInfo info;
+            load_default_file_info(&info);
+            info.truncated = false;
+            if (!file_write_text_ex(filename, "", &info)) {
+                char error_msg[512];
+                snprintf(error_msg, sizeof(error_msg), "Could not create file: %.300s\n%.150s",
+                         filename, file_get_last_error());
+                editor_ask(error_msg, false);
+                return false;
+            }
+        }
+    }
+
+    return editor_open_file(filename);
 }
 
 // Warn before a user-initiated save that would replace characters the ANSI
 // code page cannot represent with '?'. Returns false if the user cancels.
 // Classic Notepad behaviour; auto-save never prompts (it skips instead).
-static bool editor_confirm_lossy_ansi(const char *content) {
-    if (g_editor.file_info.encoding != NPAD_ENC_ANSI || !content || !file_ansi_is_lossy(content)) {
+// encoding is the one the save will write, which for Save As is the dialog's
+// choice rather than the document's.
+static bool editor_confirm_lossy_ansi(const char *content, TextEncoding encoding) {
+    if (encoding != NPAD_ENC_ANSI || !content || !file_ansi_is_lossy(content)) {
         return true;
     }
-    return ui_show_message_box(g_editor.main_window, "npad",
-                               "This document contains characters that cannot be saved in "
-                               "ANSI encoding.\nThey will be replaced with '?'. Save anyway?",
-                               true);
+    return editor_ask("This document contains characters that cannot be saved in "
+                      "ANSI encoding.\nThey will be replaced with '?'. Save anyway?",
+                      true);
+}
+
+// Whether current_file on disk is no longer what npad last read or wrote,
+// whatever the watch_file_changes preference or a "Stop telling me" choice
+// says: those decide whether to ASK, but auto-save must never overwrite
+// another program's version without asking. A file that has gone counts as
+// changed too - recreating something the user just deleted or moved is not a
+// save. A file that did not exist when stamped and still does not is
+// unchanged, so the first save of a new path proceeds.
+static bool editor_disk_copy_changed(void) {
+    if (!g_editor.current_file)
+        return false;
+    FileStamp now;
+    file_get_stamp(g_editor.current_file, &now); // size -1 when it is gone
+    return !file_stamp_equal(&now, &g_editor.file_stamp);
 }
 
 // --- External change detection --------------------------------------------
 //
 // Checked when the window is activated rather than on a timer: that is the
 // moment the user would notice anyway, and it costs nothing while npad is not
-// in front. Also checked before a save, which is the genuinely dangerous
-// moment - silently overwriting someone else's edit.
+// in front. Also checked before a manual save, which is the genuinely
+// dangerous moment - silently overwriting someone else's edit. Auto-save uses
+// editor_disk_copy_changed instead and simply does not write.
 EditorExternalChange editor_check_external_change(void) {
     if (!g_editor.current_file || g_editor.suppress_change_prompt)
         return EDITOR_FILE_UNCHANGED;
@@ -576,9 +793,16 @@ void editor_suppress_change_prompt(void) {
 
 void editor_accept_external_change(void) {
     // Adopt what is on disk now as the baseline, so the same change is not
-    // reported again on every activation
+    // reported again on every activation. If that really was a change, the
+    // user has just chosen to keep their version without writing it ("Keep
+    // editing: nothing is written"), so auto-save waits for their next save
+    // rather than overwriting the other program's version a tick later.
     if (g_editor.current_file) {
-        file_get_stamp(g_editor.current_file, &g_editor.file_stamp);
+        FileStamp now;
+        file_get_stamp(g_editor.current_file, &now);
+        if (!file_stamp_equal(&now, &g_editor.file_stamp))
+            g_editor.auto_save_held = true;
+        g_editor.file_stamp = now;
     }
 }
 
@@ -597,30 +821,148 @@ bool editor_reload_from_disk(void) {
 
     g_editor.file_info = info;
     file_get_stamp(g_editor.current_file, &g_editor.file_stamp);
-    editor_set_modified(false); // Now identical to the file again
+    g_editor.auto_save_held = false; // The buffer is the disk's version now
+    editor_set_modified(false);      // Now identical to the file again
     editor_update_status_info();
     editor_clear_session(); // The unsaved copy this replaced is gone by choice
     return true;
 }
 
+// --- Saving ---------------------------------------------------------------
+
+#ifdef _WIN32
+// Volume serial plus file index: the same file under any name (hard links,
+// 8.3 names, a different case or a mapped drive)
+static bool get_file_identity(const char *path, BY_HANDLE_FILE_INFORMATION *out) {
+    int count = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
+    if (count <= 0)
+        return false;
+    wchar_t *wide = malloc((size_t) count * sizeof(wchar_t));
+    if (!wide)
+        return false;
+    MultiByteToWideChar(CP_UTF8, 0, path, -1, wide, count);
+    // No access rights asked for: only the identity is read, so this opens
+    // even a file another program holds locked
+    HANDLE handle = CreateFileW(wide, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    free(wide);
+    if (handle == INVALID_HANDLE_VALUE)
+        return false;
+    BOOL ok = GetFileInformationByHandle(handle, out);
+    CloseHandle(handle);
+    return ok != 0;
+}
+#endif
+
+// Whether two paths name the same existing file, by identity rather than by
+// spelling (a hard link or another spelling of the path is the same file)
+static bool paths_are_same_file(const char *a, const char *b) {
+    if (!a || !b)
+        return false;
+
+    char *full_a = file_get_absolute_path(a);
+    char *full_b = file_get_absolute_path(b);
+#ifdef _WIN32
+    bool same = full_a && full_b && _stricmp(full_a, full_b) == 0;
+#else
+    bool same = full_a && full_b && strcmp(full_a, full_b) == 0;
+#endif
+    free(full_a);
+    free(full_b);
+    if (same)
+        return true;
+
+#ifdef _WIN32
+    BY_HANDLE_FILE_INFORMATION info_a, info_b;
+    if (!get_file_identity(a, &info_a) || !get_file_identity(b, &info_b))
+        return false;
+    return info_a.dwVolumeSerialNumber == info_b.dwVolumeSerialNumber &&
+           info_a.nFileIndexHigh == info_b.nFileIndexHigh &&
+           info_a.nFileIndexLow == info_b.nFileIndexLow;
+#else
+    struct stat st_a, st_b;
+    if (stat(a, &st_a) != 0 || stat(b, &st_b) != 0)
+        return false;
+    return st_a.st_dev == st_b.st_dev && st_a.st_ino == st_b.st_ino;
+#endif
+}
+
+// Where Save As starts for a document npad could only partly load:
+// "C:\pics\photo.png" becomes "C:\pics\photo (text).txt", so pressing Enter
+// in the dialog can never pick the original. Caller frees.
+static char *derived_text_name(const char *path) {
+    static const char suffix[] = " (text).txt";
+    if (!path)
+        return duplicate_string("Untitled.txt");
+    const char *base = path_base_name(path);
+    const char *dot = strrchr(base, '.');
+    size_t stem = (dot && dot != base) ? (size_t) (dot - path) : strlen(path);
+    char *name = malloc(stem + sizeof(suffix));
+    if (!name)
+        return NULL;
+    memcpy(name, path, stem);
+    memcpy(name + stem, suffix, sizeof(suffix));
+    return name;
+}
+
+static void editor_set_auto_save_notice(const char *message) {
+    if (!g_editor.main_window)
+        return;
+    ui_set_status_message(g_editor.main_window, message);
+    g_auto_save_notice = (message != NULL);
+}
+
+// Write the document over current_file and adopt the result as the new
+// baseline. Shared by Save and auto-save; never prompts.
+static bool editor_write_current(const char *content) {
+    if (!file_write_text_ex(g_editor.current_file, content, &g_editor.file_info))
+        return false;
+    // npad's saves are atomic (temp + rename), so every write changes the
+    // file's identity. Without re-stamping, npad would report its OWN write
+    // as an external change the next time the window is activated.
+    file_get_stamp(g_editor.current_file, &g_editor.file_stamp);
+    g_editor.auto_save_held = false;
+    editor_set_modified(false);
+    editor_clear_session(); // Saved work no longer needs recovery
+    if (g_auto_save_notice)
+        editor_set_auto_save_notice(NULL);
+    return true;
+}
+
+static bool editor_save_as_encoded(const char *filename, TextEncoding encoding);
+
+// The Save As dialog, then the save. Only a successful write changes the
+// document: a cancelled dialog, a declined ANSI warning or a failed write
+// leave its file, encoding and status bar exactly as they were.
+static bool editor_save_as_dialog(const char *default_name) {
+    FileDialogParams params = { .title = "Save As",
+                                .default_filename = default_name ? default_name : "Untitled.txt",
+                                .filter = "Text Documents (*.txt)|*.txt|All Files (*.*)|*.*",
+                                .save_dialog = true,
+                                .encoding = g_editor.file_info.encoding };
+
+    char *filename = editor_run_save_dialog(&params);
+    if (!filename)
+        return false; // User cancelled
+
+    bool saved = editor_save_as_encoded(filename, params.encoding); // The dialog's picker
+    free(filename);
+    return saved;
+}
+
+// Save As for a document that is only the part of a binary file before its
+// first NUL, starting from a name derived from the original
+static bool editor_save_truncated_as(void) {
+    char *suggested = derived_text_name(g_editor.current_file);
+    bool saved = editor_save_as_dialog(suggested ? suggested : "Untitled.txt");
+    free(suggested);
+    return saved;
+}
+
 bool editor_save_file(void) {
     if (!g_editor.current_file) {
         // No current file, prompt for save as
-        FileDialogParams params = { .title = "Save As",
-                                    .default_filename = "Untitled.txt",
-                                    .filter = "Text Documents (*.txt)|*.txt|All Files (*.*)|*.*",
-                                    .save_dialog = true,
-                                    .encoding = g_editor.file_info.encoding };
-
-        char *filename = ui_show_save_dialog(g_editor.main_window, &params);
-        if (!filename) {
-            return false; // User cancelled
-        }
-
-        g_editor.file_info.encoding = params.encoding; // From the dialog's picker
-        bool result = editor_save_file_as(filename);
-        free(filename);
-        return result;
+        return editor_save_as_dialog("Untitled.txt");
     }
 
     if (!g_editor.main_window)
@@ -631,106 +973,170 @@ bool editor_save_file(void) {
     // would replace the original with that fragment: a 120 KB image becomes
     // nine bytes. Divert to Save As so the original is never the target.
     if (g_editor.file_info.truncated) {
-        ui_show_message_box(g_editor.main_window, "npad",
-                            "This file contains binary data, so npad could only load the "
-                            "part before it.\n\n"
-                            "Saving over the original would discard the rest, so choose a "
-                            "different file to save this text to.",
-                            false);
+        editor_ask("This file contains binary data, so npad could only load the "
+                   "part before it.\n\n"
+                   "Saving over the original would discard the rest, so choose a "
+                   "different file to save this text to.",
+                   false);
+        return editor_save_truncated_as(); // Cancelled: original intact, the point
+    }
 
-        FileDialogParams params = { .title = "Save As",
-                                    .default_filename = "Untitled.txt",
-                                    .filter = "Text Documents (*.txt)|*.txt|All Files (*.*)|*.*",
-                                    .save_dialog = true,
-                                    .encoding = g_editor.file_info.encoding };
-        char *filename = ui_show_save_dialog(g_editor.main_window, &params);
-        if (!filename)
-            return false; // Cancelled - original still intact, which is the point
-
-        g_editor.file_info.encoding = params.encoding;
-        bool saved = editor_save_file_as(filename);
-        free(filename);
-        return saved;
+    // Another program has rewritten the file since npad read it. Saving would
+    // silently replace its version, so ask first; No keeps both by saving
+    // this one under another name (cancelling that writes nothing at all).
+    if (editor_check_external_change() == EDITOR_FILE_MODIFIED) {
+        char message[640];
+        snprintf(message, sizeof(message),
+                 "%.400s has been changed by another program since npad opened it.\n\n"
+                 "Do you want to replace it with your version?\n"
+                 "Choose No to save your version as a different file instead.",
+                 g_editor.current_file);
+        if (!editor_ask(message, true))
+            return editor_save_as_dialog(g_editor.current_file);
     }
 
     char *content = ui_get_text(g_editor.main_window);
     if (!content)
         return false;
 
-    if (!editor_confirm_lossy_ansi(content)) {
+    if (!editor_confirm_lossy_ansi(content, g_editor.file_info.encoding)) {
         free(content);
         return false; // User declined the lossy ANSI save
     }
 
-    bool success = file_write_text_ex(g_editor.current_file, content, &g_editor.file_info);
-    if (success) {
-        // npad's saves are atomic (temp + rename), so every write changes the
-        // file's identity. Without re-stamping, npad would report its OWN
-        // write as an external change the next time the window is activated.
-        file_get_stamp(g_editor.current_file, &g_editor.file_stamp);
-    }
+    bool success = editor_write_current(content);
     free(content);
 
-    if (success) {
-        editor_set_modified(false);
-        editor_clear_session(); // Saved work no longer needs recovery
-    } else {
+    if (!success) {
         char error_msg[512];
         snprintf(error_msg, sizeof(error_msg), "Could not save file: %.300s\n%.150s",
                  g_editor.current_file, file_get_last_error());
-        ui_show_message_box(g_editor.main_window, "npad", error_msg, false);
+        editor_ask(error_msg, false);
     }
 
     return success;
 }
 
-bool editor_save_file_as(const char *filename) {
+// Auto-save: silent by design. It runs from a timer, so it never raises a
+// dialog - a failure on Win32 used to open another modal error box every
+// interval, each nested inside the last. Anything that would need the user
+// (a binary fragment, a lossy ANSI save, another program's change, a write
+// error) skips the write and says why in the status bar instead; the next
+// manual save gets the full explanation, and the recovery snapshot protects
+// the text meanwhile.
+static void editor_auto_save(void) {
+    static bool in_progress = false;
+    if (in_progress || g_modal_depth > 0)
+        return; // Never inside one of npad's own questions or dialogs
+    if (!g_editor.auto_save_enabled || !g_editor.is_modified || !g_editor.current_file ||
+        !g_editor.main_window)
+        return;
+    // Saving a fragment of a binary file is a Save As, which is a dialog
+    if (g_editor.file_info.truncated)
+        return;
+
+    if (g_editor.auto_save_held || editor_disk_copy_changed()) {
+        editor_set_auto_save_notice(
+            "Auto-save paused: the file was changed outside npad. Save to resume.");
+        return;
+    }
+
+    char *content = ui_get_text(g_editor.main_window);
+    if (!content)
+        return;
+    if (g_editor.file_info.encoding == NPAD_ENC_ANSI && file_ansi_is_lossy(content)) {
+        free(content);
+        editor_set_auto_save_notice(
+            "Auto-save skipped: some characters cannot be saved in ANSI. Save to choose.");
+        return;
+    }
+
+    in_progress = true;
+    bool saved = editor_write_current(content);
+    in_progress = false;
+    free(content);
+
+    if (!saved) {
+        char notice[256];
+        snprintf(notice, sizeof(notice), "Auto-save failed: %.200s", file_get_last_error());
+        editor_set_auto_save_notice(notice);
+    }
+}
+
+// Save to filename in the given encoding. The encoding (and everything else
+// about the document) is committed only after the write succeeded: setting
+// it first meant a failed or declined Save As left the document switched to
+// the new encoding while the status bar still showed the old one, and the
+// next Ctrl+S re-encoded the original file without a word.
+static bool editor_save_as_encoded(const char *filename, TextEncoding encoding) {
     if (!filename || !g_editor.main_window)
         return false;
+
+    // A fragment of a binary file must never land on the file it came from,
+    // whatever name the dialog was given for it (the same path, another
+    // spelling of it, or a hard link)
+    if (g_editor.file_info.truncated && paths_are_same_file(filename, g_editor.current_file)) {
+        editor_ask("This is the file npad could only partly load, because it contains "
+                   "binary data.\n\n"
+                   "Saving over it would discard everything after that point, so choose a "
+                   "different file to save this text to.",
+                   false);
+        return false;
+    }
 
     char *content = ui_get_text(g_editor.main_window);
     if (!content)
         return false;
 
-    if (!editor_confirm_lossy_ansi(content)) {
+    if (!editor_confirm_lossy_ansi(content, encoding)) {
         free(content);
         return false; // User declined the lossy ANSI save
     }
 
-    bool success = file_write_text_ex(filename, content, &g_editor.file_info);
+    // Whatever was loaded is about to be written in full to THIS file, so it
+    // is no longer a fragment of something larger and Save may overwrite it
+    TextFileInfo info = g_editor.file_info;
+    info.encoding = encoding;
+    info.truncated = false;
+
+    bool success = file_write_text_ex(filename, content, &info);
     free(content);
 
-    if (success) {
-        char *new_path = duplicate_string(filename);
-        if (!new_path) {
-            NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, filename,
-                             "Failed to allocate memory for new file path");
-            return false;
-        }
-
-        if (g_editor.current_file) {
-            free(g_editor.current_file);
-        }
-        g_editor.current_file = new_path;
-
-        // Whatever was loaded has now been written in full to THIS file, so it
-        // is no longer a fragment of something larger and Save may overwrite it
-        g_editor.file_info.truncated = false;
-        file_get_stamp(new_path, &g_editor.file_stamp);
-        g_editor.suppress_change_prompt = false; // A different file, fresh slate
-
-        settings_add_recent_file(filename);
-        editor_set_modified(false);
-        editor_clear_session(); // Saved work no longer needs recovery
-        editor_update_status_info();
-    } else {
+    if (!success) {
         char error_msg[512];
         snprintf(error_msg, sizeof(error_msg), "Could not save file: %.300s\n%.150s", filename,
                  file_get_last_error());
-        ui_show_message_box(g_editor.main_window, "npad", error_msg, false);
+        editor_ask(error_msg, false);
+        return false;
     }
 
-    return success;
+    char *new_path = duplicate_string(filename);
+    if (!new_path) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, filename,
+                         "Failed to allocate memory for new file path");
+        return false;
+    }
+
+    if (g_editor.current_file) {
+        free(g_editor.current_file);
+    }
+    g_editor.current_file = new_path;
+    g_editor.file_info = info;
+    file_get_stamp(new_path, &g_editor.file_stamp);
+    g_editor.suppress_change_prompt = false; // A different file, fresh slate
+    g_editor.auto_save_held = false;
+
+    settings_add_recent_file(filename);
+    editor_set_modified(false);
+    editor_clear_session(); // Saved work no longer needs recovery
+    editor_update_status_info();
+    if (g_auto_save_notice)
+        editor_set_auto_save_notice(NULL);
+    return true;
+}
+
+bool editor_save_file_as(const char *filename) {
+    return editor_save_as_encoded(filename, g_editor.file_info.encoding);
 }
 
 bool editor_close_file(void) {
@@ -779,6 +1185,9 @@ bool editor_is_modified(void) {
 
 void editor_set_modified(bool modified) {
     g_editor.is_modified = modified;
+    // Modified: what the recovery slot holds (if anything) is out of date.
+    // Unmodified: there is nothing to protect until the next edit.
+    g_editor.snapshot_dirty = modified;
     if (g_editor.main_window) {
         ui_set_text_modified(g_editor.main_window, modified);
     }
@@ -873,6 +1282,8 @@ void editor_enable_session_resume(bool enabled) {
     editor_apply_session_timer();
     if (!enabled) {
         editor_clear_session(); // Drop any snapshot when the feature is turned off
+    } else if (g_editor.is_modified) {
+        g_editor.snapshot_dirty = true; // Turning it off dropped the old snapshot
     }
 }
 
@@ -887,12 +1298,18 @@ void editor_reload_prefs(void) {
         g_editor.auto_save_interval = 10;
     }
 
+    bool was_resuming = g_editor.session_resume_enabled;
     g_editor.session_resume_enabled = settings_get_bool("session_resume_enabled", true);
     g_editor.session_interval = settings_get_int("session_interval", DEFAULT_SESSION_INTERVAL_SEC);
     if (g_editor.session_interval < 5) {
         g_editor.session_interval = 5;
     }
+    if (g_editor.session_resume_enabled && !was_resuming && g_editor.is_modified) {
+        g_editor.snapshot_dirty = true; // Switched back on elsewhere: protect this one too
+    }
 
+    // Each apply re-arms only a timer whose interval actually changed, so the
+    // broadcast every other instance sends does not keep restarting them
     editor_apply_auto_save_timer();
     editor_apply_session_timer();
 }
@@ -938,7 +1355,9 @@ bool editor_handle_event(const UIEvent *event) {
                                             "Text Documents (*.txt)|*.txt|All Files (*.*)|*.*",
                                         .save_dialog = false };
 
+            g_modal_depth++;
             char *filename = ui_show_open_dialog(g_editor.main_window, &params);
+            g_modal_depth--;
             if (filename) {
                 editor_open_file(filename);
                 free(filename);
@@ -950,25 +1369,18 @@ bool editor_handle_event(const UIEvent *event) {
             editor_save_file();
             return true;
 
-        case UI_EVENT_FILE_SAVE_AS: {
+        case UI_EVENT_FILE_SAVE_AS:
             // Pre-fill with the current file (full path so the dialog can open
-            // its folder and reuse its name) rather than always "Untitled.txt"
-            FileDialogParams params = {
-                .title = "Save As",
-                .default_filename = g_editor.current_file ? g_editor.current_file : "Untitled.txt",
-                .filter = "Text Documents (*.txt)|*.txt|All Files (*.*)|*.*",
-                .save_dialog = true,
-                .encoding = g_editor.file_info.encoding
-            };
-
-            char *filename = ui_show_save_dialog(g_editor.main_window, &params);
-            if (filename) {
-                g_editor.file_info.encoding = params.encoding; // From the dialog's picker
-                editor_save_file_as(filename);
-                free(filename);
+            // its folder and reuse its name) rather than always "Untitled.txt" -
+            // except for a fragment of a binary file, whose original must not
+            // be one Enter away
+            if (g_editor.file_info.truncated && g_editor.current_file) {
+                editor_save_truncated_as();
+            } else {
+                editor_save_as_dialog(g_editor.current_file ? g_editor.current_file
+                                                            : "Untitled.txt");
             }
             return true;
-        }
 
         case UI_EVENT_FILE_DROPPED:
             if (event->data) {
@@ -977,27 +1389,8 @@ bool editor_handle_event(const UIEvent *event) {
             return true;
 
         case UI_EVENT_AUTO_SAVE:
-            // Silent auto-save: only for documents that already have a file.
-            // A lossy ANSI save is skipped rather than prompting from a timer
-            // (the user gets the prompt on their next manual save; session
-            // snapshots still protect the unsaved content meanwhile).
-            if (g_editor.auto_save_enabled && g_editor.is_modified && g_editor.current_file) {
-                // A truncated document is skipped outright: editor_save_file
-                // diverts it to Save As, and a modal file dialog raised by a
-                // timer is exactly what this path avoids. The snapshot still
-                // protects the text, and a manual save gets the explanation.
-                bool skip = g_editor.file_info.truncated;
-                if (!skip && g_editor.file_info.encoding == NPAD_ENC_ANSI && g_editor.main_window) {
-                    char *content = ui_get_text(g_editor.main_window);
-                    if (content) {
-                        skip = file_ansi_is_lossy(content);
-                        free(content);
-                    }
-                }
-                if (!skip) {
-                    editor_save_file();
-                }
-            }
+            // Silent auto-save, only for documents that already have a file
+            editor_auto_save();
             return true;
 
         case UI_EVENT_SESSION_SNAPSHOT:
@@ -1052,6 +1445,7 @@ bool editor_handle_event(const UIEvent *event) {
             return true;
 
         case UI_EVENT_TEXT_CHANGED:
+            g_editor.snapshot_dirty = true; // Every edit, not just the first
             if (!g_editor.is_modified) {
                 g_editor.is_modified = true;
                 editor_update_title();
@@ -1083,7 +1477,11 @@ bool editor_prompt_save_changes(void) {
 
     const char *filename = g_editor.current_file ? g_editor.current_file : "Untitled";
 
-    switch (ui_show_save_prompt(g_editor.main_window, filename)) {
+    g_modal_depth++;
+    SavePromptResult choice = ui_show_save_prompt(g_editor.main_window, filename);
+    g_modal_depth--;
+
+    switch (choice) {
         case UI_SAVE_PROMPT_SAVE:
             return editor_save_file();
         case UI_SAVE_PROMPT_DISCARD:
@@ -1099,18 +1497,7 @@ void editor_update_title(void) {
         return;
 
     const char *filename = g_editor.current_file ? g_editor.current_file : "Untitled";
-
-    // Extract just the filename from the full path
-    const char *display_name = filename;
-    const char *last_slash = strrchr(filename, '/');
-    const char *last_backslash = strrchr(filename, '\\');
-    const char *separator = last_slash;
-    if (!separator || (last_backslash && last_backslash > separator)) {
-        separator = last_backslash;
-    }
-    if (separator) {
-        display_name = separator + 1;
-    }
+    const char *display_name = path_base_name(filename); // Just the name, no folder
 
     char title[512];
     snprintf(title, sizeof(title), "%s%.400s - npad", g_editor.is_modified ? "*" : "",

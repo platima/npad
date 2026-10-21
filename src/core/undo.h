@@ -43,9 +43,22 @@ typedef struct {
     void (*remove)(void *ctx, long pos, long count);
 } UndoTarget;
 
-// max_steps bounds the history; the oldest steps are dropped beyond it.
+// max_steps bounds the history; the oldest steps are dropped beyond it. The
+// history is also bounded by the bytes of text it holds, UNDO_DEFAULT_MAX_BYTES
+// unless undo_set_max_bytes says otherwise.
 UndoStack *undo_create(size_t max_steps);
 void undo_destroy(UndoStack *stack);
+
+// Every step keeps a copy of the text it inserted or deleted, so a count of
+// steps alone does not bound memory: 10,000 Replace Alls on a large document
+// are 20,000 copies of it. Past this many bytes the oldest steps are dropped.
+// The newest step is always kept, however large, so the last edit can still
+// be undone. 0 removes the limit.
+#define UNDO_DEFAULT_MAX_BYTES ((size_t) 256 * 1024 * 1024)
+void undo_set_max_bytes(UndoStack *stack, size_t max_bytes);
+
+// Bytes of text the history holds now (undoable and redoable steps)
+size_t undo_total_bytes(const UndoStack *stack);
 
 // Forget all history (loading a new document)
 void undo_clear(UndoStack *stack);

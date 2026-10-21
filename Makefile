@@ -297,8 +297,14 @@ format-check:
 	find src/ -name "*.c" -o -name "*.h" | xargs $(CLANG_FORMAT) --dry-run --Werror
 
 # Testing targets
-test: test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops
+test: test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-editor
 	@echo "All tests completed"
+
+# The editor core (open, save, Save As, auto-save, external changes, timers)
+# against a stub UI layer instead of a window
+test-editor: tests/test_editor
+	@echo "Running editor core tests..."
+	./tests/test_editor
 
 test-file-ops: tests/test_file_ops
 	@echo "Running file operations tests..."
@@ -396,6 +402,12 @@ tests/test_tab_stops: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_
 	@mkdir -p tests
 	$(CC) $(CFLAGS) -o $@ $^ -lpthread
 
+# editor.c is linked against tests/stub_ui_editor.c in place of ui_interface.c
+# and a platform layer
+tests/test_editor: src/core/editor.c $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/stub_ui_editor.c tests/stub_ui_editor.h tests/test_editor.c
+	@mkdir -p tests
+	$(CC) $(CFLAGS) -o $@ src/core/editor.c $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/stub_ui_editor.c tests/test_editor.c -lpthread
+
 # Cleanup
 clean:
 	rm -f $(WINDOWS_GUI_TARGET) $(WINDOWS_TERMINAL_TARGET) $(MACOS_TARGET) $(LINUX_GTK_TARGET) $(LINUX_TERMINAL_TARGET)
@@ -404,8 +416,8 @@ clean:
 	rm -f src/platform/npad.res
 	rm -rf build
 	rm -rf dist/npad_* dist/npad-*.rpm dist/npad-*.pkg.tar.zst dist/npad-v*-portable-linux-*.tar.gz
-	rm -f tests/test_file_ops tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md tests/test_undo tests/test_find_seed tests/test_tab_stops
-	rm -f tests/test_file_ops.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe tests/test_html_md.exe tests/test_undo.exe tests/test_find_seed.exe tests/test_tab_stops.exe
+	rm -f tests/test_file_ops tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md tests/test_undo tests/test_find_seed tests/test_tab_stops tests/test_editor
+	rm -f tests/test_file_ops.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe tests/test_html_md.exe tests/test_undo.exe tests/test_find_seed.exe tests/test_tab_stops.exe tests/test_editor.exe
 
 # Installation (Linux). PREFIX defaults to /usr/local; DESTDIR stages the tree
 # for packaging. Only the GTK desktop app is installed: the ncurses variant is
@@ -513,6 +525,7 @@ help:
 	@echo "  test-error       - Run error system tests"
 	@echo "  test-encoding    - Run encoding/line-ending tests"
 	@echo "  test-undo        - Run undo history tests"
+	@echo "  test-editor      - Run editor core tests (open/save/auto-save, stub UI)"
 	@echo "  clean            - Remove build artifacts"
 	@echo "  install          - Install to PREFIX (default /usr/local; honours DESTDIR)"
 	@echo "  uninstall        - Remove from PREFIX"
@@ -530,4 +543,4 @@ help:
 	@echo "  DEBUG=1          - Enable debug build"
 	@echo "  VERSION          - Version string (auto-detected from git)"
 
-.PHONY: all windows windows-gui windows-arm64 windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm pacman tarball lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo help detect-platform
+.PHONY: all windows windows-gui windows-arm64 windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm pacman tarball lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-editor help detect-platform

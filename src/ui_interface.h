@@ -119,6 +119,11 @@ char *ui_get_selected_text(Window *window);
 void ui_select_all(Window *window);
 void ui_set_cursor_position(Window *window, int position);
 int ui_get_cursor_position(Window *window);
+// Notepad's .LOG stamp: move the caret to the end of the document and insert
+// a line break, the time and date exactly as Edit > Time/Date (F5) writes
+// them, and another line break, as one undoable edit that marks the document
+// modified, with the caret left after it and scrolled into view
+void ui_append_time_date_line(Window *window);
 
 // Clipboard operations
 void ui_cut(Window *window);
@@ -171,6 +176,10 @@ void ui_set_text_modified(Window *window, bool modified);
 int ui_get_line_count(Window *window);
 void ui_get_cursor_line_column(Window *window, int *line, int *column);
 void ui_set_status_info(Window *window, const char *encoding_name, const char *eol_name);
+// A transient message in the status bar's message area (NULL or "" clears
+// it). For things worth knowing that do not deserve a modal box, such as an
+// auto-save that failed or was paused. Not shown while the bar is hidden.
+void ui_set_status_message(Window *window, const char *message);
 
 // Auto-save timer (seconds; 0 disables). Fires UI_EVENT_AUTO_SAVE.
 void ui_set_auto_save_timer(Window *window, int seconds);

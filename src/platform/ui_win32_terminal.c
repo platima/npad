@@ -120,6 +120,10 @@ int ui_platform_get_cursor_position(Window *window) {
     return 0;
 }
 
+void ui_platform_append_time_date_line(Window *window) {
+    (void) window;
+}
+
 void ui_platform_cut(Window *window) {
     (void) window;
 }
@@ -244,6 +248,11 @@ void ui_platform_set_status_info(Window *window, const char *encoding_name, cons
     (void) window;
     (void) encoding_name;
     (void) eol_name;
+}
+
+void ui_platform_set_status_message(Window *window, const char *message) {
+    (void) window;
+    (void) message;
 }
 
 void ui_platform_set_auto_save_timer(Window *window, int seconds) {

@@ -29,6 +29,16 @@ typedef struct {
     // the file's identity, so without that it would report its own writes.
     FileStamp file_stamp;
     bool suppress_change_prompt; // "Don't ask again for this file", session only
+    // The user chose to keep editing after another program changed the file
+    // ("Keep editing: nothing is written"), so auto-save must not overwrite
+    // that version either. Cleared by a manual save, Save As, reload or a new
+    // document.
+    bool auto_save_held;
+    // The text (or its encoding / line ending) changed since the last crash
+    // recovery snapshot was written, so the next session tick has something
+    // new to save. Without it a large modified document was rewritten in
+    // full, identically, on every tick.
+    bool snapshot_dirty;
     Window *main_window;
 } EditorState;
 
@@ -43,10 +53,22 @@ void editor_set_main_window(Window *window);
 bool editor_new_file(void);
 bool editor_open_file(const char *filename);
 
+// Open the file named on the command line. Like Notepad, a path that does not
+// exist (in a folder that does) asks "Cannot find the ... file. Do you want to
+// create a new file?" and on Yes creates it empty and opens it, so Save goes
+// straight back to that name. Anything else behaves as editor_open_file.
+bool editor_open_startup_file(const char *filename);
+
+// Whether handing this file to the system's default application could run it
+// (a program, script, shortcut or installer, by name or by content). Asked
+// before "Open with the default app" on a binary-looking file.
+bool editor_is_program_file(const char *filename);
+
 // Has current_file been changed on disk by something other than npad? Called
-// when the window is activated and before a save. Returns the kind of change
-// so the caller can offer the right choices - a deleted file cannot be
-// reloaded, so it needs different wording.
+// when the window is activated and before a manual save (auto-save checks the
+// disk itself, without the watch_file_changes preference, and never writes
+// over a change). Returns the kind of change so the caller can offer the right
+// choices - a deleted file cannot be reloaded, so it needs different wording.
 typedef enum {
     EDITOR_FILE_UNCHANGED = 0,
     EDITOR_FILE_MODIFIED,
@@ -54,10 +76,14 @@ typedef enum {
 } EditorExternalChange;
 
 EditorExternalChange editor_check_external_change(void);
-void editor_accept_external_change(void); // Stop reporting this one
+// Stop reporting this change ("Keep editing"). Also holds auto-save until the
+// user saves, because keeping their version means nothing is written yet.
+void editor_accept_external_change(void);
 void editor_suppress_change_prompt(void); // For this file, this session only
 bool editor_reload_from_disk(void);       // Discards unsaved edits deliberately
 bool editor_save_file(void);
+// Save to filename in the document's current encoding. Nothing about the
+// document changes unless the write succeeds.
 bool editor_save_file_as(const char *filename);
 bool editor_close_file(void);
 

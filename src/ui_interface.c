@@ -45,6 +45,7 @@ extern char *ui_platform_get_selected_text(Window *window);
 extern void ui_platform_select_all(Window *window);
 extern void ui_platform_set_cursor_position(Window *window, int position);
 extern int ui_platform_get_cursor_position(Window *window);
+extern void ui_platform_append_time_date_line(Window *window);
 
 // Platform clipboard functions
 extern void ui_platform_cut(Window *window);
@@ -84,6 +85,7 @@ extern int ui_platform_get_line_count(Window *window);
 extern void ui_platform_get_cursor_line_column(Window *window, int *line, int *column);
 extern void ui_platform_set_status_info(Window *window, const char *encoding_name,
                                         const char *eol_name);
+extern void ui_platform_set_status_message(Window *window, const char *message);
 extern void ui_platform_set_auto_save_timer(Window *window, int seconds);
 extern void ui_platform_set_session_timer(Window *window, int seconds);
 extern void ui_platform_launch_recovery_instance(const char *slot_id, int cascade_index);
@@ -196,6 +198,10 @@ int ui_get_cursor_position(Window *window) {
     return ui_platform_get_cursor_position(window);
 }
 
+void ui_append_time_date_line(Window *window) {
+    ui_platform_append_time_date_line(window);
+}
+
 void ui_cut(Window *window) {
     ui_platform_cut(window);
 }
@@ -306,6 +312,10 @@ void ui_get_cursor_line_column(Window *window, int *line, int *column) {
 
 void ui_set_status_info(Window *window, const char *encoding_name, const char *eol_name) {
     ui_platform_set_status_info(window, encoding_name, eol_name);
+}
+
+void ui_set_status_message(Window *window, const char *message) {
+    ui_platform_set_status_message(window, message);
 }
 
 void ui_set_auto_save_timer(Window *window, int seconds) {
