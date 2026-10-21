@@ -25,10 +25,9 @@
 #include <unistd.h>
 #endif
 
-// The exact preserve list used by reset_all_preferences (kept in sync here so
-// the test pins the real contract).
-static const char *const KEEP[] = { "recent_file_", "window_", "find_", "replace_" };
-#define KEEP_COUNT ((int) (sizeof(KEEP) / sizeof(KEEP[0])))
+// These call settings_reset_all_preferences, the function both platforms'
+// Reset All Preferences buttons call, so the contract tested here is the one
+// the app applies - not a copy of its keep-list that could drift from it.
 
 TEST_CASE(reset_clears_preferences) {
     settings_clear_all();
@@ -42,8 +41,9 @@ TEST_CASE(reset_clears_preferences) {
     settings_set_string("theme", "solarized-dark");       // Appearance
     settings_set_bool("auto_save_enabled", true);         // General
     settings_set_int("recent_files_max", 5);              // General (NOT a recent_file_ key)
+    settings_set_bool("find_seed_selection", false);      // General, under the kept find_ prefix
 
-    settings_reset_except_prefixes(KEEP, KEEP_COUNT);
+    settings_reset_all_preferences();
 
     TEST_ASSERT(!settings_has_key("list_tools_enabled"), "Markdown pref reset");
     TEST_ASSERT(!settings_has_key("list_default_indent_format"), "Markdown format pref reset");
@@ -54,6 +54,8 @@ TEST_CASE(reset_clears_preferences) {
     TEST_ASSERT(!settings_has_key("auto_save_enabled"), "auto-save reset");
     TEST_ASSERT(!settings_has_key("recent_files_max"),
                 "recent_files_max is a preference, not a preserved recent_file_ key");
+    TEST_ASSERT(!settings_has_key("find_seed_selection"),
+                "the find-seeding preference is reset although it starts with find_");
     settings_clear_all();
 }
 
@@ -69,7 +71,7 @@ TEST_CASE(reset_preserves_kept_categories) {
     settings_set_string("find_hist_0", "needle");
     settings_set_string("replace_hist_0", "thread");
 
-    settings_reset_except_prefixes(KEEP, KEEP_COUNT);
+    settings_reset_all_preferences();
 
     TEST_ASSERT(settings_has_key("recent_file_0"), "recent file 0 kept");
     TEST_ASSERT(settings_has_key("recent_file_9"), "recent file 9 kept");
@@ -88,8 +90,27 @@ TEST_CASE(reset_returns_removed_count) {
     settings_set_bool("theme_dummy_pref", true);
     settings_set_bool("another_pref", true);
     settings_set_string("window_x", "5"); // preserved
-    int removed = settings_reset_except_prefixes(KEEP, KEEP_COUNT);
+    int removed = settings_reset_all_preferences();
     TEST_ASSERT_EQ(2, removed, "removed count excludes preserved keys");
+
+    settings_set_bool("find_seed_selection", true);
+    settings_set_bool("find_match_case", true); // preserved
+    TEST_ASSERT_EQ(1, settings_reset_all_preferences(),
+                   "an explicitly removed preference is counted too");
+    TEST_ASSERT_EQ(0, settings_reset_all_preferences(), "a second reset removes nothing");
+    settings_clear_all();
+}
+
+TEST_CASE(reset_except_prefixes_primitive) {
+    // The primitive underneath: keeps exactly the keys under the given prefixes
+    static const char *const keep[] = { "keep_" };
+    settings_clear_all();
+    settings_set_bool("keep_me", true);
+    settings_set_bool("drop_me", true);
+    settings_set_bool("kee", true); // shorter than the prefix: not kept
+    TEST_ASSERT_EQ(2, settings_reset_except_prefixes(keep, 1), "two removed");
+    TEST_ASSERT(settings_has_key("keep_me"), "prefixed key kept");
+    TEST_ASSERT_EQ(1, settings_count(), "nothing else left");
     settings_clear_all();
 }
 
@@ -266,6 +287,8 @@ TEST_CASE(config_dir_prefers_absolute_xdg) {
 #endif
 
 #ifndef _WIN32
+static char g_saved_home[2048], g_saved_xdg[2048];
+
 static void write_text_file(const char *path, const char *text) {
     FILE *f = fopen(path, "wb");
     if (f) {
@@ -275,11 +298,15 @@ static void write_text_file(const char *path, const char *text) {
 }
 
 TEST_CASE(init_reads_old_settings_when_xdg_location_is_empty) {
-    // A throwaway HOME and XDG_CONFIG_HOME under the working directory
-    mkdir("test_xdg_home", 0755);
-    mkdir("test_xdg_home/.config", 0755);
-    mkdir("test_xdg_home/.config/npad", 0755);
-    mkdir("test_xdg_conf", 0755);
+    // A throwaway HOME and XDG_CONFIG_HOME under the suite's private working
+    // directory. Anything an earlier, aborted pass left is cleared first: a
+    // stale test_xdg_conf/npad/settings.json would otherwise be read in place
+    // of the legacy file and fail every assertion below.
+    test_remove_tree("test_xdg_home");
+    test_remove_tree("test_xdg_conf");
+    TEST_ASSERT(test_make_dir("test_xdg_home") && test_make_dir("test_xdg_home/.config") &&
+                    test_make_dir("test_xdg_home/.config/npad") && test_make_dir("test_xdg_conf"),
+                "fixture directories created");
     char cwd[1024];
     TEST_ASSERT_NOT_NULL(getcwd(cwd, sizeof cwd), "cwd");
     char home[1100], xdg[1100];
@@ -289,6 +316,10 @@ TEST_CASE(init_reads_old_settings_when_xdg_location_is_empty) {
     const char *old_json = "test_xdg_home/.config/npad/settings.json";
     write_text_file(old_json, "{\n  \"theme\": \"dark\",\n  \"window_width\": \"1234\"\n}\n");
 
+    // The framework's isolated HOME / XDG_CONFIG_HOME, put back at the end
+    snprintf(g_saved_home, sizeof g_saved_home, "%s", getenv("HOME") ? getenv("HOME") : "");
+    snprintf(g_saved_xdg, sizeof g_saved_xdg, "%s",
+             getenv("XDG_CONFIG_HOME") ? getenv("XDG_CONFIG_HOME") : "");
     setenv("HOME", home, 1);
     setenv("XDG_CONFIG_HOME", xdg, 1);
 
@@ -339,13 +370,10 @@ TEST_CASE(init_reads_old_settings_when_xdg_location_is_empty) {
     free(theme);
 
     settings_cleanup();
-    remove("test_xdg_conf/npad/settings.json");
-    remove("test_xdg_conf/npad");
-    remove("test_xdg_conf");
-    remove(old_json);
-    remove("test_xdg_home/.config/npad");
-    remove("test_xdg_home/.config");
-    remove("test_xdg_home");
+    test_remove_tree("test_xdg_conf");
+    test_remove_tree("test_xdg_home");
+    setenv("HOME", g_saved_home, 1);
+    setenv("XDG_CONFIG_HOME", g_saved_xdg, 1);
 }
 #endif
 
@@ -356,6 +384,7 @@ int main(void) {
     RUN_TEST(reset_clears_preferences);
     RUN_TEST(reset_preserves_kept_categories);
     RUN_TEST(reset_returns_removed_count);
+    RUN_TEST(reset_except_prefixes_primitive);
     RUN_TEST(roundtrip_preserves_windows_path);
     RUN_TEST(roundtrip_does_not_grow_value);
     RUN_TEST(roundtrip_preserves_quotes_and_tabs);
@@ -366,7 +395,8 @@ int main(void) {
     RUN_TEST(init_reads_old_settings_when_xdg_location_is_empty);
 #endif
 
-    TEST_SUMMARY();
+    settings_cleanup();
     thread_safety_cleanup();
+    TEST_SUMMARY();
     return 0;
 }

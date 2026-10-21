@@ -201,15 +201,12 @@ TEST_CASE(count_stats_whitespace_runs) {
     (void) c;
 }
 
-TEST_CASE(path_traversal_protection) {
-    // Test path traversal attempts
-    char *content1 = file_read_text("../../../etc/passwd");
-    char *content2 = file_read_text("..\\..\\windows\\system32\\config\\sam");
-    
-    // Should be blocked
-    TEST_ASSERT_NULL(content1, "Path traversal with forward slashes should be blocked");
-    TEST_ASSERT_NULL(content2, "Path traversal with backslashes should be blocked");
-}
+// There is deliberately no "path traversal is blocked" test. npad is a desktop
+// editor and opens any path the user can, ".." included (is_valid_path; see
+// open_relative_parent_path in test_encoding.c). The test that used to sit
+// here asserted the opposite and passed only when ../../../etc/passwd
+// happened not to exist from the working directory - it failed from a
+// checkout three levels below /, and asserted nothing about security.
 
 
 // --- Binary / embedded-NUL detection --------------------------------------
@@ -374,7 +371,6 @@ int main(void) {
     RUN_TEST(count_stats_empty_and_null);
     RUN_TEST(count_stats_unicode_and_eols);
     RUN_TEST(count_stats_whitespace_runs);
-    RUN_TEST(path_traversal_protection);
     RUN_TEST(embedded_nul_is_flagged_as_truncated);
     RUN_TEST(ordinary_text_is_not_flagged);
     RUN_TEST(utf16_ascii_is_not_flagged);

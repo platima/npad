@@ -279,12 +279,16 @@ TEST_CASE(open_relative_parent_path) {
     // not be rejected by path validation (regression test: earlier
     // versions blocked every path containing "..")
     write_bytes(TEST_FILE, "content", 7);
+    // Its own subdirectory, so the test does not depend on what else exists
+    // in the working directory
+    TEST_ASSERT(test_make_dir("parent_path_sub"), "subdirectory created");
 
-    char *content = file_read_text("tests/../" TEST_FILE);
+    char *content = file_read_text("parent_path_sub/../" TEST_FILE);
     TEST_ASSERT_NOT_NULL(content, "Reading via a path containing .. should work");
     TEST_ASSERT_STR_EQ("content", content, "Content should match");
     free(content);
 
+    test_remove_tree("parent_path_sub");
     test_cleanup_temp_file(TEST_FILE);
 }
 

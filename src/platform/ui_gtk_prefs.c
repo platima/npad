@@ -998,17 +998,11 @@ static void on_import_clicked(GtkButton *button, gpointer data) {
 // remove (which silently drifts every time a setting is added), this resets
 // EVERYTHING except a small, stable set of preserved categories: recent files,
 // window geometry, and Find/Replace state (options + history). Any new
-// preference key is therefore reset by default. This is the list
-// reset_all_preferences keeps on Win32.
+// preference key is therefore reset by default. What is kept is defined once,
+// in settings_reset_all_preferences, which Win32 calls too.
 static void on_reset_clicked(GtkButton *button, gpointer data) {
     (void) button;
     (void) data;
-    static const char *const keep_prefixes[] = {
-        "recent_file_", // recent files list (recent_files_max is a pref -> reset)
-        "window_",      // window geometry
-        "find_",        // find options + find history
-        "replace_",     // replace history
-    };
 
     GtkWidget *ask = gtk_message_dialog_new(
         GTK_WINDOW(P.dialog), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
@@ -1023,11 +1017,7 @@ static void on_reset_clicked(GtkButton *button, gpointer data) {
     if (answer != GTK_RESPONSE_YES)
         return;
 
-    settings_reset_except_prefixes(keep_prefixes,
-                                   (int) (sizeof(keep_prefixes) / sizeof(keep_prefixes[0])));
-    // The one find_-prefixed key that IS a preference (Preferences > General),
-    // not search state: the prefix keep above would otherwise preserve it
-    settings_remove_key(FIND_SEED_KEY);
+    settings_reset_all_preferences();
     commit();
 
     // The controls still show pre-reset values; close rather than leave stale

@@ -5224,15 +5224,9 @@ static void import_settings(HWND owner) {
 // the small, stable set of preserved categories: recent files, window
 // geometry, and Find/Replace state (options + history). Any new preference
 // key is therefore reset by default; getters fall back to their defaults for
-// the now-missing keys. To keep something across a reset, add its prefix here.
+// the now-missing keys. What is kept is defined once, in
+// settings_reset_all_preferences, which GTK calls too.
 static void reset_all_preferences(HWND owner) {
-    static const char *const keep_prefixes[] = {
-        "recent_file_", // recent files list (recent_files_max is a pref -> reset)
-        "window_",      // window geometry
-        "find_",        // find options + find history
-        "replace_",     // replace history
-    };
-
     if (MessageBoxW(owner,
                     L"Reset all preferences to their defaults?\n\n"
                     L"Recent files, window position and Find/Replace options and history "
@@ -5242,11 +5236,7 @@ static void reset_all_preferences(HWND owner) {
         return;
     }
 
-    settings_reset_except_prefixes(keep_prefixes,
-                                   (int) (sizeof(keep_prefixes) / sizeof(keep_prefixes[0])));
-    // The one find_-prefixed key that IS a preference (Preferences > General),
-    // not search state: the prefix keep above would otherwise preserve it
-    settings_remove_key(FIND_SEED_KEY);
+    settings_reset_all_preferences();
     settings_save();
 
     // Re-apply everything that can change live (same path as a cross-instance

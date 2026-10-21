@@ -44,7 +44,8 @@ TEST_CASE(version_compare_numeric) {
     TEST_ASSERT(update_version_compare("v0.9.0", "v0.15.0") < 0, "numeric, not lexicographic");
     TEST_ASSERT(update_version_compare("v1.0.0", "v0.99.99") > 0, "major wins");
     TEST_ASSERT(update_version_compare("v0.15.0", "0.15.0") == 0, "leading v optional");
-    TEST_ASSERT(update_version_compare("v0.16.0-dev", "v0.15.0") > 0, "suffix ignored");
+    TEST_ASSERT(update_version_compare("v0.16.0-dev", "v0.15.0") > 0,
+                "a dev build of a later version is newer (the suffix only orders equal triples)");
     TEST_ASSERT(update_version_compare("v0.15.0", "v0.15.0") == 0, "equal");
     // Pre-releases sort before their release, and among themselves naturally
     TEST_ASSERT(update_version_compare("v0.36.0-rc2", "v0.36.0") < 0, "rc before its release");

@@ -42,6 +42,13 @@ int settings_count(void); // Number of stored entries (Debug page diagnostics)
 // everything to remove (which silently drifts as new preferences are added).
 int settings_reset_except_prefixes(const char *const *keep_prefixes, int prefix_count);
 
+// Preferences > Reset All Preferences, the one definition every platform
+// calls: removes every key except recent files ("recent_file_"), window
+// geometry ("window_") and Find/Replace state ("find_", "replace_"), and then
+// the preferences that happen to sit under a kept prefix (find_seed_selection).
+// In memory only; the caller saves and re-applies. Returns the count removed.
+int settings_reset_all_preferences(void);
+
 // File operations
 bool settings_save(void);
 bool settings_load(void);

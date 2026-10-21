@@ -9,6 +9,7 @@
 #include "settings.h"
 #include "error.h"
 #include "file_ops.h"
+#include "find_seed.h" // FIND_SEED_KEY, removed by Reset All Preferences
 #include "thread_safety.h"
 #include <ctype.h>
 #include <errno.h>
@@ -353,6 +354,33 @@ int settings_reset_except_prefixes(const char *const *keep_prefixes, int prefix_
     }
 
     npad_mutex_unlock(&g_settings_mutex);
+    return removed;
+}
+
+// What Reset All Preferences keeps: state, not preferences. Any new key is
+// therefore reset by default; to keep something across a reset, add its
+// prefix here (and to the confirmation text both platforms show).
+static const char *const RESET_KEEP_PREFIXES[] = {
+    "recent_file_", // recent files list (recent_files_max is a pref -> reset)
+    "window_",      // window geometry
+    "find_",        // find options + find history
+    "replace_",     // replace history
+};
+
+// Preferences whose names fall under a kept prefix: removed explicitly after
+// the prefix reset, or the Preferences checkbox would survive a "reset to
+// defaults". Prefer naming a new preference outside the kept prefixes.
+static const char *const RESET_ALWAYS_REMOVE[] = {
+    FIND_SEED_KEY, // Preferences > General, not search state
+};
+
+int settings_reset_all_preferences(void) {
+    int removed = settings_reset_except_prefixes(
+        RESET_KEEP_PREFIXES, (int) (sizeof(RESET_KEEP_PREFIXES) / sizeof(RESET_KEEP_PREFIXES[0])));
+    for (size_t i = 0; i < sizeof(RESET_ALWAYS_REMOVE) / sizeof(RESET_ALWAYS_REMOVE[0]); i++) {
+        if (settings_remove_key(RESET_ALWAYS_REMOVE[i]))
+            removed++;
+    }
     return removed;
 }
 
