@@ -9,13 +9,64 @@
  * https://npad.dev
  */
 
+// setenv/mkdir/getcwd for the throwaway config directory (c99 mode hides
+// them otherwise)
+#define _POSIX_C_SOURCE 200809L
+
 #include "test_framework.h"
 #include "../src/core/editor.h"
 #include "../src/core/settings.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #define RELOAD_FILE "test_editor_reload_tmp.txt"
+
+// --- A throwaway config directory --------------------------------------------
+// A reload clears this process's crash-recovery slot (editor_clear_session),
+// which resolves the real config directory. Point HOME and XDG_CONFIG_HOME
+// at an empty directory under the working directory first, so the run never
+// touches a developer's ~/.config/npad, whatever editor_init or settings
+// come to do later. (On Windows the directory is %APPDATA%, read through
+// SHGetFolderPath and not redirectable; the slot there is this process's own
+// random id, so nothing anyone else wrote is removed.)
+#define CONFIG_HOME "test_editor_reload_home"
+
+static void config_home_enter(void) {
+#ifndef _WIN32
+    char cwd[1024];
+    if (!getcwd(cwd, sizeof cwd)) {
+        printf("cannot read the working directory\n");
+        exit(1);
+    }
+    mkdir(CONFIG_HOME, 0755);
+    char home[1100];
+    snprintf(home, sizeof home, "%s/%s", cwd, CONFIG_HOME);
+    // XDG_CONFIG_HOME wins over HOME; set both so neither reaches the real one
+    char xdg[1200];
+    snprintf(xdg, sizeof xdg, "%s/.config", home);
+    if (setenv("HOME", home, 1) != 0 || setenv("XDG_CONFIG_HOME", xdg, 1) != 0) {
+        printf("cannot redirect the config directory\n");
+        exit(1);
+    }
+#endif
+}
+
+// Remove what the run may have created, innermost first. rmdir refuses a
+// directory that is not empty, so anything unexpected is left for a look.
+static void config_home_leave(void) {
+#ifndef _WIN32
+    static const char *const dirs[] = { CONFIG_HOME "/.config/npad/recovery",
+                                        CONFIG_HOME "/.config/npad", CONFIG_HOME "/.config",
+                                        CONFIG_HOME };
+    for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++)
+        rmdir(dirs[i]);
+#endif
+}
 
 // --- UI stubs -------------------------------------------------------------
 // One fake window; the core only passes the pointer back to these stubs.
@@ -304,8 +355,26 @@ TEST_CASE(open_still_asks_the_same_questions) {
     finish();
 }
 
+TEST_CASE(config_directory_is_the_throwaway_one) {
+#ifndef _WIN32
+    const char *xdg = getenv("XDG_CONFIG_HOME");
+    const char *home = getenv("HOME");
+    TEST_ASSERT(xdg && strstr(xdg, "/" CONFIG_HOME "/") != NULL, "XDG_CONFIG_HOME redirected");
+    TEST_ASSERT(home && strstr(home, "/" CONFIG_HOME) != NULL, "HOME redirected");
+    // Today nothing initialises settings here, so no directory resolves at
+    // all; should something start to, it must be the throwaway one
+    char *dir = settings_get_config_dir();
+    TEST_ASSERT(!dir || strstr(dir, "/" CONFIG_HOME "/") != NULL,
+                "any config directory is under the test's own HOME, not the developer's");
+    free(dir);
+#endif
+}
+
 int main(void) {
+    config_home_enter(); // Before anything can resolve the config directory
     TEST_INIT();
+
+    RUN_TEST(config_directory_is_the_throwaway_one);
 
     RUN_TEST(reload_reads_the_new_contents);
     RUN_TEST(read_failure_is_reported_and_keeps_the_document);
@@ -313,6 +382,7 @@ int main(void) {
     RUN_TEST(large_replacement_asks_first);
     RUN_TEST(open_still_asks_the_same_questions);
 
+    config_home_leave();
     TEST_SUMMARY();
     return 0;
 }

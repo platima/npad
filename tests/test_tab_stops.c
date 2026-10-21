@@ -111,6 +111,59 @@ TEST_CASE(list_indent_width_follows_tab_width_only_when_on) {
     settings_clear_all();
 }
 
+// --- Displayed tab stops (the Win32 RichEdit default tab) -------------------
+
+TEST_CASE(edit_average_width_is_gdis) {
+    // Consolas 11 pt at 96 DPI draws 8 px per letter: 52 x 8 = 416
+    TEST_ASSERT_EQ(8, tab_edit_average_width(416), "monospace 8 px");
+    TEST_ASSERT_EQ(9, tab_edit_average_width(52 * 9), "monospace 9 px");
+    // (cx / 26 + 1) / 2 rounds a proportional face's average to nearest
+    TEST_ASSERT_EQ(7, tab_edit_average_width(350), "350 / 52 = 6.7 -> 7");
+    TEST_ASSERT_EQ(0, tab_edit_average_width(0), "nothing measured");
+    TEST_ASSERT_EQ(0, tab_edit_average_width(-5), "negative extent");
+}
+
+TEST_CASE(font_pixel_height_follows_dpi_and_zoom) {
+    TEST_ASSERT_EQ(15, tab_font_pixel_height(220, 96, 100, 100), "11 pt at 96 DPI");
+    TEST_ASSERT_EQ(18, tab_font_pixel_height(220, 120, 100, 100), "11 pt at 120 DPI");
+    TEST_ASSERT_EQ(16, tab_font_pixel_height(220, 96, 110, 100), "11 pt at 110%");
+    TEST_ASSERT_EQ(15, tab_font_pixel_height(220, 96, 0, 0), "0/0 zoom is 100%");
+    TEST_ASSERT_EQ(15, tab_font_pixel_height(220, 0, 100, 100), "unknown DPI is 96");
+    TEST_ASSERT_EQ(0, tab_font_pixel_height(0, 96, 100, 100), "no height");
+}
+
+TEST_CASE(stop_twips_map_back_to_the_pixel_stop) {
+    // The review case: 8 x 8 px at 96 DPI is exactly 960 twips, not the 968
+    // that measuring at 1440 px/inch gave (a stop half a pixel late)
+    TEST_ASSERT_EQ(960, tab_stop_twips_for_pixels(64, 96, 100, 100), "64 px at 96 DPI");
+    TEST_ASSERT_EQ(960, tab_stop_twips_for_pixels(80, 120, 100, 100), "80 px at 120 DPI");
+    TEST_ASSERT_EQ(960, tab_stop_twips_for_pixels(64, 96, 0, 0), "0/0 zoom is 100%");
+    // 110%: 9 px letters, so 72 px; 981.8 twips rounds down to 981
+    TEST_ASSERT_EQ(981, tab_stop_twips_for_pixels(72, 96, 110, 100), "72 px at 110%");
+    TEST_ASSERT_EQ(0, tab_stop_twips_for_pixels(0, 96, 100, 100), "no stop");
+
+    // Everywhere: the stop drawn is at most one twip's worth of pixels early
+    // and never late, so text exactly 8 columns long passes it
+    static const long dpis[] = { 96, 120, 144, 168, 192, 288 };
+    static const long zooms[][2] = { { 100, 100 }, { 110, 100 }, { 90, 100 }, { 3, 2 },
+                                     { 1, 3 },     { 500, 100 }, { 10, 100 } };
+    int bad = 0;
+    for (size_t d = 0; d < sizeof(dpis) / sizeof(dpis[0]); d++) {
+        for (size_t z = 0; z < sizeof(zooms) / sizeof(zooms[0]); z++) {
+            for (long px = 8; px <= 400; px++) {
+                long t = tab_stop_twips_for_pixels(px, dpis[d], zooms[z][0], zooms[z][1]);
+                long long num = (long long) dpis[d] * zooms[z][0];
+                long long den = 1440LL * zooms[z][1];
+                // t * scale <= px < (t + 1) * scale
+                if (!((long long) t * num <= (long long) px * den &&
+                      (long long) (t + 1) * num > (long long) px * den))
+                    bad++;
+            }
+        }
+    }
+    TEST_ASSERT_EQ(0, bad, "the stop is never past the pixel position, and within a twip");
+}
+
 int main(void) {
     TEST_INIT();
 
@@ -125,6 +178,9 @@ int main(void) {
     RUN_TEST(settings_default_off_width_four);
     RUN_TEST(settings_width_is_clamped);
     RUN_TEST(list_indent_width_follows_tab_width_only_when_on);
+    RUN_TEST(edit_average_width_is_gdis);
+    RUN_TEST(font_pixel_height_follows_dpi_and_zoom);
+    RUN_TEST(stop_twips_map_back_to_the_pixel_stop);
 
     TEST_SUMMARY();
     return 0;

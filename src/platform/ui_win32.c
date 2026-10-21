@@ -269,9 +269,12 @@ struct Window {
     // tom_document) and released when the control is destroyed
     ITextDocument *tom;
     bool tom_unavailable;
-    // Default tab stop for the applied font, in points (see apply_tab_stops);
-    // 0 until a font has been applied
+    // Default tab stop for the applied font, in points, as measured at
+    // tab_dpi and zoom tab_zoom_num/tab_zoom_den (see apply_tab_stops); 0
+    // until measured, and reset to 0 when the font changes
     float tab_stop_points;
+    UINT tab_dpi;
+    LONG tab_zoom_num, tab_zoom_den;
     bool tab_check_pending; // NPAD_WM_REAPPLY_TABS posted and not yet handled
     // File > Recent Files exactly as the menu last showed it, so a click opens
     // the entry the user saw even if the stored list changed since
@@ -1262,6 +1265,7 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, L
                 // Ctrl+wheel is RichEdit's native zoom: treat it as a
                 // user-initiated view-state change (sync / auto-defaults)
                 if (GET_KEYSTATE_WPARAM(wparam) & MK_CONTROL) {
+                    apply_tab_stops(g_main_window); // Re-measured at the new zoom
                     on_view_state_changed(g_main_window);
                 }
             }
@@ -4614,6 +4618,7 @@ static void set_zoom(Window *window, int percent) {
     if (percent > 500)
         percent = 500;
     SendMessageW(window->edit_hwnd, EM_SETZOOM, (WPARAM) percent, 100);
+    apply_tab_stops(window); // The stop is 8 columns as drawn at this zoom
     update_status_bar(window);
     on_view_state_changed(window); // User-initiated zoom change
 }
@@ -4829,7 +4834,7 @@ static void refresh_font_binding(Window *window) {
 #endif
     // EM_EXGETSEL normalises the range, so a backward selection (made with
     // Shift+Left or by dragging up) would come back forward with its caret at
-    // the other end. TOM says which end is active.
+    // the other end. TOM says which end is active, and puts it back below.
     CHARRANGE saved_sel = { 0, 0 };
     SendMessageW(e, EM_EXGETSEL, 0, (LPARAM) &saved_sel);
     LONG anchor = saved_sel.cpMin, active = saved_sel.cpMax;
@@ -4861,8 +4866,19 @@ static void refresh_font_binding(Window *window) {
     if (zoom_num && zoom_den) {
         SendMessageW(e, EM_SETZOOM, zoom_num, zoom_den);
     }
-    // EM_SETSEL takes (anchor, active), so a backward selection stays backward
-    SendMessageW(e, EM_SETSEL, (WPARAM) anchor, (LPARAM) active);
+    // TOM's SetRange is the documented way to put the active end back, so a
+    // backward selection stays backward: its order is (cpAnchor, cpActive),
+    // although MinGW's tom.h names the parameters (cpActive, cpOther). Only
+    // if TOM refuses does EM_SETSEL take over, which is specified as a range
+    // (RichEdit happens to make lParam the active end, but does not say so).
+    bool sel_restored = false;
+    ITextSelection *restore = NULL;
+    if (SUCCEEDED(doc->lpVtbl->GetSelection(doc, &restore)) && restore) {
+        sel_restored = SUCCEEDED(restore->lpVtbl->SetRange(restore, anchor, active));
+        restore->lpVtbl->Release(restore);
+    }
+    if (!sel_restored)
+        SendMessageW(e, EM_SETSEL, (WPARAM) anchor, (LPARAM) active);
     SendMessageW(e, EM_SETSCROLLPOS, 0, (LPARAM) &scroll_pos);
     SendMessageW(window->edit_hwnd, WM_SETREDRAW, TRUE, 0);
     // The pixel position is a best effort across a full text reset; the first
@@ -4878,20 +4894,28 @@ static void refresh_font_binding(Window *window) {
 }
 
 // Notepad's tab stops are those of an Edit control: one every eight average
-// character widths of the font, so a tab is 8 columns in a monospace face at
-// any size. RichEdit's default is a fixed half inch, which at Consolas 11 pt
-// is about 5.95 columns and changes with the font size.
-#define NOTEPAD_TAB_COLUMNS 8
-
-// The tab stop spacing for cf's font, in points (0 if it cannot be measured).
-// Measured at 1440 pixels per inch - a font whose em is cf->yHeight pixels -
-// so the widths come out in twips with no screen-DPI rounding, and the
-// result holds on every monitor and at every zoom (RichEdit scales tab
-// positions with the text).
-static float tab_stop_points_for(const CHARFORMAT2W *cf) {
+// character widths of the font (TAB_EDIT_COLUMNS), so a tab is 8 columns in a
+// monospace face at any size. RichEdit's default is a fixed half inch, which
+// at Consolas 11 pt is about 5.95 columns and changes with the font size.
+//
+// The tab stop spacing for cf's font, in points, as drawn at dpi and zoom
+// zoom_num/zoom_den (0 if it cannot be measured). Measured the way the Edit
+// control measures, in device pixels at the size RichEdit draws the text:
+// GDI hints the advances at that size, so a width measured at any other size
+// and scaled does not equal 8 drawn columns. Consolas 11 pt at 96 DPI draws
+// 8 px letters (960 twips for 8), but measured at 1440 px/inch it gave 968,
+// half a pixel past column 8, and "12345678<TAB>X" put X at column 8. The
+// pixel stop is converted back through the same scale, rounded down (see
+// tab_stop_twips_for_pixels), so it depends on the DPI and zoom and is
+// re-applied whenever either changes (apply_tab_stops).
+static float tab_stop_points_for(HWND e, const CHARFORMAT2W *cf, UINT dpi, LONG zoom_num,
+                                 LONG zoom_den) {
+    long px_height = tab_font_pixel_height(cf->yHeight, (long) dpi, zoom_num, zoom_den);
+    if (px_height <= 0)
+        return 0.0f;
     LOGFONTW lf;
     ZeroMemory(&lf, sizeof(lf));
-    lf.lfHeight = -(LONG) cf->yHeight;
+    lf.lfHeight = -(LONG) px_height;
     lf.lfWeight = cf->wWeight;
     lf.lfItalic = (cf->dwEffects & CFE_ITALIC) ? TRUE : FALSE;
     lf.lfCharSet = DEFAULT_CHARSET;
@@ -4902,7 +4926,7 @@ static float tab_stop_points_for(const CHARFORMAT2W *cf) {
     if (!font)
         return 0.0f;
     float points = 0.0f;
-    HDC hdc = GetDC(NULL);
+    HDC hdc = GetDC(e);
     if (hdc) {
         HGDIOBJ old = SelectObject(hdc, font);
         static const wchar_t sample[] = L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -4910,30 +4934,58 @@ static float tab_stop_points_for(const CHARFORMAT2W *cf) {
         if (GetTextExtentPoint32W(hdc, sample, 52, &extent) && extent.cx > 0) {
             // GdiGetCharDimensions' average, which is what an Edit control
             // (and so Notepad) spaces its default tab stops by
-            LONG average = (extent.cx / 26 + 1) / 2;
-            points = (float) (NOTEPAD_TAB_COLUMNS * average) / 20.0f;
+            long stop_px = TAB_EDIT_COLUMNS * tab_edit_average_width(extent.cx);
+            long twips = tab_stop_twips_for_pixels(stop_px, (long) dpi, zoom_num, zoom_den);
+            // A quarter twip over, so a conversion back to whole twips that
+            // truncates still lands on twips rather than one below it
+            if (twips > 0)
+                points = ((float) twips + 0.25f) / 20.0f;
         }
         SelectObject(hdc, old);
-        ReleaseDC(NULL, hdc);
+        ReleaseDC(e, hdc);
     }
     DeleteObject(font);
     return points;
 }
 
-// Put the default tab stop where tab_stop_points says. Idempotent and cheap
-// when nothing changed, because it also runs after every programmatic text
+// Put the default tab stop at 8 drawn columns of the applied font at the
+// control's current DPI and zoom. Idempotent and cheap when nothing changed
+// (the measurement is cached per font, DPI and zoom), because it runs after
+// every zoom change (menu, keys, Ctrl+wheel, view sync, the zoom restores
+// around EM_SETTEXTEX), on WM_DPICHANGED, and after every programmatic text
 // replacement (NPAD_WM_REAPPLY_TABS): RichEdit is free to reset document
 // properties when EM_SETTEXTEX replaces everything, as it does the zoom.
 static void apply_tab_stops(Window *window) {
-    if (!window || window->tab_stop_points <= 0.0f)
+    if (!window || !window->edit_hwnd || !window->font_applied)
+        return;
+    UINT dpi = get_window_dpi(window->edit_hwnd);
+    WPARAM zoom_num = 0;
+    LPARAM zoom_den = 0;
+    SendMessageW(window->edit_hwnd, EM_GETZOOM, (WPARAM) &zoom_num, (LPARAM) &zoom_den);
+    // EM_GETZOOM wrote through the pointers; 0/0 means 100%
+    // cppcheck-suppress knownConditionTrueFalse
+    if (!zoom_num || !zoom_den) {
+        zoom_num = 1;
+        zoom_den = 1;
+    }
+    if (window->tab_stop_points <= 0.0f || window->tab_dpi != dpi ||
+        window->tab_zoom_num != (LONG) zoom_num || window->tab_zoom_den != (LONG) zoom_den) {
+        window->tab_dpi = dpi;
+        window->tab_zoom_num = (LONG) zoom_num;
+        window->tab_zoom_den = (LONG) zoom_den;
+        window->tab_stop_points = tab_stop_points_for(window->edit_hwnd, &window->applied_font, dpi,
+                                                      (LONG) zoom_num, (LONG) zoom_den);
+    }
+    if (window->tab_stop_points <= 0.0f)
         return;
     ITextDocument *doc = tom_document(window);
     if (!doc)
         return;
     float want = window->tab_stop_points;
     float now = 0.0f;
-    if (SUCCEEDED(doc->lpVtbl->GetDefaultTabStop(doc, &now)) && now > want - 0.05f &&
-        now < want + 0.05f)
+    // Within half a twip: a neighbouring stop is a whole twip (0.05 pt) away
+    if (SUCCEEDED(doc->lpVtbl->GetDefaultTabStop(doc, &now)) && now > want - 0.025f &&
+        now < want + 0.025f)
         return;
     // A document property, not an edit; keep it out of the undo history even
     // if RichEdit would record it
@@ -4972,7 +5024,7 @@ static void apply_font(Window *window) {
     }
     window->font_applied = true;
     window->applied_font = cf;
-    window->tab_stop_points = tab_stop_points_for(&cf);
+    window->tab_stop_points = 0.0f; // Measure the new font (apply_tab_stops)
 #if NPAD_SCROLL_TELEMETRY
     g_tel.restamps++;
 #endif
@@ -9003,6 +9055,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                 window->monospace_current = mono;
                 apply_font(window);
             }
+            apply_tab_stops(window); // At the mirrored zoom (cheap if unchanged)
             update_menu_states(window);
             update_status_bar(window);
         }
@@ -9274,14 +9327,16 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                                  suggested_rect->bottom - suggested_rect->top,
                                  SWP_NOZORDER | SWP_NOACTIVATE);
                 }
-                // Char formats and the tab stop are in twips/points
-                // (DPI-independent), so the text needs no restamp at all.
-                // Stamping the default format here used to restyle every run
-                // (plain-text mode), turning emoji into boxes whenever the
-                // window crossed to a monitor with another scale. Only the
-                // pixel-sized things below change.
+                // Char formats are in twips (DPI-independent), so the text
+                // needs no restamp at all. Stamping the default format here
+                // used to restyle every run (plain-text mode), turning emoji
+                // into boxes whenever the window crossed to a monitor with
+                // another scale. Only the pixel-sized things below change -
+                // and the tab stop, which is 8 columns as GDI draws them at
+                // this DPI (hinted widths do not scale exactly).
                 apply_edit_margins(window); // Pixel margins must rescale
                 resize_controls(window);
+                apply_tab_stops(window);
                 // The icon slots are sized in pixels, so they need re-picking
                 // at the new DPI - this previously refreshed font and layout
                 // but left the caption showing a stale-sized icon
