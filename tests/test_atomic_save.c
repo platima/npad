@@ -38,8 +38,10 @@
 
 #define ROOT "test_atomic_tmp"
 #define BACKUPS ROOT "/backups"
+#define TMPDIR_ROOT ROOT "/tmp"
 
 static char g_backup_dir[PATH_MAX + 64];
+static char g_tmpdir[PATH_MAX + 64];
 
 // --- helpers -----------------------------------------------------------------
 
@@ -67,12 +69,15 @@ static void remove_tree(const char *path) {
     }
 }
 
-// A fresh, empty ROOT (plus the backup folder TMPDIR points at)
+// A fresh, empty ROOT, with the backup folder the saves are pointed at and
+// the folder TMPDIR names
 static void reset_root(void) {
     file_ops_inject_fault(FILE_OPS_FAULT_NONE);
+    file_ops_set_backup_dir(g_backup_dir);
     remove_tree(ROOT);
     mkdir(ROOT, 0755);
     mkdir(BACKUPS, 0755);
+    mkdir(TMPDIR_ROOT, 0755);
 }
 
 static void put(const char *path, const char *content) {
@@ -138,7 +143,7 @@ static bool no_temp_files(const char *dir) {
 }
 
 static bool no_backups(void) {
-    return count_entries(BACKUPS, NULL) == 0;
+    return count_entries(BACKUPS, NULL) <= 0 && count_entries(TMPDIR_ROOT, NULL) <= 0;
 }
 
 static mode_t mode_of(const char *path) {
@@ -197,6 +202,39 @@ TEST_CASE(script_keeps_its_execute_bit) {
     chmod(ROOT "/deploy.sh", 0755);
     TEST_ASSERT(save(ROOT "/deploy.sh", "#!/bin/sh\necho 2\n"), "save succeeds");
     TEST_ASSERT_EQ(0755, (int) mode_of(ROOT "/deploy.sh"), "0755 stays 0755");
+}
+
+// Save a file with set-id bits and check they survive. The first write by a
+// process without CAP_FSETID clears S_ISUID/S_ISGID, so the identity has to
+// be set after the data. Skipped when this filesystem or group membership
+// refuses the bits in the first place.
+static void check_setid_kept(mode_t mode, bool in_place) {
+    reset_root();
+    put(ROOT "/tool", "#!/bin/sh\necho 1\n");
+    if (in_place && link(ROOT "/tool", ROOT "/tool2") != 0) {
+        printf("(no hard links here, skipped) ");
+        return;
+    }
+    if (chmod(ROOT "/tool", mode) != 0 || mode_of(ROOT "/tool") != mode) {
+        printf("(mode %o refused here, skipped) ", (unsigned) mode);
+        return;
+    }
+    TEST_ASSERT(save(ROOT "/tool", "#!/bin/sh\necho 2\n"), "save succeeds");
+    TEST_ASSERT(content_is(ROOT "/tool", "#!/bin/sh\necho 2\n"), "with the new content");
+    TEST_ASSERT_EQ((int) mode, (int) mode_of(ROOT "/tool"), "and the set-id bits are kept");
+    TEST_ASSERT(no_temp_files(ROOT) && no_backups(), "nothing left behind");
+}
+
+TEST_CASE(setuid_file_keeps_its_mode) {
+    check_setid_kept(04755, false);
+}
+
+TEST_CASE(setgid_file_keeps_its_mode) {
+    check_setid_kept(02755, false);
+}
+
+TEST_CASE(setuid_file_saved_in_place_keeps_its_mode) {
+    check_setid_kept(04755, true);
 }
 
 TEST_CASE(symlink_stays_a_link_and_target_gets_the_edit) {
@@ -469,6 +507,19 @@ TEST_CASE(failed_in_place_write_restores_original) {
     TEST_ASSERT(no_backups(), "and the safety copy is removed once it is");
 }
 
+// The path of the one npad-backup-* file in dir ("" if none)
+static void find_backup(const char *dir, char *path, size_t size) {
+    path[0] = '\0';
+    DIR *d = opendir(dir);
+    const struct dirent *e = NULL;
+    while (d && (e = readdir(d)) != NULL) {
+        if (strncmp(e->d_name, "npad-backup-", 12) == 0)
+            snprintf(path, size, "%s/%s", dir, e->d_name);
+    }
+    if (d)
+        closedir(d);
+}
+
 TEST_CASE(failed_restore_keeps_a_backup) {
     reset_root();
     put(ROOT "/h1.txt", "precious\n");
@@ -477,21 +528,58 @@ TEST_CASE(failed_restore_keeps_a_backup) {
     file_ops_inject_fault(FILE_OPS_FAULT_INPLACE_RESTORE);
     TEST_ASSERT(!save(ROOT "/h1.txt", "xyz\n"), "the save fails");
     file_ops_inject_fault(FILE_OPS_FAULT_NONE);
-    TEST_ASSERT(count_entries(BACKUPS, "npad-backup-") == 1, "the safety copy is kept");
+    TEST_ASSERT(count_entries(BACKUPS, "npad-backup-") == 1,
+                "the safety copy is kept, in the backup folder");
+    TEST_ASSERT(count_entries(TMPDIR_ROOT, NULL) == 0, "not in the temp folder");
     TEST_ASSERT(strstr(file_get_last_error(), "npad-backup-") != NULL,
                 "and the message says where it is");
 
-    DIR *d = opendir(BACKUPS);
-    const struct dirent *e = NULL;
-    char path[PATH_MAX] = { 0 };
-    while (d && (e = readdir(d)) != NULL) {
-        if (strncmp(e->d_name, "npad-backup-", 12) == 0)
-            snprintf(path, sizeof(path), "%s/%s", BACKUPS, e->d_name);
-    }
-    if (d)
-        closedir(d);
+    char path[PATH_MAX];
+    find_backup(BACKUPS, path, sizeof(path));
     TEST_ASSERT(content_is(path, "precious\n"), "holding the original content");
     TEST_ASSERT_EQ(0600, (int) mode_of(path), "readable by its owner only");
+}
+
+// An in-place save of h1.txt that fails and cannot put the original back, so
+// its safety copy stays where it was made
+static bool failed_in_place_save(void) {
+    put(ROOT "/h1.txt", "precious\n");
+    if (link(ROOT "/h1.txt", ROOT "/h2.txt") != 0) // Forces in-place
+        return false;
+    file_ops_inject_fault(FILE_OPS_FAULT_INPLACE_WRITE);
+    file_ops_inject_fault(FILE_OPS_FAULT_INPLACE_RESTORE);
+    bool ok = save(ROOT "/h1.txt", "xyz\n");
+    file_ops_inject_fault(FILE_OPS_FAULT_NONE);
+    return !ok;
+}
+
+TEST_CASE(backup_folder_is_created_when_missing) {
+    // The recovery folder may not exist yet when the first in-place save runs
+    reset_root();
+    remove_tree(BACKUPS);
+    TEST_ASSERT(failed_in_place_save(), "the save fails");
+    TEST_ASSERT(count_entries(BACKUPS, "npad-backup-") == 1, "the copy is in the new folder");
+    TEST_ASSERT_EQ(0700, (int) mode_of(BACKUPS), "which only its owner can enter");
+}
+
+TEST_CASE(unusable_backup_folder_falls_back_to_tmpdir) {
+    reset_root();
+    remove_tree(BACKUPS);
+    put(BACKUPS, "a file where the folder should be\n");
+    TEST_ASSERT(failed_in_place_save(), "the save fails");
+    char path[PATH_MAX];
+    find_backup(TMPDIR_ROOT, path, sizeof(path));
+    TEST_ASSERT(content_is(path, "precious\n"), "the copy went to TMPDIR instead");
+
+    // And with no backup folder set, an in-place save still works
+    reset_root();
+    file_ops_set_backup_dir(NULL);
+    put(ROOT "/h1.txt", "one\n");
+    TEST_ASSERT(link(ROOT "/h1.txt", ROOT "/h2.txt") == 0, "hard link (forces in-place)");
+    TEST_ASSERT(save(ROOT "/h1.txt", "two\n"), "the save succeeds");
+    TEST_ASSERT(content_is(ROOT "/h2.txt", "two\n"), "with the new content");
+    TEST_ASSERT(no_backups(), "and cleans up");
+    file_ops_set_backup_dir(g_backup_dir);
 }
 
 // --- concurrent instances ----------------------------------------------------
@@ -609,22 +697,25 @@ int main(void) {
     npad_error_init();
     TEST_INIT();
 
-    // Safety copies of in-place saves go to $TMPDIR: point it somewhere the
-    // tests can inspect and clean, never the real /tmp
-    remove_tree(ROOT);
-    mkdir(ROOT, 0755);
-    mkdir(BACKUPS, 0755);
+    // Safety copies of in-place saves go to the backup folder, or $TMPDIR
+    // without one: point both somewhere the tests can inspect and clean,
+    // never the real /tmp
     char cwd[PATH_MAX];
     if (!getcwd(cwd, sizeof(cwd))) {
         printf("getcwd failed\n");
         return 1;
     }
     snprintf(g_backup_dir, sizeof(g_backup_dir), "%s/%s", cwd, BACKUPS);
-    setenv("TMPDIR", g_backup_dir, 1);
+    snprintf(g_tmpdir, sizeof(g_tmpdir), "%s/%s", cwd, TMPDIR_ROOT);
+    setenv("TMPDIR", g_tmpdir, 1);
+    reset_root();
 
     RUN_TEST(new_file_gets_the_usual_mode);
     RUN_TEST(private_file_stays_private);
     RUN_TEST(script_keeps_its_execute_bit);
+    RUN_TEST(setuid_file_keeps_its_mode);
+    RUN_TEST(setgid_file_keeps_its_mode);
+    RUN_TEST(setuid_file_saved_in_place_keeps_its_mode);
     RUN_TEST(symlink_stays_a_link_and_target_gets_the_edit);
     RUN_TEST(symlink_chain_and_dangling_link);
     RUN_TEST(hard_links_are_not_split);
@@ -647,6 +738,8 @@ int main(void) {
     RUN_TEST(busy_rename_falls_back_to_in_place);
     RUN_TEST(failed_in_place_write_restores_original);
     RUN_TEST(failed_restore_keeps_a_backup);
+    RUN_TEST(backup_folder_is_created_when_missing);
+    RUN_TEST(unusable_backup_folder_falls_back_to_tmpdir);
     RUN_TEST(instances_saving_at_once_do_not_collide);
     RUN_TEST(opening_a_folder_says_so);
     RUN_TEST(size_is_exact);

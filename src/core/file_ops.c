@@ -12,6 +12,11 @@
 // (Not on Windows: MinGW turns _POSIX_C_SOURCE into its own printf.)
 #define _POSIX_C_SOURCE 200809L
 #define _FILE_OFFSET_BITS 64
+#ifdef __APPLE__
+// _POSIX_C_SOURCE alone hides the Darwin extensions this file uses there:
+// st_mtimespec, O_NOFOLLOW and O_DIRECTORY
+#define _DARWIN_C_SOURCE
+#endif
 #endif
 
 #include "file_ops.h"
@@ -1455,11 +1460,13 @@ const char *file_get_last_error(void) {
 //     CREATE_NEW): a planted symlink or another instance's temp file is never
 //     written through or truncated.
 //  3. Give it the original's identity (POSIX: owner, mode including set-id
-//     bits, ACLs and other extended attributes; Windows: ReplaceFileW carries
-//     over ACLs, attributes, streams such as Mark-of-the-Web, and the
-//     creation time).
-//  4. Read it back through the same handle and compare, then fsync /
-//     FlushFileBuffers so the data is on disk before the name points at it.
+//     bits, ACLs and other extended attributes - after the data, since a
+//     write clears set-id bits and file capabilities; Windows: ReplaceFileW
+//     carries over ACLs, attributes, streams such as Mark-of-the-Web, and
+//     the creation time).
+//  4. fsync / FlushFileBuffers so the data (and on POSIX the identity) is on
+//     disk before the name points at it, then read it back through the same
+//     handle and compare.
 //  5. Rename it over the target (ReplaceFileW on Windows), then fsync the
 //     folder on POSIX so the rename itself survives a power cut.
 //
@@ -1540,6 +1547,19 @@ static uint32_t temp_name_random(void) {
 }
 
 #define IO_CHUNK ((size_t) 1 << 20)
+
+// Where write_in_place keeps its safety copy of the original. It has to
+// outlive a power cut, so npad points this at its (persistent, per-user)
+// recovery folder; /tmp is tmpfs or cleaned at boot on many systems. Empty:
+// the temp folder.
+static char g_backup_dir[NPAD_MAX_PATH_LEN + 1] = { 0 };
+
+void file_ops_set_backup_dir(const char *dir) {
+    if (dir && strlen(dir) < sizeof(g_backup_dir))
+        memcpy(g_backup_dir, dir, strlen(dir) + 1);
+    else
+        g_backup_dir[0] = '\0';
+}
 
 // Check available disk space before writing. Advisory: if the space query
 // itself fails (network shares, unusual filesystems), the write proceeds.
@@ -1912,10 +1932,12 @@ static bool copy_xattrs(const char *src, int dst_fd) {
 }
 #endif
 
-// Give the temp file the original's owner, group, mode and ACLs. Returns
-// whether the result matches - it cannot when, say, the original belongs to
-// another account (only root may give a file away) or has set-id bits this
-// user may not set; the caller then keeps the original inode instead.
+// Give the temp file the original's owner, group, mode and ACLs. Called once
+// the data is written: a write clears set-id bits, and nothing may be written
+// after this. Returns whether the result matches - it cannot when, say, the
+// original belongs to another account (only root may give a file away) or
+// has set-id bits this user may not set; the caller then keeps the original
+// inode instead.
 static bool copy_identity(int fd, const char *target, const struct stat *orig) {
     // Owner first: a chown clears set-id bits, which the chmod then restores
     if (fchown(fd, orig->st_uid, orig->st_gid) != 0 && fchown(fd, (uid_t) -1, orig->st_gid) != 0) {
@@ -1937,13 +1959,24 @@ static bool copy_identity(int fd, const char *target, const struct stat *orig) {
            (now.st_mode & 07777) == (orig->st_mode & 07777);
 }
 
-// Copy the original to a private backup file in the temp folder before it is
-// overwritten in place. It is what remains if the machine dies mid-write.
+// Copy the original to a private backup file before it is overwritten in
+// place. It is what remains if the machine dies mid-write, so it goes to the
+// backup folder (file_ops_set_backup_dir) when there is one, and to the temp
+// folder only when that is unset or unusable.
 static bool write_backup(const uint8_t *data, size_t size, char **out_path) {
-    const char *tmpdir = getenv("TMPDIR");
-    if (!tmpdir || tmpdir[0] != '/')
-        tmpdir = "/tmp";
-    int fd = create_temp_posix(tmpdir, "npad-backup-", ".bak", 0600, out_path);
+    int fd = -1;
+    if (g_backup_dir[0]) {
+        if (mkdir(g_backup_dir, 0700) != 0) {
+            // Usually EEXIST; any other problem shows in the create below
+        }
+        fd = create_temp_posix(g_backup_dir, "npad-backup-", ".bak", 0600, out_path);
+    }
+    if (fd < 0) {
+        const char *tmpdir = getenv("TMPDIR");
+        if (!tmpdir || tmpdir[0] != '/')
+            tmpdir = "/tmp";
+        fd = create_temp_posix(tmpdir, "npad-backup-", ".bak", 0600, out_path);
+    }
     if (fd < 0)
         return false;
     bool ok = pwrite_all(fd, data, size) && fsync(fd) == 0;
@@ -1975,6 +2008,19 @@ static int reserve_space(int fd, size_t from, size_t len) {
     int r = posix_fallocate(fd, (off_t) from, (off_t) len);
     return (r == EOPNOTSUPP || r == ENOSYS || r == EINVAL) ? 0 : r;
 #endif
+}
+
+// Writing to or truncating a file clears its set-id bits unless the writer
+// has CAP_FSETID; put back the ones it had. Best effort (only the owner may):
+// the content is what the save is for.
+static void restore_setid_bits(int fd, const struct stat *orig) {
+    mode_t want = orig->st_mode & 07777;
+    struct stat now;
+    if (!(want & 06000) || fstat(fd, &now) != 0 || (now.st_mode & 07777) == want)
+        return;
+    if (fchmod(fd, want) != 0) {
+        // Not this file's owner: it keeps the mode the write left
+    }
 }
 
 // Overwrite the file where it is, for when it cannot be replaced (see the
@@ -2034,10 +2080,12 @@ static bool write_in_place(const char *display, const char *target, const uint8_
         what = "Failed to write";
     } else if (ftruncate(fd, (off_t) size) != 0) {
         what = "Failed to set the length of";
-    } else if (fsync(fd) != 0) {
-        what = "Failed to flush to disk";
-    } else if (!verify_fd(fd, data, size)) {
-        what = "Failed to verify the written data for";
+    } else {
+        restore_setid_bits(fd, &st);
+        if (fsync(fd) != 0)
+            what = "Failed to flush to disk";
+        else if (!verify_fd(fd, data, size))
+            what = "Failed to verify the written data for";
     }
     if (!what) {
         bool closed = close(fd) == 0;
@@ -2058,8 +2106,11 @@ static bool write_in_place(const char *display, const char *target, const uint8_
 
     // Put the original back
     bool restored = fd >= 0 && !FAULT(FILE_OPS_FAULT_INPLACE_RESTORE) &&
-                    pwrite_all(fd, orig, orig_size) && ftruncate(fd, (off_t) orig_size) == 0 &&
-                    fsync(fd) == 0 && verify_fd(fd, orig, orig_size);
+                    pwrite_all(fd, orig, orig_size) && ftruncate(fd, (off_t) orig_size) == 0;
+    if (restored) {
+        restore_setid_bits(fd, &st);
+        restored = fsync(fd) == 0 && verify_fd(fd, orig, orig_size);
+    }
     if (fd >= 0)
         close(fd);
     if (restored) {
@@ -2128,20 +2179,29 @@ static bool atomic_write_impl(const char *filename, const uint8_t *data, size_t 
         goto out;
     }
 
+    // The data goes in first, while the file is still private: the first
+    // write by a process without CAP_FSETID clears set-id bits and file
+    // capabilities, so identity copied before it would not survive it
+    if (!pwrite_all(fd, data, size) || FAULT(FILE_OPS_FAULT_WRITE)) {
+        set_errno_error("Failed to write", filename);
+        goto out;
+    }
+
     if (exists && !copy_identity(fd, target, &orig)) {
         // Owner, mode or ACL cannot be reproduced on a new file: keep the
         // original inode instead of handing back a file with other rights
         close(fd);
         fd = -1;
         unlink(temp);
+        free(temp);
+        temp = NULL;
         ok = write_in_place(filename, target, data, size);
         goto out;
     }
 
+    // The sync now covers the metadata just set as well as the data
     const char *what = NULL;
-    if (!pwrite_all(fd, data, size) || FAULT(FILE_OPS_FAULT_WRITE)) {
-        what = "Failed to write";
-    } else if (fsync(fd) != 0 || FAULT(FILE_OPS_FAULT_SYNC)) {
+    if (fsync(fd) != 0 || FAULT(FILE_OPS_FAULT_SYNC)) {
         what = "Failed to flush to disk";
     } else if (!verify_fd(fd, data, size) || FAULT(FILE_OPS_FAULT_VERIFY)) {
         what = "Failed to verify the written data for";
@@ -2355,14 +2415,34 @@ static wchar_t *final_path_of(HANDLE h) {
     return buf;
 }
 
-// The original, copied to a private file in the temp folder before it is
-// overwritten in place
+// The original, copied to a private file before it is overwritten in place:
+// in the backup folder (file_ops_set_backup_dir) when there is one, so it
+// survives a reboot, else in the temp folder
 static bool win_write_backup(const uint8_t *data, size_t size, wchar_t **out_path) {
-    wchar_t tmpdir[MAX_PATH + 2];
-    DWORD n = GetTempPathW(MAX_PATH + 1, tmpdir);
-    if (n == 0 || n > MAX_PATH)
-        return false;
-    HANDLE h = win_create_temp(tmpdir, L"npad-backup-", L".bak", out_path);
+    HANDLE h = INVALID_HANDLE_VALUE;
+    if (g_backup_dir[0]) {
+        size_t len = strlen(g_backup_dir);
+        char *dir = malloc(len + 2);
+        if (dir) {
+            memcpy(dir, g_backup_dir, len + 1);
+            if (len > 0 && dir[len - 1] != '\\' && dir[len - 1] != '/')
+                memcpy(dir + len, "\\", 2); // So the name goes inside it
+            wchar_t *wdir = widen_path(dir);
+            if (wdir) {
+                CreateDirectoryW(wdir, NULL); // Usually there already
+                h = win_create_temp(wdir, L"npad-backup-", L".bak", out_path);
+                free(wdir);
+            }
+            free(dir);
+        }
+    }
+    if (h == INVALID_HANDLE_VALUE) {
+        wchar_t tmpdir[MAX_PATH + 2];
+        DWORD n = GetTempPathW(MAX_PATH + 1, tmpdir);
+        if (n == 0 || n > MAX_PATH)
+            return false;
+        h = win_create_temp(tmpdir, L"npad-backup-", L".bak", out_path);
+    }
     if (h == INVALID_HANDLE_VALUE)
         return false;
     bool ok = win_write_all(h, data, size) && FlushFileBuffers(h);

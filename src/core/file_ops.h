@@ -93,11 +93,19 @@ bool file_ansi_is_lossy(const char *utf8_content);
 // original. A file that cannot be replaced that way (other hard links, a
 // folder that does not allow creating files, a file held open without delete
 // sharing, an owner or ACL that cannot be reproduced) is overwritten in place
-// instead, after a backup copy to the temp folder, and put back if anything
-// fails. Either way a failed write never destroys or truncates the existing
-// file, and leaves no temp file behind. file_get_last_error() says why.
+// instead, after a backup copy to the backup folder (below), and put back if
+// anything fails. Either way a failed write never destroys or truncates the
+// existing file, and leaves no temp file behind. file_get_last_error() says
+// why.
 bool file_write_text_atomic(const char *filename, const char *content);
 bool file_write_binary_atomic(const char *filename, const void *data, size_t size);
+
+// The folder for an in-place save's backup copy of the original, which is
+// what remains if the machine dies mid-write, so it must survive a reboot
+// (/tmp is tmpfs or cleaned at boot on many systems). npad sets it to its
+// recovery folder at startup; it is created if missing. NULL or unset, or
+// unusable at the time: the temp folder (TMPDIR or /tmp, %TEMP% on Windows).
+void file_ops_set_backup_dir(const char *dir);
 
 #ifdef FILE_OPS_FAULT_INJECTION
 // Test builds only: make the next write fail at a stage, once, as if the OS
