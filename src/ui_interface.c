@@ -160,6 +160,11 @@ int ui_count_main_windows(void) {
     return ui_platform_count_main_windows();
 }
 
+extern int ui_platform_print_file(const char *path);
+int ui_print_file(const char *path) {
+    return ui_platform_print_file(path);
+}
+
 void ui_get_default_window_rect(int *x, int *y, int *width, int *height) {
     ui_platform_get_default_window_rect(x, y, width, height);
 }

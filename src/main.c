@@ -21,6 +21,7 @@
 
 #include "core/editor.h"
 #include "core/error.h"
+#include "core/print_core.h"
 #include "core/settings.h"
 #include "core/startup_prof.h"
 #include "core/thread_safety.h"
@@ -42,6 +43,18 @@ static void show_version(void);
 // Cascade offset for a window spawned to reopen an extra crashed session
 // (0 for a normally launched window). Set from --cascade.
 int g_cascade_index = 0;
+
+// /p FILE (Windows) or -p / --print FILE: print and exit, as notepad.exe /p
+static bool g_print_mode = false;
+static const char *g_print_file = NULL;
+
+// The print switch accepts Notepad's own "/p" only on Windows: on Linux "/p"
+// is a perfectly good absolute path
+#ifdef _WIN32
+#define PRINT_SWITCH_ALLOWS_SLASH true
+#else
+#define PRINT_SWITCH_ALLOWS_SLASH false
+#endif
 
 int main(int argc, char *argv[]) {
     DEBUG_PRINT("npad starting...");
@@ -73,6 +86,17 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     startup_prof_mark("settings loaded");
+
+    // Print and exit. Nothing else starts: no document window, no editor (so
+    // no crash recovery prompt, no session snapshot, no recent-files entry),
+    // and settings are read but never written.
+    if (g_print_mode) {
+        int code = ui_print_file(g_print_file);
+        settings_cleanup();
+        thread_safety_cleanup();
+        npad_error_cleanup();
+        return code;
+    }
 
     // Initialize the UI system
     if (!ui_init()) {
@@ -222,6 +246,13 @@ static void parse_command_line(int argc, char *argv[]) {
             if (i + 1 < argc) {
                 g_cascade_index = atoi(argv[++i]);
             }
+        } else if (print_switch_matches(argv[i], PRINT_SWITCH_ALLOWS_SLASH)) {
+            // notepad.exe /p FILE: print to the default printer, no dialog,
+            // then exit. Explorer's Print verb runs exactly this. Before it
+            // was recognised, "/p" was taken for the name of a file to open.
+            g_print_mode = true;
+            if (i + 1 < argc)
+                g_print_file = argv[++i];
         } else if (argv[i][0] != '-') {
             // Assume it's a filename to open
             editor_set_startup_file(argv[i]);
@@ -242,6 +273,13 @@ static void show_help(void) {
     printf("Options:\n");
     printf("  -h, --help     Show this help message\n");
     printf("  -v, --version  Show version information\n");
+#ifdef _WIN32
+    printf("  /p, -p, --print FILE\n");
+#else
+    printf("  -p, --print FILE\n");
+#endif
+    printf("                 Print FILE to the default printer, without the print\n");
+    printf("                 dialog, then exit\n");
     printf("\n");
     printf("If no filename is specified, npad starts with a new document.\n");
 }

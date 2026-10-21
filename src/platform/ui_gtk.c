@@ -283,17 +283,21 @@ static bool font_is_installed(const char *family) {
 
 // The settings key (and fallback face) for the font the editor is showing.
 // Same keys as Win32, so one preference model serves both builds.
-static const char *active_font_key(const Window *window, const char **default_face) {
+static const char *font_key_for(bool monospace, const char **default_face) {
     if (settings_get_bool("opendyslexic_enabled", false) && font_is_installed("OpenDyslexic")) {
         *default_face = "OpenDyslexic";
         return "opendyslexic_font";
     }
-    if (!window || window->monospace_current) {
+    if (monospace) {
         *default_face = NPAD_GTK_DEFAULT_MONO_FONT;
         return "monospace_font";
     }
     *default_face = NPAD_GTK_DEFAULT_PROP_FONT;
     return "proportional_font";
+}
+
+static const char *active_font_key(const Window *window, const char **default_face) {
+    return font_key_for(!window || window->monospace_current, default_face);
 }
 
 const char *npad_gtk_active_font_key(const Window *window, const char **default_face) {
@@ -1917,6 +1921,75 @@ void ui_platform_get_default_window_rect(int *x, int *y, int *width, int *height
 int ui_platform_count_main_windows(void) {
     // Called before this process creates its window, so "others" is all
     return npad_gtk_instance_count_others();
+}
+
+static void print_file_error(const char *what, const char *detail) {
+    fprintf(stderr, "npad: %s%s%s\n", what, detail ? ": " : "", detail ? detail : "");
+    GtkWidget *dialog = gtk_message_dialog_new(NULL, GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
+                                               GTK_BUTTONS_OK, "%s", what);
+    if (detail && detail[0])
+        gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dialog), "%s", detail);
+    gtk_window_set_title(GTK_WINDOW(dialog), "npad");
+    gtk_dialog_run(GTK_DIALOG(dialog));
+    gtk_widget_destroy(dialog);
+}
+
+// npad --print FILE: the Linux equivalent of notepad.exe /p. Prints the file
+// to the default printer with no print dialog and exits. Called instead of
+// ui_platform_init: no window, no single-instance registration, no SIGTERM
+// handler - just GTK for the print operation and its progress window.
+int ui_platform_print_file(const char *path) {
+    g_set_prgname(NPAD_APP_ID);
+    g_set_application_name("npad");
+    if (!gtk_init_check(NULL, NULL)) {
+        fprintf(stderr, "npad: cannot open a display - is a desktop session running?\n");
+        return 1;
+    }
+    gtk_window_set_default_icon_name(npad_gtk_app_icon_name());
+
+    if (!path || !path[0]) {
+        print_file_error("No file was given to print.", "Usage: npad --print <file>");
+        return 1;
+    }
+    TextFileInfo info;
+    char *content = file_read_text_ex(path, &info);
+    if (!content) {
+        char what[400];
+        snprintf(what, sizeof(what), "Could not open %.300s", path);
+        print_file_error(what, file_get_last_error());
+        return 1;
+    }
+    // The print job splits paragraphs on '\n' only, as the editor hands them
+    char *text = file_convert_line_endings(content, NPAD_EOL_LF);
+    free(content);
+    if (!text) {
+        print_file_error("There is not enough memory to print this file.", NULL);
+        return 1;
+    }
+
+    // The font a new window would open with: the Defaults font type
+    bool mono =
+        settings_get_bool("default_font_mono", settings_get_bool("monospace_enabled", true));
+    const char *default_face = NPAD_GTK_DEFAULT_MONO_FONT;
+    const char *key = font_key_for(mono, &default_face);
+    char *face = settings_get_string(key, default_face);
+    char *title = g_path_get_basename(path);
+
+    NpadPrintDoc doc = {
+        .text = text,
+        .title = title,
+        .font_family = face,
+        .font_size = clamp_int(settings_get_int("font_size", 11), 6, 72),
+        .font_weight = clamp_int(settings_get_int("font_weight", 400), 100, 900),
+        .font_italic = settings_get_bool("font_italic", false),
+    };
+    int code = npad_gtk_print_file(&doc);
+
+    npad_gtk_print_cleanup();
+    g_free(title);
+    free(face);
+    free(text);
+    return code;
 }
 
 void ui_platform_launch_recovery_instance(const char *slot_id, int cascade_index) {

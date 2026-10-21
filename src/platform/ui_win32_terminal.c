@@ -295,6 +295,13 @@ int ui_platform_count_main_windows(void) {
     return 0;
 }
 
+// Stub: the terminal build cannot print
+int ui_platform_print_file(const char *path) {
+    (void) path;
+    fprintf(stderr, "npad: printing is not available in the terminal build\n");
+    return 1;
+}
+
 // Stub: the terminal build has no file type associations, so the elevated
 // --register-machine entry point simply reports failure here
 #include "assoc_win32.h"

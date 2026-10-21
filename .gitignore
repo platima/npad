@@ -68,6 +68,7 @@ tests/test_html_md
 tests/test_undo
 tests/test_find_seed
 tests/test_tab_stops
+tests/test_print_core
 
 # Installer build outputs (fonts are fetched by installer/fetch-fonts.ps1)
 installer/fonts/
