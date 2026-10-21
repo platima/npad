@@ -344,6 +344,15 @@ test-tab-stops: tests/test_tab_stops
 	@echo "Running tab stop tests..."
 	./tests/test_tab_stops
 
+# The release and CI scripts' own checks (the version gate, CHECKSUMS.txt,
+# installer file references), against throwaway fixtures. Shell only.
+.PHONY: test-release-scripts
+test: test-release-scripts
+
+test-release-scripts:
+	@echo "Running release script tests..."
+	sh tests/test_release_scripts.sh
+
 # Windows-only: the file type association module against a registry sandbox.
 # Cross-compiled here; run tests/test_assoc_win32.exe on Windows. Not part of
 # `make test`, which runs natively on Linux.

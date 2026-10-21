@@ -8,90 +8,154 @@ on:
   # would, and publishes nothing - no release, no attachments, no dispatch to
   # npad-packages. Run it before tagging, from the commit you mean to tag:
   #   gh workflow run release.yml --ref main -f version=v0.35.0
+  # A pre-release rehearses the same way (-f version=v0.36.0-rc4): the files
+  # carry the tag's spelling, exactly as the release would name them.
   # The assets are left as workflow artifacts to download and try. (GitHub only
   # offers workflow_dispatch for a workflow whose default-branch copy declares
   # it, so this exists once this file is on main.)
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to rehearse, as its tag would be spelled (e.g. v0.35.0); must match src/main.h"
+        description: "Version to rehearse, as its tag would be spelled (e.g. v0.35.0 or v0.36.0-rc4); must match src/main.h"
         type: string
         required: true
 
-# Creating the release and uploading assets needs write access; the default
-# GITHUB_TOKEN is read-only
-permissions:
-  contents: write
-  id-token: write   # Passed through to installers.yml for Azure Trusted Signing
+# Nothing by default: each job below asks for exactly what it needs. Only the
+# jobs that create, fill and publish the release can write to the repository,
+# and none of them runs a third-party action; the signing job gets an OIDC
+# token but read-only contents.
+permissions: {}
+
+# One release run per tag (or per dispatching branch) at a time. A second push
+# of the same tag queues behind the first instead of racing it for the same
+# draft. Never cancelled midway: a half-filled draft is harmless, but a
+# cancelled publish step is not something to leave to chance.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   BUILD_TYPE: Release
 
+# The order, for a tag:
+#   meta            the tag is well formed, and src/main.h, npad.rc, CHANGELOG.md
+#                   (and, for a final release, the AppStream metainfo) agree
+#                   with it - before anything is built
+#   ci-validation   the whole CI workflow
+#   create-release  a DRAFT release with the notes: invisible to users and to
+#                   the in-app updater
+#   build-*         every deliverable, in parallel
+#   attach-assets   validate the deliverables, write CHECKSUMS.txt, upload all
+#                   of it to the draft, download it back and validate exactly
+#                   what is attached
+#   publish-release only now does the release become public (and, for a final
+#                   release, what /releases/latest and the updater see)
+#   notify-packages, publish-aur   final releases only, after publishing
+# A failure anywhere before publish-release leaves an unpublished draft to
+# inspect or delete; nobody ever sees a release with missing assets. A dry run
+# stops after the builds and validates the artifacts instead.
 jobs:
-  # Run the main CI workflow first to ensure quality
-  ci-validation:
-    uses: ./.github/workflows/ci.yml
-    secrets: inherit
-
-  # The version, and whether this run publishes (a tag push) or rehearses (a
-  # manual dry run). Every publishing job below is gated on `publish`.
+  # The version, whether this run publishes (a tag push) or rehearses (a
+  # manual dry run), and the version-consistency gate. Every publishing job
+  # below is gated on `publish`.
   meta:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.v.outputs.version }}
       publish: ${{ steps.v.outputs.publish }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
     steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
     - id: v
       env:
         INPUT_VERSION: ${{ inputs.version }}
       run: |
+        set -eu
         if [ "$GITHUB_EVENT_NAME" = push ]; then
-          echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          echo "publish=true" >> "$GITHUB_OUTPUT"
+          version=${GITHUB_REF#refs/tags/}
+          publish=true
         else
-          case $INPUT_VERSION in
-          v[0-9]*.[0-9]*.[0-9]*) ;;
-          *) echo "ERROR: version must look like v0.35.0, not '$INPUT_VERSION'"; exit 1 ;;
-          esac
-          echo "version=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
-          echo "publish=false" >> "$GITHUB_OUTPUT"
-          echo "::notice::Dry run for $INPUT_VERSION: nothing will be published"
+          version=$INPUT_VERSION
+          publish=false
+        fi
+        # Refuses anything but v<x>.<y>.<z>[-<letters, digits, dots>] before
+        # the value is used anywhere, then checks every version source
+        sh scripts/check-release-version.sh "$version"
+        case $version in
+        *-*) prerelease=true ;;
+        *) prerelease=false ;;
+        esac
+        {
+          echo "version=$version"
+          echo "publish=$publish"
+          echo "prerelease=$prerelease"
+        } >> "$GITHUB_OUTPUT"
+        if [ "$publish" != true ]; then
+          echo "::notice::Dry run for $version: nothing will be published"
         fi
 
+  # Run the main CI workflow first to ensure quality. It needs no secrets and
+  # only reads the repository.
+  ci-validation:
+    needs: meta
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  # The release starts as a draft: drafts are visible only to maintainers, so
+  # neither users nor the in-app updater can see it while its assets are
+  # still arriving (v0.36.0-rc3 was public for 13 minutes before its last
+  # asset landed). The notes are written here, before anything exists, so a
+  # missing CHANGELOG entry or highlights section stops the run.
   create-release:
     runs-on: ubuntu-latest
-    needs: [ci-validation, meta]
+    needs: [meta, ci-validation]
     if: needs.meta.outputs.publish == 'true'
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
-      version: ${{ steps.get_version.outputs.version }}
+    permissions:
+      contents: write
     steps:
-    - name: Get version from tag
-      id: get_version
-      run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-    - uses: actions/checkout@v7
-
-    # The notes lead with this version's "### ✨ Highlights" from CHANGELOG.md.
-    # Generated before the release exists, so a missing entry or highlights
-    # section stops the run while nothing is published yet.
+    # The notes lead with this version's "### ✨ Highlights" from CHANGELOG.md
     - name: Write the release notes
+      env:
+        VERSION: ${{ needs.meta.outputs.version }}
       run: |
-        sh scripts/release-notes.sh "${{ steps.get_version.outputs.version }}" \
-          "${{ github.repository }}" "${{ github.sha }}" \
-          "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+        sh scripts/release-notes.sh "$VERSION" "$GITHUB_REPOSITORY" "$GITHUB_SHA" \
+          "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
           > release-notes.md
         cat release-notes.md
 
-    - name: Create Release
-      id: create_release
-      uses: softprops/action-gh-release@v3
-      with:
-        tag_name: ${{ github.ref }}
-        name: npad ${{ steps.get_version.outputs.version }}
-        body_path: release-notes.md
-        draft: false
-        prerelease: ${{ contains(steps.get_version.outputs.version, '-') }}
+    - name: Create the draft release
+      env:
+        GH_TOKEN: ${{ github.token }}
+        VERSION: ${{ needs.meta.outputs.version }}
+        PRERELEASE: ${{ needs.meta.outputs.prerelease }}
+      run: |
+        set -eu
+        flags=""
+        [ "$PRERELEASE" = true ] && flags="--prerelease"
+        state=$(sh scripts/ci-release.sh state "$VERSION")
+        case $state in
+        published)
+          echo "ERROR: $VERSION is already published; a published release is never rebuilt in place"
+          exit 1
+          ;;
+        draft)
+          # A re-run after a failure: reuse the draft (attach-assets replaces
+          # every asset and then checks the set is exactly the expected one)
+          echo "Reusing the existing draft of $VERSION"
+          gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --draft=true \
+            --title "npad $VERSION" --notes-file release-notes.md $flags
+          ;;
+        none)
+          gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+            --title "npad $VERSION" --notes-file release-notes.md $flags
+          ;;
+        esac
 
   # Every published binary comes from the Windows job in installers.yml: the
   # installers, and the portable exe, which is the very same npad.exe the
@@ -99,19 +163,18 @@ jobs:
   # (optional) signature, one checksum set. ci.yml still cross-compiles both
   # Windows targets on Linux, so that path stays tested; it just is not what
   # ships. Linux ships as the .deb, .rpm, Arch package and portable tarball from
-  # build-packages below; the
-  # terminal variants are unimplemented stubs and are not published.
-  # In a dry run release_tag is empty, so the deliverables stay artifacts.
+  # build-packages below; the terminal variants are unimplemented stubs and are
+  # not published. Both always get the version, so a dry run names its files
+  # exactly as the release would (a pre-release included); neither uploads
+  # anything to the release - attach-assets does, from their artifacts.
   build-installers:
-    needs: [ci-validation, meta, create-release]
-    if: ${{ !cancelled() && !failure() }}
+    needs: [meta, ci-validation]
+    permissions:
+      contents: read
+      id-token: write   # Azure Artifact Signing (OIDC); the token cannot write to the repository
     uses: ./.github/workflows/installers.yml
     with:
-      release_tag: ${{ needs.meta.outputs.publish == 'true' && needs.meta.outputs.version || '' }}
-    secrets: inherit
-    permissions:
-      contents: write
-      id-token: write
+      version: ${{ needs.meta.outputs.version }}
 
   # Linux: the .deb (Debian, Ubuntu, Mint), .rpm (Fedora, openSUSE) and Arch
   # .pkg.tar.zst for amd64, arm64 and riscv64, compiled in Debian containers and packaged with
@@ -120,64 +183,122 @@ jobs:
   # names differ from the ones CI's own call uses: names must be unique within
   # a run, and ci-validation above builds the packages too.
   build-packages:
-    needs: [ci-validation, meta]
+    needs: [meta, ci-validation]
+    permissions:
+      contents: read
     uses: ./.github/workflows/packages.yml
     with:
       release_tag: ${{ needs.meta.outputs.version }}
       artifact_name: npad-linux-packages-release
 
-  attach-packages:
-    runs-on: ubuntu-latest
-    needs: [meta, create-release, build-packages]
-    if: needs.meta.outputs.publish == 'true'
-    steps:
-    - uses: actions/download-artifact@v8
-      with:
-        pattern: npad-linux-packages-release-*
-        merge-multiple: true
-        path: pkgs
-
-    - name: Attach to the release
-      uses: softprops/action-gh-release@v3
-      with:
-        tag_name: ${{ needs.create-release.outputs.version }}
-        files: |
-          pkgs/npad_*.deb
-          pkgs/npad-*.rpm
-          pkgs/npad-*.pkg.tar.zst
-          pkgs/npad-v*-portable-linux-*.tar.gz
-          pkgs/*.sha256
-
   # Nothing releasable can execute on this runner, so validation asserts the
   # complete expected asset set is there, with plausible sizes, checksums that
   # verify, the right architecture in each portable exe, .deb and Linux
-  # tarball, and every
-  # installer the in-app updater can ask for (scripts/validate-release-assets.sh).
-  # A release checks what was actually published; a dry run checks the
-  # artifacts that would have been.
-  validate-release:
+  # tarball, and every installer the in-app updater can ask for
+  # (scripts/validate-release-assets.sh). It runs twice: on the build
+  # artifacts before anything is uploaded, and on the draft's assets as
+  # downloaded back, so what is checked is what users will get.
+  attach-assets:
     runs-on: ubuntu-latest
-    needs: [meta, build-installers, build-packages, attach-packages]
-    if: ${{ !cancelled() && !failure() }}
+    needs: [meta, create-release, build-installers, build-packages]
+    if: needs.meta.outputs.publish == 'true'
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.meta.outputs.version }}
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-    - name: Download the published release
-      if: needs.meta.outputs.publish == 'true'
+    - name: Download the Windows deliverables
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: npad-installers
+        path: assets
+
+    - name: Download the Linux packages
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        pattern: npad-linux-packages-release-*
+        merge-multiple: true
+        path: assets
+
+    - name: Validate the deliverables
+      run: |
+        ls -la assets
+        sh scripts/validate-release-assets.sh assets "$VERSION"
+
+    # One line per asset, from each asset's own .sha256; fails if any asset
+    # lacks one, rather than silently leaving it out
+    - name: Write CHECKSUMS.txt
+      run: |
+        sh scripts/ci-checksums.sh write assets "$VERSION" "$GITHUB_REPOSITORY" "$GITHUB_SHA" > CHECKSUMS.txt
+        mv CHECKSUMS.txt assets/
+        cat assets/CHECKSUMS.txt
+
+    - name: Upload everything to the draft
+      run: gh release upload "$VERSION" assets/* --repo "$GITHUB_REPOSITORY" --clobber
+
+    # Every page of the asset listing (the API's default page is 30, and a
+    # release has more assets than that)
+    - name: Download the draft and validate what is attached
+      run: |
+        set -eu
+        sh scripts/ci-release.sh download "$VERSION" attached
+        (cd assets && ls) > uploaded.txt
+        (cd attached && ls) > attached.txt
+        if ! diff -u uploaded.txt attached.txt; then
+          echo "ERROR: the draft's assets are not exactly the ones uploaded (stray assets from an earlier attempt?)"
+          exit 1
+        fi
+        sh scripts/validate-release-assets.sh attached "$VERSION"
+        sh scripts/ci-checksums.sh verify attached
+
+  # The release goes public only once every asset is attached and validated.
+  # A final release also becomes "latest", which is what the in-app updater
+  # reads; a pre-release never does.
+  publish-release:
+    runs-on: ubuntu-latest
+    needs: [meta, create-release, attach-assets]
+    if: needs.meta.outputs.publish == 'true'
+    permissions:
+      contents: write
+    steps:
+    - name: Publish the release
       env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: gh release download "${{ needs.meta.outputs.version }}" --repo "${{ github.repository }}" --dir assets
+        GH_TOKEN: ${{ github.token }}
+        VERSION: ${{ needs.meta.outputs.version }}
+        PRERELEASE: ${{ needs.meta.outputs.prerelease }}
+      run: |
+        set -eu
+        if [ "$PRERELEASE" = true ]; then
+          gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
+        else
+          gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+        fi
+        gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,url,publishedAt
+
+  # A dry run checks the artifacts that would have been released, and writes
+  # (but keeps) the CHECKSUMS.txt the release would have had
+  validate-dry-run:
+    runs-on: ubuntu-latest
+    needs: [meta, build-installers, build-packages]
+    if: needs.meta.outputs.publish != 'true'
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Download the dry run's Windows deliverables
-      if: needs.meta.outputs.publish != 'true'
-      uses: actions/download-artifact@v8
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         name: npad-installers
         path: assets
 
     - name: Download the dry run's Linux packages
-      if: needs.meta.outputs.publish != 'true'
-      uses: actions/download-artifact@v8
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         pattern: npad-linux-packages-release-*
         merge-multiple: true
@@ -185,102 +306,33 @@ jobs:
 
     - name: Validate release assets
       run: |
+        set -eu
         ls -la assets
-        sh scripts/validate-release-assets.sh assets "${{ needs.meta.outputs.version }}"
-
-  create-checksums:
-    runs-on: ubuntu-latest
-    needs: [create-release, build-installers, attach-packages, validate-release]
-    if: ${{ !cancelled() && !failure() && needs.create-release.result == 'success' }}
-    steps:
-    - uses: actions/checkout@v7
-
-    - name: Download release assets to create master checksum
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        # Get all release assets
-        release_id=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-          "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ needs.create-release.outputs.version }}" \
-          | jq -r '.id')
-
-        echo "Release ID: $release_id"
-
-        # Download all .sha256 files
-        curl -s -H "Authorization: token $GITHUB_TOKEN" \
-          "https://api.github.com/repos/${{ github.repository }}/releases/$release_id/assets" \
-          | jq -r '.[] | select(.name | endswith(".sha256")) | .browser_download_url' \
-          | while read url; do
-            echo "Downloading checksum: $url"
-            curl -L -s "$url" >> temp_checksums.txt
-          done
-
-    - name: Create master CHECKSUMS.txt
-      run: |
-        echo "# npad Release Checksums - ${{ needs.create-release.outputs.version }}" > CHECKSUMS.txt
-        echo "# Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> CHECKSUMS.txt
-        echo "# Release: https://github.com/${{ github.repository }}/releases/tag/${{ needs.create-release.outputs.version }}" >> CHECKSUMS.txt
-        echo "# Commit: ${{ github.sha }}" >> CHECKSUMS.txt
-        echo "" >> CHECKSUMS.txt
-
-        # Add all checksums
-        if [ -f temp_checksums.txt ]; then
-          cat temp_checksums.txt >> CHECKSUMS.txt
-        fi
-
-        echo "" >> CHECKSUMS.txt
-        echo "# Verification Instructions:" >> CHECKSUMS.txt
-        echo "# Linux/macOS: sha256sum -c CHECKSUMS.txt" >> CHECKSUMS.txt
-        echo "# Windows PowerShell: Get-FileHash -Algorithm SHA256 <filename>" >> CHECKSUMS.txt
-        echo "# Windows Command Prompt: certutil -hashfile <filename> SHA256" >> CHECKSUMS.txt
-
-        echo "Master checksums file created:"
-        cat CHECKSUMS.txt
-
-    - name: Upload master checksums
-      uses: softprops/action-gh-release@v3
-      with:
-        tag_name: ${{ needs.create-release.outputs.version }}
-        files: CHECKSUMS.txt
-
-  update-release-notes:
-    runs-on: ubuntu-latest
-    needs: [create-release, build-installers, attach-packages, validate-release, create-checksums]
-    if: ${{ !cancelled() && !failure() && needs.create-release.result == 'success' }}
-    steps:
-    - uses: actions/checkout@v7
-
-    - name: Write the release notes
-      run: |
-        sh scripts/release-notes.sh "${{ needs.create-release.outputs.version }}" \
-          "${{ github.repository }}" "${{ github.sha }}" \
-          "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-          > release-notes.md
-
-    - name: Update release with final info
-      uses: softprops/action-gh-release@v3
-      with:
-        tag_name: ${{ needs.create-release.outputs.version }}
-        body_path: release-notes.md
+        sh scripts/validate-release-assets.sh assets "$VERSION"
+        sh scripts/ci-checksums.sh write assets "$VERSION" "$GITHUB_REPOSITORY" "$GITHUB_SHA" > CHECKSUMS.txt
+        mv CHECKSUMS.txt assets/
+        cat assets/CHECKSUMS.txt
+        sh scripts/ci-checksums.sh verify assets
 
   # Tell npad-packages a release is ready so it rebuilds the signed apt/dnf
-  # repositories at pkg.npad.dev. Runs last, once every asset is attached and
-  # validated (a release is published before its assets are, so earlier would
-  # race the uploads). Pre-releases and dry runs are not published to the
-  # repositories. npad-packages also rebuilds daily and on demand, so a missed
-  # dispatch only delays the update. Needs the NPAD_PACKAGES_TOKEN secret: a
-  # fine-grained personal access token limited to platima/npad-packages with
-  # "Contents: Read and write" (what the dispatches API requires) and
-  # "Metadata: Read-only". Without it this job warns and exits cleanly.
+  # repositories at pkg.npad.dev. Runs once the release is published, so every
+  # asset is attached and validated. Pre-releases and dry runs are not
+  # published to the repositories. npad-packages also rebuilds daily and on
+  # demand, so a missed dispatch only delays the update. Needs the
+  # NPAD_PACKAGES_TOKEN secret: a fine-grained personal access token limited to
+  # platima/npad-packages with "Contents: Read and write" (what the dispatches
+  # API requires) and "Metadata: Read-only". Without it this job warns and
+  # exits cleanly. It uses no GITHUB_TOKEN permission at all.
   notify-packages:
     runs-on: ubuntu-latest
-    needs: [meta, create-release, validate-release, create-checksums, update-release-notes]
-    if: ${{ !cancelled() && !failure() && needs.meta.outputs.publish == 'true' && !contains(needs.meta.outputs.version, '-') }}
+    needs: [meta, publish-release]
+    if: needs.meta.outputs.publish == 'true' && needs.meta.outputs.prerelease != 'true'
+    permissions: {}
     steps:
     - name: Dispatch to npad-packages
       env:
         TOKEN: ${{ secrets.NPAD_PACKAGES_TOKEN }}
-        VERSION: ${{ needs.create-release.outputs.version }}
+        VERSION: ${{ needs.meta.outputs.version }}
       run: |
         if [ -z "$TOKEN" ]; then
           echo "::warning::NPAD_PACKAGES_TOKEN is not set; pkg.npad.dev updates at its next daily rebuild"
@@ -302,15 +354,17 @@ jobs:
   # only when the AUR_SSH_KEY secret exists - the private half of an SSH key
   # whose public half is on the maintainer's AUR account - and is skipped
   # otherwise, so a repository without it is unaffected. Final releases only,
-  # after every asset is attached and validated: scripts/aur-update.sh reads the
-  # sums from the release's own .sha256 files and writes .SRCINFO with makepkg
+  # after the release is published: scripts/aur-update.sh reads the sums from
+  # the release's own public .sha256 files and writes .SRCINFO with makepkg
   # (in an archlinux container; makepkg refuses root). The AUR host key is
   # pinned, not trusted on first use. See packaging/arch/README.md for setting
   # the account and the secret up.
   publish-aur:
     runs-on: ubuntu-latest
-    needs: [meta, create-release, validate-release, create-checksums, update-release-notes]
-    if: ${{ !cancelled() && !failure() && needs.meta.outputs.publish == 'true' && !contains(needs.meta.outputs.version, '-') }}
+    needs: [meta, publish-release]
+    if: needs.meta.outputs.publish == 'true' && needs.meta.outputs.prerelease != 'true'
+    permissions:
+      contents: read
     steps:
     - name: Check for the AUR key
       id: key
@@ -324,28 +378,40 @@ jobs:
           echo "present=true" >> "$GITHUB_OUTPUT"
         fi
 
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       if: steps.key.outputs.present == 'true'
 
+    # The checkout is mounted read-only and copied into the builder's home,
+    # as ci-aur-check.sh does: chown-ing the mounted workspace to the
+    # container's uid 1000 would leave the runner (uid 1001) unable to write
+    # its own workspace, and the clone below would fail with "Permission
+    # denied". Only the two rewritten files come back, through their own
+    # directory.
     - name: Update PKGBUILD and .SRCINFO for the release
       if: steps.key.outputs.present == 'true'
       env:
-        VERSION: ${{ needs.create-release.outputs.version }}
+        VERSION: ${{ needs.meta.outputs.version }}
       run: |
-        docker run --rm -v "$PWD:/w" -w /w -e VERSION archlinux:latest sh -c '
+        set -eu
+        out="$RUNNER_TEMP/aur-out"
+        mkdir -p "$out"
+        docker run --rm -v "$PWD:/src:ro" -v "$out:/out" -e VERSION archlinux:latest sh -c '
           set -e
           pacman -Syu --noconfirm --needed base-devel curl
           useradd -m builder
-          chown -R builder /w
-          su builder -c "cd /w && sh scripts/aur-update.sh $VERSION"
+          cp -r /src /home/builder/npad
+          chown -R builder /home/builder/npad
+          su builder -c "cd /home/builder/npad && sh scripts/aur-update.sh $VERSION"
+          cp /home/builder/npad/packaging/arch/aur/npad-bin/PKGBUILD /home/builder/npad/packaging/arch/aur/npad-bin/.SRCINFO /out/
+          chmod a+rw /out/PKGBUILD /out/.SRCINFO
         '
-        cat packaging/arch/aur/npad-bin/.SRCINFO
+        cat "$out/.SRCINFO"
 
     - name: Push to the AUR
       if: steps.key.outputs.present == 'true'
       env:
         AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
-        VERSION: ${{ needs.create-release.outputs.version }}
+        VERSION: ${{ needs.meta.outputs.version }}
       run: |
         set -e
         install -d -m 700 ~/.ssh
@@ -359,10 +425,11 @@ jobs:
           exit 1
         }
         export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/aur_known_hosts -o StrictHostKeyChecking=yes"
-        git clone ssh://aur@aur.archlinux.org/npad-bin.git aur
-        cd aur
+        # Cloned outside the workspace, which stays the checkout
+        git clone ssh://aur@aur.archlinux.org/npad-bin.git "$RUNNER_TEMP/aur"
+        cd "$RUNNER_TEMP/aur"
         git checkout -B master
-        cp ../packaging/arch/aur/npad-bin/PKGBUILD ../packaging/arch/aur/npad-bin/.SRCINFO .
+        cp "$RUNNER_TEMP/aur-out/PKGBUILD" "$RUNNER_TEMP/aur-out/.SRCINFO" .
         git add PKGBUILD .SRCINFO
         if git diff --cached --quiet; then
           echo "The AUR already has npad-bin $VERSION"

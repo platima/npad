@@ -62,7 +62,7 @@ Every change in this release: [CHANGELOG.md](https://github.com/$repo/blob/$tag/
 - \`npad-${version}-1-<arch>.pkg.tar.zst\` (\`x86_64\`, \`aarch64\`, \`riscv64\`) - Arch Linux, Arch Linux ARM and Arch RISC-V (\`sudo pacman -U ./npad-${version}-1-x86_64.pkg.tar.zst\`)
 - \`npad-$tag-portable-linux-<arch>.tar.gz\` (\`x86_64\`, \`aarch64\`, \`riscv64\`) - portable, for any glibc distro with GTK 3 and no package for it: unpack and run \`./npad\` (its README.txt adds a menu entry under \`~/.local\`; no automatic updates)
 
-**Verification:** \`CHECKSUMS.txt\` lists the SHA-256 of every file (\`sha256sum -c CHECKSUMS.txt\` on Linux, \`Get-FileHash\` on Windows).
+**Verification:** \`CHECKSUMS.txt\` lists the SHA-256 of every file. On Linux, run \`sha256sum -c --ignore-missing CHECKSUMS.txt\` in the folder you downloaded to, which checks just the files you have; on Windows, compare \`Get-FileHash <file>\` with its line.
 
 > **SmartScreen warning?** Check the file's Properties > Digital Signatures tab: a signed release names the publisher there, and SmartScreen can still warn while a publisher's reputation is new. If unsure, verify the SHA-256 against \`CHECKSUMS.txt\`, then choose "More info" > "Run anyway".
 EOF
