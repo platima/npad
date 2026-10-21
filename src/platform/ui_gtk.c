@@ -1502,7 +1502,9 @@ void npad_gtk_handle_command(Window *window, NpadCommand command) {
 void npad_gtk_reload_and_apply_settings(Window *window) {
     if (!window)
         return;
-    settings_clear_all();
+    // Merges: this window's unsaved changes (Recent Files, find history)
+    // survive, and a file that cannot be read leaves settings as they are
+    // rather than emptying them
     settings_load();
     editor_reload_prefs(); // Auto-save / session settings and timers
     npad_gtk_find_reload_settings();

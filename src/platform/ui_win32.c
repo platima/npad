@@ -4573,6 +4573,8 @@ static void build_char_format(const Window *window, CHARFORMAT2W *cf) {
         size = 6;
     if (size > 72)
         size = 72;
+    if (weight < FW_THIN || weight > FW_HEAVY) // A hand edit; wWeight is a WORD
+        weight = FW_NORMAL;
 
     ZeroMemory(cf, sizeof(*cf));
     cf->cbSize = sizeof(*cf);
@@ -4734,6 +4736,8 @@ static void show_font_dialog(Window *window, const char *font_key, const char *d
     int size = settings_get_int("font_size", 11);
     int weight = settings_get_int("font_weight", FW_NORMAL);
     bool italic = settings_get_bool("font_italic", false);
+    if (weight < FW_THIN || weight > FW_HEAVY)
+        weight = FW_NORMAL;
 
     HDC hdc = GetDC(window->edit_hwnd);
     int log_pixels_y = GetDeviceCaps(hdc, LOGPIXELSY);
@@ -5198,8 +5202,9 @@ static void import_settings(HWND owner) {
         return;
     }
 
-    // Reload settings and re-apply what can change live
-    settings_clear_all();
+    // Reload settings and re-apply what can change live. The imported file
+    // replaces this window's unsaved changes rather than being merged with them.
+    settings_discard_unsaved_changes();
     settings_load();
     editor_reload_prefs();
     if (g_main_window) {
@@ -8620,7 +8625,9 @@ static void resize_controls(Window *window) {
 static void reload_and_apply_settings(Window *window) {
     if (!window)
         return;
-    settings_clear_all();
+    // Merges: this window's unsaved changes (Recent Files, find options and
+    // history) survive, and a file that cannot be read leaves settings as they
+    // are rather than emptying them
     settings_load();
     editor_reload_prefs(); // Re-read auto-save / session settings and timers
     // Find options are process-globals seeded at init, so a broadcast has to

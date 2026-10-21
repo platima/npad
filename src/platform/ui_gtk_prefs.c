@@ -983,7 +983,9 @@ static void on_import_clicked(GtkButton *button, gpointer data) {
     }
 
     // Re-read and re-apply what can change live, tell the other instances,
-    // then show the imported values
+    // then show the imported values. The imported file replaces this window's
+    // unsaved changes rather than being merged with them.
+    settings_discard_unsaved_changes();
     npad_gtk_reload_and_apply_settings(P.owner);
     ui_notify_settings_changed();
     g_hash_table_remove_all(P.staged); // The imported file replaces pending edits
@@ -1469,8 +1471,12 @@ static void show_preferences(Window *window, bool show_debug, int start_page) {
                      "npad could not save the settings. Check that the settings folder is "
                      "writable, then try again.");
     }
-    if (P.memory_dirty)
-        npad_gtk_reload_and_apply_settings(window); // Drop values that never reached disk
+    if (P.memory_dirty) {
+        // Drop values that never reached disk: a reload alone would keep them,
+        // as it keeps every unsaved change
+        settings_discard_unsaved_changes();
+        npad_gtk_reload_and_apply_settings(window);
+    }
     gtk_widget_destroy(P.dialog);
     g_hash_table_destroy(P.staged);
     memset(&P, 0, sizeof(P));
