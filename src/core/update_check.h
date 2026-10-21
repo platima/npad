@@ -19,6 +19,24 @@
 // JSON response into out. Returns false when absent or too long.
 bool update_extract_tag(const char *json, char *out, size_t out_cap);
 
+// The newest release tag in a releases API response: either one release
+// object (/releases/latest) or an array of them (/releases?per_page=N).
+// Drafts are never picked; pre-releases only when include_prereleases. Tags
+// that do not start with a version number ("nightly") are ignored. Returns
+// false when nothing qualifies or the tag does not fit in out.
+bool update_pick_release_tag(const char *json, bool include_prereleases, char *out, size_t out_cap);
+
+// Whether a version string (update_current_version's form) is a published
+// pre-release such as "v0.36.0-rc2". A development build ("-dev") is not:
+// nothing is ever published under that name. Pre-release builds follow the
+// pre-releases (GitHub's /releases/latest never names one), so a tester on
+// rc2 is offered rc3 as well as the final release.
+bool update_is_prerelease(const char *version);
+
+// A user-facing sentence for a non-200 HTTP answer from the update server,
+// e.g. GitHub's rate limit (403/429) is not "could not reach github.com".
+void update_http_status_message(int status, char *out, size_t cap);
+
 // Compare two dotted version strings: the numeric triple first (an optional
 // leading 'v'), then, for the same triple, a pre-release suffix ("-rc2",
 // "-dev") sorts BEFORE the plain release, as in semver - so a v0.36.0-rc2
@@ -49,7 +67,10 @@ bool update_is_newer_unskipped(const char *current, const char *latest, const ch
 // Find a release asset in a GitHub releases API JSON response by matching the
 // END of its "name", and copy that asset's "browser_download_url" into out.
 // Matching is case-insensitive, e.g. suffix "-setup-win-x64.exe" selects the
-// installer while "-setup-win-x64.exe.sha256" selects its digest.
+// installer while "-setup-win-x64.exe.sha256" selects its digest. The JSON is
+// walked by structure: each asset's own "name" and URL are paired, in either
+// order, and a "name" inside a nested object (the uploader's) is never taken
+// for the asset's.
 //
 // Resolving the download from the response - rather than rebuilding the file
 // name from the tag - means a future change to release asset naming does not
@@ -68,6 +89,45 @@ const char *update_build_arch(void);
 // for any other arch, so a build of unknown architecture is offered nothing
 // rather than the x64 installer.
 const char *update_installer_suffix(const char *arch, bool checksum);
+
+// --- Which Windows installer updates this copy ------------------------------
+
+typedef enum {
+    UPDATE_PACKAGE_SETUP, // The Inno setup exe (per-user by default)
+    UPDATE_PACKAGE_MSI,   // The Windows Installer package
+} UpdatePackage;
+
+// update_installer_suffix for either package: the MSI's is "-msi-win-<arch>.msi"
+const char *update_package_suffix(const char *arch, UpdatePackage package, bool checksum);
+
+// Which package to run for an in-app update. The MSI only when Windows
+// Installer has npad registered and the Inno setup does not own this copy:
+// running the setup over an MSI install would add a second product to
+// Add/Remove Programs whose uninstaller deletes the other's files.
+UpdatePackage update_windows_package(bool setup_owns_this_copy, bool msi_installed);
+
+// Whether exe_path is a file directly inside dir. Windows paths: '\\' and '/'
+// are the same separator, case is ignored (ASCII), and a trailing separator on
+// dir is optional - Inno records InstallLocation with one.
+bool update_dir_holds_exe(const char *dir, const char *exe_path);
+
+// --- Is the downloaded installer genuine? -----------------------------------
+
+typedef enum {
+    UPDATE_SIG_VALID, // Authenticode signature present and trusted
+    UPDATE_SIG_NONE,  // No signature at all
+    UPDATE_SIG_BAD,   // A signature that does not verify (tampered, untrusted, revoked)
+} UpdateSignature;
+
+// The reason an installer must not run, or NULL when it may. The SHA-256 from
+// the same release is checked first and always; this adds the publisher.
+// Releases are signed only when the release workflow has signing configured,
+// so the rule follows THIS copy: a signed npad accepts only an installer
+// validly signed by the same publisher, while an unsigned build (a dev build,
+// or a release from before signing) accepts an unsigned installer - but never
+// one whose signature is present and broken.
+const char *update_signature_problem(UpdateSignature this_build, UpdateSignature installer,
+                                     bool same_publisher);
 
 // --- HTTP (Linux) -----------------------------------------------------------
 //

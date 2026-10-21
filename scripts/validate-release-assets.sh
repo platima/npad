@@ -127,12 +127,13 @@ for pair in amd64:x86_64 arm64:aarch64 riscv64:riscv64; do
 done
 
 # npad resolves its download by matching the END of each release asset name
-# (update_find_asset_url) against the suffixes in src/core/update_check.c.
+# (update_find_asset_url) against the suffixes in src/core/update_check.c:
+# the setup exe, and the MSI for copies Windows Installer put there.
 # Read them straight from the source so this cannot drift: renaming assets
 # without updating the updater - or the reverse - fails here, loudly, instead
 # of silently stranding every npad already installed. That happened once, in
 # v0.17.x.
-suffixes=$(grep -o '"-setup-win-[^"]*"' src/core/update_check.c | tr -d '"' | sort -u)
+suffixes=$(grep -o -e '"-setup-win-[^"]*"' -e '"-msi-win-[^"]*"' src/core/update_check.c | tr -d '"' | sort -u)
 if [ -z "$suffixes" ]; then
 	fail "could not read the updater's asset suffixes from src/core/update_check.c"
 fi
