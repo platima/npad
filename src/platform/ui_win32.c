@@ -4818,6 +4818,14 @@ static void mark_prefs_dirty(HWND page) {
 // pages only stage their writes: the last page of the round saves once and
 // broadcasts once, only when something changed, and keeps the sheet open if
 // the save fails.
+//
+// While a round is open its staged writes live only in memory, and some
+// pages' PSN_APPLY run a modal loop (the OpenDyslexic notice, the all-users
+// association wait) that dispatches another instance's npadSettingsChanged.
+// Reloading then (settings_clear_all + settings_load) would drop what the
+// earlier pages staged, and the commit would save the reloaded disk state:
+// the Apply silently lost. So a broadcast that arrives mid-round only sets
+// reload_pending; the reload runs when the round commits or the sheet closes.
 
 #define PREFS_MAX_PAGES 9 // pages[] in show_preferences_dialog
 #define PREFS_SNAP_MAX 64 // Every snapshotted control of every page
@@ -4834,7 +4842,22 @@ static struct {
     int applied_count;
     bool changed;         // A setting was written and is not saved yet
     bool sync_view_after; // Sync view state just turned on: send it after the broadcast
+    bool reload_pending;  // Another instance saved mid-round: reload once it is over
 } g_prefs_txn;
+
+// Pages have staged writes (or applied part of a round) that are not saved yet
+static bool prefs_round_open(void) {
+    return g_prefs_txn.applied_count > 0 || g_prefs_txn.changed;
+}
+
+// Run the reload a mid-round broadcast deferred, once nothing staged is left
+static void prefs_run_deferred_reload(void) {
+    if (!g_prefs_txn.reload_pending || prefs_round_open())
+        return;
+    g_prefs_txn.reload_pending = false;
+    if (g_main_window)
+        reload_and_apply_settings(g_main_window);
+}
 
 #define PREFS_IDS(array) (array), (int) (sizeof(array) / sizeof((array)[0]))
 
@@ -4914,17 +4937,19 @@ static void prefs_session_reset(void) {
 
 // Save once and broadcast once for the whole Apply / OK, if anything changed
 static LONG_PTR prefs_commit(HWND page) {
-    if (!g_prefs_txn.changed)
-        return PSNRET_NOERROR;
-    // On failure the sheet stays open with the values still in memory, so OK
-    // can be retried; an exit save would also still write them
-    if (!save_and_broadcast_settings(GetParent(page)))
-        return PSNRET_INVALID_NOCHANGEPAGE;
-    g_prefs_txn.changed = false;
-    // Other windows turn sync on from the broadcast, then adopt this state
-    if (g_prefs_txn.sync_view_after && g_main_window)
-        on_view_state_changed(g_main_window);
-    g_prefs_txn.sync_view_after = false;
+    if (g_prefs_txn.changed) {
+        // On failure the sheet stays open with the values still in memory, so
+        // OK can be retried (an exit save would also still write them), and a
+        // deferred reload keeps waiting rather than dropping them
+        if (!save_and_broadcast_settings(GetParent(page)))
+            return PSNRET_INVALID_NOCHANGEPAGE;
+        g_prefs_txn.changed = false;
+        // Other windows turn sync on from the broadcast, then adopt this state
+        if (g_prefs_txn.sync_view_after && g_main_window)
+            on_view_state_changed(g_main_window);
+        g_prefs_txn.sync_view_after = false;
+    }
+    prefs_run_deferred_reload();
     return PSNRET_NOERROR;
 }
 
@@ -6495,7 +6520,12 @@ static void show_preferences_dialog(const Window *window, int start_page, bool s
     // reload for nothing.
     prefs_session_reset();
     PropertySheetW(&psh);
+    // A broadcast deferred by a round that never committed (Cancel after a
+    // failed save or a refused page) is applied now: what is on disk wins
+    bool reload = g_prefs_txn.reload_pending;
     prefs_session_reset();
+    if (reload && g_main_window)
+        reload_and_apply_settings(g_main_window);
 }
 
 // Go To Line dialog (resource-based, truly modal)
@@ -9050,7 +9080,12 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 #if NPAD_SCROLL_TELEMETRY
             g_tel.broadcasts++;
 #endif
-            reload_and_apply_settings(window);
+            // Mid-Apply (a page's modal notice pumps messages): reloading now
+            // would drop the pages' staged writes, so wait for the commit
+            if (prefs_round_open())
+                g_prefs_txn.reload_pending = true;
+            else
+                reload_and_apply_settings(window);
         }
         return 0;
     }

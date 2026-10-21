@@ -20,6 +20,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <signal.h>
+#include <sys/resource.h>
+#endif
 
 #define LIVE "test_import_live.json"
 #define LIVE_BAK "test_import_live.json.bak"
@@ -129,9 +133,18 @@ TEST_CASE(other_files_are_refused) {
                 "VS Code's settings.json");
     TEST_ASSERT(!settings_import_looks_like_settings(
                     "{\"theme\": \"Default.sublime-theme\", \"font_size\": 12,"
-                    " \"color_scheme\": \"Mariana\", \"ignored_packages\": [\"Vintage\"],"
+                    " \"color_scheme\": \"Mariana\", \"ignored_packages\": \"Vintage\","
                     " \"translate_tabs_to_spaces\": true}"),
                 "an editor's file sharing two generic names is still mostly foreign");
+    // settings_load cannot read a nested value: it would end the parse there and
+    // silently drop every key after it, so a file npad never wrote is refused
+    TEST_ASSERT(!settings_import_looks_like_settings(
+                    "{\"theme\": \"dark\", \"window_x\": \"1\", \"list_x\": {\"a\": 1},"
+                    " \"window_y\": \"2\", \"word_wrap\": \"true\"}"),
+                "an otherwise-npad file with a nested object");
+    TEST_ASSERT(!settings_import_looks_like_settings(
+                    "{\"theme\": \"dark\", \"find_hist\": [\"a\", \"b\"], \"window_y\": \"2\"}"),
+                "an otherwise-npad file with an array value");
     TEST_ASSERT(!settings_import_looks_like_settings("{\"theme\": \"dark\", \"window_x\": \"1\""),
                 "a file cut off before its closing brace");
     TEST_ASSERT(!settings_import_looks_like_settings("{\"theme\": \"dar"), "cut off mid-value");
@@ -282,6 +295,57 @@ TEST_CASE(failed_write_changes_nothing) {
     remove(SRC);
 }
 
+#ifndef _WIN32
+// The flush and the backup succeed but the final write does not: the disk
+// fills between them. A file size limit between the live file's size and the
+// import's makes exactly that write fail (EFBIG, with SIGXFSZ ignored), which
+// is where "the live file and the in-memory settings are untouched" matters.
+#define FINAL_WRITE_LIMIT 4096
+#define FINAL_WRITE_PAD 8192
+
+TEST_CASE(failed_final_write_changes_nothing) {
+    seed_live();
+    char *before = file_read_text(LIVE);
+    TEST_ASSERT_NOT_NULL(before, "the live file is seeded");
+    TEST_ASSERT(strlen(before) < FINAL_WRITE_LIMIT, "the live file and its backup fit the limit");
+
+    static const char head[] = "{\n  \"theme\": \"solarized-light\",\n  \"find_hist_0\": \"";
+    static const char tail[] = "\"\n}\n";
+    char *big = malloc(sizeof(head) + FINAL_WRITE_PAD + sizeof(tail));
+    TEST_ASSERT_NOT_NULL(big, "import text allocated");
+    memcpy(big, head, sizeof(head) - 1);
+    memset(big + sizeof(head) - 1, 'x', FINAL_WRITE_PAD);
+    memcpy(big + sizeof(head) - 1 + FINAL_WRITE_PAD, tail, sizeof(tail));
+    write_text(SRC, big);
+    free(big);
+
+    struct rlimit old;
+    bool limited = getrlimit(RLIMIT_FSIZE, &old) == 0;
+    struct rlimit lower = old;
+    lower.rlim_cur = FINAL_WRITE_LIMIT;
+    void (*prev)(int) = signal(SIGXFSZ, SIG_IGN);
+    limited = limited && setrlimit(RLIMIT_FSIZE, &lower) == 0;
+    SettingsImportResult result = settings_import_file(SRC);
+    if (limited)
+        setrlimit(RLIMIT_FSIZE, &old); // Before anything else writes a file
+    signal(SIGXFSZ, prev);
+    TEST_ASSERT(limited, "the file size limit could be set");
+
+    TEST_ASSERT_EQ(SETTINGS_IMPORT_SAVE_FAILED, result, "the failed final write is reported");
+    char *after = file_read_text(LIVE);
+    TEST_ASSERT_STR_EQ(before, after, "the live file is byte for byte what it was");
+    free(after);
+    free(before);
+    char *theme = settings_get_string("theme", "");
+    TEST_ASSERT_STR_EQ("dark", theme, "the in-memory settings are untouched");
+    free(theme);
+    TEST_ASSERT(settings_has_key("recent_file_0"), "including the recent file");
+    TEST_ASSERT_EQ(10, settings_get_int("window_x", 0), "and the window geometry");
+    TEST_ASSERT(file_contains(LIVE_BAK, "secret.txt"), "the backup was made before the failure");
+    cleanup_files();
+}
+#endif
+
 TEST_CASE(importing_the_live_file_onto_itself) {
     seed_live();
     TEST_ASSERT_EQ(SETTINGS_IMPORT_OK, settings_import_file(LIVE), "self-import succeeds");
@@ -315,6 +379,9 @@ int main(void) {
     RUN_TEST(wrong_files_change_nothing);
     RUN_TEST(oversized_file_is_refused);
     RUN_TEST(failed_write_changes_nothing);
+#ifndef _WIN32
+    RUN_TEST(failed_final_write_changes_nothing);
+#endif
     RUN_TEST(importing_the_live_file_onto_itself);
     RUN_TEST(every_result_has_a_message);
 

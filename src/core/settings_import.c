@@ -107,30 +107,16 @@ static const char *scan_string(const char *p, char *out, size_t cap) {
 }
 
 // p points at the first character of a value. Returns the position after it,
-// or NULL when it is malformed. Nested objects and arrays are skipped whole
-// (npad writes none, but another program's file may).
+// or NULL when it is malformed or is not something npad writes. A nested
+// object or array is refused: npad writes none, and settings_load cannot read
+// one (it ends the value at the first ',' or '}', and the parse at the inner
+// '}'), so a file holding one would import "successfully" and then reload with
+// every key after it missing.
 static const char *skip_value(const char *p) {
     if (*p == '"')
         return scan_string(p, NULL, 0);
-    if (*p == '{' || *p == '[') {
-        long depth = 0;
-        while (*p) {
-            if (*p == '"') {
-                p = scan_string(p, NULL, 0);
-                if (!p)
-                    return NULL;
-                continue;
-            }
-            if (*p == '{' || *p == '[') {
-                depth++;
-            } else if (*p == '}' || *p == ']') {
-                if (--depth == 0)
-                    return p + 1;
-            }
-            p++;
-        }
+    if (*p == '{' || *p == '[')
         return NULL;
-    }
     const char *start = p;
     while (*p && *p != ',' && *p != '}' && *p != ']' && *p != ' ' && *p != '\t' && *p != '\r' &&
            *p != '\n')
