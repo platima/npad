@@ -639,10 +639,28 @@ static bool handle_return(Window *window) {
     return handled;
 }
 
+// Whether on_key_press may act on this key at all: Tab, Shift+Tab or Enter
+// while the feature that owns it is on
+static bool key_is_ours(guint keyval, GdkModifierType mods) {
+    if (keyval == GDK_KEY_Tab && mods == 0 && tab_inserts_spaces_enabled())
+        return true;
+    bool tab = keyval == GDK_KEY_Tab || keyval == GDK_KEY_ISO_Left_Tab;
+    bool enter = keyval == GDK_KEY_Return || keyval == GDK_KEY_KP_Enter;
+    return (tab || enter) && list_tools_enabled();
+}
+
 static gboolean on_key_press(GtkWidget *widget, const GdkEventKey *event, gpointer data) {
-    (void) widget;
     Window *window = data;
     GdkModifierType mods = event->state & gtk_accelerator_get_default_mod_mask();
+    if (!key_is_ours(event->keyval, mods))
+        return FALSE; // Everything else reaches GTK (and its input method) untouched
+    // The input method sees the key first, as it would without npad's
+    // handler: Enter or Tab that confirms a composition (CJK, a compose
+    // sequence) belongs to it, not to the list tools. An input method that
+    // answers asynchronously (IBus) takes the key here and hands back the ones
+    // it does not want, which then arrive again and are handled below.
+    if (gtk_text_view_im_context_filter_keypress(GTK_TEXT_VIEW(widget), (GdkEventKey *) event))
+        return TRUE;
     // Tab inserts spaces needs no Markdown tools; Shift+Tab and any other
     // modifier are left alone
     if (event->keyval == GDK_KEY_Tab && mods == 0 && tab_inserts_spaces_enabled() &&
@@ -831,9 +849,9 @@ static bool do_paste(Window *window, int mode) {
     if (md && md[0]) {
         char *text = npad_gtk_normalize_text(md); // Guard against a stray CR (&#13;)
         if (text) {
-            undo_begin_group(window->undo); // A one-character paste must not merge with typing
+            // Its own undo step (a group), so a one-character paste never
+            // merges with typing
             npad_gtk_replace_selection(window, text);
-            undo_end_group(window->undo);
             g_free(text);
             done = true;
         }
@@ -879,13 +897,12 @@ bool npad_gtk_lists_command_enabled(Window *window, NpadCommand command) {
     switch (command) {
         case NPAD_CMD_LIST_SORT_CASE:
             return true; // A setting, not an operation on the text
-        case NPAD_CMD_EDIT_PASTE_MARKDOWN: {
+        case NPAD_CMD_EDIT_PASTE_MARKDOWN:
             // It can also convert an HTML-only clipboard, which carries no
-            // plain text, so it is enabled slightly more often than Paste
-            GtkClipboard *clipboard = clipboard_for(window);
-            return gtk_clipboard_wait_is_text_available(clipboard) ||
-                   gtk_clipboard_wait_is_target_available(clipboard, html_atom());
-        }
+            // plain text, so it is enabled slightly more often than Paste.
+            // From the cached clipboard state (ui_gtk_edit.c): asking here
+            // would wait on the clipboard's owner every time a menu opens.
+            return npad_gtk_clipboard_has_text(window) || npad_gtk_clipboard_has_html(window);
         default: // They work on lines, so they need a non-empty document
             return char_count(window) > 0;
     }

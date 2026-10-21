@@ -494,7 +494,10 @@ static void replace_all(Window *window) {
     gint resume = 0; // Offset to search from; stays valid across edits
     gint last_end = -1;
 
-    // One user action: ui_gtk.c records everything inside as ONE undo group
+    // One undo step. The user action alone is not enough: ui_gtk.c flushes an
+    // action holding a single edit (one match, empty replacement) as a plain
+    // record, which would merge with the Backspaces before it.
+    undo_begin_group(window->undo);
     gtk_text_buffer_begin_user_action(window->buffer);
     for (;;) {
         GtkTextIter from, start, end;
@@ -510,6 +513,7 @@ static void replace_all(Window *window) {
         replaced++;
     }
     gtk_text_buffer_end_user_action(window->buffer);
+    undo_end_group(window->undo);
 
     char message[128];
     if (replaced > 0) {

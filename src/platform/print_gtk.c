@@ -7,13 +7,13 @@
 
 #include "print_gtk.h"
 
-#include <langinfo.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
 #include "../core/settings.h"
 #include "../ui_interface.h"
+#include "ui_gtk.h" // npad_gtk_short_time_date
 
 // notepad.exe's defaults, in thousandths of an inch from the sheet edge. The
 // same unit and keys as the Windows build, so a settings file moves between them.
@@ -350,40 +350,17 @@ static PrintJob *job_new(const NpadPrintDoc *doc) {
     return job;
 }
 
-// The date and time for &d and &t: the locale's short date, and its time
-// without seconds, as the Windows build's DATE_SHORTDATE / TIME_NOSECONDS.
+// The date and time for &d and &t: the locale's short date and its time
+// without seconds, as the Windows build's DATE_SHORTDATE / TIME_NOSECONDS -
+// the same stamp as F5 (npad_gtk_short_time_date, ui_gtk.c)
 static void job_stamp(PrintJob *job) {
-    GDateTime *now = g_date_time_new_now_local();
     g_free(job->date_text);
-    job->date_text = g_date_time_format(now, "%x");
-
-    // The locale's own time format, minus its seconds field
-    char *fmt = g_strdup(nl_langinfo(T_FMT));
-    if (!fmt || !fmt[0]) {
-        g_free(fmt);
-        fmt = g_strdup("%H:%M");
-    }
-    GString *trimmed = g_string_new(NULL);
-    for (const char *p = fmt; *p; p++) {
-        if (strncmp(p, ":%S", 3) == 0 || strncmp(p, ".%S", 3) == 0) {
-            p += 2;
-        } else if (strncmp(p, "%T", 2) == 0) {
-            g_string_append(trimmed, "%R");
-            p++;
-        } else if (strncmp(p, "%r", 2) == 0) {
-            g_string_append(trimmed, "%I:%M %p");
-            p++;
-        } else {
-            g_string_append_c(trimmed, *p);
-        }
-    }
     g_free(job->time_text);
-    job->time_text = g_date_time_format(now, trimmed->str);
+    npad_gtk_short_time_date(&job->time_text, &job->date_text);
     if (!job->time_text)
-        job->time_text = g_date_time_format(now, "%H:%M");
-    g_string_free(trimmed, TRUE);
-    g_free(fmt);
-    g_date_time_unref(now);
+        job->time_text = g_strdup("");
+    if (!job->date_text)
+        job->date_text = g_strdup("");
 }
 
 // ---------------------------------------------------------------------------

@@ -1140,6 +1140,14 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, L
     // keys never reach the control. A consumed key still has its WM_CHAR
     // already queued by TranslateMessage, so that gets eaten too.
     if (msg == WM_KEYDOWN) {
+        // A bare Insert toggles RichEdit's overtype mode, which notepad.exe's
+        // edit control does not have: a stray press would start overwriting
+        // text with nothing on screen saying so. Shift+Insert (paste) and
+        // Ctrl+Insert (copy) still reach the control.
+        if (wparam == VK_INSERT && GetKeyState(VK_SHIFT) >= 0 && GetKeyState(VK_CONTROL) >= 0 &&
+            GetKeyState(VK_MENU) >= 0) {
+            return 0;
+        }
         if (wparam == VK_TAB && (handle_markdown_tab(hwnd) || handle_tab_spaces(hwnd))) {
             g_swallow_tab_keyup = true;
             return 0;
@@ -8004,7 +8012,12 @@ static void rebuild_recent_menu(Window *window) {
     } else {
         for (int i = 0; i < count && i < MAX_RECENT_MENU_FILES; i++) {
             char item[512];
-            snprintf(item, sizeof(item), "&%d %.400s", i + 1, files[i]);
+            // "&1".."&9", then "1&0": the tenth entry's mnemonic is 0, not a
+            // second Alt+1
+            if (i < 9)
+                snprintf(item, sizeof(item), "&%d %.400s", i + 1, files[i]);
+            else
+                snprintf(item, sizeof(item), "1&0 %.400s", files[i]);
             wchar_t *wide = utf8_to_wide(item);
             if (wide) {
                 AppendMenuW(window->recent_menu, MF_STRING, ID_FILE_RECENT_BASE + (UINT) i, wide);

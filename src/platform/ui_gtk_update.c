@@ -225,10 +225,8 @@ static bool query_owner(UpdatePackageOwner owner, const char *exe, char *pkg, si
 }
 
 static UpdateInstallSource detect_source(void) {
-    char *exe = g_file_read_link("/proc/self/exe", NULL);
-    // A package upgraded under a running npad leaves the old file "(deleted)"
-    if (exe && g_str_has_suffix(exe, " (deleted)"))
-        exe[strlen(exe) - strlen(" (deleted)")] = '\0';
+    // Without the " (deleted)" a package upgrade under a running npad leaves
+    char *exe = npad_gtk_self_exe_path();
 
     UpdateInstallFacts facts = { UPDATE_OWNER_NONE, NULL, false, false, false };
     char pkg[128] = "";
