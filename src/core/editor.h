@@ -80,8 +80,14 @@ void editor_set_startup_file(const char *filename);
 const char *editor_session_slot_id(void);
 
 // Restore a specific recovery slot at startup (set from the --recover option
-// on windows spawned to reopen extra crashed sessions)
-void editor_set_recover_slot(const char *slot);
+// on windows spawned to reopen extra crashed sessions). Accepts "<slot>" or
+// "<slot>:<claimer>"; returns false, and sets nothing, for anything that is
+// not a slot id npad could have made (see session_is_valid_slot_id).
+bool editor_set_recover_slot(const char *slot);
+
+// The window was a --recover one with nothing left to restore and closed
+// itself: it was never used, so it has no window state or settings to save
+bool editor_exited_unused(void);
 
 // Directory recovery snapshots live in (malloc'd; caller frees). NULL on
 // error. Exposed for the Debug preferences page diagnostics.

@@ -2306,18 +2306,43 @@ char *ui_platform_show_save_dialog(Window *parent, FileDialogParams *params) {
     return show_save_dialog_com(parent, params);
 }
 
-bool ui_platform_show_message_box(Window *parent, const char *title, const char *message,
-                                  bool is_question) {
+UiAnswer ui_platform_ask_question(Window *parent, const char *title, const char *message) {
     HWND hwnd = parent ? parent->hwnd : NULL;
-    UINT type = is_question ? (MB_YESNO | MB_ICONQUESTION) : (MB_OK | MB_ICONINFORMATION);
-
     wchar_t *wtitle = utf8_to_wide(title ? title : "npad");
     wchar_t *wmessage = utf8_to_wide(message ? message : "");
-    int result = MessageBoxW(hwnd, wmessage ? wmessage : L"", wtitle ? wtitle : L"npad", type);
+    int result = MessageBoxW(hwnd, wmessage ? wmessage : L"", wtitle ? wtitle : L"npad",
+                             MB_YESNO | MB_ICONQUESTION);
     free(wtitle);
     free(wmessage);
 
-    return is_question ? (result == IDYES) : true;
+    // A WM_QUIT reaching the box's modal loop (a session end, an update's
+    // handoff, Close All) ends it without anyone answering; the loop puts the
+    // WM_QUIT back for the main loop. Whatever MessageBoxW returned then, it
+    // was not the user's choice. PM_NOREMOVE leaves it queued for the main
+    // loop to act on.
+    MSG pending;
+    if (PeekMessageW(&pending, NULL, WM_QUIT, WM_QUIT, PM_NOREMOVE))
+        return UI_ANSWER_DISMISSED;
+    if (result == IDYES)
+        return UI_ANSWER_YES;
+    if (result == IDNO)
+        return UI_ANSWER_NO;
+    return UI_ANSWER_DISMISSED; // 0 = the box failed, or its owner went away
+}
+
+bool ui_platform_show_message_box(Window *parent, const char *title, const char *message,
+                                  bool is_question) {
+    if (is_question)
+        return ui_platform_ask_question(parent, title, message) == UI_ANSWER_YES;
+
+    HWND hwnd = parent ? parent->hwnd : NULL;
+    wchar_t *wtitle = utf8_to_wide(title ? title : "npad");
+    wchar_t *wmessage = utf8_to_wide(message ? message : "");
+    MessageBoxW(hwnd, wmessage ? wmessage : L"", wtitle ? wtitle : L"npad",
+                MB_OK | MB_ICONINFORMATION);
+    free(wtitle);
+    free(wmessage);
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -6508,7 +6533,9 @@ void ui_platform_notify_settings_changed(void) {
     }
 }
 
-bool ui_platform_pid_is_running(long pid) {
+bool ui_platform_pid_is_running(long pid, long long *start_time) {
+    if (start_time)
+        *start_time = -1;
     if (pid <= 0)
         return false;
 
@@ -6520,13 +6547,29 @@ bool ui_platform_pid_is_running(long pid) {
     bool running = false;
     DWORD exit_code = 0;
     if (GetExitCodeProcess(proc, &exit_code) && exit_code == STILL_ACTIVE) {
-        // Confirm it is actually npad.exe, guarding against pid reuse
+        // Confirm it is actually npad, guarding against pid reuse by some
+        // other program. Any npad*.exe counts: the portable download keeps
+        // its versioned name (npad-v<v>-portable-win-x64.exe) and the arm64
+        // build may run as npad-arm64.exe.
         wchar_t image[MAX_PATH];
         DWORD size = MAX_PATH;
         if (QueryFullProcessImageNameW(proc, 0, image, &size)) {
             const wchar_t *base = wcsrchr(image, L'\\');
             base = base ? base + 1 : image;
-            running = (_wcsicmp(base, L"npad.exe") == 0);
+            size_t len = wcslen(base);
+            running = _wcsnicmp(base, L"npad", 4) == 0 && len >= 8 &&
+                      _wcsicmp(base + len - 4, L".exe") == 0;
+        }
+        // A recycled pid can also land on another npad, so report when this
+        // one started for the caller to compare with the slot's own time
+        FILETIME created, exited, kernel, user;
+        if (running && start_time && GetProcessTimes(proc, &created, &exited, &kernel, &user)) {
+            unsigned long long ticks = ((unsigned long long) created.dwHighDateTime << 32) |
+                                       (unsigned long long) created.dwLowDateTime;
+            // FILETIME counts 100 ns ticks from 1601; Unix time starts 1970
+            const unsigned long long epoch_offset = 116444736000000000ULL;
+            if (ticks > epoch_offset)
+                *start_time = (long long) ((ticks - epoch_offset) / 10000000ULL);
         }
     }
     CloseHandle(proc);

@@ -358,6 +358,8 @@ int npad_gtk_instance_count_others(void);
 
 // Whether pid is a running npad instance (bus first, /proc as fallback)
 bool npad_gtk_instance_pid_is_npad(long pid);
+// When pid started, as Unix seconds (from /proc), or -1 when that is unknown
+long long npad_gtk_process_start_time(long pid);
 
 // The desktop's colour preference from the xdg-desktop-portal Settings
 // interface (org.freedesktop.appearance color-scheme): 0 = none / no portal,

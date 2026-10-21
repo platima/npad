@@ -20,14 +20,6 @@
 #include <string.h>
 #include <time.h>
 
-#ifdef _WIN32
-#include <process.h>
-#define npad_getpid _getpid
-#else
-#include <unistd.h>
-#define npad_getpid getpid
-#endif
-
 // Files larger than this (in MB, configurable via "large_file_warning_mb")
 // prompt for confirmation before opening. 0 disables the prompt. Used only
 // when the platform cannot report installed memory (see
@@ -41,10 +33,37 @@
 EditorState g_editor = { 0 };
 char *g_startup_file = NULL;
 
+// A process holding a slot's pid that started more than this long after the
+// time recorded in the slot id is a recycled pid, not the slot's owner. The
+// owner always starts before it makes its id; the margin only absorbs clock
+// rounding and small clock corrections.
+#define SLOT_START_SLACK_SEC 60
+
+// Above this size the original of a pre-0.36 slot is not re-read to see
+// whether it held a NUL; it is assumed to have (see original_is_truncated)
+#define TRUNCATION_RECHECK_MAX_BYTES ((size_t) 512 * 1024 * 1024)
+
 // This instance's recovery slot id (unique per process), and the specific
-// slot to restore when launched with --recover (NULL for a normal launch).
-static char g_session_slot[64] = { 0 };
+// slot to restore when launched with --recover (NULL for a normal launch),
+// with the id of the window that claimed it and handed it over (NULL when
+// Windows relaunched this instance with its own old slot).
+static char g_session_slot[SESSION_SLOT_ID_MAX] = { 0 };
 static char *g_recover_slot = NULL;
+static char *g_recover_from = NULL;
+
+// A quit was requested (by the user, Close All, an update's handoff), or the
+// desktop session is ending. Checked after the recovery question, which a
+// quit can end without an answer, or reach while it is still up.
+static bool g_leaving = false;
+static bool g_session_ending = false;
+
+// A --recover window that found nothing to restore and closed itself
+static bool g_exit_unused = false;
+
+// A claimed slot this window restored but could not move under its own id
+// (see editor_restore_claimed). It stays on disk as the crash copy until this
+// window's own snapshot replaces it, or the document is saved or discarded.
+static char g_held_claim[SESSION_SLOT_ID_MAX] = { 0 };
 
 static char *duplicate_string(const char *str) {
     if (!str)
@@ -92,6 +111,40 @@ char *editor_session_dir(void) {
     return dir;
 }
 
+// What a snapshot of the current document records besides its text. The
+// truncated flag must travel with it: a restored fragment of a binary file
+// that forgot it would let Ctrl+S write the fragment over the original. The
+// stamp is the external-change baseline, so a restored document is not
+// reported as "changed on disk" just because npad was away.
+static void current_session_meta(SessionMeta *meta) {
+    memset(meta, 0, sizeof(*meta));
+    meta->encoding = g_editor.file_info.encoding;
+    meta->line_ending = g_editor.file_info.line_ending;
+    meta->truncated = g_editor.file_info.truncated;
+    meta->has_truncated = true;
+    meta->stamp.size = -1;
+    if (g_editor.current_file)
+        meta->stamp = g_editor.file_stamp;
+}
+
+// Drop a claimed slot held as this window's crash copy (g_held_claim)
+static void editor_drop_held_claim(const char *dir) {
+    if (g_held_claim[0] && dir) {
+        session_discard_claimed(dir, g_held_claim, g_session_slot);
+        g_held_claim[0] = '\0';
+    }
+}
+
+// Write this window's slot: its text and current_session_meta
+static bool editor_write_own_slot(const char *dir, const char *content) {
+    SessionMeta meta;
+    current_session_meta(&meta);
+    bool written = session_write_ex(dir, g_session_slot, content, g_editor.current_file, &meta);
+    if (written)
+        editor_drop_held_claim(dir); // The fresh snapshot supersedes it
+    return written;
+}
+
 // Write a crash-recovery snapshot of the current unsaved document
 static void editor_snapshot_session(void) {
     if (!g_editor.session_resume_enabled || !g_editor.is_modified || !g_editor.main_window)
@@ -103,11 +156,21 @@ static void editor_snapshot_session(void) {
 
     char *content = ui_get_text(g_editor.main_window);
     if (content) {
-        session_write(dir, g_session_slot, content, g_editor.current_file,
-                      g_editor.file_info.encoding, g_editor.file_info.line_ending);
+        editor_write_own_slot(dir, content);
         free(content);
     }
     free(dir);
+}
+
+// Remove this instance's recovery snapshot (after a clean save or clean exit,
+// or when the document it held was replaced or discarded)
+static void editor_clear_session(void) {
+    char *dir = editor_session_dir();
+    if (dir) {
+        session_clear_slot(dir, g_session_slot);
+        editor_drop_held_claim(dir);
+        free(dir);
+    }
 }
 
 const char *editor_session_slot_id(void) {
@@ -128,8 +191,15 @@ const char *editor_session_slot_id(void) {
 // silently: npad promised to bring the document back, and quitting on a
 // promise it could not keep would destroy the buffer outright.
 static bool editor_snapshot_handoff(void) {
-    if (!g_editor.is_modified || !g_editor.main_window)
-        return true; // Nothing unsaved to carry across
+    if (!g_editor.main_window)
+        return true;
+    if (!g_editor.is_modified) {
+        // Nothing unsaved to carry across. A snapshot still on disk is of
+        // text the user has since saved or thrown away; left there, the next
+        // launch would bring the discarded draft back as unsaved work.
+        editor_clear_session();
+        return true;
+    }
 
     char *dir = editor_session_dir();
     if (!dir)
@@ -141,8 +211,7 @@ static bool editor_snapshot_handoff(void) {
         return false;
     }
 
-    bool parked = session_write(dir, g_session_slot, content, g_editor.current_file,
-                                g_editor.file_info.encoding, g_editor.file_info.line_ending);
+    bool parked = editor_write_own_slot(dir, content);
     if (parked) {
         // A failed mark is survivable: the content is safe either way, it just
         // comes back under the crash prompt instead of silently.
@@ -165,23 +234,80 @@ static void editor_cancel_handoff(void) {
     }
 }
 
-// Remove this instance's recovery snapshot (after a clean save or clean exit)
-static void editor_clear_session(void) {
-    char *dir = editor_session_dir();
-    if (dir) {
-        session_clear_slot(dir, g_session_slot);
-        free(dir);
-    }
+// Whether a quit, an update's handoff or a session end is under way
+static bool editor_is_leaving(void) {
+    return g_leaving || g_session_ending;
 }
 
-// Restore one slot's content into this window. Returns true if restored.
-static bool editor_restore_slot(const char *dir, const char *slot_id) {
-    char *path = NULL;
-    TextFileInfo info = g_editor.file_info;
-    char *content = session_take(dir, slot_id, &path, &info.encoding, &info.line_ending);
-    if (!content) {
-        free(path);
+bool editor_exited_unused(void) {
+    return g_exit_unused;
+}
+
+// A window that has nothing to show and nobody asked for closes again
+static void editor_exit_unused(void) {
+    g_exit_unused = true;
+    g_leaving = true;
+    ui_quit();
+}
+
+// npad before 0.36 did not record truncation in the slot, so for one of its
+// slots the original is looked at again: a NUL before its end means the
+// document was only ever the part before it, and Save must not overwrite the
+// original with it. A file too large to check is assumed to be truncated -
+// the safe direction, where Save asks for a new name instead.
+static bool original_is_truncated(const char *path) {
+    if (!path || !file_exists(path))
+        return false; // No original left to protect
+    if (file_get_size(path) > TRUNCATION_RECHECK_MAX_BYTES)
+        return true;
+    TextFileInfo info;
+    memset(&info, 0, sizeof(info));
+    char *text = file_read_text_ex(path, &info);
+    if (!text)
         return false;
+    free(text);
+    return info.truncated;
+}
+
+typedef enum {
+    RESTORE_OK,      // The document is in this window now
+    RESTORE_NOTHING, // The slot was gone or empty: nothing to show
+    RESTORE_FAILED   // It could not be read; it was kept and the user told
+} RestoreResult;
+
+// Restore a slot this instance has claimed into this window.
+//
+// Nothing is deleted before the text is safely in the window, and the slot is
+// then moved under this instance's own id rather than removed: the restored
+// document has an on-disk copy from the first moment, instead of waiting for
+// the next snapshot tick (or never getting one, for a handoff restored with
+// recovery turned off).
+static RestoreResult editor_restore_claimed(const char *dir, const char *slot_id) {
+    char *content = NULL;
+    char *path = NULL;
+    SessionMeta meta;
+    bool handoff = session_is_handoff(dir, slot_id);
+    switch (session_read_claimed(dir, slot_id, g_session_slot, &content, &path, &meta)) {
+        case SESSION_READ_OK:
+            break;
+        case SESSION_READ_GONE:
+            return RESTORE_NOTHING;
+        case SESSION_READ_EMPTY:
+            session_discard_claimed(dir, slot_id, g_session_slot); // Holds nothing
+            return RESTORE_NOTHING;
+        case SESSION_READ_FAILED:
+        default: {
+            // Locked by a scanner, out of memory, a permissions problem: the
+            // only copy must survive it. Give it back so it is offered again.
+            session_release(dir, slot_id, g_session_slot);
+            char message[512];
+            snprintf(message, sizeof(message),
+                     "npad could not read a document it kept for recovery.\n%.200s\n\n"
+                     "It has been kept, and npad will offer it again the next time it starts.",
+                     file_get_last_error());
+            ui_show_message_box(g_editor.main_window, "npad", message, false);
+            return RESTORE_FAILED;
+        }
     }
 
     ui_set_text(g_editor.main_window, content);
@@ -191,20 +317,104 @@ static bool editor_restore_slot(const char *dir, const char *slot_id) {
         free(g_editor.current_file);
     }
     g_editor.current_file = path; // Ownership transferred (may be NULL)
+
+    TextFileInfo info;
+    memset(&info, 0, sizeof(info));
+    info.encoding = meta.encoding;
+    info.line_ending = meta.line_ending;
+    info.truncated = meta.has_truncated ? meta.truncated : original_is_truncated(path);
     g_editor.file_info = info;
+
+    // External-change baseline: the original as npad last saw it, so a change
+    // made while npad was away is reported and an untouched file is not. A
+    // slot from before 0.36 has no stamp; the file as it is now is the best
+    // baseline left.
+    g_editor.file_stamp.size = -1;
+    g_editor.file_stamp.write_time = 0;
+    if (path) {
+        if (meta.stamp.size >= 0)
+            g_editor.file_stamp = meta.stamp;
+        else
+            file_get_stamp(path, &g_editor.file_stamp);
+    }
+    g_editor.suppress_change_prompt = false;
+
     editor_set_modified(true);
     editor_update_status_info();
+
+    if (g_editor.session_resume_enabled || handoff) {
+        SessionMeta now;
+        current_session_meta(&now);
+        if (!session_adopt(dir, slot_id, g_session_slot, g_session_slot, g_editor.current_file,
+                           &now)) {
+            // Could not be moved: keep holding the claim as the crash copy. If
+            // this window dies it is handed back and offered again.
+            snprintf(g_held_claim, sizeof(g_held_claim), "%s", slot_id);
+        }
+    } else {
+        // Recovery is off and this was a crash leftover: no snapshots wanted
+        session_discard_claimed(dir, slot_id, g_session_slot);
+    }
+    return RESTORE_OK;
+}
+
+// A slot id records the owner's pid and when it started. The slot belongs to a
+// live session only while that pid is a running npad that started no later
+// than that: after a reboot a recycled pid can belong to a newer npad (on
+// Linux even to this very process), and its leftovers would otherwise never
+// be offered.
+static bool slot_owner_is_running(const char *slot_id, void *ctx) {
+    (void) ctx;
+    if (strcmp(slot_id, g_session_slot) == 0)
+        return true; // This instance
+    unsigned long long started_by = 0;
+    long pid = 0;
+    if (!session_parse_slot_id(slot_id, &started_by, &pid))
+        return false;
+    long long started = -1;
+    if (!ui_pid_is_running(pid, &started))
+        return false;
+    if (started >= 0 && (unsigned long long) started > started_by + SLOT_START_SLACK_SEC)
+        return false; // Same pid, later process: the owner is gone
     return true;
 }
 
-// A slot id is "<time>-<pid>" in hex; a slot whose owning pid is still a
-// running npad process is a live session, not a crash to recover.
-static bool slot_owner_is_running(const char *slot_id) {
-    const char *dash = strrchr(slot_id, '-');
-    if (!dash)
-        return false;
-    long pid = strtol(dash + 1, NULL, 16);
-    return ui_pid_is_running(pid);
+// Reopen a slot this instance claimed in a new window of its own. The child is
+// told who holds the claim, so it can take it over (and nobody else can).
+static void editor_reopen_in_new_window(const char *slot_id, int cascade) {
+    char arg[SESSION_SLOT_ID_MAX * 2];
+    snprintf(arg, sizeof(arg), "%s:%s", slot_id, g_session_slot);
+    ui_launch_recovery_instance(arg, cascade);
+}
+
+// Restore a claimed slot here while this window is free, else in a new one
+static void editor_place_slot(const char *dir, const char *slot_id, bool *window_free,
+                              int *cascade) {
+    if (*window_free) {
+        if (editor_restore_claimed(dir, slot_id) == RESTORE_OK)
+            *window_free = false;
+    } else {
+        editor_reopen_in_new_window(slot_id, (*cascade)++);
+    }
+}
+
+// Launched with --recover: restore that one slot, silently. The slot is still
+// listed when Windows relaunches npad after a restart (--recover <slot>), or
+// claimed by the window that spawned this one (--recover <slot>:<its id>).
+static void editor_recover_requested_slot(const char *dir) {
+    bool claimed = false;
+    if (g_recover_from)
+        claimed = session_claim(dir, g_recover_slot, g_recover_from, g_session_slot);
+    if (!claimed)
+        claimed = session_claim(dir, g_recover_slot, NULL, g_session_slot);
+
+    RestoreResult result = claimed ? editor_restore_claimed(dir, g_recover_slot) : RESTORE_NOTHING;
+    if (result != RESTORE_OK && !g_editor.is_modified && !g_editor.current_file) {
+        // Another window got there first (a plain launch racing a restart's
+        // relaunch), or there was nothing to restore. An empty window that
+        // nobody asked for would only puzzle; close it again.
+        editor_exit_unused();
+    }
 }
 
 // On startup, offer to restore work left behind by an unclean exit.
@@ -215,6 +425,10 @@ static bool slot_owner_is_running(const char *slot_id) {
 // were open, each left its own slot; the extras reopen in new windows.
 // Slots owned by still-running npad instances are skipped (they are live
 // snapshots, not crashed sessions).
+//
+// Runs on every launch, including one given a file to open: parked and
+// crashed documents are then reopened in windows of their own instead of
+// waiting, unseen, for a launch without a file.
 static void editor_check_session_recovery(void) {
     if (!g_editor.main_window)
         return;
@@ -223,25 +437,29 @@ static void editor_check_session_recovery(void) {
     if (!dir)
         return;
 
-    // Launched to recover one specific slot (a window spawned for an extra
-    // leftover session): restore it silently, no prompt.
     if (g_recover_slot) {
-        editor_restore_slot(dir, g_recover_slot);
+        editor_recover_requested_slot(dir);
         free(dir);
         return;
     }
 
+    // Put back whatever an interrupted restore or snapshot left half-done
+    session_recover_orphans(dir, g_session_slot, slot_owner_is_running, NULL);
+
     int listed = 0;
     char **slots = session_list_slots(dir, &listed);
 
-    // Drop slots belonging to still-running instances (compacting the array)
+    // Claim every leftover before anything is shown. Two npads starting
+    // together would otherwise both offer the same documents, and No in one
+    // would delete what the other is restoring. A slot another instance
+    // claimed first is simply not ours to offer.
     int count = 0;
     for (int i = 0; i < listed; i++) {
-        if (slot_owner_is_running(slots[i])) {
-            free(slots[i]);
-            slots[i] = NULL;
-        } else {
+        if (!slot_owner_is_running(slots[i], NULL) &&
+            session_claim(dir, slots[i], NULL, g_session_slot)) {
             slots[count++] = slots[i];
+        } else {
+            free(slots[i]);
         }
     }
 
@@ -260,54 +478,51 @@ static void editor_check_session_recovery(void) {
         }
     }
 
-    if (handoff > 0) {
-        // Restore the first into this window and fan the rest out into new
-        // ones, exactly as the crash path does - but silently.
-        bool restored_here = false;
-        int cascade = 1;
-        for (int i = 0; i < handoff; i++) {
-            session_clear_handoff(dir, slots[i]); // One-shot: never restores twice
-            if (!restored_here) {
-                restored_here = editor_restore_slot(dir, slots[i]);
-            } else {
-                ui_launch_recovery_instance(slots[i], cascade++);
-            }
-        }
-        // Any remaining slots are real crashes, but this window is now occupied
-        // by restored work, so leave them for the next launch to offer rather
-        // than clobbering what we just restored.
-        session_free_slots(slots, count);
-        free(dir);
-        return;
+    // This window takes the first document only when it is free: a file
+    // given on the command line, or anything typed already, keeps it. The
+    // rest open in new windows, cascaded so they do not stack.
+    bool window_free = !g_editor.current_file && !g_editor.is_modified;
+    int cascade = 1;
+    for (int i = 0; i < handoff; i++) {
+        editor_place_slot(dir, slots[i], &window_free, &cascade);
     }
 
-    if (count > 0) {
-        char message[256];
-        if (count == 1) {
-            snprintf(message, sizeof(message),
-                     "npad may have closed unexpectedly.\nRestore your unsaved work?");
-        } else {
-            snprintf(message, sizeof(message),
-                     "npad may have closed unexpectedly.\n"
-                     "Restore your %d unsaved documents?",
-                     count);
+    int crashed = count - handoff;
+    if (crashed > 0) {
+        UiAnswer answer = UI_ANSWER_DISMISSED;
+        if (!editor_is_leaving()) {
+            char message[256];
+            if (crashed == 1) {
+                snprintf(message, sizeof(message),
+                         "npad may have closed unexpectedly.\nRestore your unsaved work?");
+            } else {
+                snprintf(message, sizeof(message),
+                         "npad may have closed unexpectedly.\n"
+                         "Restore your %d unsaved documents?",
+                         crashed);
+            }
+            answer = ui_ask_question(g_editor.main_window, "npad", message);
+            // A quit, an update's handoff or a session end that reached the
+            // question ended it, or will close this window straight after
+            // whatever was answered. Either way it was no decision about these
+            // documents: keep them for the next launch.
+            if (editor_is_leaving())
+                answer = UI_ANSWER_DISMISSED;
         }
 
-        if (ui_show_message_box(g_editor.main_window, "npad", message, true)) {
-            // Restore the first slot here; reopen the rest in new windows,
-            // cascaded so they do not stack on top of each other
-            bool restored_here = false;
-            int cascade = 1;
-            for (int i = 0; i < count; i++) {
-                if (!restored_here) {
-                    restored_here = editor_restore_slot(dir, slots[i]);
-                } else {
-                    ui_launch_recovery_instance(slots[i], cascade++);
-                }
-            }
-        } else {
-            for (int i = 0; i < count; i++) {
-                session_clear_slot(dir, slots[i]);
+        for (int i = handoff; i < count; i++) {
+            switch (answer) {
+                case UI_ANSWER_YES:
+                    editor_place_slot(dir, slots[i], &window_free, &cascade);
+                    break;
+                case UI_ANSWER_NO:
+                    // Only an explicit No discards them
+                    session_discard_claimed(dir, slots[i], g_session_slot);
+                    break;
+                case UI_ANSWER_DISMISSED:
+                default:
+                    session_release(dir, slots[i], g_session_slot);
+                    break;
             }
         }
     }
@@ -361,10 +576,13 @@ bool editor_init(void) {
         g_editor.session_interval = 5;
     }
 
-    // Unique recovery slot id for this instance (time + pid). Distinct across
-    // concurrently running instances so their snapshots never collide.
-    snprintf(g_session_slot, sizeof(g_session_slot), "%lx-%x", (unsigned long) time(NULL),
-             (unsigned) npad_getpid());
+    // Unique recovery slot id for this instance (time + nonce + pid). Distinct
+    // across concurrently running instances so their snapshots never collide.
+    session_make_slot_id(g_session_slot, sizeof(g_session_slot));
+    g_leaving = false;
+    g_session_ending = false;
+    g_exit_unused = false;
+    g_held_claim[0] = '\0';
 
     load_default_file_info(&g_editor.file_info);
 
@@ -384,20 +602,36 @@ void editor_cleanup(void) {
         g_startup_file = NULL;
     }
 
-    if (g_recover_slot) {
-        free(g_recover_slot);
-        g_recover_slot = NULL;
-    }
+    editor_set_recover_slot(NULL);
 }
 
-void editor_set_recover_slot(const char *slot) {
-    if (g_recover_slot) {
-        free(g_recover_slot);
-        g_recover_slot = NULL;
-    }
-    if (slot) {
-        g_recover_slot = duplicate_string(slot);
-    }
+bool editor_set_recover_slot(const char *slot) {
+    free(g_recover_slot);
+    g_recover_slot = NULL;
+    free(g_recover_from);
+    g_recover_from = NULL;
+    if (!slot)
+        return true;
+
+    // "<slot>" or "<slot>:<claimer>". Both must be ids npad could have made:
+    // the slot id becomes part of file names that are renamed and deleted.
+    char slot_id[SESSION_SLOT_ID_MAX];
+    char claimer[SESSION_SLOT_ID_MAX] = "";
+    const char *colon = strchr(slot, ':');
+    size_t slot_len = colon ? (size_t) (colon - slot) : strlen(slot);
+    if (slot_len >= sizeof(slot_id) || (colon && strlen(colon + 1) >= sizeof(claimer)))
+        return false;
+    memcpy(slot_id, slot, slot_len);
+    slot_id[slot_len] = '\0';
+    if (colon)
+        strcpy(claimer, colon + 1);
+    if (!session_is_valid_slot_id(slot_id) || (colon && !session_is_valid_slot_id(claimer)))
+        return false;
+
+    g_recover_slot = duplicate_string(slot_id);
+    if (colon)
+        g_recover_from = duplicate_string(claimer);
+    return g_recover_slot != NULL;
 }
 
 void editor_set_main_window(Window *window) {
@@ -429,6 +663,10 @@ bool editor_new_file(void) {
 
     editor_set_modified(false);
     editor_update_status_info();
+    // The document the snapshot held is gone - saved, or discarded with
+    // Don't Save. Left on disk, a later crash or handoff would bring the
+    // discarded draft back as unsaved work bound to its old file.
+    editor_clear_session();
 
     return true;
 }
@@ -527,6 +765,7 @@ bool editor_open_file(const char *filename) {
 
     editor_set_modified(false);
     editor_update_status_info();
+    editor_clear_session(); // The previous document's snapshot, as for New
 
     return true;
 }
@@ -873,6 +1112,8 @@ void editor_enable_session_resume(bool enabled) {
     editor_apply_session_timer();
     if (!enabled) {
         editor_clear_session(); // Drop any snapshot when the feature is turned off
+    } else {
+        editor_snapshot_session(); // Protect what is already unsaved, now
     }
 }
 
@@ -887,6 +1128,7 @@ void editor_reload_prefs(void) {
         g_editor.auto_save_interval = 10;
     }
 
+    bool was_enabled = g_editor.session_resume_enabled;
     g_editor.session_resume_enabled = settings_get_bool("session_resume_enabled", true);
     g_editor.session_interval = settings_get_int("session_interval", DEFAULT_SESSION_INTERVAL_SEC);
     if (g_editor.session_interval < 5) {
@@ -895,6 +1137,15 @@ void editor_reload_prefs(void) {
 
     editor_apply_auto_save_timer();
     editor_apply_session_timer();
+
+    // Recovery switched in another window applies here too, snapshot and all:
+    // turned off, this window's snapshot goes, exactly as it does in the
+    // window where the switch was made; turned on, it is written now
+    if (was_enabled && !g_editor.session_resume_enabled) {
+        editor_clear_session();
+    } else if (!was_enabled && g_editor.session_resume_enabled) {
+        editor_snapshot_session();
+    }
 }
 
 bool editor_handle_event(const UIEvent *event) {
@@ -907,6 +1158,7 @@ bool editor_handle_event(const UIEvent *event) {
                 return false; // Cancel quit
             }
             editor_clear_session(); // Clean exit: nothing to recover
+            g_leaving = true;
             ui_quit();
             return true;
 
@@ -917,13 +1169,18 @@ bool editor_handle_event(const UIEvent *event) {
             if (!editor_snapshot_handoff()) {
                 return false; // Could not park it - do not exit on a broken promise
             }
+            g_leaving = true;
             ui_quit();
             return true;
 
+        // The desktop session is ending (Windows: WM_QUERYENDSESSION); the
+        // process may be stopped at any moment after this
         case UI_EVENT_HANDOFF_SNAPSHOT:
+            g_session_ending = true;
             return editor_snapshot_handoff();
 
         case UI_EVENT_HANDOFF_CANCELLED:
+            g_session_ending = false;
             editor_cancel_handoff();
             return true;
 
@@ -1005,13 +1262,12 @@ bool editor_handle_event(const UIEvent *event) {
             return true;
 
         case UI_EVENT_STARTUP_DEFERRED:
-            // Offer to restore anything a previous crash left behind (only
-            // when no startup file was requested, so we do not clobber an
-            // explicit open). Runs after the first paint - see the platform's
+            // Offer to restore anything a previous crash left behind, and bring
+            // back what an update or a restart parked. With a startup file the
+            // file keeps this window and recovered documents get windows of
+            // their own. Runs after the first paint - see the platform's
             // startup timer - so launching feels instant.
-            if (!g_startup_file) {
-                editor_check_session_recovery();
-            }
+            editor_check_session_recovery();
             return true;
 
         case UI_EVENT_EDIT_UNDO:

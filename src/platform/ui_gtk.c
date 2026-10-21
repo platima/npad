@@ -1932,8 +1932,11 @@ void ui_platform_notify_settings_changed(void) {
     npad_gtk_instance_broadcast_settings_changed();
 }
 
-bool ui_platform_pid_is_running(long pid) {
-    return npad_gtk_instance_pid_is_npad(pid);
+bool ui_platform_pid_is_running(long pid, long long *start_time) {
+    bool running = npad_gtk_instance_pid_is_npad(pid);
+    if (running && start_time)
+        *start_time = npad_gtk_process_start_time(pid);
+    return running;
 }
 
 void *ui_platform_get_native_handle(Window *window) {

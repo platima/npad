@@ -11,9 +11,11 @@
  * Each instance claims the well-known name <app id>.Instance.p<pid>. That
  * name is the instance registry: listing names with the prefix counts the
  * instances, and asking whether a pid's name has an owner says whether that
- * pid is a live npad - which also cannot be fooled by a recycled pid. The
- * bus drops a name the moment its process dies, crashes included, so nothing
- * goes stale.
+ * pid is a live npad. The bus drops a name the moment its process dies,
+ * crashes included, so nothing goes stale - but a recycled pid can belong to
+ * a newer npad (after a reboot, say), so a caller deciding whether a recovery
+ * slot's owner is alive also compares npad_gtk_process_start_time() with the
+ * time in the slot id.
  *
  * Messages are broadcast signals carrying the sender's pid; receivers ignore
  * their own, exactly as the Win32 receivers ignore a wParam equal to their
@@ -40,6 +42,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -337,17 +340,83 @@ int npad_gtk_instance_count_others(void) {
 // is npad's. comm is the executable's basename, truncated to 15 characters,
 // which keeps "npad-linux" intact.
 static bool proc_is_npad(long pid) {
-    if (kill((pid_t) pid, 0) != 0 && errno != EPERM)
+    if (kill((pid_t) pid, 0) != 0) {
+        // EPERM: alive, but another user's. Whatever it is, it is not the
+        // owner of a slot in this user's recovery directory - and with /proc
+        // mounted hidepid=2 its comm could not be read to say so, which used
+        // to hide the leftover for as long as that process ran.
         return false;
+    }
     char path[64];
     snprintf(path, sizeof(path), "/proc/%ld/comm", pid);
     FILE *f = fopen(path, "r");
     if (!f)
-        return true; // Alive, but unidentifiable: assume it is, the safe side
+        return true; // Ours and alive, but unidentifiable: assume it is, the safe side
     char comm[32] = "";
     bool npad = fgets(comm, sizeof(comm), f) != NULL && strncmp(comm, "npad", 4) == 0;
     fclose(f);
     return npad;
+}
+
+// Boot time in Unix seconds, from /proc/stat's btime line (read once)
+static long long boot_time(void) {
+    static long long cached = -2;
+    if (cached != -2)
+        return cached;
+    cached = -1;
+    FILE *f = fopen("/proc/stat", "r");
+    if (!f)
+        return cached;
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "btime ", 6) == 0) {
+            cached = strtoll(line + 6, NULL, 10);
+            break;
+        }
+    }
+    fclose(f);
+    return cached;
+}
+
+long long npad_gtk_process_start_time(long pid) {
+    if (pid <= 0)
+        return -1;
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%ld/stat", pid);
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return -1;
+    char buf[1024];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+
+    // Field 2 is the command name in parentheses and may itself hold spaces
+    // or parentheses, so count fields from the last ')'. Field 22 is the
+    // start time in clock ticks since boot.
+    const char *p = strrchr(buf, ')');
+    if (!p)
+        return -1;
+    p++;
+    int field = 2;
+    unsigned long long start_ticks = 0;
+    while (*p) {
+        while (*p == ' ')
+            p++;
+        if (!*p)
+            break;
+        if (++field == 22) {
+            start_ticks = strtoull(p, NULL, 10);
+            break;
+        }
+        while (*p && *p != ' ')
+            p++;
+    }
+    long ticks_per_second = sysconf(_SC_CLK_TCK);
+    long long boot = boot_time();
+    if (field != 22 || ticks_per_second <= 0 || boot < 0)
+        return -1;
+    return boot + (long long) (start_ticks / (unsigned long long) ticks_per_second);
 }
 
 bool npad_gtk_instance_pid_is_npad(long pid) {
