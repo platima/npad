@@ -608,7 +608,7 @@ TEST_CASE(write_failure_preserves_original) {
     chmod(TEST_FILE, 0444);
     bool refused = true;
     if (geteuid() != 0) { // root may write anyway
-        TextFileInfo info = { NPAD_ENC_UTF16_LE, NPAD_EOL_CRLF, false };
+        TextFileInfo info = { .encoding = NPAD_ENC_UTF16_LE, .line_ending = NPAD_EOL_CRLF };
         refused = !file_write_text_ex(TEST_FILE, "new content", &info);
     }
     chmod(TEST_FILE, 0644);

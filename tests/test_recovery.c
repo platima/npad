@@ -217,6 +217,55 @@ TEST_CASE(truncated_is_rechecked_for_a_pre_036_slot) {
     TEST_ASSERT(g_editor.file_info.truncated, "the NUL in the original is found again");
 }
 
+// --- NP-029 / NP-240: the encoding's load flags survive recovery -----------------------
+
+// UTF-8 with a BOM and one byte that is not UTF-8: it decodes to a
+// replacement character, so a save would not write the 0xFF back
+static const char g_lossy[] = "\xEF\xBB\xBF" "ok \xFF here";
+
+TEST_CASE(decode_lossy_survives_a_handoff) {
+    begin();
+    const char *a = test_file("lossy.txt");
+    write_file(a, g_lossy, sizeof(g_lossy) - 1);
+    TEST_ASSERT(editor_open_file(a), "open");
+    TEST_ASSERT(g_editor.file_info.decode_lossy, "loaded with a byte it could not decode");
+    type_text("ok edited");
+    post(UI_EVENT_QUIT_HANDOFF);
+
+    launch(NULL);
+    post(UI_EVENT_STARTUP_DEFERRED);
+    TEST_ASSERT_STR_EQ(a, editor_get_current_file(), "restored");
+    TEST_ASSERT(g_editor.file_info.decode_lossy, "still marked lossy");
+
+    g_stub.message_box_yes = false; // No to "save over the original anyway?"
+    TEST_ASSERT(!editor_save_file(), "declining keeps the original");
+    size_t size = 0;
+    char *data = read_file(a, &size);
+    TEST_ASSERT(data && size == sizeof(g_lossy) - 1 && memcmp(data, g_lossy, size) == 0,
+                "the undecodable byte is still on disk");
+    free(data);
+
+    g_stub.message_box_yes = true;
+    TEST_ASSERT(editor_save_file(), "Yes saves");
+    TEST_ASSERT(!g_editor.file_info.decode_lossy, "and the saved file decodes cleanly");
+}
+
+TEST_CASE(decode_lossy_is_rechecked_for_a_pre_036_slot) {
+    begin();
+    const char *a = test_file("lossy.txt");
+    write_file(a, g_lossy, sizeof(g_lossy) - 1);
+    char meta[1400];
+    snprintf(meta, sizeof(meta), "%d\n%d\n%s", (int) NPAD_ENC_UTF8_BOM, (int) NPAD_EOL_LF, a);
+    session_write(recovery_dir(), DEAD_1, "ok edited", NULL, NPAD_ENC_UTF8_BOM, NPAD_EOL_LF);
+    write_file(recovery_file(DEAD_1 ".meta"), meta, strlen(meta));
+    session_mark_handoff(recovery_dir(), DEAD_1);
+
+    post(UI_EVENT_STARTUP_DEFERRED);
+    TEST_ASSERT_STR_EQ(a, editor_get_current_file(), "restored");
+    TEST_ASSERT(g_editor.file_info.decode_lossy, "the bad byte in the original is found again");
+    TEST_ASSERT(!g_editor.file_info.truncated, "and nothing else is invented");
+}
+
 // --- NP-002 / NP-218: only an explicit No discards ---------------------------------------
 
 static void make_crash_slots(void) {
@@ -645,6 +694,8 @@ int main(void) {
     RUN_TEST(truncated_survives_a_crash);
     RUN_TEST(truncated_survives_a_handoff);
     RUN_TEST(truncated_is_rechecked_for_a_pre_036_slot);
+    RUN_TEST(decode_lossy_survives_a_handoff);
+    RUN_TEST(decode_lossy_is_rechecked_for_a_pre_036_slot);
     RUN_TEST(dismissed_prompt_keeps_the_slots);
     RUN_TEST(quit_during_prompt_keeps_the_slots);
     RUN_TEST(session_end_during_prompt_is_not_a_no);
