@@ -9,8 +9,11 @@
  * The meta file is three lines:
  *
  *     <encoding>
- *     <line ending>[ truncated=<0|1>][ altered=<0|1>][ stamp=<size>:<write time>]
+ *     <line ending>[ truncated=<0|1>][ altered=<0|1>][ stamp=<stamp>]
  *     <original path, possibly empty, running to the end of the file>
+ *
+ * <stamp> is <size>:<write time>:<device>:<inode>, the whole FileStamp; one
+ * without the last two (device and inode 0) still parses.
  *
  * The attributes ride on the second line, after the number, because npad
  * before 0.36 reads that line with atoi() and ignores whatever follows: a
@@ -241,14 +244,16 @@ static char *format_meta(const char *path, const SessionMeta *meta) {
         meta = &defaults;
     }
     size_t path_len = path ? strlen(path) : 0;
-    size_t size = path_len + 128;
+    size_t size = path_len + 192;
     char *text = malloc(size);
     if (!text)
         return NULL;
-    char stamp[64] = "";
+    // The whole FileStamp: on POSIX file_stamp_equal also compares the device
+    // and inode, so a stamp restored without them would read as a change
+    char stamp[128] = "";
     if (meta->stamp.size >= 0) {
-        snprintf(stamp, sizeof(stamp), " stamp=%lld:%lld", meta->stamp.size,
-                 meta->stamp.write_time);
+        snprintf(stamp, sizeof(stamp), " stamp=%lld:%lld:%llu:%llu", meta->stamp.size,
+                 meta->stamp.write_time, meta->stamp.device, meta->stamp.inode);
     }
     snprintf(text, size, "%d\n%d truncated=%d altered=%d%s\n%s", (int) meta->encoding,
              (int) meta->line_ending, meta->truncated ? 1 : 0, meta->altered ? 1 : 0, stamp,
@@ -303,7 +308,13 @@ static void parse_meta(const char *text, char **out_path, SessionMeta *meta) {
             long long size = strtoll(value, &end, 10);
             if (end && *end == ':' && size >= 0) {
                 meta->stamp.size = size;
-                meta->stamp.write_time = strtoll(end + 1, NULL, 10);
+                meta->stamp.write_time = strtoll(end + 1, &end, 10);
+                // Device and inode follow when the platform has them
+                if (end && *end == ':') {
+                    meta->stamp.device = strtoull(end + 1, &end, 10);
+                    if (end && *end == ':')
+                        meta->stamp.inode = strtoull(end + 1, NULL, 10);
+                }
             }
         }
 

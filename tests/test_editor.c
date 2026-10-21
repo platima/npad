@@ -253,8 +253,8 @@ TEST_CASE(auto_save_failure_is_silent) {
     // that matches (nothing there before, nothing there now)
     free(g_editor.current_file);
     g_editor.current_file = dup_text(P("missing_dir/x.txt"));
+    memset(&g_editor.file_stamp, 0, sizeof(g_editor.file_stamp));
     g_editor.file_stamp.size = -1;
-    g_editor.file_stamp.write_time = 0;
 
     for (int i = 0; i < 3; i++)
         tick_auto_save();

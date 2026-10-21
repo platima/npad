@@ -372,6 +372,8 @@ TEST_CASE(session_meta_round_trips_truncated_and_stamp) {
     meta.truncated = true;
     meta.stamp.size = 123456;
     meta.stamp.write_time = 133000000000000123LL;
+    meta.stamp.device = 2049;
+    meta.stamp.inode = 18446744073709551000ULL;
     TEST_ASSERT(session_write_ex(TEST_DIR, SLOT_A, "frag", "/data/a b.bin", &meta), "write");
 
     TEST_ASSERT(session_claim(TEST_DIR, SLOT_A, NULL, CLAIMER_1), "claim");
@@ -388,6 +390,8 @@ TEST_CASE(session_meta_round_trips_truncated_and_stamp) {
     TEST_ASSERT(back.truncated, "truncated survives");
     TEST_ASSERT(back.stamp.size == 123456, "stamp size");
     TEST_ASSERT(back.stamp.write_time == 133000000000000123LL, "stamp time");
+    TEST_ASSERT(back.stamp.device == 2049, "stamp device");
+    TEST_ASSERT(back.stamp.inode == 18446744073709551000ULL, "stamp inode, full width");
     free(content);
     free(path);
     cleanup();

@@ -418,8 +418,8 @@ static RestoreResult editor_restore_claimed(const char *dir, const char *slot_id
     // made while npad was away is reported and an untouched file is not. A
     // slot from before 0.36 has no stamp; the file as it is now is the best
     // baseline left.
+    memset(&g_editor.file_stamp, 0, sizeof(g_editor.file_stamp));
     g_editor.file_stamp.size = -1;
-    g_editor.file_stamp.write_time = 0;
     if (path) {
         if (meta.stamp.size >= 0)
             g_editor.file_stamp = meta.stamp;
@@ -767,8 +767,8 @@ bool editor_new_file(void) {
     }
 
     load_default_file_info(&g_editor.file_info);
+    memset(&g_editor.file_stamp, 0, sizeof(g_editor.file_stamp));
     g_editor.file_stamp.size = -1;
-    g_editor.file_stamp.write_time = 0;
     g_editor.auto_save_held = false;
     g_editor.suppress_change_prompt = false;
 
