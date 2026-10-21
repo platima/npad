@@ -5,14 +5,15 @@
  * RichEdit control, kept apart from ui_win32.c so tests/test_richedit_boundary.c
  * can drive the very same code against a hidden control in its own process.
  *
- * Three things about RichEdit make this more than a UTF-8 <-> UTF-16 copy:
+ * Four things about RichEdit make this more than a UTF-8 <-> UTF-16 copy:
  *
  * - It stores every line break as one bare CR, and its loader reads some break
  *   sequences differently from the core: CR CR LF is msftedit's EM_FMTLINES
  *   soft-break marker and is DELETED, joining the two lines. So the text is
  *   normalised before it goes in: every CRLF, lone CR and lone LF becomes one
- *   CR, exactly the breaks file_convert_line_endings counts. Reading back with
- *   GT_USECRLF then gives the core's own CRLF conversion of the input.
+ *   CR, exactly the breaks file_convert_line_endings counts. Reading back
+ *   (richedit_get_text: the stored CRs widened to CR LF, see below) then gives
+ *   the core's own CRLF conversion of the input.
  *
  * - It rewrites some valid characters on the way in: U+2028 and U+2029 become
  *   paragraph breaks; BEL, U+FDD0-FDEF and U+FFF9-FFFF (U+FFFC and U+FFFD

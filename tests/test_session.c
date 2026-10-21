@@ -228,6 +228,76 @@ TEST_CASE(session_handoff_marker_is_not_a_slot) {
     cleanup();
 }
 
+// The altered mark (text the edit control could not hold exactly) must come
+// back from a snapshot, or a restored document could be saved over its file
+TEST_CASE(session_altered_flag_round_trips) {
+    cleanup();
+    TEST_ASSERT(session_write_ex(TEST_DIR, "slotA", "x\r\ny", "C:/data.json", NPAD_ENC_UTF8,
+                                 NPAD_EOL_LF, true),
+                "write an altered slot");
+    char *path = NULL;
+    TextEncoding enc = NPAD_ENC_UTF16_BE;
+    LineEnding eol = NPAD_EOL_CRLF;
+    bool altered = false;
+    char *content = session_take_ex(TEST_DIR, "slotA", &path, &enc, &eol, &altered);
+    TEST_ASSERT_NOT_NULL(content, "take returns content");
+    TEST_ASSERT(altered, "the altered mark comes back");
+    TEST_ASSERT_STR_EQ("C:/data.json", path, "path still last and intact");
+    TEST_ASSERT_EQ(NPAD_ENC_UTF8, enc, "encoding round-trips");
+    TEST_ASSERT_EQ(NPAD_EOL_LF, eol, "line ending still parses with the flag after it");
+    free(content);
+    free(path);
+
+    session_write_ex(TEST_DIR, "slotA", "x", NULL, NPAD_ENC_UTF8, NPAD_EOL_CRLF, false);
+    altered = true;
+    content = session_take_ex(TEST_DIR, "slotA", NULL, NULL, NULL, &altered);
+    TEST_ASSERT_NOT_NULL(content, "take an unaltered slot");
+    TEST_ASSERT(!altered, "an exact document reads back unaltered");
+    free(content);
+
+    // session_write is the unaltered shorthand
+    session_write(TEST_DIR, "slotA", "x", NULL, NPAD_ENC_UTF8, NPAD_EOL_CRLF);
+    altered = true;
+    content = session_take_ex(TEST_DIR, "slotA", NULL, NULL, NULL, &altered);
+    TEST_ASSERT(!altered, "session_write records no mark");
+    free(content);
+    cleanup();
+}
+
+// Only the flags line is searched: a path that happens to spell the flag is
+// still just a path
+TEST_CASE(session_altered_flag_is_not_read_from_the_path) {
+    cleanup();
+    session_write_ex(TEST_DIR, "slotA", "x", "/tmp/a altered=1.txt", NPAD_ENC_UTF8, NPAD_EOL_LF,
+                     false);
+    char *path = NULL;
+    bool altered = true;
+    char *content = session_take_ex(TEST_DIR, "slotA", &path, NULL, NULL, &altered);
+    TEST_ASSERT(!altered, "the path does not set the flag");
+    TEST_ASSERT_STR_EQ("/tmp/a altered=1.txt", path, "and is read back whole");
+    free(content);
+    free(path);
+    cleanup();
+}
+
+// A meta written by npad before the flag existed: three bare lines
+TEST_CASE(session_meta_without_flags_reads_unaltered) {
+    cleanup();
+    session_write(TEST_DIR, "slotA", "old draft", NULL, NPAD_ENC_UTF8, NPAD_EOL_CRLF);
+    TEST_ASSERT(file_write_text(TEST_DIR "/slotA.meta", "0\n1\nC:/old.txt"), "old-style meta");
+    char *path = NULL;
+    LineEnding eol = NPAD_EOL_CRLF;
+    bool altered = true;
+    char *content = session_take_ex(TEST_DIR, "slotA", &path, NULL, &eol, &altered);
+    TEST_ASSERT_STR_EQ("old draft", content, "content");
+    TEST_ASSERT(!altered, "no flag means not altered");
+    TEST_ASSERT_EQ(NPAD_EOL_LF, eol, "line ending");
+    TEST_ASSERT_STR_EQ("C:/old.txt", path, "path");
+    free(content);
+    free(path);
+    cleanup();
+}
+
 int main(void) {
     TEST_INIT();
 
@@ -244,6 +314,9 @@ int main(void) {
     RUN_TEST(session_clear_slot_removes_handoff_marker);
     RUN_TEST(session_take_clears_handoff_marker);
     RUN_TEST(session_handoff_marker_is_not_a_slot);
+    RUN_TEST(session_altered_flag_round_trips);
+    RUN_TEST(session_altered_flag_is_not_read_from_the_path);
+    RUN_TEST(session_meta_without_flags_reads_unaltered);
 
     TEST_SUMMARY();
     return 0;

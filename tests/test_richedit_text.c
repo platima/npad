@@ -21,8 +21,8 @@
 #include <string.h>
 #include <wchar.h>
 
-// ASCII text -> wide, normalised, then read back the way GT_USECRLF does
-// (each stored CR as CR LF) -> ASCII
+// ASCII text -> wide, normalised, then read back the way richedit_get_text
+// does (each stored CR widened to CR LF) -> ASCII
 static char *through_normalise(const char *text) {
     size_t len = strlen(text);
     wchar_t *wide = malloc((len + 1) * sizeof(wchar_t));

@@ -2,9 +2,18 @@
  * npad - Session Recovery Implementation
  * Crash-recovery snapshots of unsaved documents
  *
- * Each instance owns a slot: <slot>.txt (UTF-8 content) and <slot>.meta
- * ("encoding\nline_ending\npath", path may be empty). Slots present at
- * startup are leftovers from instances that did not exit cleanly.
+ * Each instance owns a slot: <slot>.txt (UTF-8 content) and <slot>.meta.
+ * Slots present at startup are leftovers from instances that did not exit
+ * cleanly. The meta file is three lines:
+ *
+ *     <encoding>
+ *     <line ending>[ altered=<0|1>]
+ *     <original path, possibly empty, running to the end of the file>
+ *
+ * Flags ride on the second line after the number, because npad before 0.36
+ * reads that line with atoi() and ignores whatever follows: a meta written
+ * here still restores in an older npad, and an older meta reads here as "no
+ * flags". The path stays last because a path may itself contain a newline.
  *
  * Author: Platima
  * https://npad.dev
@@ -66,8 +75,9 @@ static bool rename_utf8(const char *from, const char *to) {
 #endif
 }
 
-bool session_write(const char *dir, const char *slot_id, const char *utf8_content, const char *path,
-                   TextEncoding encoding, LineEnding line_ending) {
+bool session_write_ex(const char *dir, const char *slot_id, const char *utf8_content,
+                      const char *path, TextEncoding encoding, LineEnding line_ending,
+                      bool altered) {
     if (!dir || !slot_id || !utf8_content)
         return false;
 
@@ -81,13 +91,13 @@ bool session_write(const char *dir, const char *slot_id, const char *utf8_conten
         return false;
     }
 
-    // Metadata: two integers then the original path (possibly empty)
+    // Metadata: the format described at the top of this file
     size_t path_len = path ? strlen(path) : 0;
     char *meta = malloc(path_len + 64);
     bool ok = false;
     if (meta) {
-        snprintf(meta, path_len + 64, "%d\n%d\n%s", (int) encoding, (int) line_ending,
-                 path ? path : "");
+        snprintf(meta, path_len + 64, "%d\n%d altered=%d\n%s", (int) encoding, (int) line_ending,
+                 altered ? 1 : 0, path ? path : "");
         // Write content first, then meta: recovery keys off the .meta file,
         // so the content is always present by the time meta appears.
         ok = file_write_text_atomic(content_path, utf8_content) &&
@@ -100,15 +110,37 @@ bool session_write(const char *dir, const char *slot_id, const char *utf8_conten
     return ok;
 }
 
-// Parse "<encoding>\n<line_ending>\n<path>" metadata contents
+bool session_write(const char *dir, const char *slot_id, const char *utf8_content, const char *path,
+                   TextEncoding encoding, LineEnding line_ending) {
+    return session_write_ex(dir, slot_id, utf8_content, path, encoding, line_ending, false);
+}
+
+// Find " <key>=" within [line, line_end) and return what follows it. The
+// leading space is part of the match, so a key must follow a separator rather
+// than end some other word.
+static const char *find_attribute(const char *line, const char *line_end, const char *key) {
+    size_t key_len = strlen(key);
+    for (const char *p = line; p + key_len + 2 <= line_end; p++) {
+        if (*p == ' ' && strncmp(p + 1, key, key_len) == 0 && p[key_len + 1] == '=')
+            return p + key_len + 2;
+    }
+    return NULL;
+}
+
+// Parse the metadata format described at the top of this file
 static void parse_meta(const char *meta, char **out_path, TextEncoding *encoding,
-                       LineEnding *line_ending) {
+                       LineEnding *line_ending, bool *altered) {
     int enc = 0, eol = 0;
     const char *first_nl = strchr(meta, '\n');
     const char *second_nl = first_nl ? strchr(first_nl + 1, '\n') : NULL;
+    if (altered)
+        *altered = false;
     if (first_nl && second_nl) {
         enc = atoi(meta);
         eol = atoi(first_nl + 1);
+        const char *flag = find_attribute(first_nl + 1, second_nl, "altered");
+        if (flag && altered)
+            *altered = *flag == '1';
         const char *path_start = second_nl + 1;
         if (*path_start && out_path) {
             *out_path = malloc(strlen(path_start) + 1);
@@ -126,8 +158,10 @@ static void parse_meta(const char *meta, char **out_path, TextEncoding *encoding
     }
 }
 
-char *session_take(const char *dir, const char *slot_id, char **out_path, TextEncoding *encoding,
-                   LineEnding *line_ending) {
+char *session_take_ex(const char *dir, const char *slot_id, char **out_path, TextEncoding *encoding,
+                      LineEnding *line_ending, bool *altered) {
+    if (altered)
+        *altered = false;
     if (out_path)
         *out_path = NULL;
     if (!dir || !slot_id)
@@ -154,7 +188,7 @@ char *session_take(const char *dir, const char *slot_id, char **out_path, TextEn
     content = file_read_text(content_claim);
 
     if (meta) {
-        parse_meta(meta, out_path, encoding, line_ending);
+        parse_meta(meta, out_path, encoding, line_ending, altered);
         free(meta);
     }
 
@@ -171,6 +205,11 @@ done:
     free(content_claim);
     free(meta_claim);
     return content;
+}
+
+char *session_take(const char *dir, const char *slot_id, char **out_path, TextEncoding *encoding,
+                   LineEnding *line_ending) {
+    return session_take_ex(dir, slot_id, out_path, encoding, line_ending, NULL);
 }
 
 // Strip a trailing ".meta" and append the base name to the slot list
