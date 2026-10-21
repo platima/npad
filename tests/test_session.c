@@ -370,6 +370,8 @@ TEST_CASE(session_meta_round_trips_truncated_and_stamp) {
     meta.encoding = NPAD_ENC_UTF16_BE;
     meta.line_ending = NPAD_EOL_LF;
     meta.truncated = true;
+    meta.decode_lossy = true;
+    meta.utf16_no_bom = true;
     meta.stamp.size = 123456;
     meta.stamp.write_time = 133000000000000123LL;
     meta.stamp.device = 2049;
@@ -388,6 +390,8 @@ TEST_CASE(session_meta_round_trips_truncated_and_stamp) {
     TEST_ASSERT_EQ(NPAD_EOL_LF, back.line_ending, "line ending");
     TEST_ASSERT(back.has_truncated, "the flag is recorded");
     TEST_ASSERT(back.truncated, "truncated survives");
+    TEST_ASSERT(back.decode_lossy, "decode_lossy survives");
+    TEST_ASSERT(back.utf16_no_bom, "utf16_no_bom survives");
     TEST_ASSERT(back.stamp.size == 123456, "stamp size");
     TEST_ASSERT(back.stamp.write_time == 133000000000000123LL, "stamp time");
     TEST_ASSERT(back.stamp.device == 2049, "stamp device");
@@ -417,6 +421,7 @@ TEST_CASE(session_meta_reads_pre_036_format) {
     TEST_ASSERT_EQ(1, (int) back.line_ending, "line ending");
     TEST_ASSERT(!back.has_truncated, "an old meta says nothing about truncation");
     TEST_ASSERT(!back.truncated, "and is not read as truncated");
+    TEST_ASSERT(!back.decode_lossy && !back.utf16_no_bom, "nor as lossy or BOM-less");
     TEST_ASSERT(back.stamp.size == -1, "no stamp");
     free(content);
     free(path);

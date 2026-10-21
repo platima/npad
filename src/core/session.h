@@ -47,7 +47,13 @@ typedef struct {
     bool truncated;
     // Reading only: the meta recorded `truncated` at all. npad before 0.36
     // did not, so for those slots the caller has to look at the file again.
+    // A meta that has it also has decode_lossy and utf16_no_bom.
     bool has_truncated;
+    // The original held bytes npad could not decode (TextFileInfo.decode_lossy),
+    // so a save over it asks first and auto-save skips it
+    bool decode_lossy;
+    // UTF-16 written back without a byte order mark (TextFileInfo.utf16_no_bom)
+    bool utf16_no_bom;
     // The text is not exactly what its file holds, because the edit control
     // could not show it exactly (see ui_text_altered_by_load): restored, it
     // must still never be saved over that file without a word. Absent (npad

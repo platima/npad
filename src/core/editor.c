@@ -20,9 +20,7 @@
 #include <string.h>
 #include <time.h>
 
-#ifdef _WIN32
-#include <windows.h>
-#else
+#ifndef _WIN32
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -47,7 +45,7 @@ char *g_startup_file = NULL;
 #define SLOT_START_SLACK_SEC 60
 
 // Above this size the original of a pre-0.36 slot is not re-read to see
-// whether it held a NUL; it is assumed to have (see original_is_truncated)
+// whether it held a NUL; it is assumed to have (see probe_original)
 #define TRUNCATION_RECHECK_MAX_BYTES ((size_t) 512 * 1024 * 1024)
 
 // This instance's recovery slot id (unique per process), and the specific
@@ -186,6 +184,8 @@ static void current_session_meta(SessionMeta *meta) {
     meta->line_ending = g_editor.file_info.line_ending;
     meta->truncated = g_editor.file_info.truncated;
     meta->has_truncated = true;
+    meta->decode_lossy = g_editor.file_info.decode_lossy;
+    meta->utf16_no_bom = g_editor.file_info.utf16_no_bom;
     meta->altered = g_text_altered;
     meta->stamp.size = -1;
     if (g_editor.current_file)
@@ -322,23 +322,31 @@ static void editor_exit_unused(void) {
     ui_quit();
 }
 
-// npad before 0.36 did not record truncation in the slot, so for one of its
-// slots the original is looked at again: a NUL before its end means the
-// document was only ever the part before it, and Save must not overwrite the
-// original with it. A file too large to check is assumed to be truncated -
-// the safe direction, where Save asks for a new name instead.
-static bool original_is_truncated(const char *path) {
+// npad before 0.36 recorded none of the original's load flags in the slot,
+// so for one of its slots the original is looked at again. A NUL before its
+// end means the document was only ever the part before it (truncated), and
+// bytes it could not decode mean a save would not reproduce them
+// (decode_lossy): either way Save must not overwrite the original without a
+// word. A BOM-less UTF-16 file keeps that form only while the document is
+// still in that encoding. A file too large to check is assumed to be
+// truncated - the safe direction, where Save asks for a new name instead. A
+// file that is gone or unreadable has no bytes to lose.
+static void probe_original(const char *path, TextFileInfo *info) {
     if (!path || !file_exists(path))
-        return false; // No original left to protect
-    if (file_get_size(path) > TRUNCATION_RECHECK_MAX_BYTES)
-        return true;
-    TextFileInfo info;
-    memset(&info, 0, sizeof(info));
-    char *text = file_read_text_ex(path, &info);
+        return; // No original left to protect
+    if (file_get_size(path) > TRUNCATION_RECHECK_MAX_BYTES) {
+        info->truncated = true;
+        return;
+    }
+    TextFileInfo probe;
+    memset(&probe, 0, sizeof(probe));
+    char *text = file_read_text_ex(path, &probe);
     if (!text)
-        return false;
+        return;
     free(text);
-    return info.truncated;
+    info->truncated = probe.truncated;
+    info->decode_lossy = probe.decode_lossy;
+    info->utf16_no_bom = probe.encoding == info->encoding && probe.utf16_no_bom;
 }
 
 typedef enum {
@@ -411,7 +419,14 @@ static RestoreResult editor_restore_claimed(const char *dir, const char *slot_id
     memset(&info, 0, sizeof(info));
     info.encoding = meta.encoding;
     info.line_ending = meta.line_ending;
-    info.truncated = meta.has_truncated ? meta.truncated : original_is_truncated(path);
+    if (meta.has_truncated) {
+        // Written by this version, which records every load flag
+        info.truncated = meta.truncated;
+        info.decode_lossy = meta.decode_lossy;
+        info.utf16_no_bom = meta.utf16_no_bom;
+    } else {
+        probe_original(path, &info);
+    }
     g_editor.file_info = info;
 
     // External-change baseline: the original as npad last saw it, so a change
@@ -637,6 +652,20 @@ static void load_default_file_info(TextFileInfo *info) {
 
     info->encoding = (TextEncoding) encoding;
     info->line_ending = (LineEnding) line_ending;
+    // A new document is nobody's fragment, and is written in standard form
+    info->truncated = false;
+    info->decode_lossy = false;
+    info->utf16_no_bom = false;
+}
+
+// The user chose an encoding (status bar, menu or the Save As picker). A
+// deliberate choice gets that encoding's standard form, so a BOM-less UTF-16
+// file converted to another encoding and back gains a BOM, as in notepad.exe;
+// keeping the same encoding keeps the file's own form.
+static void editor_choose_encoding(TextEncoding encoding) {
+    if (g_editor.file_info.encoding != encoding)
+        g_editor.file_info.utf16_no_bom = false;
+    g_editor.file_info.encoding = encoding;
 }
 
 // A file with no line breaks has nothing to detect, so it takes the user's
@@ -1060,6 +1089,21 @@ static bool editor_disk_copy_changed(void) {
     return !file_stamp_equal(&now, &g_editor.file_stamp);
 }
 
+// Ask before saving over a file npad could not decode exactly (see
+// TextFileInfo.decode_lossy): its invalid bytes are replacement characters in
+// the editor, so the save would change them. Saving to a different file needs
+// no question - the original is not touched. Returns false if the user
+// declines. The encoding is not named: decode_lossy outlives an encoding
+// change, and the bytes were invalid in the one the file was read in, which
+// need not be the one the document has now.
+static bool editor_confirm_lossy_decode(void) {
+    if (!g_editor.file_info.decode_lossy)
+        return true;
+    return editor_ask("Some bytes in this file could not be read, so npad cannot save them back "
+                      "exactly as they were.\n\nSave over the original anyway?",
+                      true);
+}
+
 // --- External change detection --------------------------------------------
 //
 // Checked when the window is activated rather than on a timer: that is the
@@ -1150,30 +1194,6 @@ static void editor_report_get_text_failed(const char *path) {
 
 // --- Saving ---------------------------------------------------------------
 
-#ifdef _WIN32
-// Volume serial plus file index: the same file under any name (hard links,
-// 8.3 names, a different case or a mapped drive)
-static bool get_file_identity(const char *path, BY_HANDLE_FILE_INFORMATION *out) {
-    int count = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
-    if (count <= 0)
-        return false;
-    wchar_t *wide = malloc((size_t) count * sizeof(wchar_t));
-    if (!wide)
-        return false;
-    MultiByteToWideChar(CP_UTF8, 0, path, -1, wide, count);
-    // No access rights asked for: only the identity is read, so this opens
-    // even a file another program holds locked
-    HANDLE handle = CreateFileW(wide, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
-    free(wide);
-    if (handle == INVALID_HANDLE_VALUE)
-        return false;
-    BOOL ok = GetFileInformationByHandle(handle, out);
-    CloseHandle(handle);
-    return ok != 0;
-}
-#endif
-
 // Whether two paths name the same existing file, by identity rather than by
 // spelling (a hard link or another spelling of the path is the same file)
 static bool paths_are_same_file(const char *a, const char *b) {
@@ -1189,22 +1209,8 @@ static bool paths_are_same_file(const char *a, const char *b) {
 #endif
     free(full_a);
     free(full_b);
-    if (same)
-        return true;
-
-#ifdef _WIN32
-    BY_HANDLE_FILE_INFORMATION info_a, info_b;
-    if (!get_file_identity(a, &info_a) || !get_file_identity(b, &info_b))
-        return false;
-    return info_a.dwVolumeSerialNumber == info_b.dwVolumeSerialNumber &&
-           info_a.nFileIndexHigh == info_b.nFileIndexHigh &&
-           info_a.nFileIndexLow == info_b.nFileIndexLow;
-#else
-    struct stat st_a, st_b;
-    if (stat(a, &st_a) != 0 || stat(b, &st_b) != 0)
-        return false;
-    return st_a.st_dev == st_b.st_dev && st_a.st_ino == st_b.st_ino;
-#endif
+    // Otherwise by identity: a hard link, an 8.3 name, a mapped drive
+    return same || file_same(a, b);
 }
 
 // Where Save As starts for a document npad could only partly load:
@@ -1237,6 +1243,8 @@ static void editor_set_auto_save_notice(const char *message) {
 static bool editor_write_current(const char *content) {
     if (!file_write_text_ex(g_editor.current_file, content, &g_editor.file_info))
         return false;
+    // The file now holds exactly the text shown, so it decodes cleanly
+    g_editor.file_info.decode_lossy = false;
     // npad's saves are atomic (temp + rename), so every write changes the
     // file's identity. Without re-stamping, npad would report its OWN write
     // as an external change the next time the window is activated.
@@ -1335,6 +1343,9 @@ bool editor_save_file(void) {
             return editor_save_as_dialog(g_editor.current_file);
     }
 
+    if (!editor_confirm_lossy_decode())
+        return false; // Declined - the original keeps its bytes
+
     char *content = ui_get_text(g_editor.main_window);
     if (!content) {
         editor_report_get_text_failed(g_editor.current_file);
@@ -1374,8 +1385,10 @@ static void editor_auto_save(void) {
         !g_editor.main_window)
         return;
     // Saving a fragment of a binary file is a Save As, which is a dialog, and
-    // so is saving text the edit control could not hold exactly
-    if (g_editor.file_info.truncated || g_text_altered)
+    // so is saving text the edit control could not hold exactly. A file npad
+    // could not decode exactly needs the question a manual save asks before
+    // its replacement characters go over the original bytes.
+    if (g_editor.file_info.truncated || g_text_altered || g_editor.file_info.decode_lossy)
         return;
 
     if (g_editor.auto_save_held || editor_disk_copy_changed()) {
@@ -1418,7 +1431,8 @@ static bool editor_save_as_encoded(const char *filename, TextEncoding encoding) 
     // A fragment of a binary file must never land on the file it came from,
     // whatever name the dialog was given for it (the same path, another
     // spelling of it, or a hard link)
-    if (g_editor.file_info.truncated && paths_are_same_file(filename, g_editor.current_file)) {
+    bool same_file = paths_are_same_file(filename, g_editor.current_file);
+    if (g_editor.file_info.truncated && same_file) {
         editor_ask("This is the file npad could only partly load, because it contains "
                    "binary data.\n\n"
                    "Saving over it would discard everything after that point, so choose a "
@@ -1426,6 +1440,11 @@ static bool editor_save_as_encoded(const char *filename, TextEncoding encoding) 
                    false);
         return false;
     }
+    // Save As onto the file that is already open overwrites the original
+    // exactly as Save does, so it gets Save's question about bytes npad could
+    // not decode. The OS "replace existing file?" prompt says nothing of them.
+    if (same_file && !editor_confirm_lossy_decode())
+        return false; // Declined - the original keeps its bytes
 
     char *content = ui_get_text(g_editor.main_window);
     if (!content) {
@@ -1441,8 +1460,11 @@ static bool editor_save_as_encoded(const char *filename, TextEncoding encoding) 
     // Whatever was loaded is about to be written in full to THIS file, so it
     // is no longer a fragment of something larger and Save may overwrite it
     TextFileInfo info = g_editor.file_info;
+    if (info.encoding != encoding)
+        info.utf16_no_bom = false; // A chosen encoding is written in its standard form
     info.encoding = encoding;
     info.truncated = false;
+    info.decode_lossy = false; // Likewise: THIS file will hold the text as shown
 
     bool success = file_write_text_ex(filename, content, &info);
     free(content);
@@ -1559,7 +1581,7 @@ LineEnding editor_get_line_ending(void) {
 void editor_set_encoding(TextEncoding encoding) {
     if (g_editor.file_info.encoding == encoding)
         return;
-    g_editor.file_info.encoding = encoding;
+    editor_choose_encoding(encoding);
     editor_set_modified(true);
     editor_update_status_info();
 }

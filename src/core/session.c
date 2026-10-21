@@ -9,11 +9,13 @@
  * The meta file is three lines:
  *
  *     <encoding>
- *     <line ending>[ truncated=<0|1>][ altered=<0|1>][ stamp=<stamp>]
+ *     <line ending>[ <attribute>=<value>]...
  *     <original path, possibly empty, running to the end of the file>
  *
- * <stamp> is <size>:<write time>:<device>:<inode>, the whole FileStamp; one
- * without the last two (device and inode 0) still parses.
+ * The attributes are truncated, lossy (TextFileInfo.decode_lossy), nobom
+ * (utf16_no_bom) and altered, each 0 or 1, and stamp=<size>:<write time>:
+ * <device>:<inode>, the whole FileStamp (one without the last two, device and
+ * inode 0, still parses).
  *
  * The attributes ride on the second line, after the number, because npad
  * before 0.36 reads that line with atoi() and ignores whatever follows: a
@@ -255,8 +257,9 @@ static char *format_meta(const char *path, const SessionMeta *meta) {
         snprintf(stamp, sizeof(stamp), " stamp=%lld:%lld:%llu:%llu", meta->stamp.size,
                  meta->stamp.write_time, meta->stamp.device, meta->stamp.inode);
     }
-    snprintf(text, size, "%d\n%d truncated=%d altered=%d%s\n%s", (int) meta->encoding,
-             (int) meta->line_ending, meta->truncated ? 1 : 0, meta->altered ? 1 : 0, stamp,
+    snprintf(text, size, "%d\n%d truncated=%d lossy=%d nobom=%d altered=%d%s\n%s",
+             (int) meta->encoding, (int) meta->line_ending, meta->truncated ? 1 : 0,
+             meta->decode_lossy ? 1 : 0, meta->utf16_no_bom ? 1 : 0, meta->altered ? 1 : 0, stamp,
              path ? path : "");
     return text;
 }
@@ -299,6 +302,12 @@ static void parse_meta(const char *text, char **out_path, SessionMeta *meta) {
             meta->has_truncated = true;
             meta->truncated = atoi(value) != 0;
         }
+        value = find_attribute(first_nl + 1, second_nl, "lossy");
+        if (value)
+            meta->decode_lossy = *value == '1';
+        value = find_attribute(first_nl + 1, second_nl, "nobom");
+        if (value)
+            meta->utf16_no_bom = *value == '1';
         value = find_attribute(first_nl + 1, second_nl, "altered");
         if (value)
             meta->altered = *value == '1';

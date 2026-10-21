@@ -12,6 +12,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 // Test data
 #define TEST_FILE "test_temp.txt"
@@ -347,6 +350,45 @@ TEST_CASE(absolute_path_resolution) {
     TEST_ASSERT_NULL(file_get_absolute_path(NULL), "NULL rejected");
 }
 
+// Save As onto the open file must be recognised however the path is spelled,
+// so it gets Save's protections (the lossy-decode question, the refusal to
+// overwrite a truncated original)
+TEST_CASE(same_file_is_recognised_by_identity) {
+    file_write_text("test_same_a.txt", "a\n");
+    file_write_text("test_same_b.txt", "a\n");
+    remove("test_same_gone.txt");
+
+    TEST_ASSERT(file_same("test_same_a.txt", "test_same_a.txt"), "a path is its own file");
+    char *abs = file_get_absolute_path("test_same_a.txt");
+    TEST_ASSERT_NOT_NULL(abs, "absolute path resolves");
+    TEST_ASSERT(file_same(abs, "test_same_a.txt"), "absolute and relative spellings match");
+    TEST_ASSERT(file_same("./test_same_a.txt", "test_same_a.txt"), "a ./ spelling matches");
+    free(abs);
+
+    TEST_ASSERT(!file_same("test_same_a.txt", "test_same_b.txt"),
+                "two files with the same contents are different files");
+    TEST_ASSERT(!file_same("test_same_a.txt", "test_same_gone.txt"),
+                "a missing file is never the same file");
+    TEST_ASSERT(!file_same("test_same_gone.txt", "test_same_gone.txt"),
+                "not even as itself: there is nothing to overwrite");
+    TEST_ASSERT(!file_same(NULL, "test_same_a.txt"), "NULL is rejected");
+    TEST_ASSERT(!file_same("test_same_a.txt", ""), "an empty path is rejected");
+
+    // An atomic save replaces the file (temp + rename); the path still names it
+    TEST_ASSERT(file_write_text("test_same_a.txt", "rewritten\n"), "rewrite succeeds");
+    TEST_ASSERT(file_same("test_same_a.txt", "./test_same_a.txt"), "still the same after a save");
+
+#ifndef _WIN32
+    remove("test_same_link.txt");
+    TEST_ASSERT(link("test_same_a.txt", "test_same_link.txt") == 0, "hard link created");
+    TEST_ASSERT(file_same("test_same_a.txt", "test_same_link.txt"), "a hard link is the same file");
+    remove("test_same_link.txt");
+#endif
+
+    remove("test_same_a.txt");
+    remove("test_same_b.txt");
+}
+
 int main(void) {
     // Initialize error system for testing
     npad_error_init();
@@ -383,6 +425,7 @@ int main(void) {
     RUN_TEST(stamp_reports_a_missing_file);
     RUN_TEST(stamp_equality_rejects_nulls);
     RUN_TEST(absolute_path_resolution);
+    RUN_TEST(same_file_is_recognised_by_identity);
     
     // Cleanup error system
     npad_error_cleanup();

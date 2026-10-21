@@ -16,9 +16,12 @@
 typedef enum {
     NPAD_ENC_UTF8 = 0, // UTF-8 without BOM (default for new files)
     NPAD_ENC_UTF8_BOM, // UTF-8 with BOM
-    NPAD_ENC_UTF16_LE, // UTF-16 little endian (with BOM)
-    NPAD_ENC_UTF16_BE, // UTF-16 big endian (with BOM)
-    NPAD_ENC_ANSI      // System code page (bytes that are not valid UTF-8)
+    NPAD_ENC_UTF16_LE, // UTF-16 little endian (BOM unless TextFileInfo.utf16_no_bom)
+    NPAD_ENC_UTF16_BE, // UTF-16 big endian (BOM unless TextFileInfo.utf16_no_bom)
+    // "ANSI": bytes that are not valid UTF-8. On Windows the system ANSI code
+    // page (its legacy one when the system code page is UTF-8); elsewhere
+    // Windows-1252, the code page such files almost always come from.
+    NPAD_ENC_ANSI
 } TextEncoding;
 
 // Line ending style of a text file
@@ -38,9 +41,12 @@ typedef enum {
 #endif
 
 // Detected properties of a text file (filled by file_read_text_ex,
-// consumed by file_write_text_ex so files round-trip unchanged)
+// consumed by file_write_text_ex so files round-trip unchanged).
+// All-false flags are the safe state, so a zeroed struct is a valid new file.
 typedef struct {
     TextEncoding encoding;
+    // The majority line ending. Mixed endings cannot be kept: the editor holds
+    // one kind of line break, so a save writes every break in this style.
     LineEnding line_ending;
     // The file held a NUL before its end, so what was loaded is only the part
     // up to it. npad's text is NUL-terminated throughout, so a binary file
@@ -48,6 +54,17 @@ typedef struct {
     // with the fragment. Set by file_read_text_ex; callers must not overwrite
     // the source file while it is true.
     bool truncated;
+    // Some bytes were not valid in the detected encoding (a stray byte in a
+    // UTF-8-with-BOM file, an unpaired surrogate or odd trailing byte in
+    // UTF-16, an invalid sequence in a multi-byte ANSI code page), so the text
+    // holds replacement characters where those bytes were and a save would
+    // not reproduce them. Set by file_read_text_ex; callers must ask before
+    // saving over the source file while it is true, and auto-save must skip.
+    bool decode_lossy;
+    // UTF-16 only: the file had no byte order mark, so none is written back.
+    // Cleared when the user picks an encoding; new files get a BOM, as in
+    // notepad.exe.
+    bool utf16_no_bom;
 } TextFileInfo;
 
 // The largest file the readers load (2 GB - 1). A document is held as one
@@ -66,7 +83,10 @@ char *file_read_text_limited(const char *filename, size_t max_bytes);
 bool file_read_binary(const char *filename, void **data, size_t *size);
 
 // Read a text file, detect its encoding and line endings, and return the
-// content converted to UTF-8 (line endings are preserved as-is).
+// content converted to UTF-8 (line endings are preserved as-is). The result is
+// always valid UTF-8: bytes the encoding cannot decode become U+FFFD and set
+// info->decode_lossy. NULL on failure, with file_get_last_error() saying why
+// (a file too large to convert is refused, never returned empty).
 // info may be NULL if the caller does not care.
 char *file_read_text_ex(const char *filename, TextFileInfo *info);
 
@@ -81,8 +101,10 @@ bool file_write_binary(const char *filename, const void *data, size_t size);
 // (NPAD_DEFAULT_LINE_ENDING: CRLF on Windows, LF elsewhere).
 bool file_write_text_ex(const char *filename, const char *utf8_content, const TextFileInfo *info);
 
-// Whether saving this UTF-8 content as ANSI would lose characters
-// (replaced with '?'). Used to warn the user before a lossy save.
+// Whether saving this UTF-8 content as ANSI would lose characters. An ANSI
+// save writes every character the code page lacks as '?' (never a
+// similar-looking "best fit" character), and this reports exactly those.
+// Used to warn the user before a lossy save.
 bool file_ansi_is_lossy(const char *utf8_content);
 
 // Atomic write. The new content goes to an exclusively created temp file
@@ -156,6 +178,11 @@ typedef struct {
 bool file_get_stamp(const char *filename, FileStamp *out);
 bool file_stamp_equal(const FileStamp *a, const FileStamp *b);
 
+// True when both paths name one existing file, however they are spelled
+// (case, relative vs absolute, a link). False if either does not exist: a
+// path with no file behind it cannot be an existing file's other name.
+bool file_same(const char *a, const char *b);
+
 bool file_exists(const char *filename);
 bool file_is_readable(const char *filename);
 bool file_is_writable(const char *filename);
@@ -164,8 +191,8 @@ bool file_is_directory(const char *path);
 // Size from the file's metadata, 64-bit (SIZE_MAX if it does not fit); 0
 // for a missing file, a folder or a device
 size_t file_get_size(const char *filename);
-// Heuristic sniff of the first 8 KB: NUL bytes (outside BOM-marked UTF-16)
-// or a high share of control bytes mark the file as binary.
+// Heuristic sniff of the first 8 KB: NUL bytes (outside UTF-16, with or
+// without a BOM) or a high share of control bytes mark the file as binary.
 bool file_looks_binary(const char *filename);
 
 // Count document statistics over UTF-8 text in one pass: words (runs of
