@@ -35,11 +35,19 @@ endif
 
 # Windows on Arm (arm64) is cross-compiled with llvm-mingw (clang + lld; MinGW
 # GCC has no arm64 Windows target), whose tools carry the target in their
-# name: put its bin/ on PATH (scripts/install-llvm-mingw.sh fetches the pinned
-# release CI uses) or point ARM64_MINGW_PREFIX at it. `make windows-arm64`
-# builds npad-arm64.exe with the same sources and flags as npad.exe, in its own
-# build directory so the two never share an object.
+# name. Point LLVM_MINGW at its install directory (scripts/install-llvm-mingw.sh
+# fetches the pinned release CI uses), or put its bin/ on PATH - APPENDED, not
+# prepended: llvm-mingw also ships x86_64-w64-mingw32-gcc/-dlltool/-windres, so
+# ahead of MinGW GCC it takes over `make windows` too (which then builds with
+# clang + lld, see WIN_LINKER below). `make windows-arm64` builds
+# npad-arm64.exe with the same sources and flags as npad.exe, in its own build
+# directory so the two never share an object.
+LLVM_MINGW ?=
+ifneq ($(LLVM_MINGW),)
+ARM64_MINGW_PREFIX ?= $(LLVM_MINGW)/bin/aarch64-w64-mingw32-
+else
 ARM64_MINGW_PREFIX ?= aarch64-w64-mingw32-
+endif
 WINDOWS_ARM64_TARGET = npad-arm64.exe
 # Per-architecture intermediates (delay-import libraries, the compiled .rc)
 WIN_BUILD_DIR ?= build
@@ -71,15 +79,17 @@ DELAY_DLLS = winhttp bcrypt comdlg32 msimg32
 # only place those entry points are declared) and each DLL is named once more.
 DELAY_LIBS = $(patsubst %,$(WIN_BUILD_DIR)/lib%_delay.a,$(DELAY_DLLS))
 WIN_RES = $(WIN_BUILD_DIR)/npad.res
-WIN_LINKER ?= bfd
+# Which of the two routes: bfd (MinGW GCC + GNU binutils, the shipped x64
+# build) or lld (llvm-mingw). Unless given, it follows the compiler MINGW_CC
+# actually resolves to, so `make windows` still builds when llvm-mingw's bin/
+# sits ahead on PATH and its x86_64-w64-mingw32-* tools (clang, lld,
+# llvm-dlltool) shadow the GNU ones - the bfd route's dlltool -y would fail
+# there. Recursively expanded: the compiler is only asked when a Windows
+# recipe needs the answer, never for `make test` or a Linux build.
 comma := ,
-ifeq ($(WIN_LINKER),lld)
-DELAY_DLLTOOL_FLAG = -l
-DELAY_LINK = $(DELAY_LIBS) $(patsubst %,-Wl$(comma)--delayload=%.dll,$(DELAY_DLLS))
-else
-DELAY_DLLTOOL_FLAG = -y
-DELAY_LINK = $(DELAY_LIBS) -ldelayimp
-endif
+WIN_LINKER ?= $(if $(findstring clang,$(shell $(MINGW_CC) --version 2>/dev/null | head -n 1)),lld,bfd)
+DELAY_DLLTOOL_FLAG = $(if $(filter lld,$(WIN_LINKER)),-l,-y)
+DELAY_LINK = $(DELAY_LIBS) $(if $(filter lld,$(WIN_LINKER)),$(patsubst %,-Wl$(comma)--delayload=%.dll,$(DELAY_DLLS)),-ldelayimp)
 WINDOWS_GUI_LIBS = -mwindows -lcomctl32 -lgdi32 -lkernel32 -lshell32 -luser32 -lole32 -luuid $(DELAY_LINK)
 WINDOWS_GUI_TARGET = npad.exe
 
@@ -106,6 +116,8 @@ LINUX_GTK_TARGET = npad-linux
 LINUX_TERMINAL_SOURCES = src/platform/ui_ncurses.c
 LINUX_TERMINAL_LIBS = -lncurses -lpthread
 LINUX_TERMINAL_TARGET = npad-linux-terminal
+# The header `make linux` probes for before building the stub
+NCURSES_HEADER ?= ncurses.h
 
 # Version information - use header version or fallback to git
 # Not using awk here due to an issue found with awk 5.2.1 that I could not fix and was mangling strings
@@ -220,7 +232,16 @@ $(LINUX_GTK_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_GTK_SOURCES) $(LI
 	$(CC) $(CFLAGS) $(LINUX_GTK_CFLAGS) -o $@ $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_GTK_SOURCES) src/main.c $(LINUX_GTK_LIBS) $(LDFLAGS)
 	@echo "Linux build complete: $(LINUX_GTK_TARGET)"
 
-linux: linux-gtk linux-terminal
+# The desktop app, plus the ncurses stub only where ncurses' headers are
+# installed: the stub does nothing yet, so it is not worth a missing package
+# failing the command README gives. `make linux-terminal` still requires them.
+linux: linux-gtk
+	@if printf '#include <$(NCURSES_HEADER)>\n' | $(CC) -E -x c - >/dev/null 2>&1; then \
+		$(MAKE) --no-print-directory linux-terminal; \
+	else \
+		echo "Skipping $(LINUX_TERMINAL_TARGET) (the unimplemented ncurses stub): $(NCURSES_HEADER) not found."; \
+		echo "  Install libncurses-dev (Debian/Ubuntu) or ncurses-devel (Fedora) and run: make linux-terminal"; \
+	fi
 
 windows-terminal: $(WINDOWS_TERMINAL_TARGET)
 
@@ -234,6 +255,7 @@ endif
 linux-terminal: $(LINUX_TERMINAL_TARGET)
 
 $(LINUX_TERMINAL_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_TERMINAL_SOURCES) src/main.c
+	@printf '#include <$(NCURSES_HEADER)>\n' | $(CC) -E -x c - >/dev/null 2>&1 || { echo "ncurses development files not found ($(NCURSES_HEADER)). Install with: sudo apt-get install libncurses-dev"; exit 1; }
 	$(CC) $(CFLAGS) -o $@ $^ $(LINUX_TERMINAL_LIBS) $(LDFLAGS)
 	@echo "Linux Terminal build complete: $(LINUX_TERMINAL_TARGET)"
 
@@ -297,8 +319,32 @@ format-check:
 	find src/ -name "*.c" -o -name "*.h" | xargs $(CLANG_FORMAT) --dry-run --Werror
 
 # Testing targets
-test: test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops
+test: test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-platform-stubs
 	@echo "All tests completed"
+
+# Each stub backend must define every ui_platform_* function the shared code
+# calls. The Cocoa stub is never compiled here (no macOS runner), which is how
+# it once stopped linking unnoticed; the check reads the symbols the shared
+# code leaves undefined from one relocatable link, then looks for each
+# definition in the stub sources. The Cocoa stub is plain C apart from its
+# #import, so it is also linked for real, as C, against the same object.
+STUB_BACKENDS = $(MACOS_SOURCES) $(LINUX_TERMINAL_SOURCES) $(WINDOWS_TERMINAL_SOURCES)
+STUB_CHECK_DIR = build/stub-check
+test-platform-stubs: $(STUB_CHECK_DIR)/shared.o $(STUB_CHECK_DIR)/npad-macos-stub
+	@echo "Running platform stub coverage check..."
+	sh scripts/check-platform-stubs.sh $(STUB_CHECK_DIR)/shared.o $(STUB_BACKENDS)
+	@echo "Cocoa stub links against the shared code"
+
+$(STUB_CHECK_DIR)/shared.o: $(CORE_SOURCES) $(SHARED_SOURCES) src/main.c
+	@mkdir -p $(STUB_CHECK_DIR)
+	$(CC) $(CFLAGS) -nostdlib -r -o $@ $^
+
+$(STUB_CHECK_DIR)/ui_cocoa.c: $(MACOS_SOURCES)
+	@mkdir -p $(STUB_CHECK_DIR)
+	sed '/^#import/d' $< > $@
+
+$(STUB_CHECK_DIR)/npad-macos-stub: $(STUB_CHECK_DIR)/shared.o $(STUB_CHECK_DIR)/ui_cocoa.c
+	$(CC) $(CFLAGS) -Isrc/platform -o $@ $^ -lpthread
 
 test-file-ops: tests/test_file_ops
 	@echo "Running file operations tests..."
@@ -499,11 +545,11 @@ help:
 	@echo "  windows-gui      - Build Windows GUI version"
 	@echo "  windows-arm64    - Build npad-arm64.exe (Windows on Arm; needs llvm-mingw)"
 	@echo "  windows-terminal - Build Windows Terminal version"
-	@echo "  linux            - Build all Linux variants (desktop + Terminal)"
+	@echo "  linux            - Build the Linux desktop app (+ the ncurses stub if ncurses is installed)"
 	@echo "  linux-gtk        - Build the Linux desktop app (GTK 3; X11 and Wayland)"
-	@echo "  linux-terminal   - Build for Linux Terminal (ncurses)"
+	@echo "  linux-terminal   - Build the Linux Terminal stub (ncurses; needs libncurses-dev)"
 	@echo "  terminal         - Build all Terminal variants (Windows + Linux)"
-	@echo "  macos            - Build for macOS"
+	@echo "  macos            - Build the macOS stub (Cocoa; needs macOS + Xcode; not functional yet)"
 	@echo "  debug            - Build with debug symbols"
 	@echo "  lint             - Run code linting"
 	@echo "  format           - Format code with clang-format"
@@ -513,6 +559,7 @@ help:
 	@echo "  test-error       - Run error system tests"
 	@echo "  test-encoding    - Run encoding/line-ending tests"
 	@echo "  test-undo        - Run undo history tests"
+	@echo "  test-platform-stubs - Check the stub backends define every ui_platform_* function"
 	@echo "  clean            - Remove build artifacts"
 	@echo "  install          - Install to PREFIX (default /usr/local; honours DESTDIR)"
 	@echo "  uninstall        - Remove from PREFIX"
@@ -525,9 +572,11 @@ help:
 	@echo "Variables:"
 	@echo "  CC               - C compiler to use"
 	@echo "  MINGW_CC         - MinGW compiler for Windows builds"
+	@echo "  LLVM_MINGW       - llvm-mingw install dir for windows-arm64 (instead of PATH)"
+	@echo "  WIN_LINKER       - bfd or lld (default: lld when MINGW_CC is clang)"
 	@echo "  CPPCHECK         - cppcheck binary (CI uses 2.13; older is less strict)"
 	@echo "  CLANG_FORMAT     - clang-format binary (CI uses 18)"
 	@echo "  DEBUG=1          - Enable debug build"
 	@echo "  VERSION          - Version string (auto-detected from git)"
 
-.PHONY: all windows windows-gui windows-arm64 windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm pacman tarball lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo help detect-platform
+.PHONY: all windows windows-gui windows-arm64 windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm pacman tarball lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-platform-stubs help detect-platform
