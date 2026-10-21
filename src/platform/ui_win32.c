@@ -7089,7 +7089,7 @@ static void print_file_message(const wchar_t *text) {
 // state is touched - no recovery snapshot, no recent-files entry, no settings
 // written. The progress window (with Cancel) is the only UI, plus a message
 // if the file cannot be read or there is no printer.
-int ui_platform_print_file(const char *path) {
+static int print_file_run(const char *path) {
     g_hinstance = GetModuleHandleW(NULL);
     INITCOMMONCONTROLSEX icex;
     icex.dwSize = sizeof(icex);
@@ -7146,6 +7146,18 @@ int ui_platform_print_file(const char *path) {
     if (result == PRINT_RESULT_PRINTED)
         return 0;
     return result == PRINT_RESULT_CANCELLED ? 2 : 1;
+}
+
+int ui_platform_print_file(const char *path) {
+    // The STA ui_platform_init sets up for the shell dialogs. A printer
+    // driver's own UI runs in this process from inside StartDoc - Microsoft
+    // Print to PDF and the FILE: port ask for a file name there - and may
+    // count on it, as the normal print path always has it
+    HRESULT com = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    int code = print_file_run(path);
+    if (SUCCEEDED(com)) // S_FALSE too: every successful call is balanced
+        CoUninitialize();
+    return code;
 }
 
 // ---------------------------------------------------------------------------
@@ -7855,15 +7867,20 @@ static LRESULT CALLBACK preview_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
                     SetActiveWindow(pv->owner);
                 if (pv->haccel)
                     DestroyAcceleratorTable(pv->haccel);
+                // An update prompt held back while this preview was open
+                // follows now (only posts; the handler checks again)
+                bool was_active = (g_preview == pv);
                 if (pv->font)
                     DeleteObject(pv->font);
                 print_layout_free(pv->layout);
                 free(pv->text);
                 free(pv->title);
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                if (g_preview == pv)
+                if (was_active)
                     g_preview = NULL;
                 free(pv);
+                if (was_active)
+                    print_flush_deferred();
             }
             return 0;
 
@@ -8074,15 +8091,15 @@ static void preview_retheme_active(void) {
 static bool g_close_deferred = false;
 static UpdateDownloadResult *g_update_deferred = NULL;
 
-// The print module's idle hook: replay whatever was held back. Only posts.
+// The print module's idle hook, and the preview's WM_DESTROY: replay whatever
+// was held back. Only posts, so the handlers decide again whether it can run.
 static void print_flush_deferred(void) {
     HWND hwnd = (g_main_window && g_main_window->hwnd) ? g_main_window->hwnd : NULL;
     if (!hwnd)
         return;
-    if (g_update_deferred) {
-        PostMessageW(hwnd, NPAD_WM_UPDATE_DOWNLOADED, 0, (LPARAM) g_update_deferred);
-        g_update_deferred = NULL;
-    }
+    if (g_update_deferred &&
+        PostMessageW(hwnd, NPAD_WM_UPDATE_DOWNLOADED, 0, (LPARAM) g_update_deferred))
+        g_update_deferred = NULL; // Now owned by the posted message
     if (g_close_deferred) {
         g_close_deferred = false;
         PostMessageW(hwnd, WM_CLOSE, 0, 0);
@@ -9163,8 +9180,11 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         case NPAD_WM_UPDATE_DOWNLOADED: {
             if (lparam) {
                 // The prompt is owned by this window, so it must not open
-                // under Print Preview or inside a print dialog's loop
-                if (!prepare_for_document_prompt()) {
+                // under Print Preview or inside a print dialog's loop. Nor
+                // does a download finishing in the background close a preview
+                // the user is reading (WM_CLOSE does: the user asked for it);
+                // the prompt waits for the preview to close or the job to end.
+                if (g_preview || print_is_busy()) {
                     g_update_deferred = (UpdateDownloadResult *) lparam;
                     return 0;
                 }
@@ -9200,9 +9220,9 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 #endif
                     apply_theme(window); // Also re-applies the icon
                 }
-                // Print Preview is its own window class, so this reaches only
-                // the document: under the "system" scheme the preview kept
-                // the old backdrop, title bar and scroll bars. Colours only -
+                // Print Preview gets this broadcast too, but its window proc
+                // does not handle it: under the "system" scheme the preview
+                // kept the old backdrop, title bar and scroll bars. Colours only -
                 // nothing about pagination changes with the Windows theme.
                 preview_recolour_active();
             }

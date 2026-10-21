@@ -8,6 +8,7 @@
 #include "print_gtk.h"
 
 #include <langinfo.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -285,6 +286,7 @@ typedef struct {
     GArray *runs;       // PrintRun, in page order
     GArray *page_first; // guint: index of each page's first run, plus a final sentinel
     int page_count;
+    bool began; // begin-print ran: a printer was found and the job started
 } PrintJob;
 
 static void job_free(gpointer data) {
@@ -628,6 +630,7 @@ static void job_paginate(PrintJob *job, GtkPrintContext *context) {
 
 static void on_begin_print(GtkPrintOperation *op, GtkPrintContext *context, gpointer data) {
     PrintJob *job = data;
+    job->began = true;
     job_paginate(job, context);
     gtk_print_operation_set_n_pages(op, job->page_count);
 }
@@ -1013,9 +1016,10 @@ static void show_error(GtkWindow *parent, const char *what, const char *detail) 
 
 // Run one print operation. action is PRINT_DIALOG (File > Print), PREVIEW
 // (File > Print Preview) or PRINT (npad --print: the default printer, no
-// dialog). Errors are reported to the user here.
+// dialog). Errors are reported to the user here. began (may be NULL) says
+// whether the job got as far as begin-print.
 static GtkPrintOperationResult print_operation_run(GtkWindow *parent, const NpadPrintDoc *doc,
-                                                   GtkPrintOperationAction action) {
+                                                   GtkPrintOperationAction action, bool *began) {
     PrintJob *job = job_new(doc);
     bool preview = (action == GTK_PRINT_OPERATION_ACTION_PREVIEW);
 
@@ -1050,7 +1054,12 @@ static GtkPrintOperationResult print_operation_run(GtkWindow *parent, const Npad
 
     GError *error = NULL;
     GtkPrintOperationResult result = gtk_print_operation_run(op, action, parent, &error);
+    if (began)
+        *began = job->began; // job is freed with op, below
     if (result == GTK_PRINT_OPERATION_RESULT_ERROR) {
+        if (!parent) // npad --print: also say so where a script can see it
+            fprintf(stderr, "npad: could not print this document%s%s\n", error ? ": " : "",
+                    error ? error->message : "");
         show_error(parent, "npad could not print this document.", error ? error->message : NULL);
     } else if (result == GTK_PRINT_OPERATION_RESULT_APPLY) {
         // Take the new reference before dropping the old one: the operation may
@@ -1070,7 +1079,8 @@ void npad_gtk_print_run(GtkWindow *parent, const NpadPrintDoc *doc, bool preview
         return;
     print_operation_run(parent, doc,
                         preview ? GTK_PRINT_OPERATION_ACTION_PREVIEW
-                                : GTK_PRINT_OPERATION_ACTION_PRINT_DIALOG);
+                                : GTK_PRINT_OPERATION_ACTION_PRINT_DIALOG,
+                        NULL);
 }
 
 int npad_gtk_print_file(const NpadPrintDoc *doc) {
@@ -1078,11 +1088,22 @@ int npad_gtk_print_file(const NpadPrintDoc *doc) {
         return 1;
     // ACTION_PRINT prints with the current print settings and no dialog;
     // with none (a fresh process) that is the default printer
+    bool began = false;
     GtkPrintOperationResult result =
-        print_operation_run(NULL, doc, GTK_PRINT_OPERATION_ACTION_PRINT);
+        print_operation_run(NULL, doc, GTK_PRINT_OPERATION_ACTION_PRINT, &began);
     if (result == GTK_PRINT_OPERATION_RESULT_APPLY)
         return 0;
-    return result == GTK_PRINT_OPERATION_RESULT_CANCEL ? 2 : 1;
+    if (result == GTK_PRINT_OPERATION_RESULT_CANCEL && !began) {
+        // GTK's unix backend starts an ACTION_PRINT at CANCEL and changes it
+        // only when it finds a printer, so with none (virtual ones such as
+        // Print to File are skipped) this is not the user's Cancel: say so,
+        // as the Windows build does with no default printer
+        const char *what = "There is no printer to print to.";
+        fprintf(stderr, "npad: %s\n", what);
+        show_error(NULL, what, NULL);
+        return 1;
+    }
+    return result == GTK_PRINT_OPERATION_RESULT_CANCEL ? 2 : 1; // 2: Cancel in the progress window
 }
 
 void npad_gtk_print_cleanup(void) {

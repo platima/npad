@@ -192,6 +192,15 @@ PrintPaginateResult print_paginate(const uint16_t *text, size_t total,
                 } else if (fit > 1 && splits_pair(text, i, fit, seg_end)) {
                     fit--; // Mid-word: but never between the halves of a pair
                 } else if (splits_pair(text, i, fit, seg_end)) {
+                    // Only the high half fits in what is left of the line
+                    if (x > 0) {
+                        // Mid-line (after a tab, or a run cut at the measure
+                        // cap): the pair starts the next line instead of
+                        // running past the margin
+                        cursor_break(&g, &c);
+                        x = 0;
+                        continue;
+                    }
                     fit = 2; // The pair alone is wider than the line
                 }
             }

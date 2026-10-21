@@ -334,6 +334,24 @@ TEST_CASE(a_pair_wider_than_the_line_is_emitted_whole) {
     free(text);
 }
 
+TEST_CASE(a_pair_that_half_fits_after_a_tab_starts_a_new_line) {
+    // "a\t" then U+1F600: the tab puts x at 80, leaving 15 of 95. The high
+    // half (10) fits there, the pair (20) does not.
+    const uint16_t text[] = { 'a', '\t', 0xD83D, 0xDE00 };
+    Rec r = { 0 };
+    int pages = 0;
+    TEST_ASSERT_EQ(PRINT_PAGINATE_OK, paginate(&r, text, 4, 95, 80, 60, 10, &pages), "ok");
+    TEST_ASSERT_EQ(2, r.count, "the 'a' and the pair");
+    TEST_ASSERT(runs_keep_pairs_whole(&r, text), "pair kept whole");
+    TEST_ASSERT_EQ(2, (int) r.runs[1].offset, "second run is the pair");
+    TEST_ASSERT_EQ(2, r.runs[1].len, "the whole pair");
+    TEST_ASSERT_EQ(1, r.runs[1].line, "on the next line");
+    TEST_ASSERT_EQ(0, r.runs[1].x, "at the margin");
+    for (int i = 0; i < r.count; i++)
+        TEST_ASSERT(r.runs[i].x + 10 * r.runs[i].len <= 95, "nothing runs past the margin");
+    rec_free(&r);
+}
+
 TEST_CASE(keep_going_can_cancel_a_long_job) {
     const size_t n = 200000;
     uint16_t *text = malloc(n * sizeof(uint16_t));
@@ -488,6 +506,7 @@ int main(void) {
     RUN_TEST(narrow_glyphs_grow_the_measure);
     RUN_TEST(wrapping_never_splits_a_surrogate_pair);
     RUN_TEST(a_pair_wider_than_the_line_is_emitted_whole);
+    RUN_TEST(a_pair_that_half_fits_after_a_tab_starts_a_new_line);
     RUN_TEST(keep_going_can_cancel_a_long_job);
     RUN_TEST(emit_failure_stops_with_no_memory);
     RUN_TEST(unmeasurable_text_falls_back_to_extent);
