@@ -36,6 +36,7 @@
 #include "../core/find_seed.h"
 #include "../core/list_ops.h"
 #include "../core/settings.h"
+#include "../core/ui_rules.h"
 
 // Find/Replace term history: most-recent-first, de-duplicated, capped
 #define FIND_HISTORY_MAX 10
@@ -949,7 +950,14 @@ void npad_gtk_show_goto_dialog(Window *window) {
     GtkWidget *label = gtk_label_new_with_mnemonic("_Line number:");
     gtk_label_set_mnemonic_widget(GTK_LABEL(label), entry);
     gtk_label_set_xalign(GTK_LABEL(label), 0.0f);
-    gtk_entry_set_text(GTK_ENTRY(entry), "1");
+
+    // Like notepad.exe, open on the caret's line rather than 1
+    GtkTextIter caret;
+    gtk_text_buffer_get_iter_at_mark(window->buffer, &caret,
+                                     gtk_text_buffer_get_insert(window->buffer));
+    char current[24];
+    snprintf(current, sizeof(current), "%d", gtk_text_iter_get_line(&caret) + 1);
+    gtk_entry_set_text(GTK_ENTRY(entry), current);
     gtk_entry_set_input_purpose(GTK_ENTRY(entry), GTK_INPUT_PURPOSE_DIGITS);
     gtk_entry_set_activates_default(GTK_ENTRY(entry), TRUE);
     gtk_box_pack_start(GTK_BOX(content), label, FALSE, FALSE, 0);
@@ -958,32 +966,32 @@ void npad_gtk_show_goto_dialog(Window *window) {
     gtk_editable_select_region(GTK_EDITABLE(entry), 0, -1);
     gtk_widget_grab_focus(entry);
 
-    gint response = gtk_dialog_run(GTK_DIALOG(dialog));
-    char *text = g_strdup(gtk_entry_get_text(GTK_ENTRY(entry)));
-    gtk_widget_destroy(dialog);
-
-    // Digits only, like an ES_NUMBER edit; anything else (or zero) is ignored
-    g_strstrip(text);
-    bool valid = response == GTK_RESPONSE_OK && text[0];
-    for (const char *p = text; valid && *p; p++)
-        valid = *p >= '0' && *p <= '9';
-    guint64 line = valid ? g_ascii_strtoull(text, NULL, 10) : 0;
-    g_free(text);
-    if (line == 0)
-        return;
-
+    // A number that is not a line (0, past the end, or too large for an int)
+    // is reported and the dialog stays open to correct it, as Notepad does.
     // GtkTextBuffer lines are logical lines, even with word wrap on, so the
-    // number matches what Ln shows and what the file contains
-    if (line > (guint64) gtk_text_buffer_get_line_count(window->buffer)) {
+    // number matches what Ln shows and what the file contains.
+    int line = 0;
+    for (;;) {
+        if (gtk_dialog_run(GTK_DIALOG(dialog)) != GTK_RESPONSE_OK)
+            break;
+        GotoLineResult r =
+            ui_goto_line_parse(gtk_entry_get_text(GTK_ENTRY(entry)),
+                               gtk_text_buffer_get_line_count(window->buffer), &line);
+        if (r == GOTO_LINE_OK)
+            break;
+        line = 0;
         GtkWidget *box = gtk_message_dialog_new(
-            GTK_WINDOW(window->window), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
-            GTK_MESSAGE_INFO, GTK_BUTTONS_OK, "%s",
-            "The line number is beyond the total number of lines");
-        gtk_window_set_title(GTK_WINDOW(box), "npad");
+            GTK_WINDOW(dialog), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, GTK_MESSAGE_INFO,
+            GTK_BUTTONS_OK, "%s", "The line number is beyond the total number of lines");
+        gtk_window_set_title(GTK_WINDOW(box), "npad - Go To Line");
         gtk_dialog_run(GTK_DIALOG(box));
         gtk_widget_destroy(box);
-        return;
+        gtk_editable_select_region(GTK_EDITABLE(entry), 0, -1);
+        gtk_widget_grab_focus(entry);
     }
+    gtk_widget_destroy(dialog);
+    if (line <= 0)
+        return;
 
     GtkTextIter iter;
     gtk_text_buffer_get_iter_at_line(window->buffer, &iter, (gint) line - 1);

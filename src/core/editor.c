@@ -14,6 +14,7 @@
 #include "file_ops.h"
 #include "session.h"
 #include "settings.h"
+#include "ui_rules.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,8 +35,8 @@
 // editor_default_large_file_mb).
 #define DEFAULT_LARGE_FILE_WARNING_MB 100
 
-// How often to snapshot unsaved work when session recovery is enabled
-#define DEFAULT_SESSION_INTERVAL_SEC 30
+// The auto-save and snapshot intervals and their limits live in ui_rules.h
+// (AUTO_SAVE_INTERVAL_*, SESSION_INTERVAL_*), shared with every Preferences UI
 
 // Global editor state
 EditorState g_editor = { 0 };
@@ -350,16 +351,10 @@ bool editor_init(void) {
     // file from a timer) so it is opt-in; crash-recovery snapshots never
     // touch the user's file, so they are on by default
     g_editor.auto_save_enabled = settings_get_bool("auto_save_enabled", false);
-    g_editor.auto_save_interval = settings_get_int("auto_save_interval", 300);
-    if (g_editor.auto_save_interval < 10) {
-        g_editor.auto_save_interval = 10; // Sanity floor
-    }
+    g_editor.auto_save_interval = ui_auto_save_interval_setting(); // Clamped both ways
 
     g_editor.session_resume_enabled = settings_get_bool("session_resume_enabled", true);
-    g_editor.session_interval = settings_get_int("session_interval", DEFAULT_SESSION_INTERVAL_SEC);
-    if (g_editor.session_interval < 5) {
-        g_editor.session_interval = 5;
-    }
+    g_editor.session_interval = ui_session_interval_setting();
 
     // Unique recovery slot id for this instance (time + pid). Distinct across
     // concurrently running instances so their snapshots never collide.
@@ -465,7 +460,9 @@ bool editor_open_file(const char *filename) {
     }
 
     // Warn before opening very large files
-    int warn_mb = settings_get_int("large_file_warning_mb", editor_default_large_file_mb());
+    // Clamped: an int-overflowing value used to read back negative and turn
+    // the warning off
+    int warn_mb = ui_large_file_mb_setting(editor_default_large_file_mb());
     if (warn_mb > 0) {
         size_t size = file_get_size(filename);
         if (size > (size_t) warn_mb * 1024 * 1024) {
@@ -844,9 +841,7 @@ bool editor_is_auto_save_enabled(void) {
 }
 
 void editor_set_auto_save_interval(int seconds) {
-    if (seconds < 10) {
-        seconds = 10;
-    }
+    seconds = ui_clamp_auto_save_interval(seconds);
     g_editor.auto_save_interval = seconds;
     settings_set_int("auto_save_interval", seconds);
     editor_apply_auto_save_timer();
@@ -861,10 +856,7 @@ void editor_enable_session_resume(bool enabled) {
     settings_set_bool("session_resume_enabled", enabled);
 
     // Pick up any interval change saved alongside this toggle
-    g_editor.session_interval = settings_get_int("session_interval", DEFAULT_SESSION_INTERVAL_SEC);
-    if (g_editor.session_interval < 5) {
-        g_editor.session_interval = 5;
-    }
+    g_editor.session_interval = ui_session_interval_setting();
 
     // Persist immediately so the flag survives even if this run is later
     // killed without a clean exit
@@ -882,16 +874,10 @@ bool editor_is_session_resume_enabled(void) {
 
 void editor_reload_prefs(void) {
     g_editor.auto_save_enabled = settings_get_bool("auto_save_enabled", false);
-    g_editor.auto_save_interval = settings_get_int("auto_save_interval", 300);
-    if (g_editor.auto_save_interval < 10) {
-        g_editor.auto_save_interval = 10;
-    }
+    g_editor.auto_save_interval = ui_auto_save_interval_setting();
 
     g_editor.session_resume_enabled = settings_get_bool("session_resume_enabled", true);
-    g_editor.session_interval = settings_get_int("session_interval", DEFAULT_SESSION_INTERVAL_SEC);
-    if (g_editor.session_interval < 5) {
-        g_editor.session_interval = 5;
-    }
+    g_editor.session_interval = ui_session_interval_setting();
 
     editor_apply_auto_save_timer();
     editor_apply_session_timer();
