@@ -151,6 +151,12 @@ TEST_CASE(save_writes_and_restamps) {
                    "npad's own write is not an external change");
 }
 
+// What the activation check reports from inside the Save As dialog
+static EditorExternalChange g_check_in_dialog;
+static void check_external_in_dialog(void) {
+    g_check_in_dialog = editor_check_external_change();
+}
+
 // NP-004: Ctrl+S used to overwrite another program's version without a word
 TEST_CASE(manual_save_asks_before_overwriting_external_change) {
     setup();
@@ -163,7 +169,11 @@ TEST_CASE(manual_save_asks_before_overwriting_external_change) {
 
     // No, then cancel the Save As it leads to: nothing may be written - not
     // even by an auto-save tick arriving while the question is open
+    // The activation check that closing the question posts runs inside the
+    // Save As dialog's modal loop; it must not ask about the same change again
     g_stub.during_message_box = tick_auto_save;
+    g_stub.during_save_dialog = check_external_in_dialog;
+    g_check_in_dialog = EDITOR_FILE_MODIFIED;
     stub_answer(false);
     g_stub.save_dialog_result = NULL;
     TEST_ASSERT(!editor_save_file(), "declined: not saved");
@@ -172,13 +182,24 @@ TEST_CASE(manual_save_asks_before_overwriting_external_change) {
     TEST_ASSERT_EQ(1, g_stub.message_boxes, "asked once");
     TEST_ASSERT_EQ(1, g_stub.save_dialogs, "No offers Save As");
     TEST_ASSERT_STR_EQ(P("a.txt"), g_stub.save_dialog_default, "Save As starts at the file");
+    TEST_ASSERT_EQ(EDITOR_FILE_UNCHANGED, g_check_in_dialog,
+                   "answered once: the check inside Save As stays quiet");
     TEST_ASSERT(editor_is_modified(), "still unsaved");
+    tick_auto_save();
+    TEST_ASSERT(disk_equals(P("a.txt"), "THEIRS, written by another program\n"),
+                "a cancelled Save As leaves auto-save held");
 
-    // Yes replaces it
+    // Yes replaces it (another change, so another question)
     g_stub.during_message_box = NULL;
+    g_stub.during_save_dialog = NULL;
+    write_text(P("a.txt"), "THEIRS again\n");
+    int boxes = g_stub.message_boxes;
     stub_answer(true);
     TEST_ASSERT(editor_save_file(), "saved on Yes");
+    TEST_ASSERT_EQ(boxes + 1, g_stub.message_boxes, "asked about the new change");
     TEST_ASSERT(disk_equals(P("a.txt"), "mine, edited\n"), "replaced with npad's version");
+    TEST_ASSERT_EQ(EDITOR_FILE_UNCHANGED, editor_check_external_change(),
+                   "the write is the new baseline");
 }
 
 // NP-004: auto-save overwrote external edits, with or without the watch

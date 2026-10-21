@@ -991,7 +991,17 @@ bool editor_save_file(void) {
                  "Do you want to replace it with your version?\n"
                  "Choose No to save your version as a different file instead.",
                  g_editor.current_file);
-        if (!editor_ask(message, true))
+        bool replace = editor_ask(message, true);
+        // The user has now answered for this change, so adopt the disk version
+        // as the baseline before anything else can open. Closing the box
+        // re-activates the main window, and both platforms run the activation
+        // check from inside the next modal loop (the Save As dialog, an error
+        // box), which would otherwise stack the "changed on disk" question -
+        // with its Reload that discards these edits - on top of this save.
+        // This also holds auto-save, so a cancelled Save As writes nothing;
+        // a successful write re-stamps and releases it.
+        editor_accept_external_change();
+        if (!replace)
             return editor_save_as_dialog(g_editor.current_file);
     }
 

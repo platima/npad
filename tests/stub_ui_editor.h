@@ -52,6 +52,9 @@ typedef struct {
     TextEncoding save_dialog_encoding;
     int save_dialogs;
     char save_dialog_default[1024];
+    // Run while the Save As dialog is "open", as the activation check posted
+    // when a question box closes is dispatched by the dialog's modal loop
+    void (*during_save_dialog)(void);
 
     const char *open_dialog_result;
     SavePromptResult save_prompt_answer;

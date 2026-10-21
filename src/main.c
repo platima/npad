@@ -104,6 +104,7 @@ int main(int argc, char *argv[]) {
     if (!editor_init()) {
         NPAD_ERROR_FATAL(NPAD_ERROR_EDITOR, 0, "main initialization",
                          "Failed to initialize editor system");
+        npad_error_set_callback(NULL); // The UI is going away
         ui_cleanup();
         settings_cleanup();
         thread_safety_cleanup();
@@ -128,6 +129,7 @@ int main(int argc, char *argv[]) {
     if (!main_window) {
         NPAD_ERROR_FATAL(NPAD_ERROR_UI, 0, "main initialization", "Failed to create main window");
         editor_cleanup();
+        npad_error_set_callback(NULL); // The UI is going away
         ui_cleanup();
         settings_cleanup();
         thread_safety_cleanup();

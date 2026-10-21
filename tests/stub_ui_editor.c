@@ -200,6 +200,8 @@ char *ui_show_save_dialog(Window *parent, FileDialogParams *params) {
     g_stub.save_dialogs++;
     snprintf(g_stub.save_dialog_default, sizeof(g_stub.save_dialog_default), "%s",
              params && params->default_filename ? params->default_filename : "");
+    if (g_stub.during_save_dialog)
+        g_stub.during_save_dialog();
     if (!g_stub.save_dialog_result)
         return NULL;
     if (params && g_stub.save_dialog_picks_encoding)
