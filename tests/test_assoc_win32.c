@@ -12,7 +12,8 @@
  *
  * Built by `make test-windows` (and `make test-assoc-win32`). It refuses to
  * run unless NPAD_ALLOW_REGISTRY_TESTS=1 is set; `make test-windows` on
- * Windows runs it only then, and CI sets it.
+ * Windows runs it only then. CI's test-windows job (windows-latest, MSYS2)
+ * sets it for this exe alone.
  *
  * Author: Platima
  * https://npad.dev

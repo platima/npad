@@ -97,8 +97,8 @@ void test_finish(void);
 // a 64-bit size nor a negative int is truncated or reinterpreted on the way.
 #define TEST_ASSERT_EQ(expected, actual, message)                                                  \
     do {                                                                                           \
-        const long long test_eq_expected_ = (long long) (expected);                               \
-        const long long test_eq_actual_ = (long long) (actual);                                   \
+        const long long test_eq_expected_ = (long long) (expected);                                \
+        const long long test_eq_actual_ = (long long) (actual);                                    \
         g_test_stats.assertions_run++;                                                             \
         if (test_eq_expected_ != test_eq_actual_) {                                                \
             test_report_failure((message), __FILE__, __LINE__);                                    \

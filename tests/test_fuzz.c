@@ -7,6 +7,10 @@
  * the update version comparator. Each case states a property that must hold
  * for EVERY input and checks it against thousands of generated ones.
  *
+ * Decoding correctness is pinned by the hand-written suites, not here: what
+ * backslash-u escapes and nested JSON values load as is test_settings.c's job;
+ * these properties check that whatever loads stays put.
+ *
  * Run by `make test` at a small iteration count, and by `make test-fuzz` for
  * longer under AddressSanitizer + UBSan (where "no crash" includes "no
  * out-of-bounds read"). Environment:
@@ -118,8 +122,8 @@ static void buf_free(Buf *b) {
 
 // One random mutation. Never inserts a NUL: every input here is a C string.
 static void mutate(Buf *b, const char *const *dict, size_t maxlen) {
-    static const char interesting[] = { '\n', '\r', '"',  '\\', '<',  '>',  '&',  ';',
-                                        '#',  ':',  ',',  '{',  '}',  '-',  ' ',  '\t',
+    static const char interesting[] = { '\n',   '\r',   '"',    '\\',   '<',    '>',    '&',   ';',
+                                        '#',    ':',    ',',    '{',    '}',    '-',    ' ',   '\t',
                                         '\x80', '\xbf', '\xc3', '\xe2', '\xed', '\xf0', '\xff' };
     size_t ndict = 0;
     while (dict && dict[ndict])
@@ -250,16 +254,6 @@ static void report_input(const char *what, long iteration, const char *data, siz
     printf(n > 512 ? "...\n" : "\n");
 }
 
-static size_t file_size_or_zero(const char *path) {
-    FILE *f = fopen(path, "rb");
-    if (!f)
-        return 0;
-    fseek(f, 0, SEEK_END);
-    long n = ftell(f);
-    fclose(f);
-    return n > 0 ? (size_t) n : 0;
-}
-
 static void read_file_into(const char *path, Buf *out) {
     buf_set(out, "", 0);
     FILE *f = fopen(path, "rb");
@@ -293,8 +287,9 @@ static const char SETTINGS_SEED[] = "{\n"
                                     "  \"font_face\": \"Consolas\"\n"
                                     "}\n";
 
-static const char *const SETTINGS_DICT[] = { "\"", "\\", "\\\\", "\\\"", "\\n", "\\t", ":", ",",
-                                             "{", "}", "[", "]", " ", "\n", "\"k\": \"v\"",
+static const char *const SETTINGS_DICT[] = { "\"",      "\\", "\\\\", "\\\"", "\\n",
+                                             "\\t",     ":",  ",",    "{",    "}",
+                                             "[",       "]",  " ",    "\n",   "\"k\": \"v\"",
                                              "\\u00e9", NULL };
 
 // Known gap NP-016: the reader keeps a KEY's escapes, so a backslash or quote
@@ -320,15 +315,46 @@ static bool saved_file_has_escaped_key(const char *text) {
     return false;
 }
 
+// Make this instance's store differ from the file, so the next settings_save
+// really writes. A store that tracks its own unsaved changes may skip a save
+// that has nothing to add, which would leave the file as it was and let every
+// comparison after it pass without testing anything. Removing a key and
+// setting it back is always a change, and leaves the same entry every time.
+static void settings_force_change(void) {
+    settings_remove_key("fuzz_touch");
+    settings_set_string("fuzz_touch", "1");
+}
+
+// One load/save cycle from the file; false when the save did not happen
+static bool settings_cycle(int *count, Buf *file) {
+    settings_clear_all();
+    settings_load();
+    *count = settings_count();
+    settings_force_change();
+    if (!settings_save())
+        return false;
+    read_file_into(FUZZ_SETTINGS, file);
+    return true;
+}
+
+static bool bufs_equal(const Buf *a, const Buf *b) {
+    return a->n == b->n && (a->n == 0 || memcmp(a->d, b->d, a->n) == 0);
+}
+
 // Whatever the file holds, loading it must not crash, and once npad has
 // written it back the store must be at a fixed point: every later load/save
-// cycle reproduces the same entries and the same file. (A value that grows
-// on each cycle is how a path once reached 1.2 GB.)
+// cycle reproduces the same entries and the same file, byte for byte. (A
+// value that grows on each cycle is how a path once reached 1.2 GB; one that
+// is rewritten without changing length would pass a size check.) The bytes
+// are compared two cycles apart: a reader that reverses the entry order on
+// each load writes the same entries in alternating order, and two cycles
+// later in the same one; a reader that keeps the order compares equal at any
+// distance.
 TEST_CASE(settings_load_of_any_file_reaches_a_fixed_point) {
     settings_set_file_path(FUZZ_SETTINGS);
     rng_reset(1);
-    Buf b = { 0 }, written = { 0 };
-    long known_gap = 0;
+    Buf b = { 0 }, written = { 0 }, file1 = { 0 }, file2 = { 0 }, file3 = { 0 };
+    long known_gap = 0, checked = 0;
     for (long it = 0; it < g_iters; it++) {
         if (it % 40 == 0)
             buf_set_str(&b, SETTINGS_SEED);
@@ -344,46 +370,60 @@ TEST_CASE(settings_load_of_any_file_reaches_a_fixed_point) {
         (void) settings_get_bool("theme", false);
         char *s = settings_get_string("font_face", "");
         free(s);
+        settings_force_change();
         if (!settings_save())
             continue; // nothing serialisable; not this property's concern
         read_file_into(FUZZ_SETTINGS, &written);
         bool escaped_key = saved_file_has_escaped_key(written.d);
 
-        settings_clear_all();
-        settings_load();
-        int count1 = settings_count();
-        settings_save();
-        size_t size1 = file_size_or_zero(FUZZ_SETTINGS);
-        settings_clear_all();
-        settings_load();
-        int count2 = settings_count();
-        settings_save();
-        size_t size2 = file_size_or_zero(FUZZ_SETTINGS);
-        if ((count1 != count2 || size1 != size2) && escaped_key) {
+        int count1 = 0, count2 = 0, count3 = 0;
+        bool saved = settings_cycle(&count1, &file1) && settings_cycle(&count2, &file2) &&
+                     settings_cycle(&count3, &file3);
+        bool stable = saved && count1 == count2 && count2 == count3 && bufs_equal(&file1, &file3);
+        if (!stable && escaped_key) {
             known_gap++;
             continue;
         }
-        if (count1 != count2 || size1 != size2) {
+        checked++;
+        if (!stable) {
             report_input("settings file", it, b.d, b.n);
             report_input("as npad first wrote it", it, written.d, written.n);
-            printf("  entries %d -> %d, bytes %lu -> %lu\n", count1, count2,
-                   (unsigned long) size1, (unsigned long) size2);
+            report_input("one cycle later", it, file1.d, file1.n);
+            report_input("three cycles later", it, file3.d, file3.n);
+            printf("  saved %d, entries %d -> %d -> %d\n", saved, count1, count2, count3);
         }
-        TEST_ASSERT(count1 == count2, "entry count is stable across load/save cycles");
-        TEST_ASSERT(size1 == size2, "file size is stable across load/save cycles");
+        TEST_ASSERT(saved, "a store npad loaded from its own file saves again");
+        TEST_ASSERT(count1 == count2 && count2 == count3,
+                    "entry count is stable across load/save cycles");
+        TEST_ASSERT(bufs_equal(&file1, &file3), "the file is stable across load/save cycles");
     }
     if (known_gap)
         printf("(%ld inputs hit known gap NP-016: an escaped key grows) ", known_gap);
+    // Most inputs must reach the comparison, or the property says nothing
+    TEST_ASSERT(checked * 2 > g_iters, "most inputs are saved and compared");
     buf_free(&b);
     buf_free(&written);
+    buf_free(&file1);
+    buf_free(&file2);
+    buf_free(&file3);
     settings_clear_all();
     remove(FUZZ_SETTINGS);
 }
 
+// A control character other than tab (the writer must escape these for the
+// file to stay valid JSON, NP-043; either way they must come back)
+static void append_control_char(Buf *b) {
+    char c;
+    do
+        c = (char) (1 + rng_below(0x1F));
+    while (c == '\t');
+    buf_append_char(b, c);
+}
+
 // Every value npad can store survives any number of save/load cycles
-// unchanged: quotes, backslashes, tabs, braces and any non-ASCII text.
-// (Keys are npad's own identifiers; control characters other than tab are a
-// separate, known gap in the writer and are not generated here.)
+// unchanged: quotes, backslashes, tabs, braces, any non-ASCII text, and in a
+// quarter of the rounds the other control characters too. (Keys are npad's
+// own identifiers.)
 TEST_CASE(settings_values_survive_repeated_round_trips) {
     enum { KEYS = 12 };
     settings_set_file_path(FUZZ_SETTINGS);
@@ -392,18 +432,25 @@ TEST_CASE(settings_values_survive_repeated_round_trips) {
     memset(values, 0, sizeof(values));
     for (long it = 0; it < g_iters / 4 + 1; it++) {
         settings_clear_all();
+        bool controls = rng_below(4) == 0;
         for (int k = 0; k < KEYS; k++) {
             values[k].n = 0;
             buf_set(&values[k], "", 0);
             size_t len = rng_below(80);
-            for (size_t i = 0; i < len; i++)
-                append_random_char(&values[k], true);
+            for (size_t i = 0; i < len; i++) {
+                if (controls && rng_below(12) == 0)
+                    append_control_char(&values[k]);
+                else
+                    append_random_char(&values[k], true);
+            }
             char key[32];
             snprintf(key, sizeof key, "fuzz_key_%d", k);
             settings_set_string(key, values[k].d);
         }
         int cycles = 1 + (int) rng_below(5);
         for (int c = 0; c < cycles; c++) {
+            if (c)
+                settings_force_change(); // the first save has the values to write
             TEST_ASSERT(settings_save(), "save succeeds");
             settings_clear_all();
             settings_load();
@@ -427,9 +474,74 @@ TEST_CASE(settings_values_survive_repeated_round_trips) {
     remove(FUZZ_SETTINGS);
 }
 
+// A value is either kept exactly or refused when it is set; it is never
+// accepted, written, and then missing on the next start. Around the reader's
+// 64 KB limit, as plain text and as text that doubles when escaped. Known gap
+// NP-043: settings_set_string accepts a value over 64 KB that the reader then
+// drops; that one shape is counted rather than failed until the setter
+// refuses it.
+TEST_CASE(settings_long_values_are_kept_or_refused) {
+    static const size_t sizes[] = { 4096, 32768, 65535, 65536, 65537, 100000 };
+    settings_set_file_path(FUZZ_SETTINGS);
+    rng_reset(14);
+    Buf value = { 0 };
+    long known_gap = 0;
+    for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
+        for (int style = 0; style < 2; style++) {
+            buf_set(&value, "", 0);
+            while (value.n < sizes[s]) {
+                if (style == 0)
+                    buf_append_char(&value, (char) ('a' + rng_below(26)));
+                else
+                    buf_append_char(&value, rng_below(2) ? '\\' : '"');
+            }
+            // From no file: a save that merges with the file would otherwise
+            // keep the previous case's value under a refused one
+            remove(FUZZ_SETTINGS);
+            settings_clear_all();
+            settings_set_string("before", "1");
+            bool accepted = settings_set_string("long", value.d);
+            settings_set_string("after", "2");
+            TEST_ASSERT(settings_save(), "save succeeds");
+            settings_clear_all();
+            settings_load();
+            char *got = settings_get_string("long", NULL);
+            char *before = settings_get_string("before", NULL);
+            char *after = settings_get_string("after", NULL);
+            bool kept = got && strcmp(got, value.d) == 0;
+            bool neighbours =
+                before && strcmp(before, "1") == 0 && after && strcmp(after, "2") == 0;
+            bool gap = accepted && !got && sizes[s] > 65536;
+            if (gap)
+                known_gap++;
+            else if (accepted ? !kept : got != NULL)
+                printf("\n  [fuzz] %lu-byte value (style %d): accepted %d, came back %s\n",
+                       (unsigned long) sizes[s], style, accepted,
+                       got ? (kept ? "intact" : "changed") : "missing");
+            free(got);
+            free(before);
+            free(after);
+            TEST_ASSERT(gap || (accepted ? kept : !got),
+                        "a value is kept exactly, or refused when it is set");
+            TEST_ASSERT(neighbours, "a long value does not cost the keys around it");
+            TEST_ASSERT(accepted || sizes[s] > 65536, "a value up to 64 KB is accepted");
+        }
+    }
+    if (known_gap)
+        printf("(%ld values hit known gap NP-043: over 64 KB, accepted then dropped) ", known_gap);
+    buf_free(&value);
+    settings_clear_all();
+    remove(FUZZ_SETTINGS);
+}
+
 // --- Session (crash recovery) ---------------------------------------------------
 
 #define FUZZ_REC "fuzz_recovery"
+
+// Slot ids have npad's own shape, "<start time>-<pid>" in hex, which a
+// recovery store that validates ids accepts; anything else it refuses, and a
+// property written with other ids would fail or pass without taking anything
+#define FUZZ_META_SLOT "1-f"
 
 // A snapshot taken back is the snapshot written: content, original path,
 // encoding and line ending. Taking it removes it (a second take finds
@@ -458,7 +570,7 @@ TEST_CASE(session_write_then_take_is_identity) {
         TextEncoding enc = (TextEncoding) rng_below(5);
         LineEnding eol = (LineEnding) rng_below(3);
         char slot[32];
-        snprintf(slot, sizeof slot, "s%lx", (unsigned long) it);
+        snprintf(slot, sizeof slot, "1-%lx", (unsigned long) it);
 
         TEST_ASSERT(session_write(FUZZ_REC, slot, content.d, has_path ? path.d : NULL, enc, eol),
                     "snapshot written");
@@ -494,50 +606,123 @@ TEST_CASE(session_write_then_take_is_identity) {
     test_remove_tree(FUZZ_REC);
 }
 
+// Write one slot's files into a recovery directory emptied first, so nothing
+// an earlier take left behind (a claim it kept) decides this one
+static bool write_meta_slot(const char *meta, size_t n) {
+    test_remove_tree(FUZZ_REC);
+    if (!test_make_dir(FUZZ_REC))
+        return false;
+    write_bytes(FUZZ_REC "/" FUZZ_META_SLOT ".meta", meta, n);
+    write_bytes(FUZZ_REC "/" FUZZ_META_SLOT ".txt", "abc", 3);
+    return true;
+}
+
 // Whatever a .meta file holds (a crash mid-write, a hand edit, a different
 // version), taking the slot must not crash and must report an encoding and
-// a line ending npad knows.
+// a line ending npad knows. So that this cannot pass by taking nothing, the
+// unmutated meta must come back every time it is the starting point, with
+// what it says, and mutated ones must come back at least sometimes.
 TEST_CASE(session_take_of_any_meta_is_safe) {
-    TEST_ASSERT(test_make_dir(FUZZ_REC), "recovery directory created");
-    static const char *const META_DICT[] = { "\n", "\r\n", "-1", "4", "2147483648",
+    static const char SEED_META[] = "2\n1\n/home/u/notes.txt";
+    static const char *const META_DICT[] = { "\n",          "\r\n",   "-1",    "4", "2147483648",
                                              "99999999999", "/tmp/x", "C:\\x", NULL };
     rng_reset(4);
     Buf b = { 0 };
+    long taken = 0;
     for (long it = 0; it < g_iters; it++) {
-        if (it % 30 == 0)
-            buf_set_str(&b, "2\n1\n/home/u/notes.txt");
+        if (it % 30 == 0) {
+            buf_set_str(&b, SEED_META);
+            TEST_ASSERT(write_meta_slot(b.d, b.n), "recovery directory created");
+            char *p = NULL;
+            TextEncoding enc = NPAD_ENC_UTF8;
+            LineEnding eol = NPAD_EOL_CRLF;
+            char *c = session_take(FUZZ_REC, FUZZ_META_SLOT, &p, &enc, &eol);
+            // SEED_META says encoding 2 and line ending 1
+            bool back = c && strcmp(c, "abc") == 0 && p && strcmp(p, "/home/u/notes.txt") == 0 &&
+                        enc == NPAD_ENC_UTF16_LE && eol == NPAD_EOL_LF;
+            free(c);
+            free(p);
+            TEST_ASSERT(back, "a well-formed slot is taken back with its path and attributes");
+        }
         int n = 1 + (int) rng_below(4);
         for (int m = 0; m < n; m++)
             mutate(&b, META_DICT, 1024);
-        write_bytes(FUZZ_REC "/fz.meta", b.d, b.n);
-        write_bytes(FUZZ_REC "/fz.txt", "abc", 3);
+        TEST_ASSERT(write_meta_slot(b.d, b.n), "recovery directory created");
 
         char *p = NULL;
         TextEncoding enc = (TextEncoding) 77;
         LineEnding eol = (LineEnding) 77;
-        char *c = session_take(FUZZ_REC, "fz", &p, &enc, &eol);
+        char *c = session_take(FUZZ_REC, FUZZ_META_SLOT, &p, &enc, &eol);
         bool in_range = !c || ((int) enc >= 0 && (int) enc <= (int) NPAD_ENC_ANSI &&
                                (int) eol >= 0 && (int) eol <= (int) NPAD_EOL_CR);
+        if (c)
+            taken++;
         if (!in_range)
             report_input("meta", it, b.d, b.n);
         free(c);
         free(p);
         TEST_ASSERT(in_range, "encoding and line ending are always known values");
     }
+    TEST_ASSERT(taken > 0, "some mutated slots are taken back, so their values were checked");
     buf_free(&b);
     test_remove_tree(FUZZ_REC);
 }
 
 // --- HTML paste -------------------------------------------------------------------
 
-static const char *const HTML_DICT[] = {
-    "<ul>", "</ul>", "<ol>", "</ol>", "<li>", "</li>", "<p>", "</p>", "<b>", "</b>", "<i>",
-    "<em>", "<strong>", "<code>", "</code>", "<pre>", "</pre>", "<a href=\"x\">", "</a>",
-    "<img src=\"s\" alt=\"a\">", "<h1>", "</h1>", "<h3>", "<blockquote>", "</blockquote>", "<br>",
-    "<hr>", "<table>", "<tr>", "<td>", "<div>", "</div>", "<span style=\"x\">", "<!--", "-->",
-    "&amp;", "&lt;", "&gt;", "&nbsp;", "&#233;", "&#x1F600;", "&#0;", "&#xD800;", "&bogus;",
-    "<script>", "</script>", "<style>", "</style>", "\"", "'", "=", "\r\n", NULL
-};
+static const char *const HTML_DICT[] = { "<ul>",
+                                         "</ul>",
+                                         "<ol>",
+                                         "</ol>",
+                                         "<li>",
+                                         "</li>",
+                                         "<p>",
+                                         "</p>",
+                                         "<b>",
+                                         "</b>",
+                                         "<i>",
+                                         "<em>",
+                                         "<strong>",
+                                         "<code>",
+                                         "</code>",
+                                         "<pre>",
+                                         "</pre>",
+                                         "<a href=\"x\">",
+                                         "</a>",
+                                         "<img src=\"s\" alt=\"a\">",
+                                         "<h1>",
+                                         "</h1>",
+                                         "<h3>",
+                                         "<blockquote>",
+                                         "</blockquote>",
+                                         "<br>",
+                                         "<hr>",
+                                         "<table>",
+                                         "<tr>",
+                                         "<td>",
+                                         "<div>",
+                                         "</div>",
+                                         "<span style=\"x\">",
+                                         "<!--",
+                                         "-->",
+                                         "&amp;",
+                                         "&lt;",
+                                         "&gt;",
+                                         "&nbsp;",
+                                         "&#233;",
+                                         "&#x1F600;",
+                                         "&#0;",
+                                         "&#xD800;",
+                                         "&bogus;",
+                                         "<script>",
+                                         "</script>",
+                                         "<style>",
+                                         "</style>",
+                                         "\"",
+                                         "'",
+                                         "=",
+                                         "\r\n",
+                                         NULL };
 
 // No HTML fragment, however malformed, may crash the converter or make it
 // return nothing; and the result stays proportionate to the input (a fixed
@@ -619,8 +804,8 @@ TEST_CASE(cf_html_offsets_never_escape_the_blob) {
 // Random multi-line text from a small alphabet, so lines repeat and differ
 // only by case often enough to exercise ordering, stability and duplicates
 static void random_lines(Buf *b, bool allow_cr) {
-    static const char *const atoms[] = { "a", "A", "b", "B", "z", "Z", "_", " ", "1", "10", "\t",
-                                         "\xc3\xa9", "\xc3\x89", "-", "* " };
+    static const char *const atoms[] = { "a", "A",  "b",  "B",        "z",        "Z", "_", " ",
+                                         "1", "10", "\t", "\xc3\xa9", "\xc3\x89", "-", "* " };
     buf_set(b, "", 0);
     size_t lines = rng_below(30);
     for (size_t l = 0; l < lines; l++) {
@@ -866,9 +1051,9 @@ TEST_CASE(list_unindent_undoes_indent_for_whitespace_formats) {
 // is at least as long as what it stands for (\uXXXX is six bytes for at most
 // three)
 TEST_CASE(list_unescape_handles_any_input) {
-    static const char *const ESC_DICT[] = { "\\", "\\n", "\\t", "\\r", "\\0", "\\\\", "\\u",
-                                            "\\u00e9", "\\uD83D", "\\uDE00", "\\uFFFF", "\\x",
-                                            NULL };
+    static const char *const ESC_DICT[] = { "\\",      "\\n", "\\t",     "\\r",     "\\0",
+                                            "\\\\",    "\\u", "\\u00e9", "\\uD83D", "\\uDE00",
+                                            "\\uFFFF", "\\x", NULL };
     rng_reset(11);
     Buf b = { 0 };
     for (long it = 0; it < g_iters; it++) {
@@ -890,8 +1075,8 @@ TEST_CASE(list_unescape_handles_any_input) {
 // --- Update version comparison --------------------------------------------------
 
 static void random_version(Buf *b) {
-    static const char *const suffixes[] = { "rc", "rc1", "rc2", "rc10", "dev", "beta", "beta2",
-                                            "alpha", "RC3", "1", "a1b2", "" };
+    static const char *const suffixes[] = { "rc",    "rc1",   "rc2", "rc10", "dev",  "beta",
+                                            "beta2", "alpha", "RC3", "1",    "a1b2", "" };
     buf_set(b, "", 0);
     if (rng_below(4) == 0) { // free-form junk
         size_t n = rng_below(12);
@@ -939,8 +1124,8 @@ TEST_CASE(version_compare_is_a_consistent_order) {
         bool antisymmetric = ab == -ba;
         bool transitive = !(ab <= 0 && bc <= 0) || ac <= 0;
         if (!reflexive || !antisymmetric || !transitive)
-            printf("\n  [fuzz] seed %llu, iteration %ld: a=\"%s\" b=\"%s\" c=\"%s\"\n", g_seed,
-                   it, a.d, b.d, c.d);
+            printf("\n  [fuzz] seed %llu, iteration %ld: a=\"%s\" b=\"%s\" c=\"%s\"\n", g_seed, it,
+                   a.d, b.d, c.d);
         TEST_ASSERT(reflexive, "a version equals itself");
         TEST_ASSERT(antisymmetric, "compare(a, b) == -compare(b, a)");
         TEST_ASSERT(transitive, "a <= b and b <= c imply a <= c");
@@ -957,9 +1142,18 @@ TEST_CASE(version_compare_is_a_consistent_order) {
 // The release JSON and checksum parsers take network input: any bytes are
 // safe, and an extracted tag always fits its buffer
 TEST_CASE(update_parsers_handle_any_input) {
-    static const char *const JSON_DICT[] = { "\"tag_name\"", ":", "\"v0.36.0\"", "\"", "\\", "{",
-                                             "}", " ", "\"browser_download_url\"", "\"name\"",
-                                             "-setup-win-x64.exe", NULL };
+    static const char *const JSON_DICT[] = { "\"tag_name\"",
+                                             ":",
+                                             "\"v0.36.0\"",
+                                             "\"",
+                                             "\\",
+                                             "{",
+                                             "}",
+                                             " ",
+                                             "\"browser_download_url\"",
+                                             "\"name\"",
+                                             "-setup-win-x64.exe",
+                                             NULL };
     rng_reset(13);
     Buf b = { 0 };
     for (long it = 0; it < g_iters; it++) {
@@ -997,6 +1191,7 @@ int main(void) {
 
     RUN_TEST(settings_load_of_any_file_reaches_a_fixed_point);
     RUN_TEST(settings_values_survive_repeated_round_trips);
+    RUN_TEST(settings_long_values_are_kept_or_refused);
     RUN_TEST(session_write_then_take_is_identity);
     RUN_TEST(session_take_of_any_meta_is_safe);
     RUN_TEST(html_to_markdown_handles_any_fragment);

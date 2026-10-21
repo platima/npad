@@ -331,6 +331,11 @@ void test_framework_begin(void) {
         begin_failed("create the settings directory");
     if (setenv("HOME", home, 1) != 0 || setenv("XDG_CONFIG_HOME", xdg, 1) != 0)
         begin_failed("set HOME and XDG_CONFIG_HOME");
+    // A -DNPAD_TEST_HOOKS build may honour NPAD_TEST_CONFIG_DIR here too; one
+    // exported in the developer's shell would send settings outside this
+    // directory and bypass the XDG resolution the settings tests exercise
+    if (unsetenv("NPAD_TEST_CONFIG_DIR") != 0)
+        begin_failed("clear NPAD_TEST_CONFIG_DIR");
     free(home);
     free(xdg);
 #endif
