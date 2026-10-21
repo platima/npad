@@ -50,7 +50,13 @@ typedef struct {
     bool truncated;
 } TextFileInfo;
 
-// File reading operations
+// The largest file the readers load (2 GB - 1). A document is held as one
+// string and the text views count in int, so anything larger is refused with
+// a "too large to open" message rather than failing part-way.
+#define FILE_MAX_LOAD_BYTES 2147483647ULL
+
+// File reading operations. A folder is refused with "'<path>' is a folder,
+// not a file".
 char *file_read_text(const char *filename); // Raw bytes, NUL-terminated
 
 // As file_read_text, but reads at most max_bytes. For salvaging a file too
@@ -64,21 +70,52 @@ bool file_read_binary(const char *filename, void **data, size_t *size);
 // info may be NULL if the caller does not care.
 char *file_read_text_ex(const char *filename, TextFileInfo *info);
 
-// File writing operations
+// File writing operations. Every write is atomic: these are the same as the
+// _atomic variants below (there is no truncating "wb" write).
 bool file_write_text(const char *filename, const char *content);
 bool file_write_binary(const char *filename, const void *data, size_t size);
 
 // Convert UTF-8 content back to the given encoding and line endings and
-// write it atomically (temp file + rename). info == NULL writes UTF-8/CRLF.
+// write it atomically (see file_write_binary_atomic). info == NULL writes
+// UTF-8 without a BOM, with the platform's line ending
+// (NPAD_DEFAULT_LINE_ENDING: CRLF on Windows, LF elsewhere).
 bool file_write_text_ex(const char *filename, const char *utf8_content, const TextFileInfo *info);
 
 // Whether saving this UTF-8 content as ANSI would lose characters
 // (replaced with '?'). Used to warn the user before a lossy save.
 bool file_ansi_is_lossy(const char *utf8_content);
 
-// Atomic file operations with rollback capability
+// Atomic write. The new content goes to an exclusively created temp file
+// beside the real file (symlinks are followed, so a link stays a link), takes
+// on the original's identity (POSIX owner, mode and ACLs; on Windows
+// ReplaceFileW keeps ACLs, attributes, streams such as Mark-of-the-Web and
+// the creation time), is read back and synced to disk, and then replaces the
+// original. A file that cannot be replaced that way (other hard links, a
+// folder that does not allow creating files, a file held open without delete
+// sharing, an owner or ACL that cannot be reproduced) is overwritten in place
+// instead, after a backup copy to the temp folder, and put back if anything
+// fails. Either way a failed write never destroys or truncates the existing
+// file, and leaves no temp file behind. file_get_last_error() says why.
 bool file_write_text_atomic(const char *filename, const char *content);
 bool file_write_binary_atomic(const char *filename, const void *data, size_t size);
+
+#ifdef FILE_OPS_FAULT_INJECTION
+// Test builds only: make the next write fail at a stage, once, as if the OS
+// had reported an error there. Calls add up (write fails, then so does the
+// restore); FILE_OPS_FAULT_NONE clears them all.
+typedef enum {
+    FILE_OPS_FAULT_NONE = 0,
+    FILE_OPS_FAULT_TEMP_CREATE,     // Temp file cannot be created (EACCES)
+    FILE_OPS_FAULT_WRITE,           // Writing the temp file fails (ENOSPC)
+    FILE_OPS_FAULT_SYNC,            // fsync of the temp file fails (EIO)
+    FILE_OPS_FAULT_VERIFY,          // Read-back does not match (EIO)
+    FILE_OPS_FAULT_RENAME,          // The final rename fails (EIO)
+    FILE_OPS_FAULT_RENAME_BUSY,     // The final rename fails with EBUSY (bind mount)
+    FILE_OPS_FAULT_INPLACE_WRITE,   // The in-place overwrite fails part-way (ENOSPC)
+    FILE_OPS_FAULT_INPLACE_RESTORE, // ...and so does putting the original back (EIO)
+} FileOpsFault;
+void file_ops_inject_fault(FileOpsFault fault);
+#endif
 
 // Enhanced validation and checks
 bool file_check_disk_space(const char *path, size_t required_bytes);
@@ -94,12 +131,16 @@ LineEnding file_detect_line_ending(const char *text);
 char *file_convert_line_endings(const char *text, LineEnding target);
 
 // File utility functions
-// Identity stamp for change detection: size plus last-write time. Neither
-// alone is enough - some tools preserve the timestamp, and an edit can leave
-// the size unchanged. A content hash would be certain but costs a full re-read.
+// Identity stamp for change detection: size plus last-write time (and, on
+// POSIX, which file the name points at). Neither size nor time alone is
+// enough - some tools preserve the timestamp, and an edit can leave the size
+// unchanged. A content hash would be certain but costs a full re-read.
 typedef struct {
-    long long size;       // -1 when the file does not exist
-    long long write_time; // Platform-native resolution; only compared, never shown
+    long long size;            // -1 when the file does not exist
+    long long write_time;      // Platform-native resolution (100 ns on Windows,
+                               // ns on POSIX); only compared, never shown
+    unsigned long long device; // POSIX st_dev/st_ino: a file replaced by a
+    unsigned long long inode;  // rename is a new inode (0 on Windows)
 } FileStamp;
 
 // Capture a file's stamp. Returns false (and a size of -1) if it is gone,
@@ -110,6 +151,10 @@ bool file_stamp_equal(const FileStamp *a, const FileStamp *b);
 bool file_exists(const char *filename);
 bool file_is_readable(const char *filename);
 bool file_is_writable(const char *filename);
+// Is the path an existing folder? For refusing to "open" one up front.
+bool file_is_directory(const char *path);
+// Size from the file's metadata, 64-bit (SIZE_MAX if it does not fit); 0
+// for a missing file, a folder or a device
 size_t file_get_size(const char *filename);
 // Heuristic sniff of the first 8 KB: NUL bytes (outside BOM-marked UTF-16)
 // or a high share of control bytes mark the file as binary.
@@ -120,11 +165,14 @@ bool file_looks_binary(const char *filename);
 // lines (breaks + 1; empty text counts as 1 line). NULL out-params are
 // skipped; NULL text yields zeros/1.
 void file_count_text_stats(const char *utf8, size_t *words, size_t *chars, size_t *lines);
+// Delete a file (never a folder), honouring UTF-8 paths on Windows
 bool file_delete(const char *filename);
+// Copy a file; the destination is written atomically, so a failed copy
+// leaves its old content in place
 bool file_copy(const char *source, const char *destination);
 
-// Move/rename a file, honouring UTF-8 paths on Windows. Replaces the
-// destination if it exists.
+// Move/rename a file, honouring UTF-8 and long paths on Windows. Replaces
+// the destination if it exists.
 bool file_rename(const char *from, const char *to);
 
 // Path utilities

@@ -32,6 +32,24 @@ static void default_error_callback(const npad_error_info_t *error) {
     if (!error)
         return;
 
+    // Logging must not change the error being reported: callers often read
+    // errno (or GetLastError) after logging, and a write to a missing stderr
+    // sets it to EBADF - which then turned every "Could not open file" in the
+    // Windows GUI into "Bad file descriptor"
+    int saved_errno = errno;
+#ifdef _WIN32
+    DWORD saved_last_error = GetLastError();
+    // A GUI (-mwindows) process started from Explorer has no stderr at all
+    // (_fileno gives a negative number): there is nowhere to write
+    if (_fileno(stderr) < 0) {
+        if (error->level == NPAD_ERROR_FATAL)
+            abort();
+        SetLastError(saved_last_error);
+        errno = saved_errno;
+        return;
+    }
+#endif
+
     // Get current timestamp
     time_t now = time(NULL);
     const struct tm *tm_info = localtime(&now);
@@ -62,6 +80,11 @@ static void default_error_callback(const npad_error_info_t *error) {
         fflush(stderr);
         abort();
     }
+
+#ifdef _WIN32
+    SetLastError(saved_last_error);
+#endif
+    errno = saved_errno;
 }
 
 void npad_error_init(void) {
@@ -98,6 +121,7 @@ void npad_error_set_callback(npad_error_callback_t callback) {
 void npad_error_report(npad_error_level_t level, npad_error_category_t category, int code,
                        const char *file, int line, const char *function, const char *context,
                        const char *format, ...) {
+    int saved_errno = errno; // Reporting an error must not change it (see above)
     if (!g_error_initialized) {
         npad_error_init();
     }
@@ -139,6 +163,7 @@ void npad_error_report(npad_error_level_t level, npad_error_category_t category,
     }
 
     npad_mutex_unlock(&g_error_mutex);
+    errno = saved_errno;
 }
 
 const npad_error_info_t *npad_error_get_last(void) {
