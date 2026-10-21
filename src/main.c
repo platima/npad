@@ -43,6 +43,19 @@ static void show_version(void);
 // (0 for a normally launched window). Set from --cascade.
 int g_cascade_index = 0;
 
+// Installed once the UI exists. A fatal error (no main window, say) is shown,
+// because the Windows build has no console and stderr goes nowhere; the
+// caller then exits through its own cleanup. Lesser errors are already
+// reported to the user by the code that hit them, so they are only logged.
+static void gui_error_callback(const npad_error_info_t *error) {
+    npad_error_log_stderr(error);
+    if (error && error->level == NPAD_ERROR_FATAL) {
+        char message[640];
+        snprintf(message, sizeof(message), "npad cannot continue:\n%.500s", error->message);
+        ui_show_message_box(NULL, "npad", message, false);
+    }
+}
+
 int main(int argc, char *argv[]) {
     DEBUG_PRINT("npad starting...");
 
@@ -56,6 +69,9 @@ int main(int argc, char *argv[]) {
     // never be reached on a supported (Windows 10+) system.
 
     startup_prof_mark("main enter");
+
+    // Errors can be reported from here on (the command line, settings)
+    npad_error_init();
 
     // Parse command line arguments
     parse_command_line(argc, argv);
@@ -82,11 +98,13 @@ int main(int argc, char *argv[]) {
         npad_error_cleanup();
         return 1;
     }
+    npad_error_set_callback(gui_error_callback);
 
     // Initialize the editor core
     if (!editor_init()) {
         NPAD_ERROR_FATAL(NPAD_ERROR_EDITOR, 0, "main initialization",
                          "Failed to initialize editor system");
+        npad_error_set_callback(NULL); // The UI is going away
         ui_cleanup();
         settings_cleanup();
         thread_safety_cleanup();
@@ -111,6 +129,7 @@ int main(int argc, char *argv[]) {
     if (!main_window) {
         NPAD_ERROR_FATAL(NPAD_ERROR_UI, 0, "main initialization", "Failed to create main window");
         editor_cleanup();
+        npad_error_set_callback(NULL); // The UI is going away
         ui_cleanup();
         settings_cleanup();
         thread_safety_cleanup();
@@ -151,10 +170,11 @@ int main(int argc, char *argv[]) {
         ui_set_window_maximized(main_window, true);
     }
 
-    // Open startup file if specified
+    // Open startup file if specified (offering to create it when missing,
+    // as Notepad does)
     extern char *g_startup_file;
     if (g_startup_file) {
-        editor_open_file(g_startup_file);
+        editor_open_startup_file(g_startup_file);
     }
 
     DEBUG_PRINT("Entering message loop...");
@@ -177,6 +197,7 @@ int main(int argc, char *argv[]) {
 
     // Cleanup
     editor_cleanup();
+    npad_error_set_callback(NULL); // The UI is going away
     ui_cleanup();
     settings_cleanup();
     thread_safety_cleanup();

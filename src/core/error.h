@@ -47,15 +47,25 @@ typedef struct {
     char function[64];
 } npad_error_info_t;
 
-// Error callback function type
+// Error callback function type. Called after the report is recorded, outside
+// the error system's lock, so a callback may show UI or report again.
 typedef void (*npad_error_callback_t)(const npad_error_info_t *error);
 
-// Core error functions
+// Core error functions. Reporting initialises on first use, but main() calls
+// npad_error_init itself so the GUI can install its callback after ui_init.
 void npad_error_init(void);
 void npad_error_cleanup(void);
+// NULL restores the default (npad_error_log_stderr)
 void npad_error_set_callback(npad_error_callback_t callback);
 
-// Error reporting functions
+// The default callback: a timestamped line on stderr, skipped when there is no
+// stderr (a Windows GUI started from Explorer). It never ends the process, not
+// even for NPAD_ERROR_FATAL: a fatal report is the caller's cue to clean up
+// and exit through its own error path. A GUI callback can call this first and
+// then show the message to the user.
+void npad_error_log_stderr(const npad_error_info_t *error);
+
+// Error reporting functions. errno is the same afterwards as before.
 void npad_error_report(npad_error_level_t level, npad_error_category_t category, int code,
                        const char *file, int line, const char *function, const char *context,
                        const char *format, ...);

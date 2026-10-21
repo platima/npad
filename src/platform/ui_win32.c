@@ -6267,11 +6267,8 @@ static bool show_custom_indent_dialog(Window *window) {
                            custom_indent_proc, 0) == 1;
 }
 
-// Insert the current time and date at the caret, like Notepad's F5
-static void insert_time_date(Window *window) {
-    if (!window || !window->edit_hwnd)
-        return;
-
+// Notepad's F5 stamp: the locale's short time (no seconds), then short date
+static void format_time_date(wchar_t *out, size_t count) {
     SYSTEMTIME st;
     GetLocalTime(&st);
 
@@ -6280,11 +6277,41 @@ static void insert_time_date(Window *window) {
     GetTimeFormatW(LOCALE_USER_DEFAULT, TIME_NOSECONDS, &st, NULL, time_str, 64);
     GetDateFormatW(LOCALE_USER_DEFAULT, DATE_SHORTDATE, &st, NULL, date_str, 64);
 
-    wchar_t combined[132];
-    _snwprintf(combined, 131, L"%s %s", time_str, date_str);
-    combined[131] = L'\0';
+    _snwprintf(out, count - 1, L"%ls %ls", time_str, date_str);
+    out[count - 1] = L'\0';
+}
 
+// Insert the current time and date at the caret, like Notepad's F5
+static void insert_time_date(Window *window) {
+    if (!window || !window->edit_hwnd)
+        return;
+    wchar_t combined[132];
+    format_time_date(combined, 132);
     SendMessageW(window->edit_hwnd, EM_REPLACESEL, TRUE, (LPARAM) combined);
+}
+
+// A .LOG file just opened: stamp a new line at the end, as Notepad does. An
+// ordinary replace-selection edit, so it is undoable and EN_CHANGE marks the
+// document modified.
+void ui_platform_append_time_date_line(Window *window) {
+    if (!window || !window->edit_hwnd)
+        return;
+    wchar_t stamp[132];
+    format_time_date(stamp, 132);
+    wchar_t line[140];
+    _snwprintf(line, 139, L"\r\n%ls\r\n", stamp);
+    line[139] = L'\0';
+
+    LONG end = edit_text_cp_length(window->edit_hwnd);
+    CHARRANGE at = { end, end };
+    SendMessageW(window->edit_hwnd, EM_EXSETSEL, 0, (LPARAM) &at);
+    SendMessageW(window->edit_hwnd, EM_REPLACESEL, TRUE, (LPARAM) line);
+    SendMessageW(window->edit_hwnd, EM_SCROLLCARET, 0, 0);
+    update_status_bar(window);
+}
+
+void ui_platform_set_status_message(Window *window, const char *message) {
+    set_status_message(window, message);
 }
 
 // (Re)build the accelerator table. The Ctrl+N / Ctrl+Shift+N pair maps to

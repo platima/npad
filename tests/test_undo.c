@@ -389,6 +389,45 @@ TEST_CASE(clear_forgets_everything) {
     undo_clear(u);
     TEST_ASSERT(!undo_can_undo(u), "no undo after clear");
     TEST_ASSERT(!undo_can_redo(u), "no redo after clear");
+    TEST_ASSERT_EQ(0, (long) undo_total_bytes(u), "clear releases every byte");
+    undo_destroy(u);
+}
+
+// The step count alone did not bound memory: each step holds its text
+TEST_CASE(byte_limit_drops_oldest_keeps_newest) {
+    UndoStack *u = undo_create(10000);
+    TEST_ASSERT_EQ((long) UNDO_DEFAULT_MAX_BYTES, (long) (256L * 1024 * 1024),
+                   "default byte budget is 256 MB");
+    undo_set_max_bytes(u, 10);
+    Doc doc = { "" };
+    type_text(&doc, u, 0, "aaaa");  // 4 bytes
+    type_text(&doc, u, 4, "bbbb");  // 8
+    type_text(&doc, u, 8, "cccc");  // 12: over budget, the oldest goes
+    TEST_ASSERT_EQ(8, (long) undo_total_bytes(u), "oldest step dropped to fit the budget");
+    TEST_ASSERT(undo_undo(u, &k_target, &doc, NULL, NULL), "newest undoes");
+    TEST_ASSERT(undo_undo(u, &k_target, &doc, NULL, NULL), "second newest undoes");
+    TEST_ASSERT(!undo_undo(u, &k_target, &doc, NULL, NULL), "the dropped step is gone");
+    TEST_ASSERT_STR_EQ("aaaa", doc.text, "only the kept steps were undone");
+
+    // One edit larger than the whole budget is still undoable on its own
+    undo_clear(u);
+    strcpy(doc.text, "");
+    type_text(&doc, u, 0, "xy");
+    type_text(&doc, u, 2, "0123456789ABCDEF");
+    TEST_ASSERT_EQ(16, (long) undo_total_bytes(u), "only the oversized newest step is kept");
+    TEST_ASSERT(undo_undo(u, &k_target, &doc, NULL, NULL), "the oversized edit undoes");
+    TEST_ASSERT_STR_EQ("xy", doc.text, "back to before the large edit");
+
+    // Coalesced typing counts as it grows; undo and redo do not change the total
+    undo_clear(u);
+    undo_set_max_bytes(u, 0);
+    strcpy(doc.text, "");
+    type_chars(&doc, u, 0, "abc");
+    TEST_ASSERT_EQ(3, (long) undo_total_bytes(u), "merged characters are counted");
+    undo_undo(u, &k_target, &doc, NULL, NULL);
+    TEST_ASSERT_EQ(3, (long) undo_total_bytes(u), "an undone step still holds its text");
+    type_text(&doc, u, 0, "z");
+    TEST_ASSERT_EQ(1, (long) undo_total_bytes(u), "discarded redo releases its bytes");
     undo_destroy(u);
 }
 
@@ -413,5 +452,6 @@ int main(void) {
     RUN_TEST(failed_group_record_drops_history);
     RUN_TEST(failed_record_outside_group_drops_history);
     RUN_TEST(clear_forgets_everything);
+    RUN_TEST(byte_limit_drops_oldest_keeps_newest);
     TEST_SUMMARY();
 }

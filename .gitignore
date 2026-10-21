@@ -73,6 +73,7 @@ test_recovery_home/
 tests/test_richedit_text
 tests/test_editor_load
 test_editor_home/
+tests/test_editor
 
 # Installer build outputs (fonts are fetched by installer/fetch-fonts.ps1)
 installer/fonts/
