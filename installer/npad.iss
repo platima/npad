@@ -67,16 +67,18 @@ ChangesAssociations=yes
 ; The 'addtopath' task edits PATH via [Code]; broadcast the change at the end
 ChangesEnvironment=yes
 ; Close a running npad so its exe can be replaced (npad's own save prompt still
-; runs), but do NOT let the Restart Manager silently bring it back: the [Run]
-; entries relaunch it instead, and only when there was something to relaunch
-; (a checkbox interactively, automatically for a per-user silent install).
-; DeinitializeSetup covers a cancelled or failed setup.
+; runs), but do NOT let the Restart Manager silently bring it back. Setup
+; relaunches it itself, and only when there was something to relaunch: a
+; [Run] checkbox interactively, CurStepChanged(ssPostInstall) automatically
+; for a per-user silent install. DeinitializeSetup covers a cancelled or
+; failed setup.
 CloseApplications=yes
 RestartApplications=no
-; 10.0.17134 = Windows 10 1803, the first with per-user fonts: a non-admin
-; install's FontInstall (below) registers and loads fonts in the user's own
-; font store, which earlier builds do not have
-MinVersion=10.0.17134
+; Any Windows 10 or later. Per-user fonts need 1803 (10.0.17134), but only a
+; non-admin install uses them: there the font files are skipped on older
+; builds (FontsInstallable) instead of refusing the whole install, so an
+; all-users install still works on Windows Server 2016 / Windows 10 1607
+MinVersion=10.0
 LicenseFile=..\LICENSE
 #ifdef Sign
 ; Only when the build passes /DSign=1 and defines the tool with
@@ -137,29 +139,34 @@ Source: "..\DOCUMENTATION.md"; DestDir: "{app}"; Flags: ignoreversion
 
 ; --- Fonts: {autofonts} + FontInstall in both install modes ---------------
 ; All users: C:\Windows\Fonts and HKLM. Per user: the user's own font store
-; (%LOCALAPPDATA%\Microsoft\Windows\Fonts, HKCU; Windows 10 1803+, hence
-; MinVersion). Either way FontInstall registers the font AND loads it
-; (AddFontResource + WM_FONTCHANGE), so npad and the fontdefaults2 preset can
-; use it straight away. Before 0.36.0 a per-user install only copied the files
-; and wrote the registry values below, and the fonts appeared after the next
-; sign-out.
-Source: "fonts\IntelOneMono\IntelOneMono-Regular.ttf"; DestDir: "{autofonts}"; FontInstall: "Intel One Mono"; Components: fonts\intelonemono; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\IntelOneMono\IntelOneMono-Bold.ttf"; DestDir: "{autofonts}"; FontInstall: "Intel One Mono Bold"; Components: fonts\intelonemono; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\IntelOneMono\IntelOneMono-Italic.ttf"; DestDir: "{autofonts}"; FontInstall: "Intel One Mono Italic"; Components: fonts\intelonemono; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\IntelOneMono\IntelOneMono-BoldItalic.ttf"; DestDir: "{autofonts}"; FontInstall: "Intel One Mono Bold Italic"; Components: fonts\intelonemono; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\Roboto\Roboto-Regular.ttf"; DestDir: "{autofonts}"; FontInstall: "Roboto"; Components: fonts\roboto; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\Roboto\Roboto-Bold.ttf"; DestDir: "{autofonts}"; FontInstall: "Roboto Bold"; Components: fonts\roboto; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\Roboto\Roboto-Italic.ttf"; DestDir: "{autofonts}"; FontInstall: "Roboto Italic"; Components: fonts\roboto; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\Roboto\Roboto-BoldItalic.ttf"; DestDir: "{autofonts}"; FontInstall: "Roboto Bold Italic"; Components: fonts\roboto; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\OpenDyslexic\OpenDyslexic-Regular.otf"; DestDir: "{autofonts}"; FontInstall: "OpenDyslexic"; Components: fonts\opendyslexic; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\OpenDyslexic\OpenDyslexic-Bold.otf"; DestDir: "{autofonts}"; FontInstall: "OpenDyslexic Bold"; Components: fonts\opendyslexic; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\OpenDyslexic\OpenDyslexic-Italic.otf"; DestDir: "{autofonts}"; FontInstall: "OpenDyslexic Italic"; Components: fonts\opendyslexic; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\OpenDyslexic\OpenDyslexic-BoldItalic.otf"; DestDir: "{autofonts}"; FontInstall: "OpenDyslexic Bold Italic"; Components: fonts\opendyslexic; Flags: onlyifdoesntexist uninsneveruninstall
+; (%LOCALAPPDATA%\Microsoft\Windows\Fonts, HKCU), which only Windows 10 1803+
+; has: on an older build a per-user install skips the fonts (FontsInstallable)
+; and still installs npad. Either way FontInstall registers the font AND loads
+; it (AddFontResource + WM_FONTCHANGE), so npad and the fontdefaults2 preset
+; can use it straight away. Before 0.36.0 a per-user install only copied the
+; files and wrote the registry values below, and the fonts appeared after the
+; next sign-out.
+; OpenDyslexic is OpenType (CFF): without fontisnttruetype Inno would append
+; " (TrueType)" to the name, so the name carries Windows' own "(OpenType)"
+; suffix instead. That is also the value name the per-user backstop rows (and
+; every pre-0.36.0 per-user install) write, so each face is registered once.
+Source: "fonts\IntelOneMono\IntelOneMono-Regular.ttf"; DestDir: "{autofonts}"; FontInstall: "Intel One Mono"; Components: fonts\intelonemono; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "fonts\IntelOneMono\IntelOneMono-Bold.ttf"; DestDir: "{autofonts}"; FontInstall: "Intel One Mono Bold"; Components: fonts\intelonemono; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "fonts\IntelOneMono\IntelOneMono-Italic.ttf"; DestDir: "{autofonts}"; FontInstall: "Intel One Mono Italic"; Components: fonts\intelonemono; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "fonts\IntelOneMono\IntelOneMono-BoldItalic.ttf"; DestDir: "{autofonts}"; FontInstall: "Intel One Mono Bold Italic"; Components: fonts\intelonemono; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "fonts\Roboto\Roboto-Regular.ttf"; DestDir: "{autofonts}"; FontInstall: "Roboto"; Components: fonts\roboto; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "fonts\Roboto\Roboto-Bold.ttf"; DestDir: "{autofonts}"; FontInstall: "Roboto Bold"; Components: fonts\roboto; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "fonts\Roboto\Roboto-Italic.ttf"; DestDir: "{autofonts}"; FontInstall: "Roboto Italic"; Components: fonts\roboto; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "fonts\Roboto\Roboto-BoldItalic.ttf"; DestDir: "{autofonts}"; FontInstall: "Roboto Bold Italic"; Components: fonts\roboto; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "fonts\OpenDyslexic\OpenDyslexic-Regular.otf"; DestDir: "{autofonts}"; FontInstall: "OpenDyslexic (OpenType)"; Components: fonts\opendyslexic; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall fontisnttruetype
+Source: "fonts\OpenDyslexic\OpenDyslexic-Bold.otf"; DestDir: "{autofonts}"; FontInstall: "OpenDyslexic Bold (OpenType)"; Components: fonts\opendyslexic; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall fontisnttruetype
+Source: "fonts\OpenDyslexic\OpenDyslexic-Italic.otf"; DestDir: "{autofonts}"; FontInstall: "OpenDyslexic Italic (OpenType)"; Components: fonts\opendyslexic; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall fontisnttruetype
+Source: "fonts\OpenDyslexic\OpenDyslexic-BoldItalic.otf"; DestDir: "{autofonts}"; FontInstall: "OpenDyslexic Bold Italic (OpenType)"; Components: fonts\opendyslexic; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall fontisnttruetype
 
 ; Font licenses always accompany the fonts
-Source: "fonts\IntelOneMono\OFL.txt"; DestDir: "{app}\licenses\IntelOneMono"; Components: fonts\intelonemono; Flags: ignoreversion
-Source: "fonts\Roboto\OFL.txt"; DestDir: "{app}\licenses\Roboto"; Components: fonts\roboto; Flags: ignoreversion
-Source: "fonts\OpenDyslexic\OFL.txt"; DestDir: "{app}\licenses\OpenDyslexic"; Components: fonts\opendyslexic; Flags: ignoreversion
+Source: "fonts\IntelOneMono\OFL.txt"; DestDir: "{app}\licenses\IntelOneMono"; Components: fonts\intelonemono; Check: FontsInstallable; Flags: ignoreversion
+Source: "fonts\Roboto\OFL.txt"; DestDir: "{app}\licenses\Roboto"; Components: fonts\roboto; Check: FontsInstallable; Flags: ignoreversion
+Source: "fonts\OpenDyslexic\OFL.txt"; DestDir: "{app}\licenses\OpenDyslexic"; Components: fonts\opendyslexic; Check: FontsInstallable; Flags: ignoreversion
 
 [Registry]
 ; Win+R "npad"
@@ -360,21 +367,23 @@ Root: HKCU; Subkey: "Software\Classes\Applications\npad.exe"; ValueType: none; C
 Root: HKCU; Subkey: "Software\Classes\*\OpenWithList\npad.exe"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
 Root: HKCU; Subkey: "Software\Platima\npad\Capabilities"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
 
-; Per-user font registration. FontInstall above writes these same values;
-; they stay as a backstop for a font file that is already present, which
-; onlyifdoesntexist skips together with its FontInstall.
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Intel One Mono (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\IntelOneMono-Regular.ttf"; Check: not IsAdminInstallMode; Components: fonts\intelonemono
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Intel One Mono Bold (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\IntelOneMono-Bold.ttf"; Check: not IsAdminInstallMode; Components: fonts\intelonemono
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Intel One Mono Italic (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\IntelOneMono-Italic.ttf"; Check: not IsAdminInstallMode; Components: fonts\intelonemono
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Intel One Mono Bold Italic (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\IntelOneMono-BoldItalic.ttf"; Check: not IsAdminInstallMode; Components: fonts\intelonemono
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Roboto (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\Roboto-Regular.ttf"; Check: not IsAdminInstallMode; Components: fonts\roboto
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Roboto Bold (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\Roboto-Bold.ttf"; Check: not IsAdminInstallMode; Components: fonts\roboto
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Roboto Italic (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\Roboto-Italic.ttf"; Check: not IsAdminInstallMode; Components: fonts\roboto
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Roboto Bold Italic (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\Roboto-BoldItalic.ttf"; Check: not IsAdminInstallMode; Components: fonts\roboto
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "OpenDyslexic (OpenType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\OpenDyslexic-Regular.otf"; Check: not IsAdminInstallMode; Components: fonts\opendyslexic
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "OpenDyslexic Bold (OpenType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\OpenDyslexic-Bold.otf"; Check: not IsAdminInstallMode; Components: fonts\opendyslexic
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "OpenDyslexic Italic (OpenType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\OpenDyslexic-Italic.otf"; Check: not IsAdminInstallMode; Components: fonts\opendyslexic
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "OpenDyslexic Bold Italic (OpenType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\OpenDyslexic-BoldItalic.otf"; Check: not IsAdminInstallMode; Components: fonts\opendyslexic
+; Per-user font registration. FontInstall above writes these same value names
+; (OpenDyslexic included, see fontisnttruetype there); they stay as a
+; backstop for a font file that is already present, which onlyifdoesntexist
+; skips together with its FontInstall. Not before Windows 10 1803, which has
+; no per-user font store to register into.
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Intel One Mono (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\IntelOneMono-Regular.ttf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\intelonemono
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Intel One Mono Bold (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\IntelOneMono-Bold.ttf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\intelonemono
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Intel One Mono Italic (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\IntelOneMono-Italic.ttf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\intelonemono
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Intel One Mono Bold Italic (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\IntelOneMono-BoldItalic.ttf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\intelonemono
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Roboto (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\Roboto-Regular.ttf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\roboto
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Roboto Bold (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\Roboto-Bold.ttf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\roboto
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Roboto Italic (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\Roboto-Italic.ttf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\roboto
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Roboto Bold Italic (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\Roboto-BoldItalic.ttf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\roboto
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "OpenDyslexic (OpenType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\OpenDyslexic-Regular.otf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\opendyslexic
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "OpenDyslexic Bold (OpenType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\OpenDyslexic-Bold.otf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\opendyslexic
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "OpenDyslexic Italic (OpenType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\OpenDyslexic-Italic.otf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\opendyslexic
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "OpenDyslexic Bold Italic (OpenType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\OpenDyslexic-BoldItalic.otf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\opendyslexic
 
 [Icons]
 Name: "{autoprograms}\npad"; Filename: "{app}\{#AppExe}"
@@ -386,13 +395,11 @@ Name: "{autodesktop}\npad"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 ; not silently relaunch it behind this checkbox, so exactly one instance starts
 ; and only if the user leaves the box ticked.
 Filename: "{app}\{#AppExe}"; Description: "Relaunch npad"; Flags: postinstall nowait skipifsilent; Check: NpadWasRunning
-; A silent install has no Finished page, so the entry above never runs: bring
-; npad back without asking, which restores the windows it parked when setup
-; closed it. Per-user installs only - an all-users silent install runs as an
-; administrator or as SYSTEM (Intune, SCCM), and npad must never start as
-; either. Not a postinstall entry, so it runs whether or not setup is silent;
-; RelaunchSilently itself requires silence.
-Filename: "{app}\{#AppExe}"; Flags: nowait runasoriginaluser; Check: RelaunchSilently
+; A silent install has no Finished page, so the entry above never runs. That
+; relaunch is not a [Run] entry: Inno runs non-postinstall entries BEFORE
+; CurStepChanged(ssPostInstall), so npad would start before ApplyFontDefaults
+; writes settings.json - and save its old settings over the preset on exit.
+; See RelaunchSilently and CurStepChanged.
 ; Windows will not let installers set the default handler programmatically
 Filename: "ms-settings:defaultapps"; Description: "Open Default Apps settings (make npad the default editor)"; Flags: postinstall shellexec skipifsilent unchecked
 ; The Windows 11 Store Notepad alias must be disabled by hand:
@@ -461,9 +468,12 @@ begin
   Result := FindWindowByClassName('NpadMainWindow') <> 0;
 end;
 
-// The silent-install relaunch ([Run]). Never in administrative install mode:
-// that process is an administrator, or SYSTEM under Intune and SCCM, and a
-// npad started from it would run as that account, on its profile.
+// The silent-install relaunch: a silent install has no Finished page, so bring
+// npad back without asking, which restores the windows it parked when setup
+// closed it. Done at the very end of CurStepChanged(ssPostInstall), after
+// settings.json, PATH and the notepad alias are final. Never in administrative
+// install mode: that process is an administrator, or SYSTEM under Intune and
+// SCCM, and a npad started from it would run as that account, on its profile.
 function RelaunchSilently(): Boolean;
 begin
   Result := WizardSilent and (not IsAdminInstallMode) and GNpadWasRunning and
@@ -703,6 +713,25 @@ end;
 // A font family counts as available when its component is being installed
 // OR it is already present on the system (user or machine font store).
 
+// Windows 10 1803 (build 17134) introduced the per-user font store that a
+// non-admin install's {autofonts} and FontInstall use
+function PerUserFontsSupported(): Boolean;
+var
+  Version: TWindowsVersion;
+begin
+  GetWindowsVersionEx(Version);
+  Result := (Version.Major > 10) or
+            ((Version.Major = 10) and (Version.Build >= 17134));
+end;
+
+// The font [Files] entries' Check: always for all users (C:\Windows\Fonts),
+// per user only where the per-user font store exists. Gating the fonts alone
+// keeps MinVersion at 10.0 for the rest of the install.
+function FontsInstallable(): Boolean;
+begin
+  Result := IsAdminInstallMode or PerUserFontsSupported();
+end;
+
 function FontFilePresent(const FileName: String): Boolean;
 begin
   Result := FileExists(ExpandConstant('{localappdata}\Microsoft\Windows\Fonts\') + FileName) or
@@ -711,13 +740,13 @@ end;
 
 function MonoFontAvailable(): Boolean;
 begin
-  Result := WizardIsComponentSelected('fonts\intelonemono') or
+  Result := (WizardIsComponentSelected('fonts\intelonemono') and FontsInstallable()) or
             FontFilePresent('IntelOneMono-Regular.ttf');
 end;
 
 function PropFontAvailable(): Boolean;
 begin
-  Result := WizardIsComponentSelected('fonts\roboto') or
+  Result := (WizardIsComponentSelected('fonts\roboto') and FontsInstallable()) or
             FontFilePresent('Roboto-Regular.ttf');
 end;
 
@@ -795,6 +824,8 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
 begin
   if CurStep = ssInstall then
     GAppDir := ExpandConstant('{app}')
@@ -809,6 +840,10 @@ begin
       EnvRemovePath(ExpandConstant('{app}'));
     if not WizardIsTaskSelected('notepadalias') then
       RemoveNotepadAlias();
+    // Last, so the relaunched npad reads the final settings.json
+    if RelaunchSilently() then
+      ExecAsOriginalUser(ExpandConstant('{app}\{#AppExe}'), '', '', SW_SHOWNORMAL,
+                         ewNoWait, ResultCode);
   end
   else if CurStep = ssDone then
     GInstallDone := True;
