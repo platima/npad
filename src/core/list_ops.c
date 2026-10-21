@@ -329,7 +329,7 @@ char *list_unescape(const char *s) {
                 i += 6;
                 if (cp >= 0xD800 && cp <= 0xDBFF) {
                     // A high surrogate pairs with a following \uDC00-\uDFFF
-                    // into one supplementary code point (😀 is one
+                    // into one supplementary code point (\uD83D\uDE00 is one
                     // emoji); encoding the halves separately gave CESU-8,
                     // which no UTF-8 consumer accepts
                     long lo = (i < len && s[i] == '\\') ? hex4_at(s, len, i) : -1;

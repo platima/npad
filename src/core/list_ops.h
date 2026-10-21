@@ -40,7 +40,7 @@ char *list_sort_lines(const char *text, bool descending, bool case_sensitive);
 char *list_unique_lines(const char *text);
 
 // Interpret backslash escapes: \n \r \t \\ and \uXXXX (4 hex digits). A
-// surrogate pair (😀) becomes the one code point it encodes; a lone
+// surrogate pair (\uD83D\uDE00) becomes the one code point it encodes; a lone
 // surrogate or \u0000 becomes U+FFFD, so the result is always valid UTF-8 and
 // never cut short by a NUL. An unrecognized escape - \0 included - yields the
 // character following the backslash; a trailing backslash is kept literally.

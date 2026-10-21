@@ -678,6 +678,32 @@ TEST_CASE(fixture_libreoffice) {
     "<span style='font:7.0pt \"Times New Roman\"'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </span>"    \
     "</span></span><![endif]>"
 
+// One Word list paragraph: the class suffix (First / Middle / Last), any style
+// before the list's own, the mso-list value, the bullet glyph or number Word
+// writes for it, and the item text.
+#define WORD_LI(cls, extra, list, glyph, text)                                                     \
+    "<p class=MsoListParagraphCxSp" cls " style='" extra "text-indent:-18.0pt;mso-list:" list      \
+    "'>" WORD_BULLET(glyph) text "<o:p></o:p></p>\r\n\r\n"
+#define WORD_INDENT2 "margin-left:72.0pt;mso-add-space:auto;"
+
+// Concatenate n strings into one malloc'd string.
+static char *join_parts(const char *const *parts, size_t n) {
+    size_t len = 0;
+    for (size_t i = 0; i < n; i++)
+        len += strlen(parts[i]);
+    char *r = malloc(len + 1);
+    if (!r)
+        return NULL;
+    size_t o = 0;
+    for (size_t i = 0; i < n; i++) {
+        size_t l = strlen(parts[i]);
+        memcpy(r + o, parts[i], l);
+        o += l;
+    }
+    r[o] = '\0';
+    return r;
+}
+
 TEST_CASE(fixture_word) {
     const char *before =
         "<html xmlns:v=\"urn:schemas-microsoft-com:vml\" "
@@ -688,32 +714,19 @@ TEST_CASE(fixture_word) {
         "<meta name=Generator content=\"Microsoft Word 15\"><style><!--\r\n p.MsoNormal\r\n"
         "\t{margin:0cm;font-size:11.0pt;}\r\n--></style></head><body lang=EN-AU "
         "style='tab-interval:36.0pt;word-wrap:break-word'>\r\n";
-    const char *frag =
-        "\r\n\r\n<p class=MsoNormal>Plain <b>bold</b> <i>italic</i><o:p></o:p></p>\r\n\r\n"
-        "<p class=MsoListParagraphCxSpFirst style='text-indent:-18.0pt;mso-list:l0 level1 "
-        "lfo1'>" WORD_BULLET(
-            "\xC2\xB7") "First<o:p></o:p></p>\r\n\r\n"
-                        "<p class=MsoListParagraphCxSpMiddle "
-                        "style='margin-left:72.0pt;mso-add-space:auto;"
-                        "text-indent:-18.0pt;mso-list:l0 level2 lfo1'>" WORD_BULLET(
-                            "o") "Nested<o:p></o:p></p>\r\n"
-                                 "\r\n<p class=MsoListParagraphCxSpLast "
-                                 "style='text-indent:-18.0pt;mso-list:l0 level1 "
-                                 "lfo1'>" WORD_BULLET(
-                                     "\xC2\xB7") "Second<o:p></o:p></p>\r\n\r\n"
-                                                 "<p class=MsoListParagraphCxSpFirst "
-                                                 "style='text-indent:-18.0pt;mso-list:l1 level1 "
-                                                 "lfo2'>" WORD_BULLET(
-                                                     "1.") "Step one<o:p></o:p></p>\r\n\r\n"
-                                                           "<p class=MsoListParagraphCxSpLast "
-                                                           "style='text-indent:-18.0pt;mso-list:l1 "
-                                                           "level1 "
-                                                           "lfo2'>" WORD_BULLET(
-                                                               "2.") "Step "
-                                                                     "two<o:p></o:p></p>\r\n\r\n"
-                                                                     "<p "
-                                                                     "class=MsoNormal>After<o:p></"
-                                                                     "o:p></p>\r\n\r\n";
+    // One element per paragraph, joined at run time, so each stays one line
+    // that is easy to compare with (or replace by) a live capture
+    static const char *const parts[] = {
+        "\r\n\r\n<p class=MsoNormal>Plain <b>bold</b> <i>italic</i><o:p></o:p></p>\r\n\r\n",
+        WORD_LI("First", "", "l0 level1 lfo1", "\xC2\xB7", "First"),
+        WORD_LI("Middle", WORD_INDENT2, "l0 level2 lfo1", "o", "Nested"),
+        WORD_LI("Last", "", "l0 level1 lfo1", "\xC2\xB7", "Second"),
+        WORD_LI("First", "", "l1 level1 lfo2", "1.", "Step one"),
+        WORD_LI("Last", "", "l1 level1 lfo2", "2.", "Step two"),
+        "<p class=MsoNormal>After<o:p></o:p></p>\r\n\r\n",
+    };
+    char *frag = join_parts(parts, sizeof(parts) / sizeof(parts[0]));
+    TEST_ASSERT_NOT_NULL(frag, "build the Word fragment");
     const char *after = "</body>\r\n\r\n</html>";
     ASSERT_MD(
         cf_convert(before, frag, after, HTML_MD_FULL),
@@ -723,6 +736,7 @@ TEST_CASE(fixture_word) {
     ASSERT_MD(cf_convert(before, frag, after, HTML_MD_LISTS),
               "Plain bold italic\n- First\n  - Nested\n- Second\n- Step one\n- Step two\nAfter",
               "Word -> Lists");
+    free(frag);
 }
 
 TEST_CASE(fixture_excel) {
@@ -810,6 +824,120 @@ TEST_CASE(fixture_firefox_page) {
               "Quoted text\n- Third\n  - child\n- Fourth\n2024. A year\n"
               "# not a heading, * not a bullet",
               "Firefox page -> Lists");
+}
+
+// A blockquote inside a list item stays in the item; a list inside a quote
+// keeps its markers after the "> ".
+TEST_CASE(quote_in_list_item) {
+    ASSERT_MD(html_to_markdown("<ul><li>a<blockquote>q</blockquote></li></ul>", HTML_MD_FULL, "- "),
+              "- a\n  > q", "quote after item text is indented into the item");
+    ASSERT_MD(html_to_markdown("<ul><li><blockquote>q</blockquote></li><li>b</li></ul>",
+                               HTML_MD_FULL, "- "),
+              "- > q\n- b", "quote first in an item stays on the marker line");
+    ASSERT_MD(html_to_markdown("<ol><li>a<blockquote><p>x</p><p>y</p></blockquote></li></ol>",
+                               HTML_MD_FULL, "- "),
+              "1. a\n   > x\n   >\n   > y", "quoted paragraphs in an ordered item");
+    ASSERT_MD(
+        html_to_markdown("<ul><li>a<blockquote><ul><li>b<br>c</li></ul></blockquote></li></ul>",
+                         HTML_MD_FULL, "- "),
+        "- a\n  > - b\n  >   c", "list in a quote in a list");
+    ASSERT_MD(
+        html_to_markdown("<blockquote><ul><li>a<br>b</li></ul></blockquote>", HTML_MD_FULL, "- "),
+        "> - a\n>   b", "list in a top-level quote");
+    ASSERT_MD(
+        html_to_markdown("<ul><li>a<blockquote>q</blockquote></li></ul>", HTML_MD_LISTS, "- "),
+        "- a\n  q", "Lists mode has no quotes");
+    // Misnested and over-deep input stays bounded (run under ASan in review)
+    static const char *const hostile[] = {
+        "<ul><li><blockquote>a</li></ul>b<br>c</blockquote>d",
+        "<blockquote><ul><li>a</blockquote>b</li></ul>",
+        "<ul><li><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote>"
+        "<blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote>"
+        "<blockquote><blockquote><blockquote><blockquote><blockquote><ul><li>x<br>y",
+        "<table><tr><td colspan=999999999>a</td></tr><tr><td>b<td>c</tr></table>",
+    };
+    for (size_t i = 0; i < sizeof(hostile) / sizeof(hostile[0]); i++) {
+        char *r = html_to_markdown(hostile[i], HTML_MD_FULL, "- ");
+        TEST_ASSERT_NOT_NULL(r, "hostile nesting converts");
+        free(r);
+    }
+}
+
+// An ordered list that does not start at 1 cannot interrupt a paragraph.
+TEST_CASE(ordered_start_after_text) {
+    ASSERT_MD(
+        html_to_markdown("Intro<ol start=\"3\"><li>x</li><li>y</li></ol>", HTML_MD_FULL, "- "),
+        "Intro\n\n3. x\n4. y", "start=3 after inline text gets a blank line");
+    ASSERT_MD(html_to_markdown("Intro<br><ol><li value=\"7\">x</li></ol>", HTML_MD_FULL, "- "),
+              "Intro\n\n7. x", "value=7 on the first item, after a line break");
+    ASSERT_MD(html_to_markdown("Intro<ol><li>x</li></ol>", HTML_MD_FULL, "- "), "Intro\n1. x",
+              "a list starting at 1 may interrupt");
+    ASSERT_MD(html_to_markdown("Intro<ol start=\"3\"><li>x</li></ol>", HTML_MD_LISTS, "- "),
+              "Intro\n- x", "Lists mode unchanged");
+}
+
+// A trailing '#' run in a heading would read as its closing sequence.
+TEST_CASE(heading_trailing_hashes) {
+    ASSERT_MD(html_to_markdown("<h2>a #</h2>", HTML_MD_FULL, "- "), "## a \\#", "trailing ' #'");
+    ASSERT_MD(html_to_markdown("<h2>a ##</h2>p", HTML_MD_FULL, "- "), "## a \\##\n\np",
+              "trailing ' ##'");
+    ASSERT_MD(html_to_markdown("<h2>#</h2>", HTML_MD_FULL, "- "), "## \\#", "heading of only '#'");
+    ASSERT_MD(html_to_markdown("<h2>C#</h2>", HTML_MD_FULL, "- "), "## C#",
+              "'#' after a letter is text");
+    ASSERT_MD(html_to_markdown("<h1>a #<br>b</h1>", HTML_MD_FULL, "- "), "# a \\#\nb",
+              "the heading's own line is the one escaped");
+    ASSERT_MD(html_to_markdown("<h2>a #", HTML_MD_FULL, "- "), "## a \\#", "unclosed heading");
+    ASSERT_MD(html_to_markdown("<h2>a #</h2>", HTML_MD_LISTS, "- "), "", "Lists mode: no list");
+}
+
+// Pipe tables take the widest row's column count; colspan writes the cells
+// it covers.
+TEST_CASE(table_widest_row_and_colspan) {
+    ASSERT_MD(html_to_markdown("<table><tr><td>A</td></tr><tr><td>b</td><td>c</td></tr></table>",
+                               HTML_MD_FULL, "- "),
+              "| A |  |\n| --- | --- |\n| b | c |", "a wider later row widens the header");
+    ASSERT_MD(html_to_markdown("<table><tr><td>A</td></tr><tr><td>b</td><td>c</td></tr>"
+                               "<tr><td>d</td><td>e</td><td>f</td></tr></table>",
+                               HTML_MD_FULL, "- "),
+              "| A |  |  |\n| --- | --- | --- |\n| b | c |\n| d | e | f |", "widened twice");
+    ASSERT_MD(html_to_markdown("<table><tr><td colspan=\"2\">A</td><td>B</td></tr>"
+                               "<tr><td>a</td><td>b</td><td>c</td></tr></table>",
+                               HTML_MD_FULL, "- "),
+              "| A | | B |\n| --- | --- | --- |\n| a | b | c |", "colspan in the header");
+    ASSERT_MD(html_to_markdown("<table><tr><td>A</td><td>B</td></tr><tr><td colspan=2>x</td>"
+                               "</tr></table>",
+                               HTML_MD_FULL, "- "),
+              "| A | B |\n| --- | --- |\n| x | |", "colspan in a body row");
+    ASSERT_MD(html_to_markdown("<table><tr><td colspan=2>A<td>B</tr><tr><td>a<td>b<td>c</tr>"
+                               "</table>",
+                               HTML_MD_PLAIN, "- "),
+              "A\t\tB\na\tb\tc", "plain text keeps the merged cell's columns");
+    ASSERT_MD(html_to_markdown("<h2>t #</h2><table><tr><td>A</td></tr><tr><td>b</td><td>c</td>"
+                               "</tr></table>",
+                               HTML_MD_FULL, "- "),
+              "## t \\#\n\n| A |  |\n| --- | --- |\n| b | c |", "after an escaped heading");
+}
+
+// Inline elements nested past the tracked bound close innermost first.
+TEST_CASE(inline_stack_overflow_order) {
+    size_t cap = 300 * 40 + 64;
+    char *in = malloc(cap);
+    TEST_ASSERT_NOT_NULL(in, "allocate the input");
+    size_t p = 0;
+    for (int i = 0; i < 255; i++)
+        p += (size_t) sprintf(in + p, "<span>");
+    p += (size_t) sprintf(in + p, "<span style=\"font-weight:700\">");
+    for (int i = 0; i < 10; i++)
+        p += (size_t) sprintf(in + p, "<span>");
+    p += (size_t) sprintf(in + p, "a</span>b");
+    for (int i = 0; i < 10; i++) // nine untracked spans, then the bold one
+        p += (size_t) sprintf(in + p, "</span>");
+    p += (size_t) sprintf(in + p, "c");
+    for (int i = 0; i < 255; i++)
+        p += (size_t) sprintf(in + p, "</span>");
+    ASSERT_MD(html_to_markdown(in, HTML_MD_FULL, "- "), "**ab**c",
+              "bold ends at its own close, not an inner one");
+    free(in);
 }
 
 // NP-143: large pastes stay linear. A bound of seconds against work that
@@ -942,6 +1070,11 @@ int main(void) {
     RUN_TEST(fixture_windows_terminal);
     RUN_TEST(fixture_chrome_page);
     RUN_TEST(fixture_firefox_page);
+    RUN_TEST(quote_in_list_item);
+    RUN_TEST(ordered_start_after_text);
+    RUN_TEST(heading_trailing_hashes);
+    RUN_TEST(table_widest_row_and_colspan);
+    RUN_TEST(inline_stack_overflow_order);
     RUN_TEST(scaling_large_paste);
 
     TEST_SUMMARY();

@@ -29,6 +29,7 @@
 #define HM_NEST 2                           // Lists mode: two spaces per level (matches list_ops)
 #define HM_MAX_ISTACK 256                   // open inline elements tracked one by one
 #define HM_MAX_OL_START 999999999L          // CommonMark allows at most nine digits
+#define HM_MAX_COLSPAN 1000                 // HTML's own colspan limit
 
 // ---------------------------------------------------------------------------
 // ASCII-only char helpers (locale-independent)
@@ -141,6 +142,23 @@ static void buf_insert_fill(Buf *b, size_t pos, char c, size_t n, unsigned cap) 
     memmove(b->data + pos + n, b->data + pos, b->len - pos);
     memset(b->data + pos, c, n);
     b->len += n;
+}
+// Insert `reps` copies of str at pos; returns the bytes inserted (0 when it
+// would pass the output cap).
+static size_t buf_insert_rep(Buf *b, size_t pos, const char *str, size_t reps, unsigned cap) {
+    size_t sl = strlen(str);
+    if (reps == 0 || sl == 0 || pos > b->len || reps > SIZE_MAX / sl)
+        return 0;
+    size_t n = sl * reps;
+    if (cap && (b->len + n > cap || b->len + n < b->len))
+        return 0;
+    if (!buf_reserve(b, n))
+        return 0;
+    memmove(b->data + pos + n, b->data + pos, b->len - pos);
+    for (size_t i = 0; i < reps; i++)
+        memcpy(b->data + pos + i * sl, str, sl);
+    b->len += n;
+    return n;
 }
 static void buf_free(Buf *b) {
     free(b->data);
@@ -456,12 +474,16 @@ typedef struct {
     int word_depth;                // list levels opened by Word mso-list paragraphs
     int word_li;                   // inside a Word list paragraph
 
-    int bq;          // blockquote depth (FULL only)
-    int pre;         // <pre> nesting
-    int wsp;         // nesting of the white-space:pre block's own tag name
-    int wsp_p;       // ... which is <p> (else <div>)
-    int pre_skip_lf; // the LF right after <pre> is not content (HTML parsing rule)
-    int fence_open;  // a ``` fence was written for the current preformatted block
+    int bq;                  // blockquote depth (FULL only)
+    int bq_depth[HM_MAX_BQ]; // list depth at which each blockquote opened
+    int prefix_indent;       // indent the line prefix wrote before its last "> "
+    int heading;             // a Markdown heading is open (FULL only)
+    size_t heading_pos;      // offset of its text, right after "## "
+    int pre;                 // <pre> nesting
+    int wsp;                 // nesting of the white-space:pre block's own tag name
+    int wsp_p;               // ... which is <p> (else <div>)
+    int pre_skip_lf;         // the LF right after <pre> is not content (HTML parsing rule)
+    int fence_open;          // a ``` fence was written for the current preformatted block
     size_t fence_pos;
 
     int kcount[K_COUNT];   // nesting count per inline kind
@@ -478,6 +500,10 @@ typedef struct {
     int row_cells;    // cells written in the current row
     int header_done;  // the current table's header separator row is written
     int inner_tables; // tables nested inside a cell (flattened)
+    int cell_span;    // colspan of the open cell
+    int hdr_cols;     // columns in the header and separator rows
+    size_t hdr_end;   // offset just past the header row's closing '|'
+    size_t sep_end;   // offset just past the separator row's closing '|'
 
     const char *src_next; // input right after the tag being handled
     const char *src_end;
@@ -644,14 +670,17 @@ static void hm_istack_push(State *s, int tag, int flags) {
 }
 
 static void hm_istack_pop(State *s, int tag) {
+    // Elements past the bound opened last, so well-nested input closes them
+    // first; matching a tracked entry instead would end its emphasis early
+    if (s->istack_lost > 0) {
+        s->istack_lost--;
+        return;
+    }
     int i = s->nistack - 1;
     while (i >= 0 && (s->istack[i] >> 4) != tag)
         i--;
-    if (i < 0) {
-        if (s->istack_lost > 0)
-            s->istack_lost--;
+    if (i < 0)
         return; // a stray close tag
-    }
     int flags = s->istack[i] & 0x0F;
     for (; i + 1 < s->nistack; i++)
         s->istack[i] = s->istack[i + 1];
@@ -684,6 +713,36 @@ static void hm_newline(State *s) {
     s->lead = 0;
 }
 
+// Write the standing prefix of a line. Each blockquote's "> " follows the
+// indent of the list items it sits in, so a quote opened inside an item stays
+// in that item ("- a" / "  > q") and a list inside a quote keeps its markers
+// after the "> ". A content line then gets the indent that keeps it in the
+// innermost item (not while a marker line is being opened); a blank separator
+// line ends at its last '>'. prefix_indent records the indent written before
+// the last "> ", which the columns of the items inside the quote count from.
+static void hm_line_prefix(State *s, int blank) {
+    size_t line = s->out.len;
+    int depth = hm_lvl(s->depth);
+    int w = 0;
+    for (int i = 0; i < s->bq; i++) {
+        int d = s->bq_depth[i] < depth ? s->bq_depth[i] : depth;
+        int col = d > 0 ? s->content_col[d - 1] : 0;
+        if (col > w) {
+            hm_fill(s, ' ', (size_t) (col - w));
+            w = col;
+        }
+        hm_raw(s, "> ");
+    }
+    s->prefix_indent = w;
+    if (blank) {
+        while (s->out.len > line && s->out.data[s->out.len - 1] == ' ')
+            s->out.len--;
+        return;
+    }
+    if (depth > 0 && !s->opening_li && s->content_col[depth - 1] > w)
+        hm_fill(s, ' ', (size_t) (s->content_col[depth - 1] - w));
+}
+
 // Flush any pending block break, then emit the standing line prefix
 // (blockquote markers, and inside a list item the indent that keeps a
 // continuation line in that item). Called just before the first content of a
@@ -695,10 +754,9 @@ static void hm_open_line(State *s) {
         if (s->pending_break >= 2 && (s->depth == 0 || s->full || s->opening_li) &&
             s->out.len > 0) {
             // A blank separator line. Inside a blockquote emit a quoted blank
-            // line ("> "-less ">") so adjacent quoted paragraphs don't lazily
-            // merge under CommonMark.
-            for (int i = 0; i < s->bq; i++)
-                hm_raw(s, ">");
+            // line (">") so adjacent quoted paragraphs don't lazily merge
+            // under CommonMark.
+            hm_line_prefix(s, 1);
             buf_putc_cap(&s->out, '\n', hm_cap(s));
         }
         s->pending_break = 0;
@@ -706,10 +764,7 @@ static void hm_open_line(State *s) {
         s->at_bol = 1;
     }
     if (s->at_bol) {
-        for (int i = 0; i < s->bq; i++)
-            hm_raw(s, "> ");
-        if (s->depth > 0 && !s->opening_li)
-            hm_fill(s, ' ', (size_t) s->content_col[hm_lvl(s->depth) - 1]);
+        hm_line_prefix(s, 0);
         s->at_bol = 0;
         s->lead = 0;
     }
@@ -947,15 +1002,23 @@ static void hm_open_li(State *s) {
     // first item (after a paragraph) stays
     if (!(top == 0 && s->top_items == 0))
         s->pending_break = 0;
+    else if (s->full && s->ordered[0] && s->counter[0] != 0 && s->out.len > 0 &&
+             s->pending_break < 2)
+        // Only a list starting at 1 may interrupt a paragraph: "Intro" /
+        // "3. x" would render as one paragraph, so separate it
+        s->pending_break = 2;
     if (top == 0)
         s->top_items++;
     s->opening_li = 1;
+    s->prefix_indent = 0;
     hm_open_line(s); // blockquote prefix, if any
     s->opening_li = 0;
     int indent = 0;
     if (top > 0)
         indent = s->full ? s->content_col[top - 1] : top * HM_NEST;
-    hm_fill(s, ' ', (size_t) indent);
+    // The prefix already wrote the indent of the items outside a quote
+    if (indent > s->prefix_indent)
+        hm_fill(s, ' ', (size_t) (indent - s->prefix_indent));
     int mlen;
     if (top >= 0 && s->ordered[top] && s->full) {
         char num[24];
@@ -1019,7 +1082,8 @@ static int hm_word_list_level(const char *ab, const char *ae) {
 
 // Is the Word list paragraph that starts at s->src_next numbered? Word writes
 // the item's number or bullet glyph inside <![if !supportLists]>: "1." "a)"
-// "iv." are numbers, "·" "o" "§" bullets.
+// "iv." are numbers, U+00B7 (middle dot), "o" and U+00A7 (section sign)
+// bullets.
 static int hm_word_list_ordered(const State *s) {
     const char *p = s->src_next, *e = s->src_end;
     if (!p || p >= e)
@@ -1149,13 +1213,23 @@ static int hm_style_is_pre(const char *ab, const char *ae) {
 // the first row), tab-separated cells otherwise - what Excel's own plain text
 // looks like. Excel's fragment carries bare <tr>/<td> with no <table>.
 // ---------------------------------------------------------------------------
+// End the open cell. A merged cell (colspan) is followed by the empty cells
+// it covers, so the columns after it stay aligned.
 static void hm_cell_close(State *s) {
     hm_inline_close_written(s);
+    for (int i = 1; i < s->cell_span; i++) {
+        if (s->full)
+            hm_raw(s, " |");
+        else
+            buf_putc_cap(&s->out, '\t', hm_cap(s));
+        s->row_cells++;
+    }
+    s->cell_span = 0;
     s->cell = 0;
     s->pending_space = 0;
 }
 
-static void hm_cell_open(State *s) {
+static void hm_cell_open(State *s, int span) {
     if (!s->row_open) {
         hm_newline(s);
         if (s->full && !s->header_done && s->out.len > 0 && s->pending_break < 2)
@@ -1163,9 +1237,12 @@ static void hm_cell_open(State *s) {
         hm_open_line(s);
         s->row_open = 1;
         s->row_cells = 0;
+    } else if (s->cell) {
+        hm_cell_close(s); // a <td> with no </td>
     } else {
         hm_inline_close_written(s);
     }
+    s->cell_span = span;
     s->li_fresh = 0;
     if (s->full)
         hm_raw(s, s->row_cells ? " | " : "| ");
@@ -1187,16 +1264,64 @@ static void hm_end_row(State *s) {
     if (s->full) {
         hm_raw(s, " |");
         if (!s->header_done) {
+            s->hdr_end = s->out.len;
             hm_newline(s);
             hm_open_line(s);
             hm_raw(s, "|");
             for (int i = 0; i < s->row_cells; i++)
                 hm_raw(s, " --- |");
+            s->sep_end = s->out.len;
+            s->hdr_cols = s->row_cells;
             s->header_done = 1;
+        } else if (s->row_cells > s->hdr_cols && s->sep_end <= s->out.len &&
+                   s->hdr_end < s->sep_end) {
+            // A wider row (a ragged sheet, or a header with fewer cells): a
+            // pipe table drops cells past the header's count, so widen the
+            // header and separator rows with empty columns. The separator
+            // comes later in the buffer, so it is widened first.
+            size_t extra = (size_t) (s->row_cells - s->hdr_cols);
+            size_t sep = buf_insert_rep(&s->out, s->sep_end, " --- |", extra, hm_cap(s));
+            size_t hdr = sep ? buf_insert_rep(&s->out, s->hdr_end, "  |", extra, hm_cap(s)) : 0;
+            if (hdr) {
+                s->hdr_end += hdr;
+                s->sep_end += hdr + sep;
+                s->hdr_cols = s->row_cells;
+            } else if (sep) {
+                // No room for the header's half: undo the separator's
+                memmove(s->out.data + s->sep_end, s->out.data + s->sep_end + sep,
+                        s->out.len - s->sep_end - sep);
+                s->out.len -= sep;
+            }
         }
     }
     s->row_open = 0;
     hm_newline(s);
+}
+
+// A heading's text that ends in a run of '#' after a space would be read as
+// its closing sequence and dropped ("## a #" is the heading "a"), so that run
+// is escaped: "## a \#". Called once the heading's line has ended.
+static void hm_heading_finish(State *s) {
+    s->heading = 0;
+    if (!s->out.data || s->heading_pos == 0 || s->heading_pos > s->out.len)
+        return;
+    const char *d = s->out.data;
+    size_t e = s->heading_pos;
+    while (e < s->out.len && d[e] != '\n')
+        e++;
+    size_t r = e;
+    while (r > s->heading_pos && d[r - 1] == '#')
+        r--;
+    if (r == e || (d[r - 1] != ' ' && d[r - 1] != '\t'))
+        return;
+    size_t before = s->out.len;
+    buf_insert_fill(&s->out, r, '\\', 1, hm_cap(s));
+    if (s->out.len != before) {
+        if (s->hdr_end >= r)
+            s->hdr_end++;
+        if (s->sep_end >= r)
+            s->sep_end++;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1408,7 +1533,8 @@ static void hm_tag(State *s, const char *name, size_t nlen, int is_close, const 
             hm_end_row(s);
         } else if (!is_close) {
             hm_word_list_end(s);
-            hm_cell_open(s);
+            long span = hm_attr_long(ab, ae, "colspan", 1);
+            hm_cell_open(s, span < 1 ? 1 : span > HM_MAX_COLSPAN ? HM_MAX_COLSPAN : (int) span);
         } else if (s->cell) {
             hm_cell_close(s);
         }
@@ -1438,6 +1564,8 @@ static void hm_tag(State *s, const char *name, size_t nlen, int is_close, const 
         int level = name[1] - '0';
         if (is_close) {
             hm_newline(s);
+            if (s->heading)
+                hm_heading_finish(s);
             int want = full ? 2 : 1;
             if (s->pending_break < want)
                 s->pending_break = want;
@@ -1448,6 +1576,8 @@ static void hm_tag(State *s, const char *name, size_t nlen, int is_close, const 
                 hm_open_line(s);
                 hm_fill(s, '#', (size_t) level);
                 buf_putc_cap(&s->out, ' ', hm_cap(s));
+                s->heading = 1;
+                s->heading_pos = s->out.len;
                 s->at_bol = 0;
                 s->trim_lead = 1; // drop a leading space after "# "
                 s->lead = 2;
@@ -1505,10 +1635,17 @@ static void hm_tag(State *s, const char *name, size_t nlen, int is_close, const 
             int want = full ? 2 : 1;
             if (s->pending_break < want)
                 s->pending_break = want;
+        } else if (full && s->bq < HM_MAX_BQ && s->li_fresh) {
+            // "<li><blockquote>" keeps the quote on the marker line: "- > q"
+            s->bq_depth[s->bq++] = s->depth;
+            hm_raw(s, "> ");
+            s->pending_space = 0;
+            s->trim_lead = 1;
+            s->lead = 0;
         } else {
             hm_newline(s);
             if (full && s->bq < HM_MAX_BQ)
-                s->bq++;
+                s->bq_depth[s->bq++] = s->depth;
         }
         return;
     }
@@ -1687,6 +1824,8 @@ char *html_to_markdown(const char *html_utf8, HtmlMdMode mode, const char *list_
     hm_end_row(&s);
     if (!s.at_bol)
         hm_inline_close_written(&s);
+    if (s.heading)
+        hm_heading_finish(&s);
     if (hm_in_pre(&s)) {
         s.pre = s.wsp = 0;
         hm_pre_finish(&s);
