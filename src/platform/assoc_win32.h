@@ -14,7 +14,11 @@
  * extension with no backup, Microsoft's own guidance says it must not be
  * removed on uninstall, and it loses to any existing UserChoice anyway.
  * Unregistering DOES remove that value when it names one of npad's ProgIDs,
- * so the pane can still undo what the installer did.
+ * so the pane can still undo what the installer did; machine-wide it puts
+ * Windows' own ProgID (txtfile, inifile, xmlfile) back where Windows has one.
+ *
+ * Each ProgID also carries a Print verb (shell\print\command, "npad /p"), as
+ * notepad.exe's txtfile does.
  *
  * Everything is applied as CHANGES, never as a whole state: only the groups
  * the user actually toggled are touched. A property sheet sends Apply to every

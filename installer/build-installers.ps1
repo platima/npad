@@ -5,7 +5,11 @@
 # plus .sha256 files for each. <arch> is x64 (default) or arm64 (-Arch arm64);
 # run it once per architecture.
 #
-# Requirements (Windows): Inno Setup 6 (ISCC.exe), WiX (dotnet tool: wix),
+# Requirements (Windows): Inno Setup 6 (ISCC.exe), WiX 6 - the version CI
+# pins, installed with
+#   dotnet tool install --global wix --version 6.0.2
+# (npad.wxs is written for WiX 6; v7 has breaking changes, so the latest WiX
+# is refused rather than allowed to build an MSI unlike the released one) -
 # and a built npad.exe for that architecture: npad.exe in the repo root for
 # x64 (make windows), npad-arm64.exe for arm64 (make windows-arm64, with
 # llvm-mingw), or pass -NpadExe. Both installers build on an x64 machine.
@@ -91,8 +95,25 @@ $iscc = @(
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $iscc) { $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue)?.Source }
 if (-not $iscc) { throw "Inno Setup 6 (ISCC.exe) not found - winget install JRSoftware.InnoSetup" }
+# WiX: the major version CI builds releases with. Keep $wixPinned in step with
+# the "Install WiX" step of .github/workflows/installers.yml.
+$wixPinned = "6.0.2"
+$wixInstall = "dotnet tool install --global wix --version $wixPinned"
 if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
-    throw "WiX not found - dotnet tool install --global wix"
+    throw "WiX not found - $wixInstall"
+}
+# Collected whole: piping a native command into Select-Object -First stops the
+# pipeline early, and $LASTEXITCODE then reports a failure that never happened
+$wixOut = @(& wix --version 2>$null)
+if ($LASTEXITCODE -ne 0 -or $wixOut.Count -eq 0) { throw "wix --version failed - reinstall it: $wixInstall" }
+$wixHave = "$($wixOut[0])".Trim()
+if (-not $wixHave.StartsWith("6.")) {
+    throw ("WiX $wixHave found, but npad.wxs is built with WiX 6 ($wixPinned in CI; v7 has " +
+           "breaking changes). Switch with: dotnet tool uninstall --global wix; $wixInstall")
+}
+# "6.0.2+<commit>" is 6.0.2; "6.0.20" is not
+if ($wixHave -notmatch "^$([regex]::Escape($wixPinned))(\+|$)") {
+    Write-Warning "WiX $wixHave, not the $wixPinned CI uses: the MSI may differ from a released one"
 }
 
 # --- Fonts (pinned downloads, idempotent) ---

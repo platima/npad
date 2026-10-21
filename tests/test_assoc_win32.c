@@ -133,6 +133,15 @@ TEST_CASE(register_writes_the_installer_shape) {
     expect[MAX_PATH + 31] = L'\0';
     TEST_ASSERT(wcscmp(v, expect) == 0, "open command quotes both the exe and %1");
 
+    TEST_ASSERT(get_sz(HKEY_CURRENT_USER, CLASSES L"\\npad.txt\\shell\\print\\command", NULL, v,
+                       MAX_PATH + 32),
+                "print command present (Explorer's Print verb)");
+    _snwprintf(expect, MAX_PATH + 31, L"\"%s\" /p \"%%1\"", g_exe);
+    expect[MAX_PATH + 31] = L'\0';
+    TEST_ASSERT(wcscmp(v, expect) == 0, "print command is the quoted exe, /p, then the quoted %1");
+    TEST_ASSERT(key_exists(HKEY_CURRENT_USER, CLASSES L"\\npad.log\\shell\\print\\command"),
+                "every ProgID carries the print verb, not just npad.txt");
+
     TEST_ASSERT(get_sz(HKEY_CURRENT_USER, CLASSES L"\\.txt\\OpenWithProgids", L"npad.txt", v,
                        MAX_PATH + 32),
                 "OpenWithProgids entry present");
@@ -304,6 +313,60 @@ TEST_CASE(machine_changes_touch_only_named_groups) {
                 "only the two named groups were removed");
 }
 
+TEST_CASE(machine_unregister_hands_back_windows_progid) {
+    // Installers before 0.36.0 overwrote HKLM's .txt = txtfile with npad.txt.
+    // Deleting that claim outright left .txt with no type name, no icon and
+    // no New > Text Document; the machine-wide undo must restore Windows' own.
+    wipe(HKEY_LOCAL_MACHINE);
+    set_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\txtfile", NULL, L"Text Document");
+    set_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\xmlfile", NULL, L"XML Document");
+    // No inifile ProgID on this "machine": nothing to hand .ini back to
+    TEST_ASSERT_EQ(0, assoc_machine_apply_changes(L"+text,+data,+config,+log"),
+                   "machine registration should succeed");
+    set_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\.txt", NULL, L"npad.txt");
+    set_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\.log", NULL, L"npad.log");
+    set_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\.xml", NULL, L"npad.xml");
+    set_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\.ini", NULL, L"npad.ini");
+    set_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\.csv", NULL, L"Excel.CSV");
+    set_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\.json", NULL, L"npad.json");
+
+    TEST_ASSERT_EQ(0, assoc_machine_apply_changes(L"-text,-data,-config,-log"),
+                   "machine removal should succeed");
+
+    wchar_t v[256];
+    TEST_ASSERT(get_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\.txt", NULL, v, 256) &&
+                    wcscmp(v, L"txtfile") == 0,
+                ".txt goes back to Windows' txtfile");
+    TEST_ASSERT(get_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\.log", NULL, v, 256) &&
+                    wcscmp(v, L"txtfile") == 0,
+                ".log goes back to Windows' txtfile");
+    TEST_ASSERT(get_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\.xml", NULL, v, 256) &&
+                    wcscmp(v, L"xmlfile") == 0,
+                ".xml goes back to Windows' xmlfile");
+    TEST_ASSERT(!value_exists(HKEY_LOCAL_MACHINE, CLASSES L"\\.ini", NULL),
+                ".ini claim is removed, never pointed at a ProgID that does not exist");
+    TEST_ASSERT(!value_exists(HKEY_LOCAL_MACHINE, CLASSES L"\\.json", NULL),
+                "a type Windows has no ProgID for just loses npad's claim");
+    TEST_ASSERT(get_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\.csv", NULL, v, 256) &&
+                    wcscmp(v, L"Excel.CSV") == 0,
+                "another app's claim is left exactly as it was");
+}
+
+TEST_CASE(user_unregister_lets_the_machine_default_show_through) {
+    // Per-user, HKCU only overlays HKLM: deleting npad's claim IS the restore,
+    // and copying a stock ProgID into the user's hive would pin it there
+    wipe(HKEY_CURRENT_USER);
+    set_sz(HKEY_CURRENT_USER, CLASSES L"\\txtfile", NULL, L"Text Document");
+    bool w[ASSOC_GROUP_COUNT], off[ASSOC_GROUP_COUNT];
+    set_groups(w, true, false, false, false, false);
+    TEST_ASSERT(apply_full(w), "registration should succeed");
+    set_sz(HKEY_CURRENT_USER, CLASSES L"\\.txt", NULL, L"npad.txt");
+    set_groups(off, false, false, false, false, false);
+    assoc_apply_user(w, off);
+    TEST_ASSERT(!value_exists(HKEY_CURRENT_USER, CLASSES L"\\.txt", NULL),
+                "per-user .txt claim is deleted, not replaced with txtfile");
+}
+
 TEST_CASE(empty_or_garbage_changes_do_nothing) {
     // A missing argument used to mean "unregister everything"
     wipe(HKEY_LOCAL_MACHINE);
@@ -453,6 +516,8 @@ int main(void) {
     RUN_TEST(no_change_writes_nothing);
     RUN_TEST(machine_changes_accept_only_exact_tokens);
     RUN_TEST(machine_changes_touch_only_named_groups);
+    RUN_TEST(machine_unregister_hands_back_windows_progid);
+    RUN_TEST(user_unregister_lets_the_machine_default_show_through);
     RUN_TEST(empty_or_garbage_changes_do_nothing);
 
     // Re-seed Program Files for the location check (the tests above wiped it)
