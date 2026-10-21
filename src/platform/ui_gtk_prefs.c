@@ -98,6 +98,9 @@ static struct {
     // Nothing reaches settings.json until Apply or OK, and Cancel drops them.
     GHashTable *staged;
     bool memory_dirty; // A failed save left applied values in memory only
+    // The keys those applied values were written to (static strings, like the
+    // staged keys), so closing after a failed save undoes just them
+    GHashTable *written;
 
     GtkWidget *spins[8]; // Every number box: typed text counts before it is committed
     int spin_count;
@@ -249,6 +252,7 @@ static bool apply_staged(void) {
         } else {
             write_staged(key, entry);
         }
+        g_hash_table_add(P.written, key);
         if (strcmp(key, "sync_view_state") == 0 && entry->number != 0)
             sync_turned_on = true;
     }
@@ -261,6 +265,7 @@ static bool apply_staged(void) {
     if (!commit())
         return false;
     P.memory_dirty = false;
+    g_hash_table_remove_all(P.written);
     g_hash_table_remove_all(P.staged);
     update_apply_button();
 
@@ -988,7 +993,9 @@ static void on_import_clicked(GtkButton *button, gpointer data) {
     settings_discard_unsaved_changes();
     npad_gtk_reload_and_apply_settings(P.owner);
     ui_notify_settings_changed();
-    g_hash_table_remove_all(P.staged); // The imported file replaces pending edits
+    g_hash_table_remove_all(P.staged);  // The imported file replaces pending edits
+    g_hash_table_remove_all(P.written); // And what a failed Apply left in memory
+    P.memory_dirty = false;
     update_apply_button();
     load_widgets();
     show_message(GTK_WINDOW(P.dialog), GTK_MESSAGE_INFO,
@@ -1422,6 +1429,7 @@ static void show_preferences(Window *window, bool show_debug, int start_page) {
                                            "_Apply", GTK_RESPONSE_APPLY, NULL);
     gtk_dialog_set_default_response(GTK_DIALOG(P.dialog), GTK_RESPONSE_OK);
     P.staged = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, free_staged);
+    P.written = g_hash_table_new(g_str_hash, g_str_equal);
 
     GtkWidget *notebook = gtk_notebook_new();
     gtk_container_set_border_width(GTK_CONTAINER(notebook), 6);
@@ -1472,13 +1480,20 @@ static void show_preferences(Window *window, bool show_debug, int start_page) {
                      "writable, then try again.");
     }
     if (P.memory_dirty) {
-        // Drop values that never reached disk: a reload alone would keep them,
-        // as it keeps every unsaved change
-        settings_discard_unsaved_changes();
+        // Drop the applied values that never reached disk: a reload alone
+        // would keep them, as it keeps every unsaved change. Only those keys:
+        // this window's other unsaved changes (Recent Files, find history)
+        // have nothing to do with Preferences and are kept for a later save.
+        GHashTableIter iter;
+        gpointer key;
+        g_hash_table_iter_init(&iter, P.written);
+        while (g_hash_table_iter_next(&iter, &key, NULL))
+            settings_discard_unsaved_change(key);
         npad_gtk_reload_and_apply_settings(window);
     }
     gtk_widget_destroy(P.dialog);
     g_hash_table_destroy(P.staged);
+    g_hash_table_destroy(P.written);
     memset(&P, 0, sizeof(P));
 }
 

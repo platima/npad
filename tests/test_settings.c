@@ -275,6 +275,8 @@ static char *get_file(const char *path) {
 static void remove_shared_files(void) {
     remove(SHARED_FILE);
     remove(SHARED_FILE ".corrupt");
+    remove(SHARED_FILE ".corrupt.1");
+    remove(SHARED_FILE ".corrupt.2");
     remove(SHARED_FILE ".lock");
 }
 
@@ -491,19 +493,43 @@ TEST_CASE(reader_skips_nested_values_and_keeps_them) {
     TEST_ASSERT(settings_get_bool("flag", false), "a bare true");
     TEST_ASSERT(!settings_has_key("nothing"), "null means not set");
     TEST_ASSERT_EQ(5, settings_count(), "no bogus keys from inside the nested values");
+    settings_set_int("n", 42);
+    settings_set_bool("flag", true);
+    TEST_ASSERT(!settings_has_unsaved_changes(), "re-asserting a bare 42 or true is no change");
 
-    // A save writes the nested values back as they were
+    // A save writes the nested values back as they were, and the bare
+    // scalars keep their JSON types
     settings_set_string("theme", "light");
     TEST_ASSERT(settings_save(), "save works");
     char *text = get_file(SHARED_FILE);
     TEST_ASSERT(text && strstr(text, "\"future\": {\"x\": {\"deep\": [1, \"}\", \"\\\"]\"]}}"),
                 "the nested object is kept verbatim");
     TEST_ASSERT(text && strstr(text, "\"list\": [1, 2, {\"a\": \"]\"}]"), "and the array");
+    TEST_ASSERT(text && strstr(text, "\"n\": 42"), "a bare number stays a number");
+    TEST_ASSERT(text && strstr(text, "\"flag\": true"), "and true stays true");
     free(text);
     settings_clear_all();
     settings_load();
     TEST_ASSERT(value_is("theme", "light"), "and the file still reads");
     TEST_ASSERT_EQ(5, settings_count(), "with the same keys");
+
+    // A value npad sets itself is a string, as always
+    settings_set_int("n", 7);
+    TEST_ASSERT(settings_save(), "save works");
+    text = get_file(SHARED_FILE);
+    TEST_ASSERT(text && strstr(text, "\"n\": \"7\""), "a changed number is written as npad writes it");
+    free(text);
+
+    // Bare text that is not valid JSON is not written back bare
+    start_instance("{\"a\": tru, \"b\": 01, \"c\": -1.5e3, \"d\": 1.}");
+    settings_set_string("probe", "1");
+    TEST_ASSERT(settings_save(), "save works");
+    text = get_file(SHARED_FILE);
+    TEST_ASSERT(text && strstr(text, "\"a\": \"tru\""), "a typo is quoted, keeping the file JSON");
+    TEST_ASSERT(text && strstr(text, "\"b\": \"01\""), "so is a number with a leading zero");
+    TEST_ASSERT(text && strstr(text, "\"c\": -1.5e3"), "a valid exponent form stays bare");
+    TEST_ASSERT(text && strstr(text, "\"d\": \"1.\""), "a number missing its fraction is quoted");
+    free(text);
     settings_clear_all();
     remove_shared_files();
 }
@@ -791,6 +817,173 @@ TEST_CASE(recent_files_keep_unreachable_entries) {
     remove_shared_files();
 }
 
+// The keys of a "<prefix>_N" list, in order, joined with spaces; positions
+// that are missing show as "-" up to the last one present
+static void list_text(const char *prefix, char *out, size_t cap) {
+    out[0] = '\0';
+    size_t len = 0;
+    int last = -1;
+    for (int i = 0; i < 12; i++) {
+        char key[48];
+        snprintf(key, sizeof(key), "%s_%d", prefix, i);
+        if (settings_has_key(key))
+            last = i;
+    }
+    for (int i = 0; i <= last; i++) {
+        char key[48];
+        snprintf(key, sizeof(key), "%s_%d", prefix, i);
+        char *v = settings_get_string(key, "-");
+        len += (size_t) snprintf(out + len, cap - len, "%s%s", i ? " " : "", v);
+        free(v);
+        if (len >= cap)
+            break;
+    }
+}
+
+TEST_CASE(recent_files_are_saved_as_a_whole_list) {
+    char got[256];
+
+    // Window A has [a,b,c] and reopens b: [b,a,c], position 2 unchanged
+    start_instance("{\"recent_file_0\": \"a\", \"recent_file_1\": \"b\", \"recent_file_2\": \"c\"}");
+    TEST_ASSERT(settings_add_recent_file("b"), "add works");
+    // Meanwhile window B saved [y,a,b,c]
+    put_file(SHARED_FILE, "{\"recent_file_0\": \"y\", \"recent_file_1\": \"a\","
+                          " \"recent_file_2\": \"b\", \"recent_file_3\": \"c\"}");
+    TEST_ASSERT(settings_save(), "A's save works");
+    settings_clear_all();
+    settings_load();
+    list_text("recent_file", got, sizeof(got));
+    TEST_ASSERT_STR_EQ("b a c", got, "A's list replaces B's whole, with no file listed twice");
+
+    // Clear Recent Files in A, holding [a], while B has saved [y,a]
+    start_instance("{\"recent_file_0\": \"a\"}");
+    put_file(SHARED_FILE, "{\"recent_file_0\": \"y\", \"recent_file_1\": \"a\", \"theme\": \"x\"}");
+    TEST_ASSERT(settings_clear_recent_files(), "clear works");
+    TEST_ASSERT(settings_save(), "save works");
+    settings_clear_all();
+    settings_load();
+    list_text("recent_file", got, sizeof(got));
+    TEST_ASSERT_STR_EQ("", got, "every entry is cleared, also those only B had");
+    TEST_ASSERT(value_is("theme", "x"), "and nothing else is touched");
+    settings_clear_all();
+    remove_shared_files();
+}
+
+TEST_CASE(history_list_has_no_gap_after_a_merge) {
+    char got[256];
+    char *mine[] = { "t0", "t1" };
+
+    // A held [t1], B saved [u0,u1,u2]; A searches t0, writing [t0,t1]
+    start_instance("{\"find_hist_0\": \"t1\"}");
+    put_file(SHARED_FILE, "{\"find_hist_0\": \"u0\", \"find_hist_1\": \"u1\","
+                          " \"find_hist_2\": \"u2\"}");
+    TEST_ASSERT(settings_set_list("find_hist", mine, 2, 10), "set_list works");
+    TEST_ASSERT(settings_save(), "save works");
+    settings_clear_all();
+    settings_load();
+    list_text("find_hist", got, sizeof(got));
+    TEST_ASSERT_STR_EQ("t0 t1", got, "the history is A's, whole, with no tail of B's");
+
+    // Rewriting the list as it is still claims every position
+    start_instance("{\"find_hist_0\": \"t0\", \"find_hist_1\": \"t1\"}");
+    TEST_ASSERT(settings_set_list("find_hist", mine, 2, 10), "set_list works");
+    TEST_ASSERT(settings_has_unsaved_changes(), "an unchanged list written whole is a change");
+
+    // Bad arguments change nothing
+    settings_discard_unsaved_changes();
+    TEST_ASSERT(!settings_set_list(NULL, mine, 2, 10), "no prefix is refused");
+    TEST_ASSERT(!settings_set_list("find_hist", mine, 3, 2), "count past capacity is refused");
+    TEST_ASSERT(!settings_has_unsaved_changes(), "and leaves nothing unsaved");
+    settings_clear_all();
+    remove_shared_files();
+}
+
+TEST_CASE(discard_one_unsaved_change_keeps_the_rest) {
+    // A failed Preferences Apply undoes only what it wrote
+    start_instance("{\"theme\": \"dark\"}");
+    settings_set_string("theme", "light");      // The Apply that failed to save
+    settings_set_string("added_by_apply", "1"); // A key the file does not have
+    settings_add_recent_file("/tmp/opened.txt"); // Unrelated: must survive
+    settings_discard_unsaved_change("theme");
+    settings_discard_unsaved_change("added_by_apply");
+    TEST_ASSERT(settings_has_unsaved_changes(), "the Recent Files change is still unsaved");
+    TEST_ASSERT(settings_load(), "reload");
+    TEST_ASSERT(value_is("theme", "dark"), "the reverted key takes the file's value");
+    TEST_ASSERT(!settings_has_key("added_by_apply"), "a key the file lacks is dropped");
+    TEST_ASSERT(value_is("recent_file_0", "/tmp/opened.txt"), "the other change is kept");
+    TEST_ASSERT(settings_save(), "save works");
+    settings_clear_all();
+    settings_load();
+    TEST_ASSERT(value_is("recent_file_0", "/tmp/opened.txt"), "and reaches the file");
+    TEST_ASSERT(value_is("theme", "dark"), "without the reverted value");
+    settings_clear_all();
+    remove_shared_files();
+}
+
+// A file that grew past the load cap after this window loaded it (an older
+// npad still running, say) is moved aside, not read whole to copy it
+TEST_CASE(file_grown_past_the_cap_before_a_save_is_moved_aside) {
+    start_instance("{\"a\": \"1\"}");
+    FILE *f = fopen(SHARED_FILE, "wb");
+    TEST_ASSERT_NOT_NULL(f, "oversized file created");
+    if (f) {
+        fputs("{\n  \"theme\": \"dark\",\n  \"runaway\": \"", f);
+        for (long i = 0; i < 9L * 1024 * 1024; i++)
+            fputc('x', f);
+        fputs("\"\n}\n", f);
+        fclose(f);
+    }
+    size_t big = file_get_size(SHARED_FILE);
+    settings_set_string("b", "2");
+    TEST_ASSERT(settings_save(), "save works");
+    TEST_ASSERT_EQ((int) big, (int) file_get_size(SHARED_FILE ".corrupt"),
+                   "the whole original is kept aside, byte for byte");
+    TEST_ASSERT(file_get_size(SHARED_FILE) < 4096, "settings.json is small again");
+    settings_clear_all();
+    settings_load();
+    TEST_ASSERT(value_is("theme", "dark"), "what came before the runaway value is salvaged");
+    TEST_ASSERT(value_is("b", "2"), "and this window's change is saved");
+    TEST_ASSERT(!settings_has_key("runaway"), "the runaway value is not");
+    settings_clear_all();
+    remove_shared_files();
+}
+
+TEST_CASE(an_earlier_corrupt_copy_is_never_overwritten) {
+    put_file(SHARED_FILE ".corrupt", "earlier");
+    // start_instance removes the shared files, so set up by hand
+    settings_clear_all();
+    settings_set_file_path(SHARED_FILE);
+    put_file(SHARED_FILE, "{\"a\": \"1\", \"b\": ");
+    settings_load();
+    settings_set_string("probe", "1");
+    TEST_ASSERT(settings_save(), "save works");
+    char *first = get_file(SHARED_FILE ".corrupt");
+    char *second = get_file(SHARED_FILE ".corrupt.1");
+    TEST_ASSERT_STR_EQ("earlier", first, "the earlier copy is untouched");
+    TEST_ASSERT_STR_EQ("{\"a\": \"1\", \"b\": ", second, "the new one goes to a free name");
+    free(first);
+    free(second);
+
+    // On load too: an oversized file moved aside takes the next free name
+    FILE *f = fopen(SHARED_FILE, "wb");
+    if (f) {
+        fputs("{\"theme\": \"dark\", \"runaway\": \"", f);
+        for (long i = 0; i < 9L * 1024 * 1024; i++)
+            fputc('x', f);
+        fclose(f);
+    }
+    settings_clear_all();
+    settings_load();
+    TEST_ASSERT(value_is("theme", "dark"), "the oversized file is salvaged");
+    TEST_ASSERT(file_get_size(SHARED_FILE ".corrupt.2") > 8u * 1024 * 1024,
+                "and moved to the next free name");
+    first = get_file(SHARED_FILE ".corrupt");
+    TEST_ASSERT_STR_EQ("earlier", first, "still without touching the earlier copy");
+    free(first);
+    settings_clear_all();
+    remove_shared_files();
+}
+
 // --- Config directory: $XDG_CONFIG_HOME ------------------------------------
 //
 // Settings live in $XDG_CONFIG_HOME/npad when that is set and absolute, else
@@ -940,6 +1133,11 @@ int main(void) {
     RUN_TEST(entry_order_is_stable);
     RUN_TEST(typed_getters_fall_back_on_malformed_text);
     RUN_TEST(recent_files_keep_unreachable_entries);
+    RUN_TEST(recent_files_are_saved_as_a_whole_list);
+    RUN_TEST(history_list_has_no_gap_after_a_merge);
+    RUN_TEST(discard_one_unsaved_change_keeps_the_rest);
+    RUN_TEST(file_grown_past_the_cap_before_a_save_is_moved_aside);
+    RUN_TEST(an_earlier_corrupt_copy_is_never_overwritten);
     remove(ROUNDTRIP_FILE ".lock"); // The save lock the round-trip tests left
 #ifndef _WIN32
     RUN_TEST(config_dir_prefers_absolute_xdg);

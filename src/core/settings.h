@@ -21,6 +21,16 @@ void settings_cleanup(void);
 bool settings_set_string(const char *key, const char *value);
 char *settings_get_string(const char *key, const char *default_value);
 
+// Store a list as keys "<prefix>_0" .. "<prefix>_<capacity-1>": values[0..count)
+// in order, every later position removed. The list is one unit: each position
+// counts as this instance's change even where it holds that value already, and
+// each removal is recorded even for a key only another window held, so a save
+// replaces the whole list rather than mixing it entry by entry with another
+// window's (duplicates, survivors of a clear, a gap that hides the rest).
+// Recent Files and find/replace history. False on a bad argument or a value
+// too long to store, with nothing changed, or when out of memory.
+bool settings_set_list(const char *prefix, char *const *values, int count, int capacity);
+
 // The typed getters return default_value for a missing key AND for text that
 // is not a whole valid value of the type ("ten", "", "12abc", out of range).
 // Bools read "true"/"false" (any case) and "1"/"0". Doubles are stored with a
@@ -47,6 +57,11 @@ bool settings_has_unsaved_changes(void);
 // Forget this instance's unsaved changes, so the next settings_load adopts the
 // file as it is (Import, and dropping values a failed save left in memory)
 void settings_discard_unsaved_changes(void);
+// The same for one key: it stops being this instance's change (set or
+// removed), so the next settings_load takes the file's value for it, or drops
+// it when the file does not have it. Every other unsaved change is kept - for
+// undoing just what a failed Preferences Apply wrote.
+void settings_discard_unsaved_change(const char *key);
 
 // Remove every setting whose key does NOT begin with one of keep_prefixes;
 // returns the count removed. This is the "reset to defaults except the
@@ -61,8 +76,10 @@ int settings_reset_except_prefixes(const char *const *keep_prefixes, int prefix_
 //   instance's unsaved changes applied, then adopts that result (so it also
 //   picks up what other windows saved). It writes nothing when there is
 //   nothing to add, and refuses (false, changes kept) when the file exists but
-//   cannot be read. A file it cannot read in full is copied to
-//   settings.json.corrupt first.
+//   cannot be read. A file it cannot read in full is kept first, as
+//   settings.json.corrupt (or .corrupt.1 and on: an earlier copy is never
+//   overwritten) - copied, or renamed when it is over the 8 MB load cap, since
+//   copying would read it whole.
 // - settings_load reads it into a fresh store and swaps that in only when the
 //   read worked, with this instance's unsaved changes put back on top. False
 //   (store untouched) when the file cannot be read or is not settings at all.

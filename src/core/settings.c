@@ -15,6 +15,11 @@
  *   this instance's unsaved changes, so a reload neither discards recent files
  *   or find history not yet saved nor empties the store when the file cannot
  *   be read at that moment.
+ * - A list stored one key per position (Recent Files, find/replace history)
+ *   is one unit: settings_set_list marks every position as changed and every
+ *   position past its end as removed, so the save replaces the whole list
+ *   with the version of the window that changed it last instead of mixing
+ *   two windows' lists entry by entry.
  *
  * Author: Platima
  * https://npad.dev
@@ -56,7 +61,8 @@
 typedef struct SettingEntry {
     char *key;
     char *value;
-    bool raw;   // value is a nested JSON object/array, kept verbatim from the file
+    bool raw;   // value is JSON kept verbatim from the file: a nested object or
+                // array, or a bare number or true/false (see is_raw_scalar)
     bool dirty; // set or changed by this instance since its last save
     struct SettingEntry *prev, *next; // order
     struct SettingEntry *chain;       // hash bucket
@@ -324,34 +330,31 @@ void settings_cleanup(void) {
     }
 }
 
+// A raw entry holding a bare number or true/false (kept as the file typed it)
+// rather than a nested object or array
+static bool is_raw_scalar(const SettingEntry *e) {
+    return e->raw && e->value[0] != '{' && e->value[0] != '[';
+}
+
 // Set key, recording it as this instance's change. Setting a value the store
 // already holds is not a change (so re-asserting every option on each search
 // does not later overwrite another window's newer choice), unless force_dirty:
 // the window geometry written at exit always counts, as in Notepad, where the
-// window closed last decides where the next one opens.
-static bool set_string_internal(const char *key, const char *value, bool force_dirty) {
-    if (!key || !value)
-        return false;
-    // The reader drops what is longer than this, so writing it would only lose
-    // it silently on the next start
-    if (strlen(key) > SETTINGS_MAX_KEY_LEN || strlen(value) > SETTINGS_MAX_VALUE_LEN) {
-        NPAD_ERROR_WARNING(NPAD_ERROR_INVALID_PARAM, 0, "Settings",
-                           "Refusing to store an implausibly long setting");
-        return false;
-    }
-
-    npad_mutex_lock(&g_settings_mutex);
+// window closed last decides where the next one opens, and so does every
+// position of a list written whole (settings_set_list). Caller holds the lock.
+static bool set_string_locked(const char *key, const char *value, bool force_dirty) {
     SettingEntry *entry = store_find(&g_store, key);
-    if (entry && !entry->raw && strcmp(entry->value, value) == 0) {
-        if (force_dirty)
+    // A bare 5 or true from the file is the same setting as "5" or "true", so
+    // re-asserting it is no change either, and it keeps its JSON type
+    if (entry && (!entry->raw || is_raw_scalar(entry)) && strcmp(entry->value, value) == 0) {
+        if (force_dirty) {
             entry->dirty = true;
-        npad_mutex_unlock(&g_settings_mutex);
+            store_remove(&g_removed, key);
+        }
         return true;
     }
-    if (!entry && g_store.count >= SETTINGS_MAX_KEYS) {
-        npad_mutex_unlock(&g_settings_mutex);
+    if (!entry && g_store.count >= SETTINGS_MAX_KEYS)
         return false;
-    }
     entry = store_put(&g_store, key, value, false);
     if (entry) {
         entry->dirty = true;
@@ -359,12 +362,74 @@ static bool set_string_internal(const char *key, const char *value, bool force_d
     } else {
         NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, errno, key, "Failed to allocate memory for setting");
     }
-    npad_mutex_unlock(&g_settings_mutex);
     return entry != NULL;
+}
+
+// The reader drops what is longer than this, so writing it would only lose it
+// silently on the next start
+static bool setting_fits(const char *key, const char *value) {
+    if (strlen(key) > SETTINGS_MAX_KEY_LEN || strlen(value) > SETTINGS_MAX_VALUE_LEN) {
+        NPAD_ERROR_WARNING(NPAD_ERROR_INVALID_PARAM, 0, "Settings",
+                           "Refusing to store an implausibly long setting");
+        return false;
+    }
+    return true;
+}
+
+static bool set_string_internal(const char *key, const char *value, bool force_dirty) {
+    if (!key || !value || !setting_fits(key, value))
+        return false;
+    npad_mutex_lock(&g_settings_mutex);
+    bool ok = set_string_locked(key, value, force_dirty);
+    npad_mutex_unlock(&g_settings_mutex);
+    return ok;
 }
 
 bool settings_set_string(const char *key, const char *value) {
     return set_string_internal(key, value, false);
+}
+
+// Record key as removed by this instance whether or not it holds it, so the
+// next save removes it from the file even when only another window had it.
+// Caller holds the lock.
+static void remove_key_always_locked(const char *key) {
+    store_remove(&g_store, key);
+    if (!store_find(&g_removed, key))
+        store_put(&g_removed, key, "", false);
+}
+
+bool settings_set_list(const char *prefix, char *const *values, int count, int capacity) {
+    if (!prefix || count < 0 || capacity < 0 || count > capacity || (count > 0 && !values))
+        return false;
+
+    char key[SETTINGS_MAX_KEY_LEN + 1];
+    for (int i = 0; i < capacity; i++) {
+        int n = snprintf(key, sizeof(key), "%s_%d", prefix, i);
+        if (n < 0 || (size_t) n >= sizeof(key))
+            return false; // Prefix too long to make the keys
+        if (i < count && (!values[i] || !setting_fits(key, values[i])))
+            return false;
+    }
+
+    // One unit, under one lock: every position is this instance's change, the
+    // ones it already held included, and every position past the end is a
+    // removal, held here or not. Per key, an unchanged position was not saved
+    // and a removal of a key only another window had was not recorded, so the
+    // save merged two windows' lists entry by entry - duplicates, entries that
+    // survived Clear Recent Files, and gaps that hid the rest of the history.
+    bool ok = true;
+    npad_mutex_lock(&g_settings_mutex);
+    for (int i = 0; i < capacity; i++) {
+        snprintf(key, sizeof(key), "%s_%d", prefix, i);
+        if (i < count) {
+            if (!set_string_locked(key, values[i], true))
+                ok = false;
+        } else {
+            remove_key_always_locked(key);
+        }
+    }
+    npad_mutex_unlock(&g_settings_mutex);
+    return ok;
 }
 
 int settings_count(void) {
@@ -561,6 +626,17 @@ void settings_discard_unsaved_changes(void) {
     npad_mutex_unlock(&g_settings_mutex);
 }
 
+void settings_discard_unsaved_change(const char *key) {
+    if (!key)
+        return;
+    npad_mutex_lock(&g_settings_mutex);
+    SettingEntry *entry = store_find(&g_store, key);
+    if (entry)
+        entry->dirty = false;
+    store_remove(&g_removed, key);
+    npad_mutex_unlock(&g_settings_mutex);
+}
+
 int settings_reset_except_prefixes(const char *const *keep_prefixes, int prefix_count) {
     int removed = 0;
     npad_mutex_lock(&g_settings_mutex);
@@ -632,10 +708,46 @@ static char *path_with_suffix(const char *path, const char *suffix) {
 typedef enum {
     SOURCE_MISSING,    // No file, or an empty one: nothing to read
     SOURCE_OK,         // Read and parsed in full
-    SOURCE_PARTIAL,    // Only a prefix parsed (truncated, malformed or oversized)
+    SOURCE_PARTIAL,    // Only a prefix parsed (truncated or malformed)
+    SOURCE_OVERSIZED,  // Too large to read whole: what a bounded prefix held
     SOURCE_NOT_JSON,   // Read, but holds no settings object at all
     SOURCE_UNREADABLE, // Exists, but could not be read just now
 } SettingsSource;
+
+// A free name beside path for keeping an unreadable original:
+// settings.json.corrupt, or .corrupt.1 to .corrupt.99 when that is taken. An
+// earlier copy is never overwritten - it can be the only full copy of a
+// runaway file the load moved aside. NULL when every name is taken.
+static char *free_aside_path(const char *path) {
+    for (int i = 0; i < 100; i++) {
+        char suffix[24];
+        if (i == 0)
+            snprintf(suffix, sizeof(suffix), ".corrupt");
+        else
+            snprintf(suffix, sizeof(suffix), ".corrupt.%d", i);
+        char *candidate = path_with_suffix(path, suffix);
+        if (!candidate || !file_exists(candidate))
+            return candidate;
+        free(candidate);
+    }
+    return NULL;
+}
+
+// Move an oversized settings file out of the way, without reading it: the
+// rename is the only way to keep it that costs no memory. The name it went
+// to (malloc'd), or NULL when it could not be moved.
+static char *move_aside(const char *path) {
+    char *aside = free_aside_path(path);
+    if (aside && !file_rename(path, aside)) {
+        free(aside);
+        aside = NULL;
+    }
+    if (aside)
+        NPAD_ERROR_WARNING(NPAD_ERROR_FILE_IO, 0, "Settings",
+                           "settings.json was implausibly large; recoverable settings were "
+                           "salvaged and the original moved aside as settings.json.corrupt");
+    return aside;
+}
 
 static bool is_blank(const char *s) {
     for (; *s; s++) {
@@ -645,11 +757,10 @@ static bool is_blank(const char *s) {
     return true;
 }
 
-// Read `path` into `out`, a private store. may_move_aside lets an oversized
-// file be renamed out of the way once salvaged; it is false for a fallback
-// file we do not own the right to rename (see settings_init) and on the save
-// path, which keeps a copy instead.
-static SettingsSource read_settings_file(const char *path, bool may_move_aside, SettingStore *out) {
+// Read `path` into `out`, a private store. Nothing is renamed here: the
+// callers decide what happens to an oversized file (load_settings_from moves
+// it aside when it may, settings_save always does before replacing it).
+static SettingsSource read_settings_file(const char *path, SettingStore *out) {
     if (!path || !file_exists(path))
         return SOURCE_MISSING;
 
@@ -671,16 +782,7 @@ static SettingsSource read_settings_file(const char *path, bool may_move_aside, 
         bool complete = false;
         parse_settings_file(prefix, out, &complete); // Truncated final entry is not stored
         free(prefix);
-
-        char *aside = may_move_aside ? path_with_suffix(path, ".corrupt") : NULL;
-        if (aside) {
-            file_rename(path, aside);
-            free(aside);
-            NPAD_ERROR_WARNING(NPAD_ERROR_FILE_IO, 0, "Settings",
-                               "settings.json was implausibly large; recoverable settings were "
-                               "salvaged and the original moved to settings.json.corrupt");
-        }
-        return SOURCE_PARTIAL;
+        return SOURCE_OVERSIZED;
     }
 
     char *content = file_read_text(path);
@@ -776,16 +878,31 @@ static void save_lock_release(const SaveLock *lock) {
 #endif
 }
 
-// Keep a copy of a settings file that could not be read in full before a save
-// replaces it, so what the reader could not make sense of is not lost for good
-static bool preserve_original(const char *path) {
-    char *aside = path_with_suffix(path, ".corrupt");
+// Keep a settings file that could not be read in full before a save replaces
+// it, so what the reader could not make sense of is not lost for good. A file
+// within the size cap is copied, so settings.json stays in place should the
+// write then fail. A larger one - oversized at this read, or grown past the
+// cap since (an older npad still running, say) - is renamed instead: copying
+// is a full read into memory, which the cap exists to prevent. *moved_to is
+// then the name it went to (malloc'd), for settings_save to put it back if the
+// write fails; otherwise NULL.
+static bool preserve_original(const char *path, bool oversized, char **moved_to) {
+    *moved_to = NULL;
+    if (oversized || file_get_size(path) > SETTINGS_MAX_FILE_BYTES) {
+        *moved_to = move_aside(path);
+        return *moved_to != NULL;
+    }
+    char *aside = free_aside_path(path);
     bool ok = aside && file_copy(path, aside);
     free(aside);
     if (ok)
         NPAD_ERROR_WARNING(NPAD_ERROR_FILE_IO, 0, "Settings",
-                           "settings.json could not be read in full; a copy was kept as "
-                           "settings.json.corrupt");
+                           "settings.json could not be read in full; a copy was kept beside it "
+                           "as settings.json.corrupt");
+    else
+        NPAD_ERROR_WARNING(NPAD_ERROR_FILE_IO, 0, "Settings",
+                           "settings.json could not be read in full and no copy of it could be "
+                           "kept, so settings were not saved");
     return ok;
 }
 
@@ -810,10 +927,11 @@ bool settings_save(void) {
     // undo every other window's changes.
     SettingStore merged;
     memset(&merged, 0, sizeof(merged));
-    SettingsSource source = read_settings_file(g_settings_file_path, false, &merged);
+    SettingsSource source = read_settings_file(g_settings_file_path, &merged);
     bool ok = false;
     bool do_write = true;
     char *content = NULL;
+    char *moved_to = NULL; // Where preserve_original renamed the original, if it did
 
     npad_mutex_lock(&g_settings_mutex);
     if (source == SOURCE_UNREADABLE) {
@@ -829,13 +947,15 @@ bool settings_save(void) {
         } else if (!apply_unsaved_changes(&merged, false)) {
             do_write = false;
         }
-    } else if (source == SOURCE_PARTIAL) {
-        do_write = preserve_original(g_settings_file_path) && apply_unsaved_changes(&merged, false);
+    } else if (source == SOURCE_PARTIAL || source == SOURCE_OVERSIZED) {
+        do_write = preserve_original(g_settings_file_path, source == SOURCE_OVERSIZED, &moved_to) &&
+                   apply_unsaved_changes(&merged, false);
     } else {
         // Nothing to merge with - no file yet, an empty one, one deleted by
         // hand, or settings read from the pre-XDG location - or a file that is
         // not settings at all (kept aside first): write the whole store
-        do_write = source != SOURCE_NOT_JSON || preserve_original(g_settings_file_path);
+        do_write =
+            source != SOURCE_NOT_JSON || preserve_original(g_settings_file_path, false, &moved_to);
         store_free(&merged);
         for (const SettingEntry *e = g_store.head; do_write && e; e = e->next) {
             if (!store_put(&merged, e->key, e->value, e->raw))
@@ -855,9 +975,14 @@ bool settings_save(void) {
         memset(&merged, 0, sizeof(merged));
         store_free(&g_removed);
         ok = true;
+    } else if (moved_to && !file_exists(g_settings_file_path)) {
+        // The original was renamed aside but nothing replaced it: put it back,
+        // so a failed save leaves the file where it was
+        file_rename(moved_to, g_settings_file_path);
     }
     npad_mutex_unlock(&g_settings_mutex);
 
+    free(moved_to);
     free(content);
     store_free(&merged);
     save_lock_release(&lock);
@@ -874,7 +999,12 @@ bool settings_load(void) {
 static bool load_settings_from(const char *path, bool may_move_aside) {
     SettingStore fresh;
     memset(&fresh, 0, sizeof(fresh));
-    SettingsSource source = read_settings_file(path, may_move_aside, &fresh);
+    SettingsSource source = read_settings_file(path, &fresh);
+    if (source == SOURCE_OVERSIZED && may_move_aside) {
+        // Salvaged; now out of the load path so it is not read again, and kept
+        // (never over an earlier copy) to be recovered by hand
+        free(move_aside(path));
+    }
     if (source == SOURCE_MISSING) {
         store_free(&fresh);
         return true; // No file to load, that's OK: keep what is held
@@ -1059,19 +1189,10 @@ bool settings_add_recent_file(const char *filepath) {
         }
     }
 
-    // Save the new list
-    for (int i = 0; i < new_count; i++) {
-        char key[32];
-        snprintf(key, sizeof(key), "recent_file_%d", i);
-        settings_set_string(key, new_list[i]);
-    }
-
-    // Remove any old entries
-    for (int i = new_count; i < MAX_RECENT_FILES; i++) {
-        char key[32];
-        snprintf(key, sizeof(key), "recent_file_%d", i);
-        settings_remove_key(key);
-    }
+    // Save the new list, as a whole: the window that changed it last decides
+    // all of it, rather than its changed positions being mixed with another
+    // window's list (which listed a file twice)
+    bool ok = settings_set_list("recent_file", new_list, new_count, MAX_RECENT_FILES);
 
     // Cleanup
     for (int i = 0; i < new_count; i++) {
@@ -1081,7 +1202,7 @@ bool settings_add_recent_file(const char *filepath) {
 
     settings_free_recent_files(recent_files, count);
 
-    return true;
+    return ok;
 }
 
 char **settings_get_recent_files(int *count) {
@@ -1099,12 +1220,9 @@ void settings_free_recent_files(char **files, int count) {
 }
 
 bool settings_clear_recent_files(void) {
-    for (int i = 0; i < MAX_RECENT_FILES; i++) {
-        char key[32];
-        snprintf(key, sizeof(key), "recent_file_%d", i);
-        settings_remove_key(key);
-    }
-    return true;
+    // Every position is removed from the file, also those only another window
+    // held: removing just the keys held here left that window's entries behind
+    return settings_set_list("recent_file", NULL, 0, MAX_RECENT_FILES);
 }
 
 // Helper function implementations
@@ -1174,8 +1292,10 @@ static char *get_settings_directory(void) {
 // pairs - that is also safe with the rest of JSON a script or a later npad may
 // put there: escapes npad does not write (\uXXXX with surrogate pairs, \b, \f,
 // \/), numbers, true/false/null, and nested objects or arrays (skipped by
-// depth and kept verbatim, so a save writes them back unchanged). It never
-// recurses, so no nesting depth can overflow the stack.
+// depth). Numbers, true/false and nested values are kept verbatim, so a save
+// writes them back with their JSON types; a key npad itself sets to a new
+// value becomes a string. It never recurses, so no nesting depth can overflow
+// the stack.
 
 static bool is_json_space(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
@@ -1331,6 +1451,40 @@ static bool skip_nested(const char **p, const char *end) {
     return false;
 }
 
+// Is s[0..n) exactly a JSON number or true/false - text that may be written
+// back verbatim without making the file invalid?
+static bool is_json_scalar(const char *s, size_t n) {
+    if ((n == 4 && memcmp(s, "true", 4) == 0) || (n == 5 && memcmp(s, "false", 5) == 0))
+        return true;
+    const char *p = s, *end = s + n;
+    if (p < end && *p == '-')
+        p++;
+    if (p >= end || *p < '0' || *p > '9')
+        return false;
+    if (*p == '0')
+        p++; // No leading zeros
+    else
+        while (p < end && *p >= '0' && *p <= '9')
+            p++;
+    if (p < end && *p == '.') {
+        p++;
+        if (p >= end || *p < '0' || *p > '9')
+            return false;
+        while (p < end && *p >= '0' && *p <= '9')
+            p++;
+    }
+    if (p < end && (*p == 'e' || *p == 'E')) {
+        p++;
+        if (p < end && (*p == '+' || *p == '-'))
+            p++;
+        if (p >= end || *p < '0' || *p > '9')
+            return false;
+        while (p < end && *p >= '0' && *p <= '9')
+            p++;
+    }
+    return p == end;
+}
+
 // Parse `content` into `out`, appending in file order (a repeated key keeps its
 // first position and its last value). False when it holds no settings object
 // at all; otherwise true, with *complete false when parsing stopped early at
@@ -1399,14 +1553,19 @@ static bool parse_settings_file(const char *content, SettingStore *out, bool *co
                 raw = true;
             }
         } else {
-            // A number, true, false or null, kept as its text
+            // A number, true, false or null, kept as its text. A valid number
+            // or true/false is also written back bare, so a save does not turn
+            // a script's 5 into "5"; anything else (a typo such as tru) is
+            // kept as a string, which writes back as valid JSON.
             const char *start = p;
             while (p < end && !is_json_space(*p) && *p != ',' && *p != '}' && *p != ']' &&
                    *p != '{' && *p != '[' && *p != '"' && *p != ':')
                 p++;
             if (p > start && p < end) {
-                value = dup_range(start, (size_t) (p - start));
-                is_null = (size_t) (p - start) == 4 && memcmp(start, "null", 4) == 0;
+                size_t n = (size_t) (p - start);
+                value = dup_range(start, n);
+                is_null = n == 4 && memcmp(start, "null", 4) == 0;
+                raw = is_json_scalar(start, n);
             }
         }
         if (!value) {
