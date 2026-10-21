@@ -158,7 +158,8 @@ struct Window {
 
     // Document state
     bool is_modified;
-    bool loading; // Text is being replaced programmatically: not an edit
+    bool loading;      // Text is being replaced programmatically: not an edit
+    bool text_altered; // The last load repaired invalid UTF-8 (ui_text_altered_by_load)
 
     // Undo: GtkTextBuffer (GTK3) keeps no history of its own
     UndoStack *undo;
@@ -231,6 +232,8 @@ void npad_gtk_zoom_by(Window *window, int delta);
 // Text as the buffer wants it: '\n' line breaks and valid UTF-8 (invalid
 // sequences repaired, not dropped). g_malloc'd; NULL only for NULL input.
 char *npad_gtk_normalize_text(const char *text);
+// Whether text is short enough for a GtkTextBuffer (whose lengths are gint)
+bool npad_gtk_text_fits(const char *text);
 
 // --- ui_gtk_dialogs.c --------------------------------------------------------
 

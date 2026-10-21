@@ -48,6 +48,11 @@ typedef struct {
     // Reading only: the meta recorded `truncated` at all. npad before 0.36
     // did not, so for those slots the caller has to look at the file again.
     bool has_truncated;
+    // The text is not exactly what its file holds, because the edit control
+    // could not show it exactly (see ui_text_altered_by_load): restored, it
+    // must still never be saved over that file without a word. Absent (npad
+    // before 0.36) reads as false.
+    bool altered;
     // The original file's stamp when npad last read or wrote it, the baseline
     // for noticing an external change. size -1 when there is none.
     FileStamp stamp;
@@ -107,6 +112,10 @@ bool session_adopt(const char *dir, const char *slot_id, const char *claimer,
 // *line_ending are set.
 char *session_take(const char *dir, const char *slot_id, char **out_path, TextEncoding *encoding,
                    LineEnding *line_ending);
+// session_take that also reports the altered flag the slot recorded (false
+// for a slot written without it, including by npad before 0.36)
+char *session_take_ex(const char *dir, const char *slot_id, char **out_path, TextEncoding *encoding,
+                      LineEnding *line_ending, bool *altered);
 
 // List the slot ids currently present in dir (from <slot>.meta files; claimed
 // slots and names that are not valid ids are left out). Returns a malloc'd

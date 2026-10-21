@@ -1961,13 +1961,28 @@ char *npad_gtk_normalize_text(const char *text) {
     return result;
 }
 
-void ui_platform_set_text(Window *window, const char *text) {
+// GtkTextBuffer measures text in a gint: a longer string goes negative (GTK
+// inserts nothing) or wraps to its low 32 bits (GTK inserts a fragment), and
+// either way the editor would bind the file to the wrong text. Refuse it.
+bool npad_gtk_text_fits(const char *text) {
+    return text && strlen(text) <= (size_t) G_MAXINT;
+}
+
+// Returns false, with the buffer untouched, if the text cannot be loaded
+bool ui_platform_set_text(Window *window, const char *text) {
     if (!window || !text)
-        return;
+        return false;
 
     char *source = npad_gtk_normalize_text(text);
+    if (!source || !npad_gtk_text_fits(source)) {
+        g_free(source);
+        return false;
+    }
+    // Line breaks become LF by design (the core converts back on save);
+    // invalid UTF-8 repaired with U+FFFD is a real change to the text
+    window->text_altered = !g_utf8_validate(text, -1, NULL);
     window->loading = true;
-    gtk_text_buffer_set_text(window->buffer, source, -1);
+    gtk_text_buffer_set_text(window->buffer, source, (gint) strlen(source));
     window->loading = false;
     g_free(source);
 
@@ -1982,6 +1997,11 @@ void ui_platform_set_text(Window *window, const char *text) {
     gtk_text_buffer_set_modified(window->buffer, FALSE);
     window->is_modified = false;
     update_status_bar(window);
+    return true;
+}
+
+bool ui_platform_text_altered_by_load(Window *window) {
+    return window && window->text_altered;
 }
 
 // The returned string is g_malloc'd, which since GLib 2.46 is always the

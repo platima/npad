@@ -111,7 +111,15 @@ void ui_get_default_window_rect(int *x, int *y, int *width, int *height);
 int ui_count_main_windows(void);
 
 // Text editing
-void ui_set_text(Window *window, const char *text);
+// Replaces the document with text. Returns false if it could not be loaded at
+// all (too large for the control, or out of memory): the window then still
+// shows what it showed before, and the caller must treat the open as failed.
+bool ui_set_text(Window *window, const char *text);
+// True when the last ui_set_text loaded, but the control could not hold the
+// text exactly (Win32 RichEdit rewrites a few characters, such as U+2028 and
+// U+FFFD, and either platform replaces invalid UTF-8). The core must
+// then not save over the source file without telling the user.
+bool ui_text_altered_by_load(Window *window);
 char *ui_get_text(Window *window);
 void ui_clear_text(Window *window);
 bool ui_has_selection(Window *window);

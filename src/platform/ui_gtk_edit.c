@@ -156,6 +156,13 @@ static void insert_file_at(Window *window, const char *path, int x, int y) {
     free(content);
     if (!text)
         return;
+    if (!npad_gtk_text_fits(text)) {
+        g_free(text);
+        char message[512];
+        snprintf(message, sizeof(message), "Could not insert file: %.300s\nIt is too large.", path);
+        ui_show_message_box(window, "npad", message, false);
+        return;
+    }
 
     if (text[0]) {
         GtkTextView *view = GTK_TEXT_VIEW(window->text_view);
@@ -168,7 +175,7 @@ static void insert_file_at(Window *window, const char *path, int x, int y) {
         // run in the undo history); the whole insert is one user action
         gtk_text_buffer_place_cursor(window->buffer, &where);
         gtk_text_buffer_begin_user_action(window->buffer);
-        gtk_text_buffer_insert_at_cursor(window->buffer, text, -1);
+        gtk_text_buffer_insert_at_cursor(window->buffer, text, (gint) strlen(text));
         gtk_text_buffer_end_user_action(window->buffer);
         gtk_text_view_scroll_mark_onscreen(view, gtk_text_buffer_get_insert(window->buffer));
     }

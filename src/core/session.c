@@ -9,7 +9,7 @@
  * The meta file is three lines:
  *
  *     <encoding>
- *     <line ending>[ truncated=<0|1>][ stamp=<size>:<write time>]
+ *     <line ending>[ truncated=<0|1>][ altered=<0|1>][ stamp=<size>:<write time>]
  *     <original path, possibly empty, running to the end of the file>
  *
  * The attributes ride on the second line, after the number, because npad
@@ -250,8 +250,9 @@ static char *format_meta(const char *path, const SessionMeta *meta) {
         snprintf(stamp, sizeof(stamp), " stamp=%lld:%lld", meta->stamp.size,
                  meta->stamp.write_time);
     }
-    snprintf(text, size, "%d\n%d truncated=%d%s\n%s", (int) meta->encoding, (int) meta->line_ending,
-             meta->truncated ? 1 : 0, stamp, path ? path : "");
+    snprintf(text, size, "%d\n%d truncated=%d altered=%d%s\n%s", (int) meta->encoding,
+             (int) meta->line_ending, meta->truncated ? 1 : 0, meta->altered ? 1 : 0, stamp,
+             path ? path : "");
     return text;
 }
 
@@ -293,6 +294,9 @@ static void parse_meta(const char *text, char **out_path, SessionMeta *meta) {
             meta->has_truncated = true;
             meta->truncated = atoi(value) != 0;
         }
+        value = find_attribute(first_nl + 1, second_nl, "altered");
+        if (value)
+            meta->altered = *value == '1';
         value = find_attribute(first_nl + 1, second_nl, "stamp");
         if (value) {
             char *end = NULL;
@@ -501,10 +505,12 @@ bool session_adopt(const char *dir, const char *slot_id, const char *claimer,
     return ok;
 }
 
-char *session_take(const char *dir, const char *slot_id, char **out_path, TextEncoding *encoding,
-                   LineEnding *line_ending) {
+char *session_take_ex(const char *dir, const char *slot_id, char **out_path, TextEncoding *encoding,
+                      LineEnding *line_ending, bool *altered) {
     if (out_path)
         *out_path = NULL;
+    if (altered)
+        *altered = false;
     char me[SESSION_SLOT_ID_MAX];
     session_make_slot_id(me, sizeof(me));
     if (!session_claim(dir, slot_id, NULL, me))
@@ -524,6 +530,8 @@ char *session_take(const char *dir, const char *slot_id, char **out_path, TextEn
                 *encoding = meta.encoding;
             if (line_ending)
                 *line_ending = meta.line_ending;
+            if (altered)
+                *altered = meta.altered;
             return content;
         case SESSION_READ_EMPTY:
             session_discard_claimed(dir, slot_id, me); // Nothing in it to keep
@@ -535,6 +543,11 @@ char *session_take(const char *dir, const char *slot_id, char **out_path, TextEn
             session_release(dir, slot_id, me);
             return NULL;
     }
+}
+
+char *session_take(const char *dir, const char *slot_id, char **out_path, TextEncoding *encoding,
+                   LineEnding *line_ending) {
+    return session_take_ex(dir, slot_id, out_path, encoding, line_ending, NULL);
 }
 
 // --- Listing ---------------------------------------------------------------------

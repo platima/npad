@@ -65,6 +65,25 @@ static bool g_exit_unused = false;
 // window's own snapshot replaces it, or the document is saved or discarded.
 static char g_held_claim[SESSION_SLOT_ID_MAX] = { 0 };
 
+// The edit control could not hold the loaded text exactly (Win32 RichEdit
+// turns U+2028/2029 into line breaks and U+FFFD, BEL and some noncharacters
+// into spaces; see ui_text_altered_by_load). What it shows is then not the
+// file, so like a truncated load it must never be saved over the file without
+// a word: Save diverts to Save As and auto-save skips it. The mark travels
+// with the recovery snapshot, so a crash or handoff restore keeps it.
+static bool g_text_altered = false;
+
+// Shown when ui_set_text could not load a file at all
+#define EDITOR_SET_TEXT_FAILED                                                                     \
+    "The file is too large to show, or there is not enough memory to open it."
+
+// An auto-save is under way: nothing it runs into may raise a dialog
+static bool g_auto_saving = false;
+
+// Shown when ui_get_text could not read the document back for a save
+#define EDITOR_GET_TEXT_FAILED                                                                     \
+    "npad could not read the document's text (it may be too large, or memory is low)."
+
 static char *duplicate_string(const char *str) {
     if (!str)
         return NULL;
@@ -122,6 +141,7 @@ static void current_session_meta(SessionMeta *meta) {
     meta->line_ending = g_editor.file_info.line_ending;
     meta->truncated = g_editor.file_info.truncated;
     meta->has_truncated = true;
+    meta->altered = g_text_altered;
     meta->stamp.size = -1;
     if (g_editor.current_file)
         meta->stamp = g_editor.file_stamp;
@@ -310,7 +330,24 @@ static RestoreResult editor_restore_claimed(const char *dir, const char *slot_id
         }
     }
 
-    ui_set_text(g_editor.main_window, content);
+    if (!ui_set_text(g_editor.main_window, content)) {
+        // The window could not take the text (too large, or out of memory)
+        // and still shows what it had. Nothing has been deleted: give the
+        // claim back, so the work is offered again rather than lost.
+        free(content);
+        free(path);
+        session_release(dir, slot_id, g_session_slot);
+        ui_show_message_box(g_editor.main_window, "npad",
+                            "npad could not show a document it kept for recovery.\n"
+                            EDITOR_SET_TEXT_FAILED "\n\n"
+                            "It has been kept, and npad will offer it again the next time it "
+                            "starts.",
+                            false);
+        return RESTORE_FAILED;
+    }
+    // The snapshot already holds the control's substitutes, so this load is
+    // exact; the mark from the original load is what keeps Save off the file
+    g_text_altered = meta.altered || ui_text_altered_by_load(g_editor.main_window);
     free(content);
 
     if (g_editor.current_file) {
@@ -653,6 +690,7 @@ bool editor_new_file(void) {
     if (g_editor.main_window) {
         ui_clear_text(g_editor.main_window);
     }
+    g_text_altered = false;
 
     if (g_editor.current_file) {
         free(g_editor.current_file);
@@ -743,8 +781,20 @@ bool editor_open_file(const char *filename) {
     }
 
     apply_default_eol_if_no_breaks(&info, content); // Before content is freed
+    bool altered = false;
     if (g_editor.main_window) {
-        ui_set_text(g_editor.main_window, content);
+        if (!ui_set_text(g_editor.main_window, content)) {
+            // The window still shows the previous document: binding this
+            // path to it would let Save write that text over this file
+            free(content);
+            free(new_path);
+            char error_msg[512];
+            snprintf(error_msg, sizeof(error_msg), "Could not open file: %.300s\n%s", filename,
+                     EDITOR_SET_TEXT_FAILED);
+            ui_show_message_box(g_editor.main_window, "npad", error_msg, false);
+            return false;
+        }
+        altered = ui_text_altered_by_load(g_editor.main_window);
     }
     // Needs the text, so before it is freed
     apply_default_eol_if_no_breaks(&info, content);
@@ -760,6 +810,7 @@ bool editor_open_file(const char *filename) {
     }
     g_editor.current_file = new_path;
     g_editor.file_info = info;
+    g_text_altered = altered;
 
     settings_add_recent_file(filename);
 
@@ -831,7 +882,16 @@ bool editor_reload_from_disk(void) {
         return false;
     apply_default_eol_if_no_breaks(&info, content);
 
-    ui_set_text(g_editor.main_window, content);
+    if (!ui_set_text(g_editor.main_window, content)) {
+        // Nothing changed: the window keeps its text, flags and encoding
+        free(content);
+        char error_msg[512];
+        snprintf(error_msg, sizeof(error_msg), "Could not reload file: %.300s\n%s",
+                 g_editor.current_file, EDITOR_SET_TEXT_FAILED);
+        ui_show_message_box(g_editor.main_window, "npad", error_msg, false);
+        return false;
+    }
+    g_text_altered = ui_text_altered_by_load(g_editor.main_window);
     free(content);
 
     g_editor.file_info = info;
@@ -840,6 +900,18 @@ bool editor_reload_from_disk(void) {
     editor_update_status_info();
     editor_clear_session(); // The unsaved copy this replaced is gone by choice
     return true;
+}
+
+// A save could not read the text back from the control. Said out loud: the
+// platform only logs it, and a Save that silently does nothing (or a close
+// prompt's Save that just leaves the window open) gives no hint why.
+static void editor_report_get_text_failed(const char *path) {
+    if (g_auto_saving)
+        return; // Never a box from a timer; the next manual save says it
+    char error_msg[512];
+    snprintf(error_msg, sizeof(error_msg), "Could not save file: %.300s\n%s", path ? path : "",
+             EDITOR_GET_TEXT_FAILED);
+    ui_show_message_box(g_editor.main_window, "npad", error_msg, false);
 }
 
 bool editor_save_file(void) {
@@ -869,12 +941,20 @@ bool editor_save_file(void) {
     // NUL-terminated throughout, so only the part before it was loaded. Saving
     // would replace the original with that fragment: a 120 KB image becomes
     // nine bytes. Divert to Save As so the original is never the target.
-    if (g_editor.file_info.truncated) {
+    // The same goes for text the edit control could not hold exactly: saving
+    // would write its substitutes over the characters still in the file.
+    if (g_editor.file_info.truncated || g_text_altered) {
         ui_show_message_box(g_editor.main_window, "npad",
-                            "This file contains binary data, so npad could only load the "
-                            "part before it.\n\n"
-                            "Saving over the original would discard the rest, so choose a "
-                            "different file to save this text to.",
+                            g_editor.file_info.truncated
+                                ? "This file contains binary data, so npad could only load the "
+                                  "part before it.\n\n"
+                                  "Saving over the original would discard the rest, so choose a "
+                                  "different file to save this text to."
+                                : "This file contains characters npad cannot show exactly (such "
+                                  "as Unicode line separators or U+FFFD), so "
+                                  "it displays substitutes for them.\n\n"
+                                  "Saving over the original would replace those characters, so "
+                                  "choose a different file to save this text to.",
                             false);
 
         FileDialogParams params = { .title = "Save As",
@@ -893,8 +973,10 @@ bool editor_save_file(void) {
     }
 
     char *content = ui_get_text(g_editor.main_window);
-    if (!content)
+    if (!content) {
+        editor_report_get_text_failed(g_editor.current_file);
         return false;
+    }
 
     if (!editor_confirm_lossy_ansi(content)) {
         free(content);
@@ -928,8 +1010,10 @@ bool editor_save_file_as(const char *filename) {
         return false;
 
     char *content = ui_get_text(g_editor.main_window);
-    if (!content)
+    if (!content) {
+        editor_report_get_text_failed(filename);
         return false;
+    }
 
     if (!editor_confirm_lossy_ansi(content)) {
         free(content);
@@ -955,6 +1039,7 @@ bool editor_save_file_as(const char *filename) {
         // Whatever was loaded has now been written in full to THIS file, so it
         // is no longer a fragment of something larger and Save may overwrite it
         g_editor.file_info.truncated = false;
+        g_text_altered = false; // THIS file now holds exactly what is shown
         file_get_stamp(new_path, &g_editor.file_stamp);
         g_editor.suppress_change_prompt = false; // A different file, fresh slate
 
@@ -1243,16 +1328,18 @@ bool editor_handle_event(const UIEvent *event) {
                 // diverts it to Save As, and a modal file dialog raised by a
                 // timer is exactly what this path avoids. The snapshot still
                 // protects the text, and a manual save gets the explanation.
-                bool skip = g_editor.file_info.truncated;
+                // So is one whose text the control could not hold exactly.
+                bool skip = g_editor.file_info.truncated || g_text_altered;
                 if (!skip && g_editor.file_info.encoding == NPAD_ENC_ANSI && g_editor.main_window) {
                     char *content = ui_get_text(g_editor.main_window);
-                    if (content) {
-                        skip = file_ansi_is_lossy(content);
-                        free(content);
-                    }
+                    // Unreadable text is skipped too; a manual save reports it
+                    skip = !content || file_ansi_is_lossy(content);
+                    free(content);
                 }
                 if (!skip) {
+                    g_auto_saving = true;
                     editor_save_file();
+                    g_auto_saving = false;
                 }
             }
             return true;

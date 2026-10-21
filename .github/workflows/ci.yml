@@ -114,6 +114,37 @@ jobs:
           npad-terminal.exe.sha256
         retention-days: 7
 
+    - name: Build the RichEdit boundary test
+      run: |
+        make test-richedit-win32 WERROR=1
+
+    - name: Upload the RichEdit boundary test
+      uses: actions/upload-artifact@v7
+      with:
+        name: npad-test-richedit-boundary-x64
+        path: tests/test_richedit_boundary.exe
+        retention-days: 1
+
+  # The text boundary between npad and the real msftedit.dll (CR CR LF,
+  # characters RichEdit rewrites, the get-text copy count): only Windows has
+  # the control. The test creates a hidden RichEdit in its own process, shows
+  # and messages no other window, and writes no settings or registry values.
+  test-richedit-windows:
+    runs-on: windows-latest
+    needs: build-windows
+    timeout-minutes: 10
+    steps:
+    - name: Download the RichEdit boundary test
+      uses: actions/download-artifact@v8
+      with:
+        name: npad-test-richedit-boundary-x64
+
+    - name: Run the RichEdit boundary test
+      shell: pwsh
+      run: |
+        .\test_richedit_boundary.exe
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
   # Windows on Arm: cross-compiled with a pinned llvm-mingw (clang + lld);
   # MinGW GCC has no arm64 Windows target. Nothing here can execute an arm64
   # exe, so the checks are on the file: an ARM64 PE that delay-loads the four
