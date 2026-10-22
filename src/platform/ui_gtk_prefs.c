@@ -693,7 +693,7 @@ static void build_editor(GtkWidget *notebook) {
 
     GtkWidget *find = add_group(page, "Find and Replace");
     add_check(find, "_Fill Find with the selected text", FIND_SEED_KEY, true);
-    add_check(find, "Wrap _around by default", "find_wrap_around", false);
+    add_check(find, "Wrap _around by default", FIND_WRAP_KEY, false);
 
     GtkWidget *tab = add_group(page, "Tab key");
     P.tab_check =
@@ -989,9 +989,9 @@ static void on_import_clicked(GtkButton *button, gpointer data) {
 // Reset every preference to its default. Rather than an allowlist of keys to
 // remove (which silently drifts every time a setting is added), this resets
 // EVERYTHING except a small, stable set of preserved categories: recent files,
-// window geometry, and Find/Replace state (options + history). Any new
-// preference key is therefore reset by default. What is kept is defined once,
-// in settings_reset_all_preferences, which Win32 calls too.
+// window geometry, and Find/Replace state (the dialog's options + history).
+// Any new preference key is therefore reset by default. What is kept is
+// defined once, in settings_reset_all_preferences, which Win32 calls too.
 static void on_reset_clicked(GtkButton *button, gpointer data) {
     (void) button;
     (void) data;
@@ -1000,7 +1000,8 @@ static void on_reset_clicked(GtkButton *button, gpointer data) {
         GTK_WINDOW(P.dialog), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
         GTK_MESSAGE_QUESTION, GTK_BUTTONS_YES_NO, "%s",
         "Reset all preferences to their defaults?\n\n"
-        "Recent files, window position and Find/Replace options and history are kept.\n"
+        "Find wrap-around is reset with them. Recent files, window position and the other "
+        "Find/Replace options and history are kept.\n"
         "The Preferences window will close.");
     gtk_window_set_title(GTK_WINDOW(ask), "npad");
     gtk_dialog_set_default_response(GTK_DIALOG(ask), GTK_RESPONSE_NO);
@@ -1010,7 +1011,10 @@ static void on_reset_clicked(GtkButton *button, gpointer data) {
         return;
 
     // A reset that could not be saved is not applied: the reload puts back
-    // what is on disk (see settings_reset_all_preferences_and_save)
+    // what is on disk (see settings_reset_all_preferences_and_save). The
+    // find_-prefixed keys that ARE preferences (both on the Editor page: Fill
+    // Find with the selected text, Wrap around by default) are reset too,
+    // although the find_ prefix is kept as search state.
     if (settings_reset_all_preferences_and_save()) {
         ui_notify_settings_changed();
     } else {
@@ -1049,8 +1053,9 @@ static void build_backup(GtkWidget *notebook) {
     gtk_container_add(GTK_CONTAINER(reset), rbox);
     add_button(rbox, "_Reset All Preferences...", G_CALLBACK(on_reset_clicked));
     gtk_box_pack_start(GTK_BOX(page), reset, FALSE, FALSE, 0);
-    add_note(page, "Restores every preference to its default. Recent files, window position and "
-                   "Find/Replace options and history are kept.");
+    add_note(page, "Restores every preference to its default, Find wrap-around included. Recent "
+                   "files, window position and the other Find/Replace options and history are "
+                   "kept.");
 }
 
 // ---------------------------------------------------------------------------

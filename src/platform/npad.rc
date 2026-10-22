@@ -263,7 +263,7 @@ BEGIN
     LTEXT           "Exports or replaces the settings.json file. Import applies immediately to all open windows.", IDC_STATIC, 10, 60, 220, 16
     GROUPBOX        "Reset", IDC_STATIC, 10, 84, 220, 40
     PUSHBUTTON      "&Reset All Preferences...", ID_PREF_RESET_DEFAULTS, 18, 100, 120, 14
-    LTEXT           "Restores every preference to its default. Recent files, window position and Find/Replace options and history are kept.", IDC_STATIC, 10, 132, 220, 16
+    LTEXT           "Restores every preference to its default, Find wrap-around included. Recent files, window position and the other Find/Replace options and history are kept.", IDC_STATIC, 10, 132, 220, 24
 END
 
 IDD_PREFS_DEBUG DIALOGEX 0, 0, 240, 196
