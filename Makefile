@@ -439,7 +439,10 @@ tests/test_%: tests/test_%.c $(TEST_DEPS)
 # elevation. test_assoc_win32.exe writes a scratch key under HKCU (removed
 # afterwards), so it runs only with NPAD_ALLOW_REGISTRY_TESTS=1, here and when
 # launched by hand.
-WIN_TEST_EXES = $(patsubst %,tests/test_%.exe,$(TEST_SUITES))
+# test_atomic_save is POSIX only: its faults are injected through rlimits and
+# file modes that Windows does not have.
+WIN_TEST_SUITES = $(filter-out atomic_save,$(TEST_SUITES))
+WIN_TEST_EXES = $(patsubst %,tests/test_%.exe,$(WIN_TEST_SUITES))
 WIN_TEST_RES = $(WIN_BUILD_DIR)/test_manifest.res
 WIN_TEST_LIBS = -lshell32 -ladvapi32 -luser32 -lole32
 
