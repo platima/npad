@@ -588,6 +588,10 @@ SAN_DIR = build/sanitize
 SAN_TEST_BINS = $(patsubst %,$(SAN_DIR)/test_%,$(TEST_SUITES))
 # make test-fuzz: iterations per property and the PRNG seed. Both fixed by
 # default so a CI failure reproduces exactly; vary FUZZ_SEED to explore.
+# Like every suite, it writes its scratch files in a fresh folder under
+# $(TMPDIR) (an absolute path; /tmp otherwise). Its saves fsync, so on a disk
+# where that is slow (WSL, CI runners) the default count takes over ten
+# minutes under ASan: `TMPDIR=/dev/shm make test-fuzz` keeps it on tmpfs.
 FUZZ_ITERS ?= 5000
 FUZZ_SEED ?= 20261021
 

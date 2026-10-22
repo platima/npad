@@ -477,7 +477,9 @@ jobs:
   sanitize:
     runs-on: ubuntu-latest
     needs: lint
-    timeout-minutes: 30
+    # Room for the fuzz step's own limit below, so a slow fuzz run fails
+    # there, by name, rather than as the whole job timing out
+    timeout-minutes: 40
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -487,8 +489,15 @@ jobs:
     - name: Unit tests under ASan and UBSan
       run: make test-sanitize WERROR=1
 
+    # The fuzz suite's saves fsync, which on the runner's disk makes the
+    # default 5000 iterations take over ten minutes under ASan; its scratch
+    # folder goes under TMPDIR, so keep it on tmpfs (there the run takes
+    # seconds; locally under WSL, 7 s)
     - name: Fuzz harnesses
       run: make test-fuzz WERROR=1
+      env:
+        TMPDIR: /dev/shm
+      timeout-minutes: 15
 
   # The unit suites built by the compiler that builds the x64 npad.exe that
   # ships (MSYS2's MinGW GCC, natively on Windows, as installers.yml does)

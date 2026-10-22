@@ -259,9 +259,9 @@ sudo pacman -Sy npad
 ```
 
 Or run `curl -fsSL https://pkg.npad.dev/install.sh | sudo sh`, which detects
-which of the three you need. Read the script first if you prefer. The AUR
-package `npad-bin` (built from the release's portable tarball) is the other
-route on Arch.
+which of the three you need. Read the script first if you prefer. An AUR
+package, `npad-bin` (built from the release's portable tarball), is ready to
+publish and is coming as the other route on Arch; it is not on the AUR yet.
 
 **Planned:** 🎁 **Winget** - for `winget install npad`.
 

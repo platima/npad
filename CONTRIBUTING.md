@@ -170,7 +170,7 @@ keeps a suite's folder and prints its path.
 | `make test-<suite>` | One suite, e.g. `make test-encoding` or `make test-editor` |
 | `make test-windows` | Builds every suite as a Windows `.exe` with MinGW, and on Windows (MSYS2) runs them. The registry suite, `test_assoc_win32.exe`, writes a scratch HKCU key and runs only with `NPAD_ALLOW_REGISTRY_TESTS=1` |
 | `make test-sanitize` | Every suite under AddressSanitizer and UBSan |
-| `make test-fuzz` | The property/fuzz suite under the sanitizers. `FUZZ_ITERS` (default 5000) and `FUZZ_SEED` tune it; a failure prints the seed, the iteration and the input |
+| `make test-fuzz` | The property/fuzz suite under the sanitizers. `FUZZ_ITERS` (default 5000) and `FUZZ_SEED` tune it; a failure prints the seed, the iteration and the input. Its saves fsync, so where the disk makes that slow (WSL, CI) run it as `TMPDIR=/dev/shm make test-fuzz` |
 | `make test-richedit-win32`, `make test-win32-unicode` | Cross-compile Windows-only tests of the RichEdit text boundary and of Unicode command lines and paths, to run on a Windows test machine |
 
 Under WSL, gcc's AddressSanitizer can loop on `AddressSanitizer:DEADLYSIGNAL`

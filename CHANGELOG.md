@@ -756,7 +756,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NPAD_ALLOW_REGISTRY_TESTS=1`). `make test-sanitize` runs the unit tests
   under AddressSanitizer and UBSan, and `make test-fuzz` runs seeded random
   tests of the settings reader, crash-recovery files, HTML paste, the list
-  tools and update version ordering. `make test` gains suites for atomic
+  tools and update version ordering (its scratch files go under `$TMPDIR`;
+  CI points that at tmpfs, where the saves' fsync is cheap, so the default
+  5000 iterations fit its time limit). `make test` gains suites for atomic
   saves, the editor core, print pagination, time formats, RichEdit text
   conversion, the release scripts and the platform stubs.
 - **Isolated, portable tests.** Each suite runs in its own temporary folder

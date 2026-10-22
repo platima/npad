@@ -565,7 +565,9 @@ the ones you did not.
   directly) and installs the same files as the .deb plus
   `/usr/share/licenses/npad/LICENSE`; pacman's hooks refresh the icon and
   desktop caches. `make pacman` builds one into `dist/`.
-- **AUR: `npad-bin`** (Arch and derivatives): an AUR helper builds a package
+- **AUR: `npad-bin`** (Arch and derivatives; coming - the package is ready to
+  publish but not on the AUR yet, so use the pacman repository below for
+  now): once it is published, an AUR helper builds a package
   from the release's portable tarball, `yay -S npad-bin` (or `paru -S
   npad-bin`, or `git clone https://aur.archlinux.org/npad-bin.git && cd
   npad-bin && makepkg -si`). It provides and conflicts with `npad`. It is for
