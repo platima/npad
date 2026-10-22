@@ -8,8 +8,10 @@
 
 #include "test_framework.h"
 #include "../src/core/list_ops.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 // Assert a transform produces the expected string, freeing the malloc'd result
 #define ASSERT_XFORM(actual, expected, msg)                                                        \
@@ -96,7 +98,8 @@ TEST_CASE(replace_all_empty_from) {
 }
 
 TEST_CASE(replace_all_grow) {
-    ASSERT_XFORM(list_replace_all("a.b.c", ".", "___"), "a___b___c", "replacement longer than match");
+    ASSERT_XFORM(list_replace_all("a.b.c", ".", "___"), "a___b___c",
+                 "replacement longer than match");
 }
 
 TEST_CASE(indent_spaces) {
@@ -340,6 +343,246 @@ TEST_CASE(marker_length_custom) {
     TEST_ASSERT_EQ(2, (int) list_marker_length("- x", 3, ">> ", false), "built-ins still count");
 }
 
+// ---- Review round (NP-022, NP-051, NP-052, NP-143) ----
+
+TEST_CASE(sort_stable_both_directions) {
+    // Case-insensitive ties keep input order ascending AND descending
+    ASSERT_XFORM(list_sort_lines("B\nb\na\nA", false, false), "a\nA\nB\nb",
+                 "ascending ties stable");
+    ASSERT_XFORM(list_sort_lines("B\nb\na\nA", true, false), "B\nb\na\nA",
+                 "descending ties stable");
+    ASSERT_XFORM(list_sort_lines("", false, false), "", "empty text");
+    ASSERT_XFORM(list_sort_lines("\n", false, false), "\n", "a lone newline");
+    ASSERT_XFORM(list_sort_lines("only", true, true), "only", "one line");
+    ASSERT_XFORM(list_sort_lines("b\n\na\n", false, false), "\na\nb\n", "blank lines sort first");
+}
+
+// A tiny deterministic generator, so failures reproduce.
+static unsigned lcg_next(unsigned *s) {
+    *s = *s * 1103515245u + 12345u;
+    return (*s >> 16) & 0x7FFF;
+}
+
+// Random lines over a small alphabet (lots of duplicates and case ties).
+static char *random_lines(unsigned *seed, size_t lines, size_t *out_len) {
+    char *t = malloc(lines * 8 + 2);
+    if (!t)
+        return NULL;
+    size_t p = 0;
+    for (size_t i = 0; i < lines; i++) {
+        size_t len = lcg_next(seed) % 4;
+        for (size_t k = 0; k < len; k++)
+            t[p++] = "aAbB"[lcg_next(seed) % 4];
+        if (i + 1 < lines || lcg_next(seed) % 2)
+            t[p++] = '\n';
+    }
+    t[p] = '\0';
+    *out_len = p;
+    return t;
+}
+
+// Reference implementations: the obvious quadratic algorithms.
+static int ref_cmp(const char *a, size_t al, const char *b, size_t bl, bool cs) {
+    size_t n = al < bl ? al : bl;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char ca = (unsigned char) a[i], cb = (unsigned char) b[i];
+        if (!cs) {
+            ca = (unsigned char) ((ca >= 'A' && ca <= 'Z') ? ca + 32 : ca);
+            cb = (unsigned char) ((cb >= 'A' && cb <= 'Z') ? cb + 32 : cb);
+        }
+        if (ca != cb)
+            return ca < cb ? -1 : 1;
+    }
+    return al == bl ? 0 : (al < bl ? -1 : 1);
+}
+
+typedef struct {
+    const char *s;
+    size_t n;
+} RefLine;
+
+static size_t ref_split(const char *t, RefLine *v, bool *trail) {
+    size_t len = strlen(t), n = 0;
+    *trail = len > 0 && t[len - 1] == '\n';
+    size_t end = *trail ? len - 1 : len, st = 0;
+    for (size_t i = 0; i <= end; i++) {
+        if (i == end || t[i] == '\n') {
+            v[n].s = t + st;
+            v[n].n = i - st;
+            n++;
+            st = i + 1;
+        }
+    }
+    return n;
+}
+
+static char *ref_join(const RefLine *v, size_t n, bool trail) {
+    size_t total = 2;
+    for (size_t i = 0; i < n; i++)
+        total += v[i].n + 1;
+    char *o = malloc(total), *q = o;
+    if (!o)
+        return NULL;
+    for (size_t i = 0; i < n; i++) {
+        memcpy(q, v[i].s, v[i].n);
+        q += v[i].n;
+        if (i + 1 < n)
+            *q++ = '\n';
+    }
+    if (trail)
+        *q++ = '\n';
+    *q = '\0';
+    return o;
+}
+
+TEST_CASE(sort_unique_match_reference) {
+    unsigned seed = 12345;
+    RefLine *v = malloc(400 * sizeof(RefLine));
+    TEST_ASSERT_NOT_NULL(v, "allocate reference lines");
+    for (int trial = 0; trial < 300; trial++) {
+        size_t len;
+        char *t = random_lines(&seed, 1 + lcg_next(&seed) % 300, &len);
+        TEST_ASSERT_NOT_NULL(t, "allocate random text");
+        bool desc = trial % 2, cs = (trial / 2) % 2, trail;
+        size_t n = ref_split(t, v, &trail);
+        for (size_t i = 1; i < n; i++) { // stable insertion sort
+            RefLine key = v[i];
+            size_t j = i;
+            while (j > 0) {
+                int c = ref_cmp(v[j - 1].s, v[j - 1].n, key.s, key.n, cs);
+                if ((desc ? -c : c) <= 0)
+                    break;
+                v[j] = v[j - 1];
+                j--;
+            }
+            v[j] = key;
+        }
+        char *want = ref_join(v, n, trail);
+        char *got = list_sort_lines(t, desc, cs);
+        int same = want && got && strcmp(want, got) == 0;
+        free(want);
+        free(got);
+
+        n = ref_split(t, v, &trail);
+        size_t kept = 0;
+        for (size_t i = 0; i < n; i++) {
+            bool dup = false;
+            for (size_t j = 0; j < kept && !dup; j++)
+                dup = v[j].n == v[i].n && memcmp(v[j].s, v[i].s, v[i].n) == 0;
+            if (!dup)
+                v[kept++] = v[i];
+        }
+        want = ref_join(v, kept, trail);
+        got = list_unique_lines(t);
+        int same_u = want && got && strcmp(want, got) == 0;
+        free(want);
+        free(got);
+        free(t);
+        TEST_ASSERT(same, "merge sort matches a stable reference sort");
+        TEST_ASSERT(same_u, "hash unique matches the reference");
+    }
+    free(v);
+}
+
+// NP-022 / NP-143: Sort and Unique on a 200k-line document. The bound is
+// generous (seconds against milliseconds); the old quadratic code took
+// minutes, so it still catches a regression.
+TEST_CASE(sort_unique_scale_200k_lines) {
+    const size_t lines = 200000;
+    char *t = malloc(lines * 12 + 1);
+    TEST_ASSERT_NOT_NULL(t, "allocate the large document");
+    size_t p = 0;
+    for (size_t i = 0; i < lines; i++)
+        p += (size_t) sprintf(t + p, "line%06zu\n", i); // already ascending, all distinct
+    clock_t t0 = clock();
+    char *desc = list_sort_lines(t, true, false); // the old worst case
+    char *asc = desc ? list_sort_lines(desc, false, true) : NULL;
+    char *uniq = list_unique_lines(t);
+    double secs = (double) (clock() - t0) / CLOCKS_PER_SEC;
+    int ok_desc = desc && strncmp(desc, "line199999\nline199998\n", 22) == 0;
+    int ok_asc = asc && strcmp(asc, t) == 0;
+    int ok_uniq = uniq && strcmp(uniq, t) == 0;
+    free(desc);
+    free(asc);
+    free(uniq);
+    free(t);
+    TEST_ASSERT(ok_desc, "descending sort of sorted input");
+    TEST_ASSERT(ok_asc, "sorting back restores the input");
+    TEST_ASSERT(ok_uniq, "unique of distinct lines is the identity");
+    TEST_ASSERT(secs < 10.0, "200k-line sort x2 + unique well under ten seconds");
+
+    // Unique on many duplicates
+    char *d = malloc(lines * 3 + 1);
+    TEST_ASSERT_NOT_NULL(d, "allocate the duplicate document");
+    for (size_t i = 0; i < lines; i++) {
+        d[i * 3] = (char) ('a' + i % 26);
+        d[i * 3 + 1] = (char) ('a' + (i / 26) % 26);
+        d[i * 3 + 2] = '\n';
+    }
+    d[lines * 3] = '\0';
+    char *u = list_unique_lines(d);
+    TEST_ASSERT_NOT_NULL(u, "unique of duplicates");
+    if (u)
+        TEST_ASSERT_EQ(676 * 3, (int) strlen(u), "676 distinct two-letter lines kept");
+    free(u);
+    free(d);
+}
+
+// NP-051
+TEST_CASE(unescape_surrogates_and_nul) {
+    ASSERT_XFORM(list_unescape("\\uD83D\\uDE00"), "\xF0\x9F\x98\x80",
+                 "a surrogate pair is one code point (4-byte UTF-8)");
+    ASSERT_XFORM(list_unescape("\\ud83d\\ude00!"), "\xF0\x9F\x98\x80!", "lowercase hex pair");
+    ASSERT_XFORM(list_unescape("\\uD800x"), "\xEF\xBF\xBDx", "lone high surrogate -> U+FFFD");
+    ASSERT_XFORM(list_unescape("\\uDC00"), "\xEF\xBF\xBD", "lone low surrogate -> U+FFFD");
+    ASSERT_XFORM(list_unescape("\\uD83D\\u0041"),
+                 "\xEF\xBF\xBD"
+                 "A",
+                 "high surrogate followed by a non-surrogate");
+    ASSERT_XFORM(list_unescape("\\uD83D"), "\xEF\xBF\xBD", "high surrogate at the end");
+    ASSERT_XFORM(list_unescape("a\\u0000b"),
+                 "a\xEF\xBF\xBD"
+                 "b",
+                 "\\u0000 does not cut the text");
+    ASSERT_XFORM(list_unescape(";\\0x"), ";0x", "\\0 is not an escape: the field is not truncated");
+    ASSERT_XFORM(list_unescape("\\uZZZZ"), "uZZZZ", "malformed \\u still literal");
+}
+
+// NP-052
+TEST_CASE(custom_prefix_with_leading_whitespace) {
+    const char *prefixes[] = { "  - ", "\t* ", "> ", " + ", "TODO: ", "\t\t- " };
+    const char *lines[] = { "item", "two words", "x", "" };
+    for (size_t i = 0; i < sizeof(prefixes) / sizeof(prefixes[0]); i++) {
+        for (size_t j = 0; j < sizeof(lines) / sizeof(lines[0]); j++) {
+            char *once = list_indent_lines(lines[j], LIST_INDENT_CUSTOM, prefixes[i]);
+            TEST_ASSERT_NOT_NULL(once, "indent");
+            char *twice = list_indent_lines(once, LIST_INDENT_CUSTOM, prefixes[i]);
+            TEST_ASSERT_NOT_NULL(twice, "indent again");
+            char *back1 = list_unindent_lines(twice, LIST_INDENT_CUSTOM, prefixes[i]);
+            TEST_ASSERT_NOT_NULL(back1, "unindent");
+            char *back0 = list_unindent_lines(back1, LIST_INDENT_CUSTOM, prefixes[i]);
+            TEST_ASSERT_NOT_NULL(back0, "unindent again");
+            int ok1 = strcmp(back1, once) == 0, ok0 = strcmp(back0, lines[j]) == 0;
+            free(once);
+            free(twice);
+            free(back1);
+            free(back0);
+            TEST_ASSERT(ok1, "unindent undoes the deepen step");
+            TEST_ASSERT(ok0, "unindent undoes the custom prefix, lead-in included");
+        }
+    }
+    ASSERT_XFORM(list_unindent_lines("  - item", LIST_INDENT_CUSTOM, "  - "), "item",
+                 "'  - ' comes off whole");
+    ASSERT_XFORM(list_unindent_lines("\t* item", LIST_INDENT_CUSTOM, "\t* "), "item",
+                 "'\\t* ' comes off whole");
+    ASSERT_XFORM(list_unindent_lines("\t- x", LIST_INDENT_HYPHEN, NULL), "- x",
+                 "a tab-nested bullet loses one tab");
+    ASSERT_XFORM(list_indent_lines("\t- x", LIST_INDENT_HYPHEN, NULL), "  \t- x",
+                 "a tab-nested bullet deepens rather than taking a second marker");
+    ASSERT_XFORM(list_indent_lines("  x", LIST_INDENT_HYPHEN, "  "), "-   x",
+                 "a whitespace-only custom prefix is not a bullet");
+}
+
 int main(void) {
     TEST_INIT();
 
@@ -396,6 +639,11 @@ int main(void) {
     RUN_TEST(marker_length_builtin);
     RUN_TEST(marker_length_bare);
     RUN_TEST(marker_length_custom);
+    RUN_TEST(sort_stable_both_directions);
+    RUN_TEST(sort_unique_match_reference);
+    RUN_TEST(sort_unique_scale_200k_lines);
+    RUN_TEST(unescape_surrogates_and_nul);
+    RUN_TEST(custom_prefix_with_leading_whitespace);
 
     TEST_SUMMARY();
     return 0;

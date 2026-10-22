@@ -2045,7 +2045,10 @@ static void do_paste(Window *window, int mode) {
     }
     window->line_cut_pending = false;
 
-    // Rich paste: convert the clipboard's HTML fragment when present
+    // Rich paste: convert the clipboard's HTML fragment when present. Lists
+    // mode converts only a fragment that holds a list: for anything else
+    // html_to_markdown returns "" and the plain text the source offered (code
+    // with its indentation, tab-separated cells) is pasted instead
     if (mode != 0) {
         char *html = read_clipboard_html(window->hwnd);
         if (html) {

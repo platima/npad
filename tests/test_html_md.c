@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 // Assert a converter result equals expected, freeing the malloc'd result.
 #define ASSERT_MD(actual, expected, msg)                                                           \
@@ -128,8 +129,11 @@ TEST_CASE(full_br) {
 // ----------------------------- Entities ----------------------------------
 
 TEST_CASE(entities_basic) {
-    ASSERT_MD(html_to_markdown("a &amp; b &lt;c&gt; &#39;x&#39;", HTML_MD_FULL, "- "),
+    ASSERT_MD(html_to_markdown("a &amp; b &lt;c&gt; &#39;x&#39;", HTML_MD_PLAIN, "- "),
               "a & b <c> 'x'", "named and numeric entities");
+    // In Markdown a decoded "<c>" would be raw HTML, so its '<' is escaped
+    ASSERT_MD(html_to_markdown("a &amp; b &lt;c&gt; &#39;x&#39;", HTML_MD_FULL, "- "),
+              "a & b \\<c> 'x'", "decoded tag-like text escaped in Markdown");
 }
 
 TEST_CASE(entities_hex_and_nbsp) {
@@ -139,14 +143,18 @@ TEST_CASE(entities_hex_and_nbsp) {
 
 TEST_CASE(entities_unknown_literal) {
     // Unknown entity is left literal.
-    ASSERT_MD(html_to_markdown("x &bogus; y", HTML_MD_FULL, "- "), "x &bogus; y",
+    ASSERT_MD(html_to_markdown("x &bogus; y", HTML_MD_PLAIN, "- "), "x &bogus; y",
               "unknown entity kept literal");
+    // ... and in Markdown its '&' is escaped, so no renderer decodes it
+    ASSERT_MD(html_to_markdown("x &bogus; y", HTML_MD_FULL, "- "), "x \\&bogus; y",
+              "entity-like text escaped in Markdown");
 }
 
 // ------------------------- Whitespace / text -----------------------------
 
 TEST_CASE(whitespace_collapse) {
-    ASSERT_MD(html_to_markdown("  a   b  ", HTML_MD_FULL, "- "), "a b", "runs of whitespace collapse");
+    ASSERT_MD(html_to_markdown("  a   b  ", HTML_MD_FULL, "- "), "a b",
+              "runs of whitespace collapse");
 }
 
 TEST_CASE(whitespace_newlines_collapse) {
@@ -240,7 +248,8 @@ TEST_CASE(cf_extract_offsets) {
     snprintf(buf, sizeof(buf),
              "StartFragment:%010d\r\nEndFragment:%010d\r\n<html><body>%s</body></html>", sf, ef,
              frag);
-    ASSERT_MD(html_cf_extract_fragment(buf), frag, "fragment via StartFragment/EndFragment offsets");
+    ASSERT_MD(html_cf_extract_fragment(buf), frag,
+              "fragment via StartFragment/EndFragment offsets");
 }
 
 TEST_CASE(cf_extract_comment_markers) {
@@ -344,6 +353,641 @@ TEST_CASE(rev_cf_strips_header_on_bad_offsets) {
     }
 }
 
+// ---- Review round (NP-023..026, NP-047..050) ----
+
+// NP-023: Lists mode converts only a fragment that holds a list; for anything
+// else the caller pastes the source's own plain text.
+TEST_CASE(lists_mode_needs_a_list) {
+    ASSERT_MD(html_to_markdown("<p>plain <b>para</b></p>", HTML_MD_LISTS, "- "), "",
+              "no list item -> empty (plain-text fallback)");
+    ASSERT_MD(
+        html_to_markdown("<table><tr><td>Name</td><td>Qty</td></tr></table>", HTML_MD_LISTS, "- "),
+        "", "a table is not a list");
+    ASSERT_MD(html_to_markdown("<!-- <li> -->x<script>'<li>'</script>", HTML_MD_LISTS, "- "), "",
+              "an <li> in a comment or script does not count");
+    ASSERT_MD(html_to_markdown("<p>Intro</p><ul><li>a</li></ul>", HTML_MD_LISTS, "- "),
+              "Intro\n- a", "a fragment with a list still converts whole");
+}
+
+TEST_CASE(block_elements_break_lines) {
+    ASSERT_MD(html_to_markdown("<section>a</section><article>b</article><footer>c</footer>",
+                               HTML_MD_FULL, "- "),
+              "a\nb\nc", "section/article/footer are blocks");
+    ASSERT_MD(html_to_markdown("<dl><dt>term</dt><dd>def</dd></dl>", HTML_MD_PLAIN, "- "),
+              "term\ndef", "definition list parts are blocks");
+}
+
+TEST_CASE(tables_markdown_and_plain) {
+    const char *t = "<table><tr><th>Name</th><th>Qty</th></tr>"
+                    "<tr><td>Apple</td><td>3</td></tr><tr><td>a|b</td><td></td></tr></table>";
+    ASSERT_MD(html_to_markdown(t, HTML_MD_FULL, "- "),
+              "| Name | Qty |\n| --- | --- |\n| Apple | 3 |\n| a\\|b |  |",
+              "GitHub pipe table, '|' escaped in a cell");
+    ASSERT_MD(html_to_markdown(t, HTML_MD_PLAIN, "- "), "Name\tQty\nApple\t3\na|b",
+              "plain: tab-separated cells, one row per line (trailing tab trimmed at the end)");
+    ASSERT_MD(html_to_markdown("<p>Before</p><table><tr><td><p>x</p><p>y</p></td></tr></table>"
+                               "<p>After</p>",
+                               HTML_MD_FULL, "- "),
+              "Before\n\n| x y |\n| --- |\n\nAfter", "blocks inside a cell become spaces");
+    ASSERT_MD(html_to_markdown("<table><tr><td>a<table><tr><td>in</td></tr></table></td>"
+                               "<td>b</td></tr></table>",
+                               HTML_MD_FULL, "- "),
+              "| a in | b |\n| --- | --- |", "a nested table flattens into its cell");
+}
+
+TEST_CASE(white_space_pre_block) {
+    // VS Code / Windows Terminal: a <div> styled white-space:pre, one <div> or
+    // <br> per line
+    const char *h = "<div style=\"font-family: Consolas, 'Courier New';white-space: pre;\">"
+                    "<div><span>def f(x):</span></div>"
+                    "<div><span>&nbsp; &nbsp; return x</span></div></div><p>after</p>";
+    ASSERT_MD(html_to_markdown(h, HTML_MD_FULL, "- "), "```\ndef f(x):\n    return x\n```\n\nafter",
+              "fenced, indentation kept");
+    ASSERT_MD(html_to_markdown(h, HTML_MD_PLAIN, "- "), "def f(x):\n    return x\nafter",
+              "plain keeps the indentation too");
+    ASSERT_MD(html_to_markdown(h, HTML_MD_LISTS, "- "), "", "Lists mode leaves code to plain text");
+    ASSERT_MD(
+        html_to_markdown("<p><span style=\"white-space:pre\">a   b</span></p>", HTML_MD_FULL, "- "),
+        "a b", "an inline white-space:pre span does not make a code block");
+    ASSERT_MD(html_to_markdown("<div style=\"white-space: pre-wrap;\">Hello\nthere</div>",
+                               HTML_MD_FULL, "- "),
+              "Hello there", "pre-wrap prose is not code");
+}
+
+// NP-024: a block opener right after the marker stays on the marker line, and
+// continuation lines are indented under the item text.
+TEST_CASE(li_block_children) {
+    ASSERT_MD(html_to_markdown("<ul><li><p>First</p></li><li><p>Second</p></li></ul>",
+                               HTML_MD_LISTS, "- "),
+              "- First\n- Second", "li>p (Google Docs, LibreOffice)");
+    ASSERT_MD(html_to_markdown("<ul><li><div>First</div></li><li><div>Second</div></li></ul>",
+                               HTML_MD_FULL, "- "),
+              "- First\n- Second", "li>div");
+    ASSERT_MD(html_to_markdown("<ul><li><h3>Title</h3></li></ul>", HTML_MD_FULL, "- "),
+              "- ### Title", "li>h3 is a heading inside the item");
+    ASSERT_MD(html_to_markdown("<ul><li>a<br>b</li></ul>", HTML_MD_LISTS, "- "), "- a\n  b",
+              "<br> inside an item continues under the text");
+    ASSERT_MD(html_to_markdown("<ul><li>a<ul><li>b</li></ul>c</li></ul>", HTML_MD_LISTS, "- "),
+              "- a\n  - b\n  c", "text after a nested list stays in the outer item");
+    ASSERT_MD(html_to_markdown("<ul><li><p>a</p><p>b</p></li></ul>", HTML_MD_FULL, "- "),
+              "- a\n\n  b", "a second paragraph in an item is indented (loose item)");
+    ASSERT_MD(html_to_markdown("<ul><li>a</li></ul><p>after</p>", HTML_MD_FULL, "- "),
+              "- a\n\nafter", "a paragraph after a list does not join its last item");
+}
+
+// NP-025: the Google Docs wrapper <b> is not bold; styled spans are.
+TEST_CASE(google_docs_wrapper_bold) {
+    ASSERT_MD(html_to_markdown("<b style=\"font-weight:normal;\" id=\"docs-internal-guid-1a2b\">"
+                               "<p><span>Para one</span></p><p><span>Para two</span></p></b>",
+                               HTML_MD_FULL, "- "),
+              "Para one\n\nPara two", "no stray ** around the paste");
+    ASSERT_MD(html_to_markdown("<span style=\"font-weight:700\">B</span> "
+                               "<span style=\"font-style:italic\">I</span> "
+                               "<span style=\"font-weight:400\">N</span>",
+                               HTML_MD_FULL, "- "),
+              "**B** *I* N", "font-weight / font-style on spans");
+    ASSERT_MD(html_to_markdown("<b id=\"docs-internal-guid-x\"><span style=\"font-weight:bold\">"
+                               "a</span></b>",
+                               HTML_MD_FULL, "- "),
+              "**a**", "real bold inside the wrapper survives");
+}
+
+// NP-026: delimiters are written only around real content.
+TEST_CASE(emphasis_written_lazily) {
+    ASSERT_MD(html_to_markdown("<b></b>", HTML_MD_FULL, "- "), "", "empty bold writes nothing");
+    ASSERT_MD(html_to_markdown("x<b></b>y<i> </i>z<code></code>", HTML_MD_FULL, "- "), "xy z",
+              "empty and space-only elements leave no delimiters");
+    ASSERT_MD(html_to_markdown("word<b> bold</b> end", HTML_MD_FULL, "- "), "word **bold** end",
+              "a leading inner space moves outside");
+    ASSERT_MD(html_to_markdown("<b><p>a</p><p>b</p></b>", HTML_MD_FULL, "- "), "**a**\n\n**b**",
+              "emphasis is closed and reopened at block breaks");
+    ASSERT_MD(html_to_markdown("<b>a<strong>b</strong>c</b>", HTML_MD_FULL, "- "), "**abc**",
+              "nested bold counts, does not close early");
+    ASSERT_MD(html_to_markdown("<b>a <i>b</i></b>", HTML_MD_FULL, "- "), "**a *b***",
+              "bold and italic close innermost first");
+    ASSERT_MD(html_to_markdown("<b><a href=\"u\">x</a></b> <a href=\"u\"><i>y</i></a>",
+                               HTML_MD_FULL, "- "),
+              "**[x](u)** [*y*](u)", "emphasis and links nest either way");
+    ASSERT_MD(html_to_markdown("<a href=\"u\"><p>a</p><p>b</p></a>", HTML_MD_FULL, "- "),
+              "[a](u)\n\n[b](u)", "a link never spans a paragraph break");
+    ASSERT_MD(html_to_markdown("<code>a<b>b</b></code>", HTML_MD_FULL, "- "), "`ab`",
+              "nothing opens inside a code span");
+    ASSERT_MD(html_to_markdown("<b>a<br>b</b>", HTML_MD_FULL, "- "), "**a**\n**b**",
+              "a line break closes and reopens");
+}
+
+// NP-047: ordered-list children nest under the item text; start= and value=.
+TEST_CASE(ordered_nesting_and_start) {
+    ASSERT_MD(
+        html_to_markdown("<ol><li>a<ul><li>b</li></ul></li><li>c</li></ol>", HTML_MD_FULL, "- "),
+        "1. a\n   - b\n2. c", "children of '1. ' indent three spaces");
+    ASSERT_MD(html_to_markdown("<ol><li>a<ol><li>b</li></ol></li></ol>", HTML_MD_FULL, "- "),
+              "1. a\n   1. b", "ordered in ordered");
+    ASSERT_MD(html_to_markdown("<ol start=\"5\"><li>x</li><li>y</li></ol>", HTML_MD_FULL, "- "),
+              "5. x\n6. y", "start= is honoured");
+    ASSERT_MD(html_to_markdown("<ol start=0><li>x</li></ol>", HTML_MD_FULL, "- "), "0. x",
+              "start=0");
+    ASSERT_MD(html_to_markdown("<ol><li>x</li><li value=\"10\">y</li><li>z</li></ol>", HTML_MD_FULL,
+                               "- "),
+              "1. x\n10. y\n11. z", "li value= renumbers from there");
+    ASSERT_MD(html_to_markdown("<ol start=\"99999999999\"><li>x</li></ol>", HTML_MD_FULL, "- "),
+              "999999999. x", "start is clamped to nine digits");
+    ASSERT_MD(
+        html_to_markdown("<ol start=\"5\"><li>x<ul><li>y</li></ul></li></ol>", HTML_MD_LISTS, "- "),
+        "- x\n  - y", "Lists mode keeps bullets and two-space nesting");
+}
+
+// NP-048: the tag scanner skips quoted attribute values.
+TEST_CASE(quote_aware_tags) {
+    ASSERT_MD(html_to_markdown("<a title=\"a>b\" href=\"u\">t</a>", HTML_MD_FULL, "- "), "[t](u)",
+              "'>' inside a quoted value");
+    ASSERT_MD(
+        html_to_markdown("<a title=\"see href=evil\" href=\"good\">t</a>", HTML_MD_FULL, "- "),
+        "[t](good)", "href= inside another attribute's value");
+    ASSERT_MD(html_to_markdown("<img alt='x > y' src=\"s.png\">", HTML_MD_FULL, "- "),
+              "![x > y](s.png)", "single-quoted value with '>'");
+    ASSERT_MD(html_to_markdown("<p class=\"a>b\">text</p>", HTML_MD_FULL, "- "), "text",
+              "'>' in a class");
+    ASSERT_MD(html_to_markdown("<a href=x title=it's>t</a>", HTML_MD_FULL, "- "), "[t](x)",
+              "an apostrophe inside an unquoted value is not a quote");
+    ASSERT_MD(html_to_markdown("<a href=\"x>t</a> more", HTML_MD_FULL, "- "), "[t](x) more",
+              "an unterminated quote falls back to the first '>'");
+    ASSERT_MD(html_to_markdown("a<3 and 1<2", HTML_MD_PLAIN, "- "), "a<3 and 1<2",
+              "'<' before a digit is text");
+}
+
+// NP-049: Markdown output is escaped.
+TEST_CASE(markdown_escaping) {
+    ASSERT_MD(html_to_markdown("<code>a`b</code>", HTML_MD_FULL, "- "), "``a`b``",
+              "backtick inside code: longer delimiter");
+    ASSERT_MD(html_to_markdown("<code>`x`</code>", HTML_MD_FULL, "- "), "`` `x` ``",
+              "code starting/ending with a backtick is padded");
+    ASSERT_MD(html_to_markdown("<pre>a\n```\nb</pre>", HTML_MD_FULL, "- "), "````\na\n```\nb\n````",
+              "``` inside <pre>: longer fence");
+    ASSERT_MD(html_to_markdown("<pre>\nx</pre>", HTML_MD_FULL, "- "), "```\nx\n```",
+              "the newline right after <pre> is not content");
+    ASSERT_MD(html_to_markdown("<a href=\"u\">the [docs]</a>", HTML_MD_FULL, "- "),
+              "[the \\[docs\\]](u)", "brackets in link text");
+    ASSERT_MD(html_to_markdown("<img src=\"a.png\" alt=\"v[2]\">", HTML_MD_FULL, "- "),
+              "![v\\[2\\]](a.png)", "brackets in alt text");
+    ASSERT_MD(
+        html_to_markdown("<a href=\"https://x.org/my page (1).html\">t</a>", HTML_MD_FULL, "- "),
+        "[t](<https://x.org/my page (1).html>)", "a URL with spaces or parens is wrapped");
+    ASSERT_MD(html_to_markdown("<p>*not emphasis* and 2 * 3</p>", HTML_MD_FULL, "- "),
+              "\\*not emphasis\\* and 2 * 3", "asterisks");
+    ASSERT_MD(html_to_markdown("<p>snake_case _x_</p>", HTML_MD_FULL, "- "), "snake_case \\_x\\_",
+              "underscores: intraword left alone");
+    ASSERT_MD(html_to_markdown("<p>1. one</p><p>- two</p><p># three</p><p>&gt; four</p>",
+                               HTML_MD_FULL, "- "),
+              "1\\. one\n\n\\- two\n\n\\# three\n\n\\> four", "block syntax at line start");
+    ASSERT_MD(html_to_markdown("<p>2.0 is -5 and #tag</p>", HTML_MD_FULL, "- "),
+              "2.0 is -5 and #tag", "look-alikes that are not syntax stay unescaped");
+    ASSERT_MD(html_to_markdown("<p>C:\\path a\\*b ~x~</p>", HTML_MD_FULL, "- "),
+              "C:\\path a\\\\\\*b \\~x\\~", "backslash only before punctuation; tildes");
+    ASSERT_MD(html_to_markdown("<p>&amp;copy; AT&amp;T</p>", HTML_MD_FULL, "- "), "\\&copy; AT&T",
+              "an entity-shaped '&' is escaped");
+    ASSERT_MD(html_to_markdown("<p>a</p><hr><p>b</p>a<hr>", HTML_MD_FULL, "- "),
+              "a\n\n---\n\nb\n\na\n\n---", "a rule never sits under a text line (setext)");
+    ASSERT_MD(html_to_markdown("<p>*x* [y]</p>", HTML_MD_LISTS, "- "), "",
+              "Lists mode without a list still falls back");
+    ASSERT_MD(html_to_markdown("<ul><li>*x*</li></ul>", HTML_MD_LISTS, "- "), "- *x*",
+              "Lists mode output is plain text, not escaped");
+}
+
+// NP-050: CR/LF/TAB never reach a URL or alt text.
+TEST_CASE(attribute_line_breaks) {
+    ASSERT_MD(html_to_markdown("<a href=\"http://x.com/a\r\nb\tc\">t</a>", HTML_MD_FULL, "- "),
+              "[t](http://x.com/abc)", "CR/LF/TAB dropped from href");
+    ASSERT_MD(
+        html_to_markdown("<img src=\" a\n.png \" alt=\"line\r\none\ttwo\">", HTML_MD_FULL, "- "),
+        "![line one two](a.png)", "src cleaned, alt collapsed to spaces");
+    ASSERT_MD(html_to_markdown("<a href=\"\r\n\">t</a>", HTML_MD_FULL, "- "), "t",
+              "an href that is only a line break is no link");
+    ASSERT_MD(html_to_markdown("<img alt=\"a\nb\">", HTML_MD_FULL, "- "), "a b",
+              "alt-only image text collapsed");
+}
+
+// NP-143: payloads modelled on what real sources put on the clipboard (the
+// markup patterns of each app's HTML export; not live captures).
+
+// A CF_HTML blob the way Windows apps build it: header with byte offsets,
+// then the document with the fragment between the comment markers.
+static char *cf_wrap(const char *before, const char *frag, const char *after) {
+    const char *hdr = "Version:0.9\r\nStartHTML:%010d\r\nEndHTML:%010d\r\n"
+                      "StartFragment:%010d\r\nEndFragment:%010d\r\n";
+    int hl = snprintf(NULL, 0, hdr, 0, 0, 0, 0);
+    int sh = hl;
+    int sf = sh + (int) strlen(before) + (int) strlen("<!--StartFragment-->");
+    int ef = sf + (int) strlen(frag);
+    int eh = ef + (int) strlen("<!--EndFragment-->") + (int) strlen(after);
+    size_t n = (size_t) eh + 1;
+    char *out = malloc(n);
+    if (!out)
+        return NULL;
+    int k = snprintf(out, n, hdr, sh, eh, sf, ef);
+    snprintf(out + k, n - (size_t) k, "%s<!--StartFragment-->%s<!--EndFragment-->%s", before, frag,
+             after);
+    return out;
+}
+
+// Extract the fragment from a CF_HTML blob and convert it.
+static char *cf_convert(const char *before, const char *frag, const char *after, HtmlMdMode mode) {
+    char *cf = cf_wrap(before, frag, after);
+    char *f = cf ? html_cf_extract_fragment(cf) : NULL;
+    char *md = f ? html_to_markdown(f, mode, "- ") : NULL;
+    free(cf);
+    free(f);
+    return md;
+}
+
+#define GD_SPAN                                                                                    \
+    "font-size:11pt;font-family:Arial,sans-serif;color:#000000;background-color:"                  \
+    "transparent;font-variant:normal;text-decoration:none;vertical-align:baseline;"                \
+    "white-space:pre;white-space:pre-wrap;"
+#define GD_P "<p dir=\"ltr\" style=\"line-height:1.38;margin-top:0pt;margin-bottom:0pt;\">"
+#define GD_LI_P                                                                                    \
+    "<p dir=\"ltr\" style=\"line-height:1.38;margin-top:0pt;margin-bottom:0pt;\" "                 \
+    "role=\"presentation\">"
+
+TEST_CASE(fixture_google_docs) {
+    const char *frag =
+        "<meta charset=\"utf-8\"><b style=\"font-weight:normal;\" "
+        "id=\"docs-internal-guid-5c1e2f3a-7fff-1a2b-3c4d-5e6f7a8b9c0d\">"
+        "<h1 dir=\"ltr\" style=\"line-height:1.38;margin-top:20pt;margin-bottom:6pt;\">"
+        "<span style=\"" GD_SPAN
+        "font-weight:400;font-style:normal;\">Meeting notes</span></h1>" GD_P
+        "<span style=\"" GD_SPAN "font-weight:400;font-style:normal;\">Para one has </span>"
+        "<span style=\"" GD_SPAN "font-weight:700;font-style:normal;\">bold</span>"
+        "<span style=\"" GD_SPAN "font-weight:400;font-style:normal;\">, </span>"
+        "<span style=\"" GD_SPAN "font-weight:400;font-style:italic;\">italic</span>"
+        "<span style=\"" GD_SPAN "font-weight:400;font-style:normal;\"> and </span>"
+        "<a href=\"https://example.com/a?b=1&amp;c=2\" style=\"text-decoration:none;\">"
+        "<span style=\"" GD_SPAN "font-weight:400;color:#1155cc;\">a link</span></a>"
+        "<span style=\"" GD_SPAN "font-weight:400;\">.</span></p><br>"
+        "<ul style=\"margin-top:0;margin-bottom:0;padding-inline-start:48px;\">"
+        "<li dir=\"ltr\" style=\"list-style-type:disc;font-size:11pt;\" aria-level=\"1\">" GD_LI_P
+        "<span style=\"" GD_SPAN "font-weight:400;\">First</span></p></li>"
+        "<ul style=\"margin-top:0;margin-bottom:0;padding-inline-start:48px;\">"
+        "<li dir=\"ltr\" style=\"list-style-type:circle;font-size:11pt;\" aria-level=\"2\">" GD_LI_P
+        "<span style=\"" GD_SPAN "font-weight:400;\">Nested</span></p></li></ul>"
+        "<li dir=\"ltr\" style=\"list-style-type:disc;font-size:11pt;\" aria-level=\"1\">" GD_LI_P
+        "<span style=\"" GD_SPAN "font-weight:400;\">Second</span></p></li></ul><br>" GD_P
+        "<span style=\"" GD_SPAN "font-weight:400;\">Para two</span></p></b>"
+        "<br class=\"Apple-interchange-newline\">";
+    const char *before = "<html><body>\r\n";
+    const char *after = "\r\n</body>\r\n</html>";
+    ASSERT_MD(cf_convert(before, frag, after, HTML_MD_FULL),
+              "# Meeting notes\n\nPara one has **bold**, *italic* and "
+              "[a link](https://example.com/a?b=1&c=2).\n\n- First\n  - Nested\n- Second\n\n"
+              "Para two",
+              "Google Docs -> Markdown");
+    ASSERT_MD(cf_convert(before, frag, after, HTML_MD_LISTS),
+              "Meeting notes\nPara one has bold, italic and a link.\n\n- First\n  - Nested\n"
+              "- Second\n\nPara two",
+              "Google Docs -> Lists");
+}
+
+TEST_CASE(fixture_libreoffice) {
+    const char *before =
+        "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.0 Transitional//EN\">\r\n<html><head>"
+        "<meta http-equiv=\"content-type\" content=\"text/html; charset=utf-8\"/><title></title>"
+        "<meta name=\"generator\" content=\"LibreOffice 7.6.4.1 (Windows)\"/>"
+        "<style type=\"text/css\">@page { size: 21cm 29.7cm; margin: 2cm } p { line-height: "
+        "115%; margin-bottom: 0.25cm; background: transparent }</style></head>"
+        "<body lang=\"en-AU\" link=\"#000080\" vlink=\"#800000\" dir=\"ltr\">";
+    const char *frag =
+        "<p style=\"line-height: 100%; margin-bottom: 0cm\">Intro with <b>bold</b> and "
+        "<i>italic</i>.</p>\r\n<ul>\r\n\t<li><p style=\"line-height: 100%; margin-bottom: "
+        "0cm\">Alpha</p>\r\n\t<li><p style=\"line-height: 100%; margin-bottom: 0cm\">Beta</p>\r\n"
+        "\t<ul>\r\n\t\t<li><p style=\"line-height: 100%; margin-bottom: 0cm\">Beta one</p>\r\n"
+        "\t</ul>\r\n</ul>\r\n<ol>\r\n\t<li><p style=\"line-height: 100%; margin-bottom: 0cm\">"
+        "Step</p>\r\n\t<li><p style=\"line-height: 100%; margin-bottom: 0cm\">Next</p>\r\n</ol>";
+    const char *after = "</body></html>";
+    ASSERT_MD(cf_convert(before, frag, after, HTML_MD_FULL),
+              "Intro with **bold** and *italic*.\n\n- Alpha\n- Beta\n  - Beta one\n\n1. Step\n"
+              "2. Next",
+              "LibreOffice Writer -> Markdown");
+    ASSERT_MD(cf_convert(before, frag, after, HTML_MD_LISTS),
+              "Intro with bold and italic.\n- Alpha\n- Beta\n  - Beta one\n- Step\n- Next",
+              "LibreOffice Writer -> Lists");
+}
+
+#define WORD_BULLET(glyph)                                                                         \
+    "<![if !supportLists]><span style='font-family:Symbol;mso-fareast-font-family:Symbol;"         \
+    "mso-bidi-font-family:Symbol'><span style='mso-list:Ignore'>" glyph                            \
+    "<span style='font:7.0pt \"Times New Roman\"'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </span>"    \
+    "</span></span><![endif]>"
+
+// One Word list paragraph: the class suffix (First / Middle / Last), any style
+// before the list's own, the mso-list value, the bullet glyph or number Word
+// writes for it, and the item text.
+#define WORD_LI(cls, extra, list, glyph, text)                                                     \
+    "<p class=MsoListParagraphCxSp" cls " style='" extra "text-indent:-18.0pt;mso-list:" list      \
+    "'>" WORD_BULLET(glyph) text "<o:p></o:p></p>\r\n\r\n"
+#define WORD_INDENT2 "margin-left:72.0pt;mso-add-space:auto;"
+
+// Concatenate n strings into one malloc'd string.
+static char *join_parts(const char *const *parts, size_t n) {
+    size_t len = 0;
+    for (size_t i = 0; i < n; i++)
+        len += strlen(parts[i]);
+    char *r = malloc(len + 1);
+    if (!r)
+        return NULL;
+    size_t o = 0;
+    for (size_t i = 0; i < n; i++) {
+        size_t l = strlen(parts[i]);
+        memcpy(r + o, parts[i], l);
+        o += l;
+    }
+    r[o] = '\0';
+    return r;
+}
+
+TEST_CASE(fixture_word) {
+    const char *before =
+        "<html xmlns:v=\"urn:schemas-microsoft-com:vml\" "
+        "xmlns:o=\"urn:schemas-microsoft-com:office:office\" "
+        "xmlns:w=\"urn:schemas-microsoft-com:office:word\" "
+        "xmlns=\"http://www.w3.org/TR/REC-html40\"><head><meta http-equiv=Content-Type "
+        "content=\"text/html; charset=utf-8\"><meta name=ProgId content=Word.Document>"
+        "<meta name=Generator content=\"Microsoft Word 15\"><style><!--\r\n p.MsoNormal\r\n"
+        "\t{margin:0cm;font-size:11.0pt;}\r\n--></style></head><body lang=EN-AU "
+        "style='tab-interval:36.0pt;word-wrap:break-word'>\r\n";
+    // One element per paragraph, joined at run time, so each stays one line
+    // that is easy to compare with (or replace by) a live capture
+    static const char *const parts[] = {
+        "\r\n\r\n<p class=MsoNormal>Plain <b>bold</b> <i>italic</i><o:p></o:p></p>\r\n\r\n",
+        WORD_LI("First", "", "l0 level1 lfo1", "\xC2\xB7", "First"),
+        WORD_LI("Middle", WORD_INDENT2, "l0 level2 lfo1", "o", "Nested"),
+        WORD_LI("Last", "", "l0 level1 lfo1", "\xC2\xB7", "Second"),
+        WORD_LI("First", "", "l1 level1 lfo2", "1.", "Step one"),
+        WORD_LI("Last", "", "l1 level1 lfo2", "2.", "Step two"),
+        "<p class=MsoNormal>After<o:p></o:p></p>\r\n\r\n",
+    };
+    char *frag = join_parts(parts, sizeof(parts) / sizeof(parts[0]));
+    TEST_ASSERT_NOT_NULL(frag, "build the Word fragment");
+    const char *after = "</body>\r\n\r\n</html>";
+    ASSERT_MD(
+        cf_convert(before, frag, after, HTML_MD_FULL),
+        "Plain **bold** *italic*\n\n- First\n  - Nested\n- Second\n1. Step one\n2. Step two\n\n"
+        "After",
+        "Word -> Markdown (mso-list paragraphs become a list)");
+    ASSERT_MD(cf_convert(before, frag, after, HTML_MD_LISTS),
+              "Plain bold italic\n- First\n  - Nested\n- Second\n- Step one\n- Step two\nAfter",
+              "Word -> Lists");
+    free(frag);
+}
+
+TEST_CASE(fixture_excel) {
+    const char *before =
+        "<html xmlns:v=\"urn:schemas-microsoft-com:vml\" "
+        "xmlns:x=\"urn:schemas-microsoft-com:office:excel\" "
+        "xmlns=\"http://www.w3.org/TR/REC-html40\">\r\n<head>\r\n<meta name=ProgId "
+        "content=Excel.Sheet>\r\n<style>\r\n<!--table\r\n\t{mso-displayed-decimal-separator:\"\\."
+        "\";}"
+        "\r\n-->\r\n</style>\r\n</head>\r\n<body link=\"#0563C1\" vlink=\"#954F72\">\r\n\r\n"
+        "<table border=0 cellpadding=0 cellspacing=0 width=128 style='border-collapse:\r\n"
+        " collapse;width:96pt'>\r\n<col width=64 span=2 style='width:48pt'>\r\n";
+    // Excel's fragment is bare rows: the <table> tag sits outside it
+    const char *frag = "\r\n <tr height=20 style='height:15.0pt'>\r\n  <td height=20 width=64 "
+                       "style='height:15.0pt;width:48pt'>Name</td>\r\n  <td width=64 "
+                       "style='width:48pt'>Qty</td>\r\n </tr>\r\n <tr height=20 "
+                       "style='height:15.0pt'>\r\n  <td height=20 style='height:15.0pt'>Apple</td>"
+                       "\r\n  <td align=right>3</td>\r\n </tr>\r\n <tr height=20 "
+                       "style='height:15.0pt'>\r\n  <td height=20 style='height:15.0pt'>Pipe|Co"
+                       "</td>\r\n  <td align=right>12</td>\r\n </tr>\r\n";
+    const char *after = "\r\n</table>\r\n\r\n</body>\r\n\r\n</html>\r\n";
+    ASSERT_MD(cf_convert(before, frag, after, HTML_MD_FULL),
+              "| Name | Qty |\n| --- | --- |\n| Apple | 3 |\n| Pipe\\|Co | 12 |",
+              "Excel -> Markdown table");
+    ASSERT_MD(cf_convert(before, frag, after, HTML_MD_LISTS), "",
+              "Excel -> Lists falls back to Excel's own tab-separated text");
+    ASSERT_MD(cf_convert(before, frag, after, HTML_MD_PLAIN), "Name\tQty\nApple\t3\nPipe|Co\t12",
+              "Excel -> plain");
+}
+
+TEST_CASE(fixture_vscode) {
+    const char *frag =
+        "<meta charset='utf-8'><div style=\"color: #cccccc;background-color: #1f1f1f;"
+        "font-family: Consolas, 'Courier New', monospace;font-weight: normal;font-size: 14px;"
+        "line-height: 19px;white-space: pre;\"><div><span style=\"color: #569cd6;\">def</span>"
+        "<span style=\"color: #cccccc;\"> </span><span style=\"color: #dcdcaa;\">f</span>"
+        "<span style=\"color: #cccccc;\">(</span><span style=\"color: #9cdcfe;\">x</span>"
+        "<span style=\"color: #cccccc;\">):</span></div><div><span style=\"color: #cccccc;\">"
+        "&nbsp; &nbsp; </span><span style=\"color: #c586c0;\">return</span>"
+        "<span style=\"color: #cccccc;\"> x </span><span style=\"color: #d4d4d4;\">*</span>"
+        "<span style=\"color: #cccccc;\"> </span><span style=\"color: #b5cea8;\">2</span></div>"
+        "<br><div><span style=\"color: #6a9955;\"># done `x`</span></div></div>";
+    ASSERT_MD(cf_convert("<html><body>", frag, "</body></html>", HTML_MD_FULL),
+              "```\ndef f(x):\n    return x * 2\n\n# done `x`\n```", "VS Code -> fenced code");
+    ASSERT_MD(cf_convert("<html><body>", frag, "</body></html>", HTML_MD_LISTS), "",
+              "VS Code -> Lists falls back to the plain text (indentation intact)");
+}
+
+TEST_CASE(fixture_windows_terminal) {
+    const char *frag = "<DIV style=\"display:inline-block;white-space:pre;background-color:#0C0C0C;"
+                       "font-family:'Cascadia Mono',monospace;font-size:12pt;padding:4px;\">"
+                       "<SPAN style=\"color:#CCCCCC;background-color:#0C0C0C;\">PS C:\\&gt; dir"
+                       "</SPAN><BR><SPAN style=\"color:#CCCCCC;background-color:#0C0C0C;\">Mode"
+                       "    Name *</SPAN><BR></DIV>";
+    ASSERT_MD(cf_convert("<HTML><BODY>", frag, "</BODY></HTML>", HTML_MD_FULL),
+              "```\nPS C:\\> dir\nMode    Name *\n```", "terminal -> fenced, columns kept");
+}
+
+TEST_CASE(fixture_chrome_page) {
+    const char *frag =
+        "<h2 style=\"box-sizing: border-box; margin-top: 24px; color: rgb(31, 35, 40); "
+        "font-family: -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif;\">"
+        "Install</h2><p style=\"box-sizing: border-box; margin-bottom: 16px;\">Run <code "
+        "style=\"padding: 0.2em 0.4em; font-size: 85%;\">npm i `x`</code> then see <a "
+        "href=\"https://example.com/my page (1).html\" style=\"color: rgb(9, 105, 218);\">the "
+        "[docs]</a>.</p><pre style=\"padding: 16px; overflow: auto;\">\nfirst line\n``` not a "
+        "fence\n</pre><p><img src=\"https://example.com/a.png\" alt=\"A\ndiagram [v2]\" "
+        "style=\"max-width: 100%;\"></p>";
+    ASSERT_MD(cf_convert("<html><body>\r\n", frag, "\r\n</body>\r\n</html>", HTML_MD_FULL),
+              "## Install\n\nRun `` npm i `x` `` then see "
+              "[the \\[docs\\]](<https://example.com/my page (1).html>).\n\n````\nfirst line\n"
+              "``` not a fence\n````\n\n![A diagram \\[v2\\]](https://example.com/a.png)",
+              "Chrome page -> Markdown");
+}
+
+TEST_CASE(fixture_firefox_page) {
+    const char *frag = "<blockquote><p>Quoted <em>text</em></p></blockquote>"
+                       "<ol start=\"3\"><li>Third<ul><li>child</li></ul></li><li>Fourth</li></ol>"
+                       "<p>2024. A year</p><p># not a heading, * not a bullet</p>";
+    ASSERT_MD(cf_convert("<html><body>\n", frag, "\n</body>\n</html>", HTML_MD_FULL),
+              "> Quoted *text*\n\n3. Third\n   - child\n4. Fourth\n\n2024\\. A year\n\n"
+              "\\# not a heading, * not a bullet",
+              "Firefox page -> Markdown");
+    ASSERT_MD(cf_convert("<html><body>\n", frag, "\n</body>\n</html>", HTML_MD_LISTS),
+              "Quoted text\n- Third\n  - child\n- Fourth\n2024. A year\n"
+              "# not a heading, * not a bullet",
+              "Firefox page -> Lists");
+}
+
+// A blockquote inside a list item stays in the item; a list inside a quote
+// keeps its markers after the "> ".
+TEST_CASE(quote_in_list_item) {
+    ASSERT_MD(html_to_markdown("<ul><li>a<blockquote>q</blockquote></li></ul>", HTML_MD_FULL, "- "),
+              "- a\n  > q", "quote after item text is indented into the item");
+    ASSERT_MD(html_to_markdown("<ul><li><blockquote>q</blockquote></li><li>b</li></ul>",
+                               HTML_MD_FULL, "- "),
+              "- > q\n- b", "quote first in an item stays on the marker line");
+    ASSERT_MD(html_to_markdown("<ol><li>a<blockquote><p>x</p><p>y</p></blockquote></li></ol>",
+                               HTML_MD_FULL, "- "),
+              "1. a\n   > x\n   >\n   > y", "quoted paragraphs in an ordered item");
+    ASSERT_MD(
+        html_to_markdown("<ul><li>a<blockquote><ul><li>b<br>c</li></ul></blockquote></li></ul>",
+                         HTML_MD_FULL, "- "),
+        "- a\n  > - b\n  >   c", "list in a quote in a list");
+    ASSERT_MD(
+        html_to_markdown("<blockquote><ul><li>a<br>b</li></ul></blockquote>", HTML_MD_FULL, "- "),
+        "> - a\n>   b", "list in a top-level quote");
+    ASSERT_MD(
+        html_to_markdown("<ul><li>a<blockquote>q</blockquote></li></ul>", HTML_MD_LISTS, "- "),
+        "- a\n  q", "Lists mode has no quotes");
+    // Misnested and over-deep input stays bounded (run under ASan in review)
+    static const char *const hostile[] = {
+        "<ul><li><blockquote>a</li></ul>b<br>c</blockquote>d",
+        "<blockquote><ul><li>a</blockquote>b</li></ul>",
+        "<ul><li><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote>"
+        "<blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote>"
+        "<blockquote><blockquote><blockquote><blockquote><blockquote><ul><li>x<br>y",
+        "<table><tr><td colspan=999999999>a</td></tr><tr><td>b<td>c</tr></table>",
+    };
+    for (size_t i = 0; i < sizeof(hostile) / sizeof(hostile[0]); i++) {
+        char *r = html_to_markdown(hostile[i], HTML_MD_FULL, "- ");
+        TEST_ASSERT_NOT_NULL(r, "hostile nesting converts");
+        free(r);
+    }
+}
+
+// An ordered list that does not start at 1 cannot interrupt a paragraph.
+TEST_CASE(ordered_start_after_text) {
+    ASSERT_MD(
+        html_to_markdown("Intro<ol start=\"3\"><li>x</li><li>y</li></ol>", HTML_MD_FULL, "- "),
+        "Intro\n\n3. x\n4. y", "start=3 after inline text gets a blank line");
+    ASSERT_MD(html_to_markdown("Intro<br><ol><li value=\"7\">x</li></ol>", HTML_MD_FULL, "- "),
+              "Intro\n\n7. x", "value=7 on the first item, after a line break");
+    ASSERT_MD(html_to_markdown("Intro<ol><li>x</li></ol>", HTML_MD_FULL, "- "), "Intro\n1. x",
+              "a list starting at 1 may interrupt");
+    ASSERT_MD(html_to_markdown("Intro<ol start=\"3\"><li>x</li></ol>", HTML_MD_LISTS, "- "),
+              "Intro\n- x", "Lists mode unchanged");
+}
+
+// A trailing '#' run in a heading would read as its closing sequence.
+TEST_CASE(heading_trailing_hashes) {
+    ASSERT_MD(html_to_markdown("<h2>a #</h2>", HTML_MD_FULL, "- "), "## a \\#", "trailing ' #'");
+    ASSERT_MD(html_to_markdown("<h2>a ##</h2>p", HTML_MD_FULL, "- "), "## a \\##\n\np",
+              "trailing ' ##'");
+    ASSERT_MD(html_to_markdown("<h2>#</h2>", HTML_MD_FULL, "- "), "## \\#", "heading of only '#'");
+    ASSERT_MD(html_to_markdown("<h2>C#</h2>", HTML_MD_FULL, "- "), "## C#",
+              "'#' after a letter is text");
+    ASSERT_MD(html_to_markdown("<h1>a #<br>b</h1>", HTML_MD_FULL, "- "), "# a \\#\nb",
+              "the heading's own line is the one escaped");
+    ASSERT_MD(html_to_markdown("<h2>a #", HTML_MD_FULL, "- "), "## a \\#", "unclosed heading");
+    ASSERT_MD(html_to_markdown("<h2>a #</h2>", HTML_MD_LISTS, "- "), "", "Lists mode: no list");
+}
+
+// Pipe tables take the widest row's column count; colspan writes the cells
+// it covers.
+TEST_CASE(table_widest_row_and_colspan) {
+    ASSERT_MD(html_to_markdown("<table><tr><td>A</td></tr><tr><td>b</td><td>c</td></tr></table>",
+                               HTML_MD_FULL, "- "),
+              "| A |  |\n| --- | --- |\n| b | c |", "a wider later row widens the header");
+    ASSERT_MD(html_to_markdown("<table><tr><td>A</td></tr><tr><td>b</td><td>c</td></tr>"
+                               "<tr><td>d</td><td>e</td><td>f</td></tr></table>",
+                               HTML_MD_FULL, "- "),
+              "| A |  |  |\n| --- | --- | --- |\n| b | c |\n| d | e | f |", "widened twice");
+    ASSERT_MD(html_to_markdown("<table><tr><td colspan=\"2\">A</td><td>B</td></tr>"
+                               "<tr><td>a</td><td>b</td><td>c</td></tr></table>",
+                               HTML_MD_FULL, "- "),
+              "| A | | B |\n| --- | --- | --- |\n| a | b | c |", "colspan in the header");
+    ASSERT_MD(html_to_markdown("<table><tr><td>A</td><td>B</td></tr><tr><td colspan=2>x</td>"
+                               "</tr></table>",
+                               HTML_MD_FULL, "- "),
+              "| A | B |\n| --- | --- |\n| x | |", "colspan in a body row");
+    ASSERT_MD(html_to_markdown("<table><tr><td colspan=2>A<td>B</tr><tr><td>a<td>b<td>c</tr>"
+                               "</table>",
+                               HTML_MD_PLAIN, "- "),
+              "A\t\tB\na\tb\tc", "plain text keeps the merged cell's columns");
+    ASSERT_MD(html_to_markdown("<h2>t #</h2><table><tr><td>A</td></tr><tr><td>b</td><td>c</td>"
+                               "</tr></table>",
+                               HTML_MD_FULL, "- "),
+              "## t \\#\n\n| A |  |\n| --- | --- |\n| b | c |", "after an escaped heading");
+}
+
+// Inline elements nested past the tracked bound close innermost first.
+TEST_CASE(inline_stack_overflow_order) {
+    size_t cap = 300 * 40 + 64;
+    char *in = malloc(cap);
+    TEST_ASSERT_NOT_NULL(in, "allocate the input");
+    size_t p = 0;
+    for (int i = 0; i < 255; i++)
+        p += (size_t) sprintf(in + p, "<span>");
+    p += (size_t) sprintf(in + p, "<span style=\"font-weight:700\">");
+    for (int i = 0; i < 10; i++)
+        p += (size_t) sprintf(in + p, "<span>");
+    p += (size_t) sprintf(in + p, "a</span>b");
+    for (int i = 0; i < 10; i++) // nine untracked spans, then the bold one
+        p += (size_t) sprintf(in + p, "</span>");
+    p += (size_t) sprintf(in + p, "c");
+    for (int i = 0; i < 255; i++)
+        p += (size_t) sprintf(in + p, "</span>");
+    ASSERT_MD(html_to_markdown(in, HTML_MD_FULL, "- "), "**ab**c",
+              "bold ends at its own close, not an inner one");
+    free(in);
+}
+
+// NP-143: large pastes stay linear. A bound of seconds against work that
+// takes milliseconds: a quadratic path would blow far past it.
+TEST_CASE(scaling_large_paste) {
+    const char *unit = "<li><b>item</b> <span style=\"font-weight:700\">x</span> "
+                       "<a href=\"u\">l</a> <code>c`d</code></li>";
+    size_t ul = strlen(unit), reps = 20000;
+    char *in = malloc(ul * reps + 16);
+    TEST_ASSERT_NOT_NULL(in, "allocate the large input");
+    size_t p = 0;
+    memcpy(in + p, "<ul>", 4);
+    p += 4;
+    for (size_t i = 0; i < reps; i++) {
+        memcpy(in + p, unit, ul);
+        p += ul;
+    }
+    memcpy(in + p, "</ul>", 6);
+    clock_t t0 = clock();
+    char *full = html_to_markdown(in, HTML_MD_FULL, "- ");
+    char *lists = html_to_markdown(in, HTML_MD_LISTS, "- ");
+    double secs = (double) (clock() - t0) / CLOCKS_PER_SEC;
+    free(in);
+    TEST_ASSERT_NOT_NULL(full, "large Markdown conversion");
+    TEST_ASSERT_NOT_NULL(lists, "large Lists conversion");
+    if (full && lists) {
+        const char *ef = "- **item** **x** [l](u) ``c`d``\n- **item**";
+        const char *el = "- item x l c`d\n- item";
+        TEST_ASSERT(strncmp(full, ef, strlen(ef)) == 0, "each item converts");
+        TEST_ASSERT(strncmp(lists, el, strlen(el)) == 0, "each item converts (Lists)");
+    }
+    free(full);
+    free(lists);
+    TEST_ASSERT(secs < 10.0, "a 2 MB paste converts in well under ten seconds");
+
+    // Deeply nested inline elements past the tracked-stack bound
+    size_t depth = 5000;
+    char *deep = malloc(depth * 40 + 16);
+    TEST_ASSERT_NOT_NULL(deep, "allocate the deep input");
+    p = 0;
+    for (size_t i = 0; i < depth; i++)
+        p += (size_t) sprintf(deep + p, "<span style=\"font-weight:700\">");
+    deep[p++] = 'x';
+    for (size_t i = 0; i < depth; i++)
+        p += (size_t) sprintf(deep + p, "</span>");
+    deep[p] = '\0';
+    ASSERT_MD(html_to_markdown(deep, HTML_MD_FULL, "- "), "**x**", "5000 nested bold spans");
+    free(deep);
+}
+
 int main(void) {
     TEST_INIT();
 
@@ -406,6 +1050,32 @@ int main(void) {
     RUN_TEST(rev_li_leading_space_trimmed);
     RUN_TEST(rev_nested_anchor_balanced);
     RUN_TEST(rev_cf_strips_header_on_bad_offsets);
+
+    RUN_TEST(lists_mode_needs_a_list);
+    RUN_TEST(block_elements_break_lines);
+    RUN_TEST(tables_markdown_and_plain);
+    RUN_TEST(white_space_pre_block);
+    RUN_TEST(li_block_children);
+    RUN_TEST(google_docs_wrapper_bold);
+    RUN_TEST(emphasis_written_lazily);
+    RUN_TEST(ordered_nesting_and_start);
+    RUN_TEST(quote_aware_tags);
+    RUN_TEST(markdown_escaping);
+    RUN_TEST(attribute_line_breaks);
+    RUN_TEST(fixture_google_docs);
+    RUN_TEST(fixture_libreoffice);
+    RUN_TEST(fixture_word);
+    RUN_TEST(fixture_excel);
+    RUN_TEST(fixture_vscode);
+    RUN_TEST(fixture_windows_terminal);
+    RUN_TEST(fixture_chrome_page);
+    RUN_TEST(fixture_firefox_page);
+    RUN_TEST(quote_in_list_item);
+    RUN_TEST(ordered_start_after_text);
+    RUN_TEST(heading_trailing_hashes);
+    RUN_TEST(table_widest_row_and_colspan);
+    RUN_TEST(inline_stack_overflow_order);
+    RUN_TEST(scaling_large_paste);
 
     TEST_SUMMARY();
     return 0;
