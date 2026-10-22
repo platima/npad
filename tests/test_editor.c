@@ -464,7 +464,11 @@ TEST_CASE(missing_startup_file_offers_to_create_it) {
     stub_type("todo\n");
     TEST_ASSERT(editor_save_file(), "Ctrl+S");
     TEST_ASSERT_EQ(0, g_stub.save_dialogs, "without a Save As dialog");
-    TEST_ASSERT(disk_equals(P("new.txt"), "todo\n"), "into the named file");
+    // A created file is a new document, so it takes the default line ending
+    // (CRLF on Windows, as in notepad.exe; LF elsewhere)
+    TEST_ASSERT(disk_equals(P("new.txt"),
+                            NPAD_DEFAULT_LINE_ENDING == NPAD_EOL_CRLF ? "todo\r\n" : "todo\n"),
+                "into the named file");
 
     setup();
     remove(P("other.txt"));
