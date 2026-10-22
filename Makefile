@@ -490,8 +490,8 @@ tests/test_assoc_win32.exe: tests/test_assoc_win32.c src/platform/assoc_win32.c 
 
 # Windows-only: the RichEdit text boundary (src/platform/richedit_text.c)
 # against a hidden msftedit control in the test's own process. Cross-compiled
-# here; run tests/test_richedit_boundary.exe on Windows (CI does, on
-# windows-latest). Links no settings or session code: it writes no
+# here; run tests/test_richedit_boundary.exe on Windows (make test-windows does,
+# CI too). Links no settings or session code: it writes no
 # configuration and no registry value, and messages only its own windows.
 test-richedit-win32: tests/test_richedit_boundary.exe
 
