@@ -59,6 +59,7 @@ notes.txt
 
 # Test executables
 tests/test_file_ops
+tests/test_atomic_save
 tests/test_error
 tests/test_encoding
 tests/test_session
