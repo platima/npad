@@ -1932,8 +1932,9 @@ char *editor_read_file_for_insert(const char *filename) {
         confirmed_binary = true;
     }
 
-    // The large-file threshold Open uses (0 turns the warning off)
-    int warn_mb = settings_get_int("large_file_warning_mb", editor_default_large_file_mb());
+    // The large-file threshold Open uses, clamped the same way (0 turns the
+    // warning off)
+    int warn_mb = ui_large_file_mb_setting(editor_default_large_file_mb());
     if (warn_mb > 0) {
         size_t size = file_get_size(filename);
         if (size > (size_t) warn_mb * 1024 * 1024) {
