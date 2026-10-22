@@ -1139,18 +1139,28 @@ TEST_CASE(update_parsers_handle_any_input) {
                                              "\"browser_download_url\"",
                                              "\"name\"",
                                              "-setup-win-x64.exe",
+                                             "[",
+                                             "]",
+                                             ",",
+                                             "\"prerelease\"",
+                                             "\"draft\"",
+                                             "true",
+                                             "false",
                                              NULL };
     rng_reset(13);
     Buf b = { 0 };
     for (long it = 0; it < g_iters; it++) {
-        if (it % 30 == 0)
+        if (it % 60 == 0)
             buf_set_str(&b, "{\"tag_name\":\"v0.36.0\",\"assets\":[{\"name\":\"x\"}]}");
+        else if (it % 30 == 0)
+            buf_set_str(&b, "[{\"tag_name\":\"v0.37.0-rc1\",\"prerelease\":true,\"draft\":false},"
+                            "{\"tag_name\":\"v0.36.0\",\"prerelease\":false}]");
         int n = 1 + (int) rng_below(5);
         for (int m = 0; m < n; m++)
             mutate(&b, JSON_DICT, 2048);
         char tag[16];
         memset(tag, 'Z', sizeof tag);
-        bool got = update_extract_tag(b.d, tag, sizeof tag);
+        bool got = update_pick_release_tag(b.d, (it & 1) != 0, tag, sizeof tag);
         bool fits = !got || memchr(tag, '\0', sizeof tag) != NULL;
         char url[64];
         (void) update_find_asset_url(b.d, "-setup-win-x64.exe", url, sizeof url);
