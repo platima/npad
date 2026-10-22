@@ -1314,6 +1314,10 @@ char **settings_get_recent_files(int *count) {
     return read_recent_list(count, true);
 }
 
+char **settings_get_recent_files_ex(int *count, bool only_existing) {
+    return read_recent_list(count, only_existing);
+}
+
 void settings_free_recent_files(char **files, int count) {
     if (!files)
         return;

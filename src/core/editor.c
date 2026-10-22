@@ -908,15 +908,12 @@ static bool text_starts_log(const char *text) {
            (text[4] == '\0' || text[4] == '\r' || text[4] == '\n');
 }
 
-bool editor_open_file(const char *filename) {
-    if (!filename)
-        return false;
-
-    // Pre-open checks run before the save prompt so declining either one
-    // never costs the user a pointless "save changes?" round trip
-
-    // A binary-looking file is usually a mistake: offer the system's own
-    // handler for it instead of a wall of control characters
+// The questions asked before reading a file into the editor, shared by Open
+// and Reload from disk: a binary-looking file is usually a mistake, so offer
+// the system's own handler instead of a wall of control characters, and a
+// very large one loads on the UI thread, so ask first. Returns true to go
+// ahead; false leaves the current document untouched.
+static bool editor_confirm_load(const char *filename) {
     if (file_looks_binary(filename)) {
         g_modal_depth++;
         UiOpenChoice choice = ui_prompt_binary_open(g_editor.main_window, filename);
@@ -932,7 +929,6 @@ bool editor_open_file(const char *filename) {
         }
     }
 
-    // Warn before opening very large files
     int warn_mb = settings_get_int("large_file_warning_mb", editor_default_large_file_mb());
     if (warn_mb > 0) {
         size_t size = file_get_size(filename);
@@ -947,6 +943,17 @@ bool editor_open_file(const char *filename) {
             }
         }
     }
+    return true;
+}
+
+bool editor_open_file(const char *filename) {
+    if (!filename)
+        return false;
+
+    // Pre-open checks run before the save prompt so declining either one
+    // never costs the user a pointless "save changes?" round trip
+    if (!editor_confirm_load(filename))
+        return false;
 
     // Check if current file needs saving
     if (!editor_prompt_save_changes()) {
@@ -1154,10 +1161,22 @@ bool editor_reload_from_disk(void) {
     if (!g_editor.current_file || !g_editor.main_window)
         return false;
 
+    // The file was replaced underneath npad, possibly by something binary or
+    // huge: the same questions Open asks, before anything is read
+    if (!editor_confirm_load(g_editor.current_file))
+        return false;
+
     TextFileInfo info;
     char *content = file_read_text_ex(g_editor.current_file, &info);
-    if (!content)
+    if (!content) {
+        // Say why (a sharing violation, say) rather than failing silently;
+        // the document on screen is untouched
+        char error_msg[512];
+        snprintf(error_msg, sizeof(error_msg), "Could not reload %.300s\n%.150s",
+                 g_editor.current_file, file_get_last_error());
+        editor_ask(error_msg, false);
         return false;
+    }
     apply_default_eol_if_no_breaks(&info, content);
 
     if (!ui_set_text(g_editor.main_window, content)) {

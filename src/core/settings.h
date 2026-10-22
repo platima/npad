@@ -128,6 +128,11 @@ bool settings_load_window_state(int *x, int *y, int *width, int *height, bool *m
 // when the file is reachable again.
 bool settings_add_recent_file(const char *filepath);
 char **settings_get_recent_files(int *count);
+// The stored list, optionally without the file-system check: an existence
+// test on a path whose share or drive is asleep can block for the SMB timeout
+// (20-40 s), so a menu built on every open must not make one per entry.
+// settings_get_recent_files(count) is settings_get_recent_files_ex(count, true).
+char **settings_get_recent_files_ex(int *count, bool only_existing);
 void settings_free_recent_files(char **files, int count);
 bool settings_clear_recent_files(void);
 

@@ -406,7 +406,10 @@ static void prompt_external_change(Window *window) {
 
     switch (choice) {
         case EXT_RELOAD:
-            editor_reload_from_disk();
+            // Declined or failed (the core has said why): treat it as Keep
+            // editing, or the same prompt returns on the next activation
+            if (!editor_reload_from_disk())
+                editor_accept_external_change();
             break;
         case EXT_SAVE_AS:
             ui_post_event(UI_EVENT_FILE_SAVE_AS, window, NULL);

@@ -80,7 +80,10 @@ EditorExternalChange editor_check_external_change(void);
 // user saves, because keeping their version means nothing is written yet.
 void editor_accept_external_change(void);
 void editor_suppress_change_prompt(void); // For this file, this session only
-bool editor_reload_from_disk(void);       // Discards unsaved edits deliberately
+// Discards unsaved edits deliberately. Asks Open's binary and large-file
+// questions first and reports a read failure itself; false (declined or
+// failed) leaves the document and its baseline untouched.
+bool editor_reload_from_disk(void);
 bool editor_save_file(void);
 // Save to filename in the document's current encoding. Nothing about the
 // document changes unless the write succeeds.
