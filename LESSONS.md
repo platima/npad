@@ -1456,6 +1456,25 @@ uninstall key `Inno Setup *_is1` (under WOW6432Node) gives `InstallLocation`
 and `DisplayVersion`, so ISCC can be found without assuming the `Inno Setup 6`
 folder name.
 
+**"No product claims this folder" is not evidence that a product owns it.**
+MSIs before 0.36.0 recorded no `InstallLocation`, and the updater trusted
+such a product whenever no other product named this exe's folder - so on a
+PC with an old MSI install, a portable copy anywhere else updated through
+that MSI (upgrading the other install, not itself). → Require positive
+evidence: a legacy product owns only a copy in its own default folder for
+its scope (`ProgramFiles64Folder\npad`, which is `FOLDERID_ProgramFiles` all
+users and `FOLDERID_UserProgramFiles` per user). `update_msi_owner` in
+`src/core/update_check.c` decides it, with tests.
+
+**The two installers cannot see each other through their own upgrade
+logic.** MajorUpgrade finds only MSIs with the same UpgradeCode, and Inno
+only its own AppId, so installing the setup EXE and the MSI together gave two
+products sharing one folder and one set of keys. → Each checks for the other
+by name: setup calls `MsiEnumRelatedProducts` with the MSI's UpgradeCode in
+`InitializeSetup`; the MSI's `Launch` condition tests RegistrySearches of
+setup's `{AppId}_is1` uninstall key in HKCU and HKLM. Keep both identifiers in
+step with `src/platform/ui_win32.c`, which uses the same two.
+
 ## Windows on Arm (arm64)
 
 **MinGW GCC has no arm64 Windows target; llvm-mingw (clang + lld) does - and

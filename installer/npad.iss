@@ -7,6 +7,8 @@
 ; elevated account's profile. Fonts are optional components; file
 ; associations, PATH and the notepad alias takeover are tasks; re-running
 ; setup with the PATH or notepad alias task unticked removes that entry.
+; Setup refuses to install while an npad MSI is installed (InstalledNpadMsi),
+; as the MSI refuses while this setup's install is there.
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -348,8 +350,9 @@ Root: HKA; Subkey: "Software\Classes\npad.conf"; ValueType: none; Flags: dontcre
 Root: HKA; Subkey: "Software\Classes\npad.log"; ValueType: none; Flags: dontcreatekey uninsdeletekey
 ; On an all-users install HKA is HKLM, but Preferences > Associations writes
 ; the per-user hive by default. Clean the uninstalling account's per-user
-; registrations as well. Other accounts' per-user entries are out of an
-; uninstaller's reach; DOCUMENTATION.md says so.
+; registrations as well (and, in [Code], RemoveUserDefaultAppsEntry: the
+; HKCU RegisteredApplications value). Other accounts' per-user entries are
+; out of an uninstaller's reach; DOCUMENTATION.md says so.
 Root: HKCU; Subkey: "Software\Classes\npad.txt"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\npad.md"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\npad.markdown"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
@@ -424,6 +427,26 @@ var
   // Each extension's default value as uninstall found it - see
   // SnapshotExtDefaults
   GExtBefore: array of String;
+  // InitializeSetup refused to install beside an npad MSI (RefuseBesideMsi
+  // has already done what DeinitializeSetup would)
+  GRefused: Boolean;
+
+const
+  // installer/npad.wxs's UpgradeCode, shared by every npad MSI (x64, arm64,
+  // every version) - what src/platform/ui_win32.c enumerates too
+  NpadMsiUpgradeCode = '{6C9F1E28-4B57-4A0D-BE73-8A51F2D90C44}';
+  // This setup's own uninstall key ([Setup] AppId plus Inno's "_is1")
+  NpadSetupUninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{B7E5A2C4-9D31-4F8E-A6C0-3D2E71540A9B}_is1';
+  // The value Preferences > Associations writes under
+  // Software\RegisteredApplications (src/platform/assoc_win32.c's CAPS)
+  NpadCapabilitiesKey = 'Software\Platima\npad\Capabilities';
+
+// Windows Installer: the ProductCode of each product sharing an UpgradeCode,
+// installed for this user (per-user) or for the machine (all-users). msi.dll
+// is loaded on first use; it is part of every supported Windows.
+function MsiEnumRelatedProducts(lpUpgradeCode: String; dwReserved: Cardinal;
+  iProductIndex: Cardinal; lpProductBuf: String): Cardinal;
+  external 'MsiEnumRelatedProductsW@msi.dll stdcall delayload';
 
 // The Components and Tasks check lists draw their check boxes at a raw,
 // unscaled Offset of 2 and 4 pixels while the glyph itself scales with DPI.
@@ -441,6 +464,77 @@ begin
   GPrevAppDir := WizardForm.PrevAppDir;
 end;
 
+// --- One installer per machine --------------------------------------------
+// npad's MSI is a separate product with its own Installed apps entry, but it
+// installs to the same folder and writes the same App Paths, alias, PATH and
+// file-type keys as this setup. Installing both listed npad twice, and
+// uninstalling either removed the program and the entries the other still
+// pointed at. So setup refuses while an npad MSI is installed, per-user (for
+// this account) or all-users, and the MSI refuses while this setup's install
+// is there (its LaunchCondition). The MSI is found the way Windows Installer
+// registers it: by its UpgradeCode.
+function InstalledNpadMsi(): String;
+var
+  Buf: String;
+begin
+  Result := '';
+  // 38 characters and the terminating NUL
+  Buf := StringOfChar(' ', 39);
+  try
+    if MsiEnumRelatedProducts(NpadMsiUpgradeCode, 0, 0, Buf) = 0 then
+      Result := Copy(Buf, 1, 38);
+  except
+    Log('Could not ask Windows Installer about an npad MSI: ' + GetExceptionMessage);
+  end;
+end;
+
+// Setup is about to exit without installing. An in-app update (/RELAUNCH=1)
+// closed npad before starting setup, parking its unsaved documents; start
+// the copy this setup installed earlier, when there is one, which restores
+// them (DeinitializeSetup's job, but it knows no folder this early). As the
+// original user, and never for a silent all-users run.
+procedure RelaunchAfterRefusal();
+var
+  Dir, Exe: String;
+  ResultCode: Integer;
+begin
+  if (not GNpadWasRunning) or (FindWindowByClassName('NpadMainWindow') <> 0) then
+    exit;
+  if WizardSilent and IsAdminInstallMode then
+    exit;
+  if not RegQueryStringValue(HKEY_CURRENT_USER, NpadSetupUninstallKey, 'InstallLocation', Dir) then
+    if not RegQueryStringValue(HKEY_LOCAL_MACHINE, NpadSetupUninstallKey, 'InstallLocation', Dir) then
+      exit;
+  Exe := AddBackslash(Dir) + '{#AppExe}';
+  if FileExists(Exe) then
+    ExecAsOriginalUser(Exe, '', '', SW_SHOWNORMAL, ewNoWait, ResultCode);
+end;
+
+// Interactive: a message box. Silent (/SILENT, /VERYSILENT): only the log
+// line, so an unattended deployment can never wait on a box nobody sees;
+// returning False from InitializeSetup ends setup with exit code 1 either way.
+procedure RefuseBesideMsi(const Product: String);
+var
+  Msg: String;
+begin
+  Log('npad is already installed by its Windows Installer package (MSI product ' + Product +
+      '). Refusing to install a second copy beside it: uninstall the MSI first ' +
+      '(msiexec /x ' + Product + '), then run setup again. Exit code 1.');
+  if not WizardSilent then
+  begin
+    Msg := 'npad is already installed on this PC by its Windows Installer package (MSI).' + #13#10#13#10 +
+           'Setup will not install npad a second time: the two installations would share one ' +
+           'folder and the same registrations, and uninstalling either would break the other.' + #13#10#13#10 +
+           'Uninstall npad first (Settings > Apps > Installed apps, or msiexec /x ' + Product +
+           '), then run this setup again.';
+    if GNpadWasRunning and (FindWindowByClassName('NpadMainWindow') = 0) then
+      Msg := Msg + #13#10#13#10 + 'Unsaved npad documents are kept and reopen the next time npad starts.';
+    MsgBox(Msg, mbCriticalError, MB_OK);
+  end;
+  RelaunchAfterRefusal();
+  GRefused := True;
+end;
+
 // --- Was npad already running when setup started? -------------------------
 // The relaunch checkbox should only appear when setup actually interrupted a
 // running instance - offering to start an app the user was not using is noise.
@@ -452,11 +546,20 @@ end;
 //   * /RELAUNCH=1      -> npad launched setup ITSELF for an in-app update and
 //                         then closed, so by now there is no window to find
 function InitializeSetup(): Boolean;
+var
+  Msi: String;
 begin
   GNpadWasRunning := (FindWindowByClassName('NpadMainWindow') <> 0) or
                      (ExpandConstant('{param:RELAUNCH|0}') = '1');
   GInstallDone := False;
+  GRefused := False;
   Result := True;
+  Msi := InstalledNpadMsi();
+  if Msi <> '' then
+  begin
+    RefuseBesideMsi(Msi);
+    Result := False;
+  end;
 end;
 
 function NpadWasRunning(): Boolean;
@@ -493,7 +596,7 @@ var
   Exe: String;
   ResultCode: Integer;
 begin
-  if GInstallDone or (not GNpadWasRunning) then
+  if GInstallDone or GRefused or (not GNpadWasRunning) then
     exit;
   if WizardSilent and IsAdminInstallMode then
     exit;
@@ -850,6 +953,26 @@ begin
     GInstallDone := True;
 end;
 
+// An all-users uninstall also cleans the uninstalling account's per-user
+// registrations (the HKCU [Registry] rows above). Preferences > Associations
+// lists npad in Default apps per user too, as the value "npad" under
+// HKCU\Software\RegisteredApplications naming the per-user Capabilities key
+// those rows delete; without this the value stayed behind, naming a key that
+// no longer exists. Removed only when it is npad's own entry. Done in [Code]
+// rather than as a dontcreatekey row because a row with no value type is not
+// certain to log a value deletion. A per-user uninstall's own [Registry] row
+// (HKA, uninsdeletevalue) already removes it.
+procedure RemoveUserDefaultAppsEntry();
+var
+  Value: String;
+begin
+  if not IsAdminInstallMode then
+    exit;
+  if RegQueryStringValue(HKEY_CURRENT_USER, 'Software\RegisteredApplications', 'npad', Value) and
+     (CompareText(Value, NpadCapabilitiesKey) = 0) then
+    RegDeleteValue(HKEY_CURRENT_USER, 'Software\RegisteredApplications', 'npad');
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
@@ -858,5 +981,8 @@ begin
     SnapshotExtDefaults();
   end
   else if CurUninstallStep = usPostUninstall then
+  begin
     RestoreExtDefaults();
+    RemoveUserDefaultAppsEntry();
+  end;
 end;

@@ -60,6 +60,37 @@
                   DowngradeErrorMessage="A newer version of npad is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
+    <!-- One installer per machine. The setup EXE (installer/npad.iss) is a
+         separate product, but it installs to the same folder and writes the
+         same App Paths, alias, PATH and file-type keys: installing both listed
+         npad twice, and uninstalling either removed the program and the
+         entries the other still pointed at. Its installation is found by its
+         uninstall key (setup's AppId plus "_is1"), per-user in HKCU and
+         all-users in HKLM (the 64-bit view setup writes, and the 32-bit view
+         for good measure). While one is there this package refuses to install,
+         as setup refuses while an npad MSI is installed. Never once Installed:
+         repairing or removing this product is not blocked. A quiet install
+         (/qn) shows nothing: it fails with exit code 1603 and the message is
+         in its log (msiexec /l*v). Another account's per-user setup install
+         is out of sight, as it is for any MSI. -->
+    <Property Id="NPAD_SETUP_CU" Secure="yes">
+      <RegistrySearch Root="HKCU"
+                      Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\{B7E5A2C4-9D31-4F8E-A6C0-3D2E71540A9B}_is1"
+                      Name="UninstallString" Type="raw" />
+    </Property>
+    <Property Id="NPAD_SETUP_LM" Secure="yes">
+      <RegistrySearch Root="HKLM"
+                      Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\{B7E5A2C4-9D31-4F8E-A6C0-3D2E71540A9B}_is1"
+                      Name="UninstallString" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="NPAD_SETUP_LM32" Secure="yes">
+      <RegistrySearch Root="HKLM"
+                      Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\{B7E5A2C4-9D31-4F8E-A6C0-3D2E71540A9B}_is1"
+                      Name="UninstallString" Type="raw" Bitness="always32" />
+    </Property>
+    <Launch Condition="Installed OR NOT (NPAD_SETUP_CU OR NPAD_SETUP_LM OR NPAD_SETUP_LM32)"
+            Message="npad is already installed on this PC by its setup program (the setup EXE, not this Windows Installer package). This package will not install npad a second time: the two installations would share one folder and the same registrations, and uninstalling either would break the other. Uninstall npad first (Settings &gt; Apps &gt; Installed apps), then run this package again." />
+
     <!-- Add/Remove Programs entry. npad.ico became npad-light.ico in v0.28.0
          when the icon gained light/dark variants; this is the default one. -->
     <Icon Id="npadIcon" SourceFile="..\src\platform\npad-light.ico" />

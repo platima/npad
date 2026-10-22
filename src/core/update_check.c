@@ -552,6 +552,26 @@ static bool is_path_sep(char c) {
     return c == '\\' || c == '/';
 }
 
+int update_msi_owner(const UpdateMsiProduct *products, size_t count, const char *exe_path,
+                     const char *machine_default_dir, const char *user_default_dir) {
+    if (!products || !exe_path)
+        return -1;
+    for (size_t i = 0; i < count; i++) {
+        const char *loc = products[i].install_location;
+        if (loc && loc[0] && update_dir_holds_exe(loc, exe_path))
+            return (int) i;
+    }
+    for (size_t i = 0; i < count; i++) {
+        const char *loc = products[i].install_location;
+        if (!loc || loc[0])
+            continue;
+        const char *def = products[i].per_machine ? machine_default_dir : user_default_dir;
+        if (def && update_dir_holds_exe(def, exe_path))
+            return (int) i;
+    }
+    return -1;
+}
+
 bool update_dir_holds_exe(const char *dir, const char *exe_path) {
     if (!dir || !exe_path || !dir[0])
         return false;

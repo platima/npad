@@ -33,12 +33,25 @@ one).
 **Use one installer per machine.** The setup EXE and the MSI are separate
 products, each with its own entry in Installed apps, but in the same scope
 they install to the same folder and write the same App Paths, alias, PATH and
-file-type keys. Installing both lists npad twice, and uninstalling either one
-removes the program and the entries the other still points at. To switch,
-uninstall the one you have first. (A per-user and an all-users installation
-can also exist side by side; setup then asks which of them to upgrade.) The
-in-app updater always updates a copy with the installer that installed it -
-see [Updates](#updates-preferences--updates---all-opt-in-off-by-default).
+file-type keys. Installing both would list npad twice, and uninstalling
+either one would remove the program and the entries the other still points
+at, so each installer refuses to install while the other's installation is
+there:
+- **Setup EXE**: finds an npad MSI through Windows Installer (by the MSI's
+  UpgradeCode, per-user for the account running setup or all-users), says
+  so and exits without changing anything. A silent run (`/SILENT`,
+  `/VERYSILENT`) shows no message: it writes the reason to its log
+  (`/LOG=<file>`) and exits with code 1.
+- **MSI**: finds the setup EXE's installation by its uninstall key (HKCU and
+  HKLM), says so and installs nothing. A quiet `msiexec /qn` shows no message:
+  it ends with exit code 1603 and writes the reason to its log (`/l*v
+  <file>`). Repairing or removing an MSI install is never blocked.
+
+To switch, uninstall the one you have first (Settings > Apps > Installed
+apps). Neither can see another account's per-user installation. (A per-user
+and an all-users installation of the same installer can also exist side by
+side; setup then asks which of them to upgrade.) The in-app updater always
+updates a copy with the installer that installed it - see [Updates](#updates-preferences--updates---all-opt-in-off-by-default).
 
 **SmartScreen / Defender**: releases from v0.32.4 are code-signed (Azure
 Artifact Signing; check Properties > Digital Signatures). A publisher's
@@ -243,11 +256,12 @@ editor** above). It keeps:
   with the setup EXE also removes the per-user registrations that
   Preferences > Associations made - but only for the account that runs the
   uninstaller, which under an over-the-shoulder UAC prompt is the
-  administrator who elevated, not the signed-in user. Other accounts' per-user
-  entries remain, pointing at the removed program, and so does the running
-  account's `HKCU\Software\RegisteredApplications` value `npad`, which then
-  names a key that no longer exists (Windows ignores it). The MSI does not
-  remove groups added on Preferences > Associations (see
+  administrator who elevated, not the signed-in user. For that account it
+  also removes the `HKCU\Software\RegisteredApplications` value `npad` (the
+  Default apps entry), when it is npad's. Other accounts' per-user entries
+  remain, pointing at the removed program; a `RegisteredApplications` value
+  left behind names a key that no longer exists, which Windows ignores. The
+  MSI does not remove groups added on Preferences > Associations (see
   [Associations](#associations-preferences--associations)).
 
 **Portable exe**: the same program, run from wherever you put it, with
@@ -259,7 +273,10 @@ npad if there is one, and otherwise makes a **new per-user installation** with
 setup's default choices (the PATH entry, the `.txt` association, the notepad
 alias and the fonts, unless you untick them in the wizard). Setup's Relaunch
 then starts the installed copy; the portable exe stays at its old version. To
-update the portable copy itself, download the new portable exe.
+update the portable copy itself, download the new portable exe. On a PC where
+npad is installed from the MSI, setup refuses (see **Use one installer per
+machine** above): the portable copy's unsaved documents reopen the next time
+it starts. Update an MSI install from the npad it installed.
 
 **Building the installers** (repo checkout, Windows): `pwsh
 installer/build-installers.ps1` - needs Inno Setup 6, **WiX 6** (`dotnet tool
@@ -782,7 +799,11 @@ this copy: the MSI (`npad-v<v>-msi-win-<arch>.msi`, run as `msiexec /i ...
 Windows Installer installed npad into the folder this `npad.exe` runs from,
 and otherwise the setup EXE (`npad-v<v>-setup-win-<arch>.exe`), which is also
 what a portable copy gets (see **Portable exe** under
-[Installation](#installation-windows)). An MSI update keeps the association
+[Installation](#installation-windows)). An MSI from before 0.36.0 did not
+record its folder; such an install counts as this copy's only when `npad.exe`
+runs from that MSI's default folder for its scope (`Program Files\npad` for
+all users, `%LOCALAPPDATA%\Programs\npad` per user), so a portable copy
+elsewhere never updates through it. An MSI update keeps the association
 groups you unticked on Preferences > Associations unticked. It is always the
 download for the architecture npad was compiled for: an arm64 npad is never
 offered the x64 installer, and reports an error if a release has none for it.

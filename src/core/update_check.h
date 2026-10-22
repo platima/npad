@@ -109,6 +109,29 @@ UpdatePackage update_windows_package(bool setup_owns_this_copy, bool msi_owns_th
 // dir is optional - Inno records InstallLocation with one.
 bool update_dir_holds_exe(const char *dir, const char *exe_path);
 
+// One installed npad MSI product, as Windows Installer reports it
+typedef struct {
+    // InstallLocation: "" for a product from an MSI built before 0.36.0,
+    // which did not record it; NULL when it could not be read
+    const char *install_location;
+    bool per_machine; // AssignmentType 1: an all-users install
+} UpdateMsiProduct;
+
+// Which of the installed npad MSI products installed the copy at exe_path:
+// its index, or -1 when none did (the copy is portable, or the setup EXE's).
+//
+// A product that recorded its InstallLocation owns the copy in that folder.
+// A product that recorded none owns a copy only on positive evidence: the exe
+// is in that MSI's default folder for the product's own scope,
+// machine_default_dir (<Program Files>\npad) for an all-users product and
+// user_default_dir (%LOCALAPPDATA%\Programs\npad) for a per-user one - every
+// npad MSI has installed to ProgramFiles64Folder\npad, which Windows Installer
+// resolves that way. Anywhere else, the copy is not that product's: it may be a
+// portable copy, and running the MSI would upgrade a different install while
+// this one stayed old. A recorded location is preferred over a legacy match.
+int update_msi_owner(const UpdateMsiProduct *products, size_t count, const char *exe_path,
+                     const char *machine_default_dir, const char *user_default_dir);
+
 // The msiexec feature selection for an MSI update that must not bring back
 // association groups the user has since unregistered on Preferences >
 // Associations (the MSI's counterpart of setup's /MERGETASKS).

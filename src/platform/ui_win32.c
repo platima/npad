@@ -3703,12 +3703,34 @@ static FARPROC msi_proc(const char *name) {
 // are told apart, and *per_machine is the matching product's own scope.
 //
 // A product with no InstallLocation came from an MSI built before the
-// property was recorded; there is no telling where it put npad, so it is
-// trusted as before - but only when no product claims this folder outright.
-// Any other copy (a portable one beside an MSI install elsewhere) is not the
-// MSI's: it used to download and run the MSI, which upgraded the OTHER install
-// (with a UAC prompt for an all-users one) while this copy stayed old and kept
-// offering the update.
+// property was recorded. It is trusted only on positive evidence: this exe is
+// in the folder that MSI installs to by default for its scope
+// (update_msi_owner). It used to be trusted whenever no product claimed this
+// folder outright, so on a PC with such an MSI a portable copy elsewhere still
+// updated through it - upgrading the OTHER install (with a UAC prompt for an
+// all-users one) while this copy stayed old and kept offering the update.
+//
+// The default folder: every npad MSI installs to ProgramFiles64Folder\npad,
+// which Windows Installer resolves to FOLDERID_ProgramFiles for an all-users
+// install and to FOLDERID_UserProgramFiles (%LOCALAPPDATA%\Programs) for a
+// per-user one. NULL when the folder is not known.
+static char *msi_default_folder(bool per_machine) {
+    PWSTR base = NULL;
+    REFKNOWNFOLDERID folder = per_machine ? &FOLDERID_ProgramFiles : &FOLDERID_UserProgramFiles;
+    HRESULT hr = SHGetKnownFolderPath(folder, 0, NULL, &base);
+    char *result = NULL;
+    if (SUCCEEDED(hr) && base && base[0]) {
+        wchar_t dir[MAX_PATH + 8];
+        _snwprintf(dir, MAX_PATH + 7, L"%ls\\npad", base);
+        dir[MAX_PATH + 7] = L'\0';
+        result = wide_to_utf8(dir);
+    }
+    CoTaskMemFree(base);
+    return result;
+}
+
+#define NPAD_MSI_MAX_PRODUCTS 64
+
 static bool msi_owns_this_copy(const char *exe_utf8, bool *per_machine,
                                wchar_t product_out[NPAD_MSI_GUID_CHARS]) {
     *per_machine = false;
@@ -3726,38 +3748,46 @@ static bool msi_owns_this_copy(const char *exe_utf8, bool *per_machine,
     if (!enum_fn.proc || !info_fn.proc || !exe_utf8)
         return false;
 
-    wchar_t legacy[NPAD_MSI_GUID_CHARS] = L"";
-    for (DWORD i = 0; i < 64; i++) {
-        wchar_t product[NPAD_MSI_GUID_CHARS];
+    wchar_t codes[NPAD_MSI_MAX_PRODUCTS][NPAD_MSI_GUID_CHARS];
+    UpdateMsiProduct products[NPAD_MSI_MAX_PRODUCTS];
+    char *locations[NPAD_MSI_MAX_PRODUCTS];
+    size_t count = 0;
+    bool any_legacy = false;
+    for (DWORD i = 0; i < NPAD_MSI_MAX_PRODUCTS; i++) {
+        wchar_t *product = codes[count];
         if (enum_fn.func(NPAD_MSI_UPGRADE_CODE, 0, i, product) != ERROR_SUCCESS)
             break; // ERROR_NO_MORE_ITEMS, or the enumeration failed
         wchar_t location[MAX_PATH + 1] = L"";
         DWORD n = MAX_PATH + 1;
         if (info_fn.func(product, L"InstallLocation", location, &n) != ERROR_SUCCESS)
             continue; // Too long to be this copy's folder, or not readable
-        if (!location[0]) {
-            if (!legacy[0])
-                wcscpy(legacy, product);
+        locations[count] = wide_to_utf8(location);
+        if (!locations[count])
             continue;
-        }
-        char *loc = wide_to_utf8(location);
-        bool owns = loc && update_dir_holds_exe(loc, exe_utf8);
-        free(loc);
-        if (owns) {
-            wcscpy(product_out, product);
-            break;
-        }
+        wchar_t assignment[8] = L"";
+        n = 8;
+        products[count].install_location = locations[count];
+        products[count].per_machine =
+            info_fn.func(product, L"AssignmentType", assignment, &n) == ERROR_SUCCESS &&
+            assignment[0] == L'1';
+        if (!locations[count][0])
+            any_legacy = true;
+        count++;
     }
-    if (!product_out[0] && legacy[0])
-        wcscpy(product_out, legacy);
-    if (!product_out[0])
-        return false;
 
-    wchar_t assignment[8] = L"";
-    DWORD n = 8;
-    if (info_fn.func(product_out, L"AssignmentType", assignment, &n) == ERROR_SUCCESS)
-        *per_machine = (assignment[0] == L'1');
-    return true;
+    // The known folders only matter for a legacy product
+    char *machine_default = any_legacy ? msi_default_folder(true) : NULL;
+    char *user_default = any_legacy ? msi_default_folder(false) : NULL;
+    int owner = update_msi_owner(products, count, exe_utf8, machine_default, user_default);
+    free(machine_default);
+    free(user_default);
+    if (owner >= 0) {
+        wcscpy(product_out, codes[owner]);
+        *per_machine = products[owner].per_machine;
+    }
+    for (size_t i = 0; i < count; i++)
+        free(locations[i]);
+    return owner >= 0;
 }
 
 // Which package to download for this copy (update_windows_package)

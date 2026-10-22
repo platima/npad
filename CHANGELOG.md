@@ -639,7 +639,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     in Add/Remove Programs. Only the copy the MSI installed updates through
     it, so a portable copy on the same PC no longer upgrades the MSI install,
     and an MSI update no longer brings back file associations you unticked
-    on Preferences > Associations.
+    on Preferences > Associations. An MSI from before 0.36.0, which did not
+    record its folder, counts only for a copy in its default folder, so a
+    portable copy elsewhere no longer updates through it either.
   - An update installer with a valid signature is no longer rejected as "not
     valid" on a PC that has not yet cached the signing root certificate.
   - An npad running as administrator now closes for an in-app update like the
@@ -676,6 +678,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     failed after closing it. Its windows are restored.
   - An all-users install no longer offers to set the default fonts, which
     changed the elevating administrator's settings instead of yours.
+  - The setup EXE and the MSI no longer install npad a second time beside
+    each other. Each now refuses while the other's installation is there and
+    says to uninstall it first; a silent install fails with a line in its log
+    (setup: exit code 1, MSI: 1603) instead of adding a second npad to
+    Installed apps whose uninstaller would break the first.
+  - An all-users uninstall with the setup EXE now also removes the
+    uninstalling account's per-user Default apps entry
+    (`HKCU\Software\RegisteredApplications`), which was left naming a key
+    the uninstall had deleted.
 - **Releases**
   - Release downloads are complete from the moment a release appears.
     Releases are now prepared privately and published only after every file

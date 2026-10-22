@@ -434,6 +434,47 @@ TEST_CASE(dir_holds_exe) {
     TEST_ASSERT(!update_dir_holds_exe("C:\\x", NULL), "NULL exe");
 }
 
+TEST_CASE(msi_owner) {
+    const char *pf = "C:\\Program Files\\npad";
+    const char *upf = "C:\\Users\\me\\AppData\\Local\\Programs\\npad";
+    const char *pf_exe = "C:\\Program Files\\npad\\npad.exe";
+    const char *upf_exe = "C:\\Users\\me\\AppData\\Local\\Programs\\npad\\npad.exe";
+    const char *portable = "C:\\Tools\\npad\\npad.exe";
+
+    UpdateMsiProduct recorded[] = { { "D:\\Apps\\npad\\", true } };
+    TEST_ASSERT(update_msi_owner(recorded, 1, "D:\\Apps\\npad\\npad.exe", pf, upf) == 0,
+                "a recorded InstallLocation owns its folder");
+    TEST_ASSERT(update_msi_owner(recorded, 1, pf_exe, pf, upf) == -1,
+                "a recorded InstallLocation owns nothing else, the default folder included");
+
+    // Pre-0.36.0 MSIs recorded no InstallLocation: only the default folder
+    // for the product's own scope is evidence
+    UpdateMsiProduct legacy_machine[] = { { "", true } };
+    TEST_ASSERT(update_msi_owner(legacy_machine, 1, pf_exe, pf, upf) == 0,
+                "legacy all-users product, exe in Program Files\\npad");
+    TEST_ASSERT(update_msi_owner(legacy_machine, 1, portable, pf, upf) == -1,
+                "legacy product, portable copy elsewhere: not the MSI's");
+    TEST_ASSERT(update_msi_owner(legacy_machine, 1, upf_exe, pf, upf) == -1,
+                "legacy all-users product, exe in the per-user folder");
+    UpdateMsiProduct legacy_user[] = { { "", false } };
+    TEST_ASSERT(update_msi_owner(legacy_user, 1, upf_exe, pf, upf) == 0,
+                "legacy per-user product, exe in Programs\\npad");
+    TEST_ASSERT(update_msi_owner(legacy_user, 1, pf_exe, pf, upf) == -1,
+                "legacy per-user product, exe in Program Files");
+    TEST_ASSERT(update_msi_owner(legacy_user, 1, upf_exe, pf, NULL) == -1,
+                "no default folder known: no evidence");
+
+    // A recorded match wins over a legacy one, wherever it is listed
+    UpdateMsiProduct both[] = { { "", false }, { upf, false } };
+    TEST_ASSERT(update_msi_owner(both, 2, upf_exe, pf, upf) == 1, "recorded beats legacy");
+    UpdateMsiProduct unreadable[] = { { NULL, true }, { "", true } };
+    TEST_ASSERT(update_msi_owner(unreadable, 2, pf_exe, pf, upf) == 1,
+                "an unreadable location is skipped, not taken as legacy");
+    TEST_ASSERT(update_msi_owner(unreadable, 1, pf_exe, pf, upf) == -1, "unreadable alone");
+    TEST_ASSERT(update_msi_owner(NULL, 0, pf_exe, pf, upf) == -1, "no products");
+    TEST_ASSERT(update_msi_owner(legacy_machine, 1, NULL, pf, upf) == -1, "NULL exe");
+}
+
 TEST_CASE(signature_policy) {
     // Unsigned build: the hash decides, but a broken signature never runs
     TEST_ASSERT(update_signature_problem(UPDATE_SIG_NONE, UPDATE_SIG_NONE, false) == NULL,
@@ -708,6 +749,7 @@ int main(void) {
     RUN_TEST(windows_package_choice);
     RUN_TEST(msi_feature_args);
     RUN_TEST(dir_holds_exe);
+    RUN_TEST(msi_owner);
     RUN_TEST(signature_policy);
     RUN_TEST(http_plain_body);
     RUN_TEST(http_content_length);
