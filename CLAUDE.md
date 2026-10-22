@@ -24,7 +24,17 @@ npad is a lightweight, cross-platform text editor inspired by classic Windows No
 - `make format-check` - Verify code formatting without changes
   (canonical against clang-format 18, matching CI; override the binary with
   `CLANG_FORMAT=... make format-check` if your distro ships another major)
-- `make test` - Build and run the unit test suites (file ops, errors, encoding)
+- `make test` - Build and run the core unit test suites (file ops, atomic
+  save, encoding, settings, session/recovery, the editor against stub UIs,
+  update check, Markdown/list tools, undo, print core and more); each suite
+  runs in a fresh temp dir with the settings location pointed inside it
+- `make test-sanitize` - The same suites under AddressSanitizer + UBSan
+- `make test-fuzz` - Seeded property/fuzz suite (slow under ASan on disks with
+  costly fsync; `FUZZ_ITERS=` lowers the count)
+- `make test-windows` - Cross-builds the suites as Windows `.exe` files with
+  `-DNPAD_TEST_HOOKS`, so they can never reach the real `%APPDATA%`; never
+  run `test_assoc_win32.exe` outside CI or a VM (it writes the registry and
+  needs `NPAD_ALLOW_REGISTRY_TESTS=1`)
 
 **Installers (Windows-only build step):**
 - `pwsh installer/build-installers.ps1` - builds `dist/npad-v<v>-setup-win-x64.exe`
