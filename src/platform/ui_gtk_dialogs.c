@@ -177,9 +177,15 @@ static gint run_and_destroy(GtkWidget *dialog) {
 }
 
 UiAnswer ui_platform_ask_question(Window *parent, const char *title, const char *message) {
+    // The core's messages can carry a file name's raw bytes, which need not
+    // be UTF-8 - all a GTK label takes. Valid UTF-8 passes through unchanged,
+    // so a message the GTK layer already made displayable is not converted
+    // twice.
+    char *shown = g_utf8_make_valid(message ? message : "", -1);
     GtkWidget *dialog = gtk_message_dialog_new(
         parent_window(parent), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
-        GTK_MESSAGE_QUESTION, GTK_BUTTONS_YES_NO, "%s", message ? message : "");
+        GTK_MESSAGE_QUESTION, GTK_BUTTONS_YES_NO, "%s", shown);
+    g_free(shown);
     gtk_window_set_title(GTK_WINDOW(dialog), title ? title : "npad");
     gint response = run_and_destroy(dialog);
 
@@ -203,9 +209,11 @@ bool ui_platform_show_message_box(Window *parent, const char *title, const char 
     if (is_question)
         return ui_platform_ask_question(parent, title, message) == UI_ANSWER_YES;
 
-    GtkWidget *dialog = gtk_message_dialog_new(
-        parent_window(parent), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, GTK_MESSAGE_INFO,
-        GTK_BUTTONS_OK, "%s", message ? message : "");
+    char *shown = g_utf8_make_valid(message ? message : "", -1); // As above
+    GtkWidget *dialog = gtk_message_dialog_new(parent_window(parent),
+                                               GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+                                               GTK_MESSAGE_INFO, GTK_BUTTONS_OK, "%s", shown);
+    g_free(shown);
     gtk_window_set_title(GTK_WINDOW(dialog), title ? title : "npad");
     run_and_destroy(dialog);
     return true;

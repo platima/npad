@@ -238,7 +238,8 @@ static void insert_file_at(Window *window, const char *path, int x, int y) {
         g_free(text);
         char message[512];
         char *shown = npad_gtk_display_text(path); // The dialog takes UTF-8 only
-        snprintf(message, sizeof(message), "Could not insert file: %.300s\nIt is too large.", shown);
+        snprintf(message, sizeof(message), "Could not insert file: %.300s\nIt is too large.",
+                 shown);
         g_free(shown);
         ui_show_message_box(window, "npad", message, false);
         return;
