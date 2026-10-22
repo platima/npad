@@ -361,3 +361,14 @@ bool ui_platform_is_window_maximized(const Window *window) {
     (void) window;
     return false;
 }
+
+int ui_platform_count_main_windows(void) {
+    return 0;
+}
+
+// Stub: printing is not implemented on macOS yet
+int ui_platform_print_file(const char *path) {
+    (void) path;
+    fprintf(stderr, "npad: printing is not available in the macOS build yet\n");
+    return 1;
+}

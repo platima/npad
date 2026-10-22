@@ -58,9 +58,11 @@ static void gui_error_callback(const npad_error_info_t *error) {
     }
 }
 
-// /p FILE (Windows) or -p / --print FILE: print and exit, as notepad.exe /p
+// /p FILE (Windows) or -p / --print FILE: print and exit, as notepad.exe /p.
+// The name is a copy: on Windows argv is the UTF-8 one built from the wide
+// command line, which is freed once the command line has been parsed.
 static bool g_print_mode = false;
-static const char *g_print_file = NULL;
+static char *g_print_file = NULL;
 
 // The print switch accepts Notepad's own "/p" only on Windows: on Linux "/p"
 // is a perfectly good absolute path
@@ -132,6 +134,8 @@ int main(int argc, char *argv[]) {
     // and settings are read but never written.
     if (g_print_mode) {
         int code = ui_print_file(g_print_file);
+        free(g_print_file);
+        g_print_file = NULL;
         settings_cleanup();
         thread_safety_cleanup();
         npad_error_cleanup();
@@ -305,8 +309,13 @@ static void parse_command_line(int argc, char *argv[]) {
             // then exit. Explorer's Print verb runs exactly this. Before it
             // was recognised, "/p" was taken for the name of a file to open.
             g_print_mode = true;
-            if (i + 1 < argc)
-                g_print_file = argv[++i];
+            if (i + 1 < argc) {
+                const char *name = argv[++i];
+                free(g_print_file); // A repeated switch: the last one wins
+                g_print_file = malloc(strlen(name) + 1);
+                if (g_print_file)
+                    strcpy(g_print_file, name);
+            }
         } else if (argv[i][0] != '-') {
             // Assume it's a filename to open
             editor_set_startup_file(argv[i]);
