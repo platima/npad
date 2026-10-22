@@ -445,6 +445,15 @@ test-time-format: tests/test_time_format
 	@echo "Running time format tests..."
 	./tests/test_time_format
 
+# The release and CI scripts' own checks (the version gate, CHECKSUMS.txt,
+# installer file references), against throwaway fixtures. Shell only.
+.PHONY: test-release-scripts
+test: test-release-scripts
+
+test-release-scripts:
+	@echo "Running release script tests..."
+	sh tests/test_release_scripts.sh
+
 # The property/fuzz suite at its default (small) iteration count, so every
 # `make test` exercises it; `make test-fuzz` runs it longer under sanitizers
 test-fuzz-quick: tests/test_fuzz
