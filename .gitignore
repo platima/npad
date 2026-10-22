@@ -76,6 +76,20 @@ tests/test_editor_load
 test_editor_home/
 tests/test_editor
 tests/test_editor_insert
+tests/test_fuzz
+
+# Test fixtures. Suites now run in a private temporary directory, so these
+# should never appear; older test binaries wrote them into the working
+# directory (usually the checkout root)
+/test_temp.txt
+/test_trunc*.bin
+/test_trunc*.txt
+/test_stamp*.txt
+/test_encoding_temp.txt
+/test_settings_roundtrip.json*
+/test_session_dir/
+/test_xdg_home/
+/test_xdg_conf/
 
 # Installer build outputs (fonts are fetched by installer/fetch-fonts.ps1)
 installer/fonts/

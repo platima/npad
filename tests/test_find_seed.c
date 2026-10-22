@@ -9,6 +9,7 @@
 #include "test_framework.h"
 #include "../src/core/find_seed.h"
 #include "../src/core/settings.h"
+#include "../src/core/thread_safety.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -118,6 +119,9 @@ TEST_CASE(preference_defaults_on_and_follows_setting) {
 }
 
 int main(void) {
+    // The settings store is guarded by g_settings_mutex, which must be
+    // initialised first: on Windows an uninitialised CRITICAL_SECTION crashes
+    thread_safety_init();
     TEST_INIT();
 
     RUN_TEST(seeds_plain_word);
@@ -131,6 +135,8 @@ int main(void) {
     RUN_TEST(escape_mode_cap_applies_to_escaped_length);
     RUN_TEST(preference_defaults_on_and_follows_setting);
 
+    settings_cleanup();
+    thread_safety_cleanup();
     TEST_SUMMARY();
     return 0;
 }

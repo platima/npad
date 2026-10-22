@@ -9,6 +9,7 @@
 #include "test_framework.h"
 #include "../src/core/tab_stops.h"
 #include "../src/core/settings.h"
+#include "../src/core/thread_safety.h"
 #include <string.h>
 
 #define COL(s, w) tab_column_after((s), strlen(s), (w))
@@ -112,6 +113,9 @@ TEST_CASE(list_indent_width_follows_tab_width_only_when_on) {
 }
 
 int main(void) {
+    // The settings store is guarded by g_settings_mutex, which must be
+    // initialised first: on Windows an uninitialised CRITICAL_SECTION crashes
+    thread_safety_init();
     TEST_INIT();
 
     RUN_TEST(stop_is_next_multiple_not_fixed_count);
@@ -126,6 +130,8 @@ int main(void) {
     RUN_TEST(settings_width_is_clamped);
     RUN_TEST(list_indent_width_follows_tab_width_only_when_on);
 
+    settings_cleanup();
+    thread_safety_cleanup();
     TEST_SUMMARY();
     return 0;
 }

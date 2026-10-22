@@ -304,40 +304,47 @@ format-check:
 	find src/ -name "*.c" -o -name "*.h" | xargs $(CLANG_FORMAT) --dry-run --Werror
 
 # Testing targets
-test: test-file-ops test-atomic-save test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-recovery test-richedit-text test-editor-load test-editor test-settings-import test-editor-insert
+#
+# Each suite is tests/test_<name>.c, linked with the core sources and the
+# framework, and builds three ways from the same rule set:
+#   make test           native binaries (tests/test_<name>), run in turn
+#   make test-windows   Windows executables (tests/test_<name>.exe); cross-
+#                       compiled anywhere, run only on Windows (MSYS2)
+#   make test-sanitize  the suite under AddressSanitizer + UBSan
+#   make test-fuzz      the seeded property/fuzz suite, longer, sanitized
+# Every suite runs in its own fresh temporary directory with the settings
+# location pointed inside it (tests/test_framework.c), so a run never writes
+# into the checkout or reads the user's real settings.
+TEST_SUITES = file_ops atomic_save error encoding session list_ops update_check settings html_md undo find_seed tab_stops settings_import richedit_text editor_load editor recovery editor_insert fuzz
+TEST_DEPS = $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_framework.h
+# NPAD_TEST_HOOKS: on Windows a test build keeps settings under
+# %NPAD_TEST_CONFIG_DIR% (which the framework sets) instead of %APPDATA%
+TEST_CFLAGS = $(CFLAGS) -DNPAD_TEST_HOOKS
+# Per-suite extra flags. undo.c is built with allocation failure injection, so
+# the test can prove a failed record never leaves a history that would corrupt
+# the text; fault injection makes each stage of a save fail on demand
+# (file_ops.h).
+TEST_FLAGS_undo = -DUNDO_FAULT_INJECTION
+TEST_FLAGS_atomic_save = -DFILE_OPS_FAULT_INJECTION
+# Per-suite extra sources, linked after the core ones. The editor suites run
+# the real editor.c against a UI layer of their own instead of a window:
+# test_editor and test_recovery against shared stubs (tests/stub_ui_*.c),
+# test_editor_load and test_editor_insert against stubs in the test file.
+TEST_EXTRA_richedit_text = src/platform/richedit_text.c
+TEST_EXTRA_editor_load = src/core/editor.c src/core/startup_prof.c
+TEST_EXTRA_editor = src/core/editor.c tests/stub_ui_editor.c
+TEST_EXTRA_recovery = src/core/editor.c tests/stub_ui_recovery.c
+TEST_EXTRA_editor_insert = src/core/editor.c
+# ... which every build of that suite (native, .exe, sanitized) depends on
+# (the rules that add them follow the sanitizer section, where SAN_DIR is set)
+TEST_EXTRA_DEPS_richedit_text = $(TEST_EXTRA_richedit_text) src/platform/richedit_text.h
+TEST_EXTRA_DEPS_editor_load = $(TEST_EXTRA_editor_load)
+TEST_EXTRA_DEPS_editor = $(TEST_EXTRA_editor) tests/stub_ui_editor.h
+TEST_EXTRA_DEPS_recovery = $(TEST_EXTRA_recovery) tests/stub_ui_recovery.h
+TEST_EXTRA_DEPS_editor_insert = $(TEST_EXTRA_editor_insert)
+
+test: test-file-ops test-atomic-save test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-settings-import test-richedit-text test-editor-load test-editor test-recovery test-editor-insert test-fuzz-quick
 	@echo "All tests completed"
-
-test-richedit-text: tests/test_richedit_text
-	@echo "Running RichEdit line break normalisation tests..."
-	./tests/test_richedit_text
-
-test-editor-load: tests/test_editor_load
-	@echo "Running editor load/save contract tests..."
-	./tests/test_editor_load
-
-# The editor core (open, save, Save As, auto-save, external changes, timers)
-# against a stub UI layer instead of a window
-test-editor: tests/test_editor
-	@echo "Running editor core tests..."
-	./tests/test_editor
-
-test-editor-insert: tests/test_editor_insert
-	@echo "Running Ctrl+drop insert tests..."
-	./tests/test_editor_insert
-
-# editor.c against scripted UI stubs (in the test file), so the prompts it
-# raises can be answered and counted
-tests/test_editor_insert: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) src/core/editor.c tests/test_editor_insert.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -DNPAD_TEST_HOOKS -o $@ $^ -lpthread
-
-# Windows-only: UTF-8 argv from the wide command line, and settings under a
-# non-ASCII directory. Cross-compiled here; run tests/test_win32_unicode.exe
-# on Windows (a test VM: it writes only under %TEMP%). Not part of `make test`.
-test-win32-unicode: tests/test_win32_unicode.exe
-
-tests/test_win32_unicode.exe: tests/test_win32_unicode.c src/platform/args_win32.c $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES)
-	$(MINGW_CC) $(CFLAGS) -DNPAD_TEST_HOOKS -o $@ $^ -lshell32 -lole32 -luuid
 
 test-file-ops: tests/test_file_ops
 	@echo "Running file operations tests..."
@@ -387,21 +394,64 @@ test-tab-stops: tests/test_tab_stops
 	@echo "Running tab stop tests..."
 	./tests/test_tab_stops
 
-test-recovery: tests/test_recovery
-	@echo "Running crash recovery tests..."
-	./tests/test_recovery
-
 test-settings-import: tests/test_settings_import
 	@echo "Running settings import tests..."
 	./tests/test_settings_import
 
-# Windows-only: the file type association module against a registry sandbox.
-# Cross-compiled here; run tests/test_assoc_win32.exe on Windows. Not part of
-# `make test`, which runs natively on Linux.
-test-assoc-win32: tests/test_assoc_win32.exe
+test-richedit-text: tests/test_richedit_text
+	@echo "Running RichEdit line break normalisation tests..."
+	./tests/test_richedit_text
 
-tests/test_assoc_win32.exe: tests/test_assoc_win32.c src/platform/assoc_win32.c $(TEST_FRAMEWORK_SOURCES)
-	$(MINGW_CC) $(CFLAGS) -o $@ $^ -ladvapi32 -lshell32 -luser32
+test-editor-load: tests/test_editor_load
+	@echo "Running editor load/save contract tests..."
+	./tests/test_editor_load
+
+# The editor core (open, save, Save As, auto-save, external changes, timers)
+# against a stub UI layer instead of a window
+test-editor: tests/test_editor
+	@echo "Running editor core tests..."
+	./tests/test_editor
+
+# Crash recovery and handoff at the editor level
+test-recovery: tests/test_recovery
+	@echo "Running crash recovery tests..."
+	./tests/test_recovery
+
+# Ctrl+drop: the prompts editor.c raises are answered and counted
+test-editor-insert: tests/test_editor_insert
+	@echo "Running Ctrl+drop insert tests..."
+	./tests/test_editor_insert
+
+# The property/fuzz suite at its default (small) iteration count, so every
+# `make test` exercises it; `make test-fuzz` runs it longer under sanitizers
+test-fuzz-quick: tests/test_fuzz
+	@echo "Running property/fuzz tests (quick)..."
+	./tests/test_fuzz
+
+tests/test_%: tests/test_%.c $(TEST_DEPS)
+	$(CC) $(TEST_CFLAGS) $(TEST_FLAGS_$*) -o $@ $(TEST_CORE_SOURCES) $(TEST_EXTRA_$*) $(TEST_FRAMEWORK_SOURCES) $< -lpthread
+
+# --- Windows ---------------------------------------------------------------
+#
+# The same suites as Windows executables, plus the Windows-only tests below.
+# Every one links an asInvoker manifest: without one, UAC's installer
+# detection makes test_update_check.exe ("update" in the name) demand
+# elevation. test_assoc_win32.exe writes a scratch key under HKCU (removed
+# afterwards), so it runs only with NPAD_ALLOW_REGISTRY_TESTS=1, here and when
+# launched by hand.
+WIN_TEST_EXES = $(patsubst %,tests/test_%.exe,$(TEST_SUITES))
+WIN_TEST_RES = $(WIN_BUILD_DIR)/test_manifest.res
+WIN_TEST_LIBS = -lshell32 -ladvapi32 -luser32 -lole32
+
+$(WIN_TEST_RES): tests/test_manifest.rc tests/test.manifest
+	@mkdir -p $(WIN_BUILD_DIR)
+	cd tests && $(MINGW_WINDRES) test_manifest.rc -O coff -o ../$(WIN_TEST_RES)
+
+tests/test_%.exe: tests/test_%.c $(TEST_DEPS) $(WIN_TEST_RES)
+	$(MINGW_CC) $(TEST_CFLAGS) $(TEST_FLAGS_$*) -o $@ $(TEST_CORE_SOURCES) $(TEST_EXTRA_$*) $(TEST_FRAMEWORK_SOURCES) $< $(WIN_TEST_RES) $(WIN_TEST_LIBS)
+
+tests/test_assoc_win32.exe: tests/test_assoc_win32.c src/platform/assoc_win32.c src/platform/assoc_win32.h $(TEST_FRAMEWORK_SOURCES) tests/test_framework.h $(WIN_TEST_RES)
+	$(MINGW_CC) $(TEST_CFLAGS) -o $@ tests/test_assoc_win32.c src/platform/assoc_win32.c $(TEST_FRAMEWORK_SOURCES) $(WIN_TEST_RES) -ladvapi32 -lshell32 -luser32
 
 # Windows-only: the RichEdit text boundary (src/platform/richedit_text.c)
 # against a hidden msftedit control in the test's own process. Cross-compiled
@@ -410,83 +460,75 @@ tests/test_assoc_win32.exe: tests/test_assoc_win32.c src/platform/assoc_win32.c 
 # configuration and no registry value, and messages only its own windows.
 test-richedit-win32: tests/test_richedit_boundary.exe
 
-tests/test_richedit_boundary.exe: tests/test_richedit_boundary.c src/platform/richedit_text.c src/platform/richedit_text.h src/core/file_ops.c src/core/error.c src/core/thread_safety.c $(TEST_FRAMEWORK_SOURCES)
-	$(MINGW_CC) $(CFLAGS) -o $@ $(filter %.c,$^) -luser32 -lgdi32
+tests/test_richedit_boundary.exe: tests/test_richedit_boundary.c src/platform/richedit_text.c src/platform/richedit_text.h src/core/file_ops.c src/core/error.c src/core/thread_safety.c $(TEST_FRAMEWORK_SOURCES) tests/test_framework.h $(WIN_TEST_RES)
+	$(MINGW_CC) $(TEST_CFLAGS) -o $@ $(filter %.c,$^) $(WIN_TEST_RES) -luser32 -lgdi32 -lshell32
 
-tests/test_richedit_text: tests/test_richedit_text.c src/platform/richedit_text.c src/platform/richedit_text.h $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES)
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) -lpthread
+# Windows-only: UTF-8 argv from the wide command line, and settings under a
+# non-ASCII directory. Cross-compiled here; run tests/test_win32_unicode.exe
+# on Windows (a test VM: it writes only under %TEMP%). Not part of `make test`.
+test-win32-unicode: tests/test_win32_unicode.exe
 
-# The real editor.c against a fake UI layer defined by the test itself
-tests/test_editor_load: tests/test_editor_load.c src/core/editor.c src/core/startup_prof.c $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES)
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+tests/test_win32_unicode.exe: tests/test_win32_unicode.c src/platform/args_win32.c $(TEST_DEPS) $(WIN_TEST_RES)
+	$(MINGW_CC) $(TEST_CFLAGS) -o $@ tests/test_win32_unicode.c src/platform/args_win32.c $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) $(WIN_TEST_RES) -lshell32 -lole32 -luuid
 
-tests/test_file_ops: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_file_ops.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+test-windows-build: $(WIN_TEST_EXES) tests/test_assoc_win32.exe tests/test_richedit_boundary.exe tests/test_win32_unicode.exe
 
-# Fault injection makes each stage of a save fail on demand (file_ops.h)
-tests/test_atomic_save: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_atomic_save.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -DFILE_OPS_FAULT_INJECTION -o $@ $^ -lpthread
+test-assoc-win32: tests/test_assoc_win32.exe
 
-tests/test_error: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_error.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+test-windows: test-windows-build
+ifeq ($(OS),Windows_NT)
+	@set -e; for t in $(WIN_TEST_EXES) tests/test_richedit_boundary.exe; do echo "Running $$t..."; ./$$t; done
+	@if [ "$$NPAD_ALLOW_REGISTRY_TESTS" = "1" ]; then \
+		echo "Running tests/test_assoc_win32.exe..."; ./tests/test_assoc_win32.exe; \
+	else \
+		echo "Skipped tests/test_assoc_win32.exe: set NPAD_ALLOW_REGISTRY_TESTS=1 to run it"; \
+	fi
+	@echo "All Windows tests completed"
+else
+	@echo "Windows test executables built in tests/. They run on Windows only:"
+	@echo "run make test-windows there (MSYS2), or launch tests/test_*.exe."
+endif
 
-tests/test_encoding: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_encoding.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+# --- Sanitizers and fuzzing --------------------------------------------------
+#
+# gcc's AddressSanitizer aborts at start-up ("DEADLYSIGNAL", or a shadow
+# memory mapping failure) on kernels that randomise mmap with more bits than it
+# expects - WSL2 and newer Ubuntu runner images among them. Running the test
+# with address-space randomisation off for that one process avoids it, so
+# SANITIZE_RUN uses `setarch -R` wherever personality(2) is permitted (some
+# containers forbid it; there the test runs as-is). Override SANITIZE_RUN= to
+# run without it.
+SANITIZE_FLAGS ?= -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g -O1
+SANITIZE_RUN ?= $(shell setarch $(UNAME_M) -R true >/dev/null 2>&1 && echo setarch $(UNAME_M) -R)
+SANITIZE_ENV = ASAN_OPTIONS=detect_leaks=1:abort_on_error=0:halt_on_error=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
+SAN_DIR = build/sanitize
+SAN_TEST_BINS = $(patsubst %,$(SAN_DIR)/test_%,$(TEST_SUITES))
+# make test-fuzz: iterations per property and the PRNG seed. Both fixed by
+# default so a CI failure reproduces exactly; vary FUZZ_SEED to explore.
+FUZZ_ITERS ?= 5000
+FUZZ_SEED ?= 20261021
 
-tests/test_session: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_session.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+$(SAN_DIR)/test_%: tests/test_%.c $(TEST_DEPS)
+	@mkdir -p $(SAN_DIR)
+	$(CC) $(TEST_CFLAGS) $(TEST_FLAGS_$*) $(SANITIZE_FLAGS) -o $@ $(TEST_CORE_SOURCES) $(TEST_EXTRA_$*) $(TEST_FRAMEWORK_SOURCES) $< -lpthread
 
-tests/test_list_ops: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_list_ops.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+test-sanitize: $(SAN_TEST_BINS)
+	@set -e; for t in $(SAN_TEST_BINS); do \
+		echo "Running $$t under ASan+UBSan..."; \
+		$(SANITIZE_ENV) $(SANITIZE_RUN) ./$$t; \
+	done
+	@echo "All sanitizer tests completed"
 
-tests/test_update_check: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_update_check.c
-	$(CC) $(CFLAGS) -o tests/test_update_check $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_update_check.c
+test-fuzz: $(SAN_DIR)/test_fuzz
+	@echo "Running property/fuzz tests: $(FUZZ_ITERS) iterations, seed $(FUZZ_SEED), ASan+UBSan..."
+	$(SANITIZE_ENV) NPAD_FUZZ_ITERS=$(FUZZ_ITERS) NPAD_FUZZ_SEED=$(FUZZ_SEED) $(SANITIZE_RUN) ./$(SAN_DIR)/test_fuzz
 
-# NPAD_TEST_HOOKS: settings follow $NPAD_TEST_CONFIG_DIR (see get_settings_directory)
-tests/test_settings: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_settings.c
-	$(CC) $(CFLAGS) -DNPAD_TEST_HOOKS -o tests/test_settings $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_settings.c
-
-tests/test_html_md: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_html_md.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $^ -lpthread
-
-# Built with allocation failure injection compiled into undo.c, so the test can
-# prove a failed record never leaves a history that would corrupt the text
-tests/test_undo: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_undo.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -DUNDO_FAULT_INJECTION -o $@ $^ -lpthread
-
-tests/test_find_seed: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_find_seed.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $^ -lpthread
-
-tests/test_tab_stops: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_tab_stops.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $^ -lpthread
-
-# Crash recovery and handoff at the editor level: the real editor.c against a
-# stub UI (tests/stub_ui_recovery.c), under a throwaway HOME/XDG_CONFIG_HOME
-tests/test_recovery: $(TEST_CORE_SOURCES) src/core/editor.c tests/stub_ui_recovery.c $(TEST_FRAMEWORK_SOURCES) tests/test_recovery.c tests/stub_ui_recovery.h
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) -lpthread
-
-# editor.c is linked against tests/stub_ui_editor.c in place of ui_interface.c
-# and a platform layer
-tests/test_editor: src/core/editor.c $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/stub_ui_editor.c tests/stub_ui_editor.h tests/test_editor.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ src/core/editor.c $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/stub_ui_editor.c tests/test_editor.c -lpthread
-
-tests/test_settings_import: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_settings_import.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+# The suites with extra sources depend on them in every build
+tests/test_richedit_text tests/test_richedit_text.exe $(SAN_DIR)/test_richedit_text: $(TEST_EXTRA_DEPS_richedit_text)
+tests/test_editor_load tests/test_editor_load.exe $(SAN_DIR)/test_editor_load: $(TEST_EXTRA_DEPS_editor_load)
+tests/test_editor tests/test_editor.exe $(SAN_DIR)/test_editor: $(TEST_EXTRA_DEPS_editor)
+tests/test_recovery tests/test_recovery.exe $(SAN_DIR)/test_recovery: $(TEST_EXTRA_DEPS_recovery)
+tests/test_editor_insert tests/test_editor_insert.exe $(SAN_DIR)/test_editor_insert: $(TEST_EXTRA_DEPS_editor_insert)
 
 # Cleanup
 clean:
@@ -496,10 +538,9 @@ clean:
 	rm -f src/platform/npad.res
 	rm -rf build
 	rm -rf dist/npad_* dist/npad-*.rpm dist/npad-*.pkg.tar.zst dist/npad-v*-portable-linux-*.tar.gz
-	rm -f tests/test_file_ops tests/test_atomic_save tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md tests/test_undo tests/test_find_seed tests/test_tab_stops tests/test_recovery tests/test_richedit_text tests/test_editor_load tests/test_editor tests/test_settings_import tests/test_editor_insert
-	rm -f tests/test_assoc_win32.exe tests/test_richedit_boundary.exe tests/test_richedit_text.exe tests/test_editor_load.exe tests/test_win32_unicode.exe
+	rm -f $(patsubst %,tests/test_%,$(TEST_SUITES))
+	rm -f $(patsubst %,tests/test_%.exe,$(TEST_SUITES)) tests/test_assoc_win32.exe tests/test_richedit_boundary.exe tests/test_win32_unicode.exe
 	rm -rf test_editor_home test_recovery_home
-	rm -f tests/test_file_ops.exe tests/test_atomic_save.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe tests/test_html_md.exe tests/test_undo.exe tests/test_find_seed.exe tests/test_tab_stops.exe tests/test_recovery.exe tests/test_editor.exe tests/test_settings_import.exe
 
 # Installation (Linux). PREFIX defaults to /usr/local; DESTDIR stages the tree
 # for packaging. Only the GTK desktop app is installed: the ncurses variant is
@@ -608,6 +649,9 @@ help:
 	@echo "  test-encoding    - Run encoding/line-ending tests"
 	@echo "  test-undo        - Run undo history tests"
 	@echo "  test-editor      - Run editor core tests (open/save/auto-save, stub UI)"
+	@echo "  test-windows     - Build the suite as Windows .exe files (runs them on Windows)"
+	@echo "  test-sanitize    - Run the suite under AddressSanitizer + UBSan"
+	@echo "  test-fuzz        - Run the seeded property/fuzz tests (FUZZ_ITERS, FUZZ_SEED)"
 	@echo "  clean            - Remove build artifacts"
 	@echo "  install          - Install to PREFIX (default /usr/local; honours DESTDIR)"
 	@echo "  uninstall        - Remove from PREFIX"
@@ -625,4 +669,4 @@ help:
 	@echo "  DEBUG=1          - Enable debug build"
 	@echo "  VERSION          - Version string (auto-detected from git)"
 
-.PHONY: all windows windows-gui windows-arm64 windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm pacman tarball lint format format-check test test-file-ops test-atomic-save test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-recovery test-richedit-text test-editor-load test-editor test-settings-import help detect-platform
+.PHONY: all windows windows-gui windows-arm64 windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm pacman tarball lint format format-check test test-file-ops test-atomic-save test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-settings-import test-richedit-text test-editor-load test-editor test-recovery test-editor-insert test-fuzz-quick test-windows test-windows-build test-assoc-win32 test-richedit-win32 test-win32-unicode test-sanitize test-fuzz help detect-platform

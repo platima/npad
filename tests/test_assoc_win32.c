@@ -10,8 +10,10 @@
  * The one visible side effect is SHChangeNotify(SHCNE_ASSOCCHANGED), which
  * asks Explorer to refresh its association cache. It changes nothing.
  *
- * Build and run on Windows:  make test-assoc-win32  (cross-compiles), then
- * run tests\test_assoc_win32.exe. Not part of `make test`, which is native.
+ * Built by `make test-windows` (and `make test-assoc-win32`). It refuses to
+ * run unless NPAD_ALLOW_REGISTRY_TESTS=1 is set; `make test-windows` on
+ * Windows runs it only then. CI's test-windows job (windows-latest, MSYS2)
+ * sets it for this exe alone.
  *
  * Author: Platima
  * https://npad.dev
@@ -406,6 +408,17 @@ TEST_CASE(an_orphaned_openwithprogids_entry_is_not_a_registration) {
 // --- Sandbox -----------------------------------------------------------------
 
 int main(void) {
+    // Opt-in only: the sandbox lives in the real HKCU, and SHChangeNotify
+    // reaches Explorer, so a stray double-click or a plain `make` must never
+    // run this. CI sets the variable; so can anyone who means to.
+    const char *allow = getenv("NPAD_ALLOW_REGISTRY_TESTS");
+    if (!allow || strcmp(allow, "1") != 0) {
+        printf("test_assoc_win32: not run. It writes a scratch key under "
+               "HKCU\\Software\\npad-assoc-selftest (deleted afterwards).\n"
+               "Set NPAD_ALLOW_REGISTRY_TESTS=1 to run it.\n");
+        return 77; // the conventional "skipped" exit status
+    }
+
     TEST_INIT();
 
     DWORD n = GetModuleFileNameW(NULL, g_exe, MAX_PATH);
@@ -440,6 +453,11 @@ int main(void) {
     if (RegOverridePredefKey(HKEY_CURRENT_USER, user) != ERROR_SUCCESS ||
         RegOverridePredefKey(HKEY_LOCAL_MACHINE, machine) != ERROR_SUCCESS) {
         printf("could not redirect the predefined keys\n");
+        RegOverridePredefKey(HKEY_CURRENT_USER, NULL);
+        RegOverridePredefKey(HKEY_LOCAL_MACHINE, NULL);
+        RegCloseKey(user);
+        RegCloseKey(machine);
+        RegDeleteTreeW(HKEY_CURRENT_USER, SANDBOX);
         return 1;
     }
 
