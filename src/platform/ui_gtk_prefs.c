@@ -1009,8 +1009,16 @@ static void on_reset_clicked(GtkButton *button, gpointer data) {
     if (answer != GTK_RESPONSE_YES)
         return;
 
-    settings_reset_all_preferences();
-    commit();
+    // A reset that could not be saved is not applied: the reload puts back
+    // what is on disk (see settings_reset_all_preferences_and_save)
+    if (settings_reset_all_preferences_and_save()) {
+        ui_notify_settings_changed();
+    } else {
+        show_message(GTK_WINDOW(P.dialog), GTK_MESSAGE_WARNING,
+                     "npad could not save the settings, so nothing was reset. Check that the "
+                     "settings folder is writable, then try again.");
+    }
+    npad_gtk_reload_and_apply_settings(P.owner);
 
     // The controls still show pre-reset values; close rather than leave stale
     // state on screen. Cancel, so nothing staged is written back over the reset.

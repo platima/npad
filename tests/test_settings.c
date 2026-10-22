@@ -398,6 +398,41 @@ TEST_CASE(removals_merge_both_ways) {
     remove_shared_files();
 }
 
+// Reset All Preferences as the buttons run it: a reset that reaches the file
+// is kept; one whose save fails is undone as a change, so the reload puts the
+// file's values back and no later save (exit's) writes the reset after all
+TEST_CASE(reset_and_save_undoes_a_reset_that_was_not_saved) {
+    start_instance("{\"theme\": \"dark\", \"window_x\": \"7\"}");
+    settings_add_recent_file("kept_by_the_window.txt"); // An unsaved change of its own
+    TEST_ASSERT(settings_reset_all_preferences_and_save(), "a reset that saves reports so");
+    settings_clear_all();
+    settings_load();
+    TEST_ASSERT(!settings_has_key("theme"), "the preference is gone from the file");
+    TEST_ASSERT(value_is("window_x", "7"), "what a reset keeps is kept");
+
+#ifndef _WIN32
+    // Root reads anything, so the failing half only runs unprivileged
+    if (geteuid() != 0) {
+        start_instance("{\"theme\": \"dark\", \"window_x\": \"7\"}");
+        settings_set_string("find_hist_0", "needle"); // Unsaved, and kept by a reset
+        chmod(SHARED_FILE, 0);
+        TEST_ASSERT(!settings_reset_all_preferences_and_save(),
+                    "a reset whose save fails reports so");
+        chmod(SHARED_FILE, 0644);
+        TEST_ASSERT(settings_load(), "the reload works");
+        TEST_ASSERT(value_is("theme", "dark"), "the reload puts the preference back");
+        TEST_ASSERT(value_is("find_hist_0", "needle"), "unrelated unsaved changes are kept");
+        TEST_ASSERT(settings_save(), "a later save goes through");
+        settings_clear_all();
+        settings_load();
+        TEST_ASSERT(value_is("theme", "dark"), "and does not write the failed reset");
+        TEST_ASSERT(value_is("find_hist_0", "needle"), "but does write the kept change");
+    }
+#endif
+    settings_clear_all();
+    remove_shared_files();
+}
+
 TEST_CASE(setting_the_held_value_is_not_a_change) {
     start_instance("{\"find_match_case\": \"false\"}");
     // Every search re-asserts every option; that must not count as choosing it
@@ -1211,6 +1246,7 @@ int main(void) {
     RUN_TEST(reload_keeps_unsaved_changes);
     RUN_TEST(exit_save_does_not_overwrite_newer_values);
     RUN_TEST(removals_merge_both_ways);
+    RUN_TEST(reset_and_save_undoes_a_reset_that_was_not_saved);
     RUN_TEST(setting_the_held_value_is_not_a_change);
     RUN_TEST(save_with_nothing_changed_leaves_file_alone);
     RUN_TEST(window_state_is_always_this_windows);

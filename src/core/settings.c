@@ -735,6 +735,41 @@ int settings_reset_all_preferences(void) {
     return removed;
 }
 
+bool settings_reset_all_preferences_and_save(void) {
+    // Every key held now, to tell afterwards which ones the reset removed
+    npad_mutex_lock(&g_settings_mutex);
+    size_t held = g_store.count;
+    char **keys = held ? calloc(held, sizeof(char *)) : NULL;
+    size_t listed = 0;
+    bool ok = held == 0 || keys != NULL;
+    for (const SettingEntry *e = g_store.head; ok && e; e = e->next) {
+        keys[listed] = dup_string(e->key);
+        if (keys[listed])
+            listed++;
+        else
+            ok = false;
+    }
+    npad_mutex_unlock(&g_settings_mutex);
+
+    // Out of memory before anything changed: nothing is reset
+    bool saved = false;
+    if (ok) {
+        settings_reset_all_preferences();
+        saved = settings_save();
+    }
+    for (size_t i = 0; i < listed; i++) {
+        // A reset that did not reach the file is not left in memory as this
+        // instance's removals, which the next save (exit's included) would
+        // write: each removed key stops being a change, so the reload the
+        // caller does restores it from the file
+        if (ok && !saved && !settings_has_key(keys[i]))
+            settings_discard_unsaved_change(keys[i]);
+        free(keys[i]);
+    }
+    free(keys);
+    return saved;
+}
+
 // Create a directory and any missing parent directories
 static void create_directory_recursive(const char *path) {
     if (!path || !path[0])

@@ -5737,8 +5737,7 @@ static void reset_all_preferences(HWND owner) {
         return;
     }
 
-    settings_reset_all_preferences();
-    bool saved = settings_save();
+    bool saved = settings_reset_all_preferences_and_save();
 
     // Re-apply everything that can change live (same path as a cross-instance
     // settings change), then tell other running instances. A reset that could

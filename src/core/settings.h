@@ -77,6 +77,12 @@ int settings_reset_except_prefixes(const char *const *keep_prefixes, int prefix_
 // the preferences that happen to sit under a kept prefix (find_seed_selection).
 // In memory only; the caller saves and re-applies. Returns the count removed.
 int settings_reset_all_preferences(void);
+// The Reset button's whole step: reset, then save. True when the reset reached
+// the file. False when the save failed (or memory ran out first): the reset is
+// then undone as a change - every key it removed stops being this instance's
+// unsaved removal - so the caller's reload (settings_load) puts back what the
+// file holds, and no later save writes a reset the user was told failed.
+bool settings_reset_all_preferences_and_save(void);
 
 // File operations. Several npad windows share the file, so:
 // - settings_save re-reads it and writes back what it holds with only this
