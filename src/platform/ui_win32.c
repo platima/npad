@@ -8085,7 +8085,8 @@ static void insert_time_date(Window *window) {
 
 // A .LOG file just opened: stamp a new line at the end, as Notepad does. An
 // ordinary replace-selection edit, so it is undoable and EN_CHANGE marks the
-// document modified.
+// document modified, and its own undo step, so Ctrl+Z after typing the entry
+// does not take the stamp with it.
 void ui_platform_append_time_date_line(Window *window) {
     if (!window || !window->edit_hwnd)
         return;
@@ -8098,7 +8099,7 @@ void ui_platform_append_time_date_line(Window *window) {
     LONG end = edit_text_cp_length(window->edit_hwnd);
     CHARRANGE at = { end, end };
     SendMessageW(window->edit_hwnd, EM_EXSETSEL, 0, (LPARAM) &at);
-    SendMessageW(window->edit_hwnd, EM_REPLACESEL, TRUE, (LPARAM) line);
+    replace_sel_one_step(window->edit_hwnd, line);
     SendMessageW(window->edit_hwnd, EM_SCROLLCARET, 0, 0);
     update_status_bar(window);
 }

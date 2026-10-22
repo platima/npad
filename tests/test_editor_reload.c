@@ -9,64 +9,19 @@
  * https://npad.dev
  */
 
-// setenv/mkdir/getcwd for the throwaway config directory (c99 mode hides
-// them otherwise)
-#define _POSIX_C_SOURCE 200809L
-
 #include "test_framework.h"
 #include "../src/core/editor.h"
 #include "../src/core/settings.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifndef _WIN32
-#include <sys/stat.h>
-#include <unistd.h>
-#endif
 
-#define RELOAD_FILE "test_editor_reload_tmp.txt"
-
-// --- A throwaway config directory --------------------------------------------
 // A reload clears this process's crash-recovery slot (editor_clear_session),
-// which resolves the real config directory. Point HOME and XDG_CONFIG_HOME
-// at an empty directory under the working directory first, so the run never
-// touches a developer's ~/.config/npad, whatever editor_init or settings
-// come to do later. (On Windows the directory is %APPDATA%, read through
-// SHGetFolderPath and not redirectable; the slot there is this process's own
-// random id, so nothing anyone else wrote is removed.)
-#define CONFIG_HOME "test_editor_reload_home"
-
-static void config_home_enter(void) {
-#ifndef _WIN32
-    char cwd[1024];
-    if (!getcwd(cwd, sizeof cwd)) {
-        printf("cannot read the working directory\n");
-        exit(1);
-    }
-    mkdir(CONFIG_HOME, 0755);
-    char home[1100];
-    snprintf(home, sizeof home, "%s/%s", cwd, CONFIG_HOME);
-    // XDG_CONFIG_HOME wins over HOME; set both so neither reaches the real one
-    char xdg[1200];
-    snprintf(xdg, sizeof xdg, "%s/.config", home);
-    if (setenv("HOME", home, 1) != 0 || setenv("XDG_CONFIG_HOME", xdg, 1) != 0) {
-        printf("cannot redirect the config directory\n");
-        exit(1);
-    }
-#endif
-}
-
-// Remove what the run may have created, innermost first. rmdir refuses a
-// directory that is not empty, so anything unexpected is left for a look.
-static void config_home_leave(void) {
-#ifndef _WIN32
-    static const char *const dirs[] = { CONFIG_HOME "/.config/npad/recovery",
-                                        CONFIG_HOME "/.config/npad", CONFIG_HOME "/.config",
-                                        CONFIG_HOME };
-    for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++)
-        rmdir(dirs[i]);
-#endif
-}
+// which resolves the config directory. TEST_INIT runs the suite in a private
+// temporary directory and points the config location inside it (HOME and
+// XDG_CONFIG_HOME on Linux, NPAD_TEST_CONFIG_DIR on Windows), so the run never
+// touches a developer's real settings or recovery slots.
+#define RELOAD_FILE "test_editor_reload_tmp.txt"
 
 // --- UI stubs -------------------------------------------------------------
 // One fake window; the core only passes the pointer back to these stubs.
@@ -83,10 +38,25 @@ static int g_binary_prompts;     // ui_prompt_binary_open calls
 static UiOpenChoice g_binary_answer;
 static int g_default_app_opens; // ui_open_with_default_app calls
 
-void ui_set_text(Window *window, const char *text) {
+bool ui_set_text(Window *window, const char *text) {
     (void) window;
     g_set_text_calls++;
     snprintf(g_text, sizeof(g_text), "%s", text ? text : "");
+    return true;
+}
+
+bool ui_text_altered_by_load(Window *window) {
+    (void) window;
+    return false;
+}
+
+void ui_append_time_date_line(Window *window) {
+    (void) window;
+}
+
+void ui_set_status_message(Window *window, const char *message) {
+    (void) window;
+    (void) message;
 }
 
 char *ui_get_text(Window *window) {
@@ -108,6 +78,10 @@ bool ui_show_message_box(Window *parent, const char *title, const char *message,
     g_message_boxes++;
     snprintf(g_last_message, sizeof(g_last_message), "%s", message ? message : "");
     return is_question ? g_message_answer : true;
+}
+
+UiAnswer ui_ask_question(Window *parent, const char *title, const char *message) {
+    return ui_show_message_box(parent, title, message, true) ? UI_ANSWER_YES : UI_ANSWER_NO;
 }
 
 UiOpenChoice ui_prompt_binary_open(Window *parent, const char *filename) {
@@ -144,8 +118,10 @@ size_t ui_system_memory_mb(void) {
     return 0;
 }
 
-bool ui_pid_is_running(long pid) {
+bool ui_pid_is_running(long pid, long long *start_time) {
     (void) pid;
+    if (start_time)
+        *start_time = -1;
     return false;
 }
 
@@ -356,23 +332,18 @@ TEST_CASE(open_still_asks_the_same_questions) {
 }
 
 TEST_CASE(config_directory_is_the_throwaway_one) {
-#ifndef _WIN32
-    const char *xdg = getenv("XDG_CONFIG_HOME");
-    const char *home = getenv("HOME");
-    TEST_ASSERT(xdg && strstr(xdg, "/" CONFIG_HOME "/") != NULL, "XDG_CONFIG_HOME redirected");
-    TEST_ASSERT(home && strstr(home, "/" CONFIG_HOME) != NULL, "HOME redirected");
-    // Today nothing initialises settings here, so no directory resolves at
-    // all; should something start to, it must be the throwaway one
+    const char *work = test_work_dir();
+    TEST_ASSERT_NOT_NULL(work, "the suite runs in its own temporary directory");
+    // Today nothing initialises settings here, so no directory may resolve at
+    // all; should something start to, it must be the suite's own one
     char *dir = settings_get_config_dir();
-    TEST_ASSERT(!dir || strstr(dir, "/" CONFIG_HOME "/") != NULL,
-                "any config directory is under the test's own HOME, not the developer's");
+    TEST_ASSERT(!dir || (work && strncmp(dir, work, strlen(work)) == 0),
+                "any config directory is under the suite's directory, not the developer's");
     free(dir);
-#endif
 }
 
 int main(void) {
-    config_home_enter(); // Before anything can resolve the config directory
-    TEST_INIT();
+    TEST_INIT(); // Before anything can resolve the config directory
 
     RUN_TEST(config_directory_is_the_throwaway_one);
 
@@ -382,7 +353,6 @@ int main(void) {
     RUN_TEST(large_replacement_asks_first);
     RUN_TEST(open_still_asks_the_same_questions);
 
-    config_home_leave();
     TEST_SUMMARY();
     return 0;
 }
