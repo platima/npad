@@ -292,27 +292,18 @@ static const char *const SETTINGS_DICT[] = { "\"",      "\\", "\\\\", "\\\"", "\
                                              "[",       "]",  " ",    "\n",   "\"k\": \"v\"",
                                              "\\u00e9", NULL };
 
-// Known gap NP-016: the reader keeps a KEY's escapes, so a backslash or quote
-// in a key doubles on every save. npad's own keys never contain either, so it
-// is reported (counted) rather than failed - for that one shape only, judged
-// from the file npad itself wrote: an entry (`{` or `,`, newline, two spaces,
-// quote) whose key, up to the `": "` that ends it, holds a backslash. Keys
-// can hold raw newlines too, so this works on the whole text, not by line.
-// Once the reader unescapes keys this never triggers.
-static bool saved_file_has_escaped_key(const char *text) {
-    const char *p = text;
-    while ((p = strstr(p, "\n  \"")) != NULL) {
-        bool entry_start = p > text && (p[-1] == '{' || p[-1] == ',');
-        p += 4;
-        if (!entry_start)
-            continue;
-        const char *sep = strstr(p, "\": \"");
-        if (!sep)
-            break;
-        if (memchr(p, '\\', (size_t) (sep - p)))
-            return true;
+// A save that meets a file it cannot read in full keeps it aside first, as
+// settings.json.corrupt or .corrupt.1 to .corrupt.99, and refuses to save
+// once every name is taken (an earlier copy is never overwritten). Each input
+// here is a new file, so the copies the last one left are cleared first, or
+// after a hundred malformed inputs no save would happen at all.
+static void remove_aside_copies(void) {
+    remove(FUZZ_SETTINGS ".corrupt");
+    for (int i = 1; i < 100; i++) {
+        char name[64];
+        snprintf(name, sizeof name, FUZZ_SETTINGS ".corrupt.%d", i);
+        remove(name);
     }
-    return false;
 }
 
 // Make this instance's store differ from the file, so the next settings_save
@@ -354,13 +345,14 @@ TEST_CASE(settings_load_of_any_file_reaches_a_fixed_point) {
     settings_set_file_path(FUZZ_SETTINGS);
     rng_reset(1);
     Buf b = { 0 }, written = { 0 }, file1 = { 0 }, file2 = { 0 }, file3 = { 0 };
-    long known_gap = 0, checked = 0;
+    long checked = 0;
     for (long it = 0; it < g_iters; it++) {
         if (it % 40 == 0)
             buf_set_str(&b, SETTINGS_SEED);
         int n = 1 + (int) rng_below(5);
         for (int m = 0; m < n; m++)
             mutate(&b, SETTINGS_DICT, 4096);
+        remove_aside_copies();
         write_bytes(FUZZ_SETTINGS, b.d, b.n);
 
         settings_clear_all();
@@ -374,16 +366,11 @@ TEST_CASE(settings_load_of_any_file_reaches_a_fixed_point) {
         if (!settings_save())
             continue; // nothing serialisable; not this property's concern
         read_file_into(FUZZ_SETTINGS, &written);
-        bool escaped_key = saved_file_has_escaped_key(written.d);
 
         int count1 = 0, count2 = 0, count3 = 0;
         bool saved = settings_cycle(&count1, &file1) && settings_cycle(&count2, &file2) &&
                      settings_cycle(&count3, &file3);
         bool stable = saved && count1 == count2 && count2 == count3 && bufs_equal(&file1, &file3);
-        if (!stable && escaped_key) {
-            known_gap++;
-            continue;
-        }
         checked++;
         if (!stable) {
             report_input("settings file", it, b.d, b.n);
@@ -397,8 +384,6 @@ TEST_CASE(settings_load_of_any_file_reaches_a_fixed_point) {
                     "entry count is stable across load/save cycles");
         TEST_ASSERT(bufs_equal(&file1, &file3), "the file is stable across load/save cycles");
     }
-    if (known_gap)
-        printf("(%ld inputs hit known gap NP-016: an escaped key grows) ", known_gap);
     // Most inputs must reach the comparison, or the property says nothing
     TEST_ASSERT(checked * 2 > g_iters, "most inputs are saved and compared");
     buf_free(&b);
@@ -408,6 +393,7 @@ TEST_CASE(settings_load_of_any_file_reaches_a_fixed_point) {
     buf_free(&file3);
     settings_clear_all();
     remove(FUZZ_SETTINGS);
+    remove_aside_copies();
 }
 
 // A control character other than tab (the writer must escape these for the
