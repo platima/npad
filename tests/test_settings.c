@@ -387,7 +387,7 @@ TEST_CASE(removals_merge_both_ways) {
     // Reset All Preferences is a removal of everything not kept
     settings_set_string("theme", "dark");
     settings_save();
-    settings_reset_except_prefixes(KEEP, KEEP_COUNT);
+    settings_reset_all_preferences();
     put_file(SHARED_FILE, "{\"theme\": \"dark\", \"window_x\": \"7\"}");
     settings_save();
     settings_clear_all();

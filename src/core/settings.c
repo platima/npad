@@ -706,6 +706,8 @@ static void make_one_directory(const char *path) {
 #else
     mkdir(path, 0700); // Private: settings and recovery snapshots live here
 #endif
+}
+
 // What Reset All Preferences keeps: state, not preferences. Any new key is
 // therefore reset by default; to keep something across a reset, add its
 // prefix here (and to the confirmation text both platforms show).
