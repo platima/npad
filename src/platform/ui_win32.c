@@ -19,6 +19,10 @@
 #include <shellapi.h>
 #include <winhttp.h>
 #include <bcrypt.h>
+// Authenticode types for the update check; the functions themselves are
+// resolved at run time from System32 (see authenticode_check)
+#include <wincrypt.h>
+#include <wintrust.h>
 #include <objbase.h>
 #include <shlobj.h>
 
@@ -53,6 +57,9 @@
 #endif
 #ifndef MSFTEDIT_CLASS
 #define MSFTEDIT_CLASS L"RICHEDIT50W"
+#endif
+#ifndef ERROR_ELEVATION_REQUIRED
+#define ERROR_ELEVATION_REQUIRED 740L // winerror.h; absent from some MinGW headers
 #endif
 
 // Window class name
@@ -312,6 +319,17 @@ static UINT g_close_handoff_msg = 0;
 // otherwise put up an invisible modal dialog and stall setup until it times
 // out. That is the whole reason this latch exists.
 static bool g_session_ending = false;
+
+// Set while this window's own save-checked close (UI_EVENT_QUIT) is running.
+// Its save prompt is modal and pumps messages, so a second close request -
+// another instance's Close All, a second click on the close box, File > Exit
+// from the taskbar - would otherwise run a second, nested prompt on top of
+// the first. See request_quit.
+static bool g_quit_prompt_open = false;
+
+// WM_QUERYENDSESSION refused to let Windows end the session (the document
+// could not be parked) and registered a reason that Windows shows for it
+static bool g_shutdown_blocked = false;
 
 // Registered message carrying live view state (font type + zoom) between
 // instances when "Sync view across all instances" is enabled.
@@ -1449,6 +1467,64 @@ void ui_platform_quit(void) {
 // Window management
 // ---------------------------------------------------------------------------
 
+// An elevated npad (Run as administrator, to edit the hosts file say) must
+// still hear the other instances. UIPI silently drops a message posted from a
+// lower integrity level unless the window lets it through, so without this
+// the update's handoff never reached that window: the updater waited out its
+// timeout and setup's Restart Manager could not close it either. Only npad's
+// own registered messages are allowed; none carries a pointer, and each asks
+// no more of the window than its own user could from the menu.
+// ChangeWindowMessageFilterEx is Windows 7+, so it is looked up, not linked.
+//
+// Only an npad running ABOVE medium integrity opens the filter. Medium to
+// medium needs no exception, and opening it on every window would also let a
+// low-integrity process (a sandboxed browser renderer, say) close every npad
+// or start Close All.
+static bool runs_above_medium_integrity(void) {
+    HANDLE token = NULL;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        return false;
+    union {
+        TOKEN_MANDATORY_LABEL label;
+        BYTE bytes[sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE];
+    } info;
+    DWORD size = 0;
+    bool above = false;
+    if (GetTokenInformation(token, TokenIntegrityLevel, &info, sizeof(info), &size) &&
+        info.label.Label.Sid && IsValidSid(info.label.Label.Sid)) {
+        PUCHAR count = GetSidSubAuthorityCount(info.label.Label.Sid);
+        if (count && *count > 0) {
+            DWORD rid = *GetSidSubAuthority(info.label.Label.Sid, (DWORD) (*count - 1));
+            above = rid > SECURITY_MANDATORY_MEDIUM_RID;
+        }
+    }
+    CloseHandle(token);
+    return above;
+}
+
+static void allow_npad_messages(HWND hwnd) {
+    static int elevated = -1; // Unknown until the first window asks
+    if (elevated < 0)
+        elevated = runs_above_medium_integrity() ? 1 : 0;
+    if (!elevated)
+        return;
+    typedef BOOL(WINAPI * ChangeFilterExFunc)(HWND, UINT, DWORD, void *);
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    union {
+        FARPROC proc;
+        ChangeFilterExFunc func;
+    } fn;
+    fn.proc = user32 ? GetProcAddress(user32, "ChangeWindowMessageFilterEx") : NULL;
+    if (!fn.proc)
+        return;
+    const UINT msgs[] = { g_settings_changed_msg, g_view_sync_msg, g_close_all_msg,
+                          g_close_handoff_msg };
+    for (size_t i = 0; i < sizeof(msgs) / sizeof(msgs[0]); i++) {
+        if (msgs[i])
+            fn.func(hwnd, msgs[i], MSGFLT_ALLOW, NULL);
+    }
+}
+
 Window *ui_platform_create_main_window(void) {
     Window *window = malloc(sizeof(Window));
     if (!window)
@@ -1485,6 +1561,7 @@ Window *ui_platform_create_main_window(void) {
         return NULL;
     }
 
+    allow_npad_messages(window->hwnd);
     apply_window_icon(window);
 
     // ES_DISABLENOSCROLL greys the scroll bars out instead of hiding them when
@@ -2813,7 +2890,7 @@ static void set_status_message(Window *window, const char *message) {
 typedef struct {
     bool ok;
     char tag[32];
-    char error[160];
+    char error[200];
 } UpdateCheckResult;
 
 typedef struct {
@@ -2824,19 +2901,32 @@ typedef struct {
 typedef struct {
     bool ok;
     wchar_t path[MAX_PATH];
+    // The verified installer, held open with read sharing only (no write, no
+    // delete, so no rename) from the moment it is hashed until the installer
+    // process has it. What runs is therefore exactly what was verified; it
+    // used to be closed after hashing and reopened by name at launch.
+    HANDLE file;
+    UpdatePackage package;   // Setup exe, or the MSI for an MSI-installed copy
+    bool per_machine;        // That MSI was installed for all users (ALLUSERS=1)
+    wchar_t msi_product[39]; // That MSI's ProductCode (NPAD_MSI_GUID_CHARS)
     char tag[32];
-    char error[160];
+    char error[200];
 } UpdateDownloadResult;
 
 // One update operation (check or download) at a time
 static volatile LONG g_update_busy = 0;
+
+// The busy operation is a check (rather than a download): a second request for
+// a check joins it instead of being refused. UI thread only.
+static bool g_update_check_running = false;
 
 // Preferences > Updates, while it is open, so a check or download that is in
 // flight can be shown there: Install Now and Check Now grey out and a marquee
 // runs beside the current version. Without that a slow download looked like
 // nothing had happened, and Install Now got clicked three or four times.
 static HWND g_updates_page = NULL;
-static bool g_updates_install_enabled = true; // Install Now's state before busy greyed it
+
+static void prefs_updates_sync_skip(HWND page); // With the Updates page
 
 static void updates_page_sync_busy(void) {
     if (!g_updates_page)
@@ -2847,23 +2937,62 @@ static void updates_page_sync_busy(void) {
         SendMessageW(bar, PBM_SETMARQUEE, busy ? TRUE : FALSE, 30);
         ShowWindow(bar, busy ? SW_SHOW : SW_HIDE);
     }
-    HWND install = GetDlgItem(g_updates_page, ID_PREF_UPD_INSTALL);
     HWND check = GetDlgItem(g_updates_page, ID_PREF_UPD_CHECK);
     if (busy) {
-        if (install && IsWindowEnabled(install))
-            g_updates_install_enabled = true;
-        else if (install)
-            g_updates_install_enabled = false;
-        EnableWindow(install, FALSE);
+        EnableWindow(GetDlgItem(g_updates_page, ID_PREF_UPD_INSTALL), FALSE);
         EnableWindow(check, FALSE);
     } else {
-        EnableWindow(install, g_updates_install_enabled ? TRUE : FALSE);
+        // Recomputed, not restored: the check that just finished may have
+        // found a release, or the one the page was offering may be gone
+        prefs_updates_sync_skip(g_updates_page);
         EnableWindow(check, TRUE);
     }
 }
 
+// The page's "latest version" and "last checked" lines, from settings
+static void prefs_updates_show_status(HWND page) {
+    char *latest = settings_get_string("update_latest_version", "");
+    wchar_t *wlatest = utf8_to_wide((latest && latest[0]) ? latest : "unknown");
+    if (wlatest) {
+        SetDlgItemTextW(page, ID_PREF_UPD_LATEST, wlatest);
+        free(wlatest);
+    }
+    free(latest);
+
+    char *last = settings_get_string("update_last_checked", "");
+    wchar_t *wlast = utf8_to_wide((last && last[0]) ? last : "never");
+    if (wlast) {
+        SetDlgItemTextW(page, ID_PREF_UPD_LASTCHECK, wlast);
+        free(wlast);
+    }
+    free(last);
+}
+
+// Bring an open Updates page up to date after a check, a skip or a download.
+// Check Now used to leave it showing the previous result until reopened.
+static void updates_page_refresh(void) {
+    if (!g_updates_page)
+        return;
+    prefs_updates_show_status(g_updates_page);
+    updates_page_sync_busy();
+}
+
+// The window an update dialog belongs to. A check or install started from
+// Preferences reports while the sheet is up and the document window is
+// disabled under it; a box owned by the document then sat behind the sheet
+// (or beside it) and the sheet stayed live. When the document window is
+// disabled, its last active popup is that modal sheet.
+static HWND update_dialog_owner(const Window *window) {
+    HWND hwnd = window ? window->hwnd : NULL;
+    if (!hwnd || IsWindowEnabled(hwnd))
+        return hwnd;
+    HWND popup = GetLastActivePopup(hwnd);
+    return (popup && IsWindowVisible(popup) && IsWindowEnabled(popup)) ? popup : hwnd;
+}
+
 // True while the in-flight check was user-initiated (Help menu / Check Now):
-// drives loud-vs-silent surfacing of the result. Set before spawning a check.
+// drives loud-vs-silent surfacing of the result. Set before spawning a check,
+// or by a manual request that joins the launch check already running.
 static bool g_update_check_manual = false;
 
 // Refreshes the Help-menu update indicator for a window (defined with the
@@ -2889,12 +3018,16 @@ static void stamp_update_checked(void) {
 
 // Bounded HTTPS GET on the calling (worker) thread. Returns a malloc'd,
 // NUL-terminated buffer and its length; NULL on any failure. Posts percent
-// progress to progress_hwnd when given and the size is known.
+// progress to progress_hwnd when given and the size is known. *out_status
+// (optional) is the HTTP status when the server answered, 0 when it was never
+// reached - so a rate limit is not reported as "could not reach github.com".
 static char *http_get_alloc(const wchar_t *host, const wchar_t *path, size_t max_bytes,
-                            size_t *out_len, HWND progress_hwnd) {
+                            size_t *out_len, HWND progress_hwnd, int *out_status) {
     char *data = NULL;
     size_t len = 0, cap = 0;
     bool ok = false;
+    if (out_status)
+        *out_status = 0;
 
     HINTERNET ses = WinHttpOpen(L"npad-updater", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                 WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
@@ -2918,6 +3051,8 @@ static char *http_get_alloc(const wchar_t *host, const wchar_t *path, size_t max
     DWORD status = 0, sz = sizeof(status);
     WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                         WINHTTP_HEADER_NAME_BY_INDEX, &status, &sz, WINHTTP_NO_HEADER_INDEX);
+    if (out_status)
+        *out_status = (int) status;
     if (status != 200)
         goto done;
 
@@ -2973,26 +3108,41 @@ done:
     return data;
 }
 
-// SHA-256 of a file as lowercase hex via Windows CNG
-static bool sha256_file_hex(const wchar_t *path, char out[65]) {
+// SHA-256 as lowercase hex via Windows CNG, of a memory buffer (data) or, when
+// data is NULL, of everything readable from file's start
+static bool sha256_hex(const void *data, size_t len, HANDLE file, char out[65]) {
     bool ok = false;
     BCRYPT_ALG_HANDLE alg = NULL;
     BCRYPT_HASH_HANDLE hash = NULL;
-    FILE *f = NULL;
     unsigned char digest[32];
 
     if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, NULL, 0) != 0)
         return false;
     if (BCryptCreateHash(alg, &hash, NULL, 0, NULL, 0, 0) != 0)
         goto done;
-    f = _wfopen(path, L"rb");
-    if (!f)
-        goto done;
-    unsigned char buf[65536];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
-        if (BCryptHashData(hash, buf, (ULONG) n, 0) != 0)
+    if (data) {
+        const unsigned char *p = (const unsigned char *) data;
+        while (len > 0) {
+            ULONG n = len > 0x40000000 ? 0x40000000 : (ULONG) len;
+            if (BCryptHashData(hash, (PUCHAR) p, n, 0) != 0)
+                goto done;
+            p += n;
+            len -= n;
+        }
+    } else {
+        LARGE_INTEGER zero = { 0 };
+        if (!SetFilePointerEx(file, zero, NULL, FILE_BEGIN))
             goto done;
+        unsigned char buf[65536];
+        for (;;) {
+            DWORD got = 0;
+            if (!ReadFile(file, buf, sizeof(buf), &got, NULL))
+                goto done;
+            if (got == 0)
+                break;
+            if (BCryptHashData(hash, buf, got, 0) != 0)
+                goto done;
+        }
     }
     if (BCryptFinishHash(hash, digest, sizeof(digest), 0) != 0)
         goto done;
@@ -3001,8 +3151,6 @@ static bool sha256_file_hex(const wchar_t *path, char out[65]) {
     ok = true;
 
 done:
-    if (f)
-        fclose(f);
     if (hash)
         BCryptDestroyHash(hash);
     if (alg)
@@ -3010,40 +3158,388 @@ done:
     return ok;
 }
 
+// A DLL from System32 only, never from the application directory or the
+// current directory: the update path runs a downloaded installer, so a planted
+// wintrust.dll beside npad must not be the one asked whether it is genuine.
+static HMODULE load_system_dll(const wchar_t *name) {
+    wchar_t path[MAX_PATH];
+    UINT n = GetSystemDirectoryW(path, MAX_PATH);
+    if (n == 0 || n + wcslen(name) + 2 > MAX_PATH)
+        return NULL;
+    _snwprintf(path + n, MAX_PATH - n - 1, L"\\%ls", name);
+    path[MAX_PATH - 1] = L'\0';
+    return LoadLibraryW(path);
+}
+
+// Authenticode, resolved from wintrust.dll and crypt32.dll at first use: like
+// winhttp and bcrypt (delay-loaded), nothing on a plain launch touches them.
+typedef LONG(WINAPI *WinVerifyTrustFunc)(HWND, GUID *, LPVOID);
+typedef CRYPT_PROVIDER_DATA *(WINAPI *ProvDataFromStateFunc)(HANDLE);
+typedef CRYPT_PROVIDER_SGNR *(WINAPI *ProvSignerFromChainFunc)(CRYPT_PROVIDER_DATA *, DWORD, BOOL,
+                                                               DWORD);
+typedef CRYPT_PROVIDER_CERT *(WINAPI *ProvCertFromChainFunc)(CRYPT_PROVIDER_SGNR *, DWORD);
+typedef DWORD(WINAPI *CertGetNameStringFunc)(PCCERT_CONTEXT, DWORD, DWORD, void *, LPWSTR, DWORD);
+
+// The signer's subject Common Name and Organization, "CN|O": the identity
+// Artifact Signing certifies. Its certificates are short-lived and renewed
+// constantly, so the certificate itself (thumbprint, serial) is never stable
+// between two releases - the validated name is.
+static void signer_identity(PCCERT_CONTEXT cert, wchar_t *out, size_t cap) {
+    out[0] = L'\0';
+    HMODULE crypt32 = load_system_dll(L"crypt32.dll");
+    union {
+        FARPROC proc;
+        CertGetNameStringFunc func;
+    } name_fn;
+    name_fn.proc = crypt32 ? GetProcAddress(crypt32, "CertGetNameStringW") : NULL;
+    if (!name_fn.proc || !cert)
+        return;
+    wchar_t cn[128] = L"", org[128] = L"";
+    name_fn.func(cert, CERT_NAME_ATTR_TYPE, 0, (void *) szOID_COMMON_NAME, cn, 128);
+    name_fn.func(cert, CERT_NAME_ATTR_TYPE, 0, (void *) szOID_ORGANIZATION_NAME, org, 128);
+    if (cn[0])
+        _snwprintf(out, cap - 1, L"%ls|%ls", cn, org);
+    out[cap - 1] = L'\0';
+}
+
+// The Authenticode state of a file - read through file when given, which is
+// what makes the check apply to the very bytes that will run - and, when it is
+// validly signed, the signer's identity. Revocation is not checked: it needs
+// the network and stalls offline, and the release's own SHA-256 has already
+// been checked by then. Chain building may still fetch over the network (an
+// intermediate by AIA, or a root Windows installs on demand from Windows
+// Update): this runs just after a download from github.com, so the network is
+// there, and restricting it to the cache made a correctly signed installer
+// fail with CERT_E_UNTRUSTEDROOT/CERT_E_CHAINING - reported as "not valid" -
+// on any machine that had not yet cached the signing root.
+static UpdateSignature authenticode_check(const wchar_t *path, HANDLE file, wchar_t *publisher,
+                                          size_t publisher_cap) {
+    if (publisher && publisher_cap)
+        publisher[0] = L'\0';
+    HMODULE wintrust = load_system_dll(L"wintrust.dll");
+    if (!wintrust)
+        return UPDATE_SIG_NONE; // Cannot ask: the SHA-256 stands alone, as before
+    union {
+        FARPROC proc;
+        WinVerifyTrustFunc func;
+    } verify;
+    union {
+        FARPROC proc;
+        ProvDataFromStateFunc func;
+    } prov_data;
+    union {
+        FARPROC proc;
+        ProvSignerFromChainFunc func;
+    } prov_signer;
+    union {
+        FARPROC proc;
+        ProvCertFromChainFunc func;
+    } prov_cert;
+    verify.proc = GetProcAddress(wintrust, "WinVerifyTrust");
+    prov_data.proc = GetProcAddress(wintrust, "WTHelperProvDataFromStateData");
+    prov_signer.proc = GetProcAddress(wintrust, "WTHelperGetProvSignerFromChain");
+    prov_cert.proc = GetProcAddress(wintrust, "WTHelperGetProvCertFromChain");
+    if (!verify.proc)
+        return UPDATE_SIG_NONE;
+
+    WINTRUST_FILE_INFO info;
+    ZeroMemory(&info, sizeof(info));
+    info.cbStruct = sizeof(info);
+    info.pcwszFilePath = path;
+    info.hFile = file;
+
+    WINTRUST_DATA data;
+    ZeroMemory(&data, sizeof(data));
+    data.cbStruct = sizeof(data);
+    data.dwUIChoice = WTD_UI_NONE;
+    data.fdwRevocationChecks = WTD_REVOKE_NONE;
+    data.dwUnionChoice = WTD_CHOICE_FILE;
+    data.pFile = &info;
+    data.dwStateAction = WTD_STATEACTION_VERIFY;
+    data.dwProvFlags = WTD_REVOCATION_CHECK_NONE;
+
+    // WINTRUST_ACTION_GENERIC_VERIFY_V2 (softpub.h), spelled out so no
+    // import library is needed for the GUID
+    GUID action = {
+        0x00aac56b, 0xcd44, 0x11d0, { 0x8c, 0xc2, 0x00, 0xc0, 0x4f, 0xc2, 0x95, 0xee }
+    };
+    LONG status = verify.func((HWND) INVALID_HANDLE_VALUE, &action, &data);
+
+    UpdateSignature result;
+    if (status == ERROR_SUCCESS) {
+        result = UPDATE_SIG_VALID;
+        if (publisher && publisher_cap && prov_data.proc && prov_signer.proc && prov_cert.proc) {
+            CRYPT_PROVIDER_DATA *pd = prov_data.func(data.hWVTStateData);
+            CRYPT_PROVIDER_SGNR *signer = pd ? prov_signer.func(pd, 0, FALSE, 0) : NULL;
+            const CRYPT_PROVIDER_CERT *cert = signer ? prov_cert.func(signer, 0) : NULL;
+            if (cert)
+                signer_identity(cert->pCert, publisher, publisher_cap);
+        }
+    } else if (status == TRUST_E_NOSIGNATURE || status == TRUST_E_SUBJECT_FORM_UNKNOWN ||
+               status == TRUST_E_PROVIDER_UNKNOWN) {
+        result = UPDATE_SIG_NONE;
+    } else {
+        result = UPDATE_SIG_BAD; // Tampered, untrusted root, explicitly distrusted...
+    }
+
+    data.dwStateAction = WTD_STATEACTION_CLOSE;
+    verify.func((HWND) INVALID_HANDLE_VALUE, &action, &data);
+    return result;
+}
+
+// This copy's own signature and signer, worked out once
+static UpdateSignature this_build_signature(wchar_t *publisher, size_t cap) {
+    static bool known = false;
+    static UpdateSignature sig = UPDATE_SIG_NONE;
+    static wchar_t who[300];
+    if (!known) {
+        wchar_t exe[MAX_PATH];
+        DWORD n = GetModuleFileNameW(NULL, exe, MAX_PATH);
+        if (n > 0 && n < MAX_PATH)
+            sig = authenticode_check(exe, NULL, who, 300);
+        known = true;
+    }
+    _snwprintf(publisher, cap - 1, L"%ls", who);
+    publisher[cap - 1] = L'\0';
+    return sig;
+}
+
+// --- Which installer updates this copy ---------------------------------------
+
+// installer/npad.wxs's UpgradeCode (shared by the x64 and arm64 MSIs)
+#define NPAD_MSI_UPGRADE_CODE L"{6C9F1E28-4B57-4A0D-BE73-8A51F2D90C44}"
+// Inno's uninstall key: installer/npad.iss's AppId (see assoc_win32.c)
+#define NPAD_INNO_UNINSTALL_KEY                                                                    \
+    L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\"                                   \
+    L"{B7E5A2C4-9D31-4F8E-A6C0-3D2E71540A9B}_is1"
+
+// Whether the Inno setup installed THIS copy: its recorded InstallLocation, in
+// either hive, is the directory npad.exe is running from
+static bool setup_owns_this_copy(const char *exe_utf8) {
+    HKEY roots[] = { HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE };
+    for (size_t i = 0; i < sizeof(roots) / sizeof(roots[0]); i++) {
+        HKEY key;
+        if (RegOpenKeyExW(roots[i], NPAD_INNO_UNINSTALL_KEY, 0, KEY_READ, &key) != ERROR_SUCCESS)
+            continue;
+        wchar_t location[MAX_PATH + 1];
+        DWORD type = 0, size = sizeof(location) - sizeof(wchar_t);
+        LONG rc = RegQueryValueExW(key, L"InstallLocation", NULL, &type, (BYTE *) location, &size);
+        RegCloseKey(key);
+        if (rc != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ))
+            continue;
+        location[size / sizeof(wchar_t)] = L'\0';
+        char *loc = wide_to_utf8(location);
+        bool owns = loc && update_dir_holds_exe(loc, exe_utf8);
+        free(loc);
+        if (owns)
+            return true;
+    }
+    return false;
+}
+
+// msi.dll, resolved at first use like wintrust: a plain launch never loads it
+typedef UINT(WINAPI *MsiEnumRelatedProductsFunc)(LPCWSTR, DWORD, DWORD, LPWSTR);
+typedef UINT(WINAPI *MsiGetProductInfoFunc)(LPCWSTR, LPCWSTR, LPWSTR, DWORD *);
+typedef UINT(WINAPI *MsiEnumFeaturesFunc)(LPCWSTR, DWORD, LPWSTR, LPWSTR);
+typedef int(WINAPI *MsiQueryFeatureStateFunc)(LPCWSTR, LPCWSTR);
+#define NPAD_MSI_GUID_CHARS 39    // "{XXXXXXXX-...}" and its NUL
+#define NPAD_MSI_FEATURE_CHARS 39 // msi.h's MAX_FEATURE_CHARS (38) and its NUL
+#define NPAD_INSTALLSTATE_LOCAL 3 // msi.h's INSTALLSTATE_LOCAL
+
+static FARPROC msi_proc(const char *name) {
+    HMODULE msi = load_system_dll(L"msi.dll");
+    return msi ? GetProcAddress(msi, name) : NULL;
+}
+
+// Whether an npad MSI installed THIS copy, mirroring setup_owns_this_copy: the
+// product whose recorded InstallLocation (installer/npad.wxs sets
+// ARPINSTALLLOCATION) is the directory npad.exe runs from. Every related
+// product is looked at, so a per-user and an all-users install side by side
+// are told apart, and *per_machine is the matching product's own scope.
+//
+// A product with no InstallLocation came from an MSI built before the
+// property was recorded; there is no telling where it put npad, so it is
+// trusted as before - but only when no product claims this folder outright.
+// Any other copy (a portable one beside an MSI install elsewhere) is not the
+// MSI's: it used to download and run the MSI, which upgraded the OTHER install
+// (with a UAC prompt for an all-users one) while this copy stayed old and kept
+// offering the update.
+static bool msi_owns_this_copy(const char *exe_utf8, bool *per_machine,
+                               wchar_t product_out[NPAD_MSI_GUID_CHARS]) {
+    *per_machine = false;
+    product_out[0] = L'\0';
+    union {
+        FARPROC proc;
+        MsiEnumRelatedProductsFunc func;
+    } enum_fn;
+    union {
+        FARPROC proc;
+        MsiGetProductInfoFunc func;
+    } info_fn;
+    enum_fn.proc = msi_proc("MsiEnumRelatedProductsW");
+    info_fn.proc = msi_proc("MsiGetProductInfoW");
+    if (!enum_fn.proc || !info_fn.proc || !exe_utf8)
+        return false;
+
+    wchar_t legacy[NPAD_MSI_GUID_CHARS] = L"";
+    for (DWORD i = 0; i < 64; i++) {
+        wchar_t product[NPAD_MSI_GUID_CHARS];
+        if (enum_fn.func(NPAD_MSI_UPGRADE_CODE, 0, i, product) != ERROR_SUCCESS)
+            break; // ERROR_NO_MORE_ITEMS, or the enumeration failed
+        wchar_t location[MAX_PATH + 1] = L"";
+        DWORD n = MAX_PATH + 1;
+        if (info_fn.func(product, L"InstallLocation", location, &n) != ERROR_SUCCESS)
+            continue; // Too long to be this copy's folder, or not readable
+        if (!location[0]) {
+            if (!legacy[0])
+                wcscpy(legacy, product);
+            continue;
+        }
+        char *loc = wide_to_utf8(location);
+        bool owns = loc && update_dir_holds_exe(loc, exe_utf8);
+        free(loc);
+        if (owns) {
+            wcscpy(product_out, product);
+            break;
+        }
+    }
+    if (!product_out[0] && legacy[0])
+        wcscpy(product_out, legacy);
+    if (!product_out[0])
+        return false;
+
+    wchar_t assignment[8] = L"";
+    DWORD n = 8;
+    if (info_fn.func(product_out, L"AssignmentType", assignment, &n) == ERROR_SUCCESS)
+        *per_machine = (assignment[0] == L'1');
+    return true;
+}
+
+// Which package to download for this copy (update_windows_package)
+static UpdatePackage detect_update_package(bool *per_machine,
+                                           wchar_t msi_product[NPAD_MSI_GUID_CHARS]) {
+    *per_machine = false;
+    msi_product[0] = L'\0';
+    wchar_t exe[MAX_PATH];
+    DWORD n = GetModuleFileNameW(NULL, exe, MAX_PATH);
+    char *exe_utf8 = (n > 0 && n < MAX_PATH) ? wide_to_utf8(exe) : NULL;
+    bool setup = exe_utf8 && setup_owns_this_copy(exe_utf8);
+    bool msi = exe_utf8 && msi_owns_this_copy(exe_utf8, per_machine, msi_product);
+    free(exe_utf8);
+    UpdatePackage package = update_windows_package(setup, msi);
+    if (package != UPDATE_PACKAGE_MSI) {
+        *per_machine = false;
+        msi_product[0] = L'\0';
+    }
+    return package;
+}
+
+// The features an installed MSI product has installed locally, as ASCII names
+// in names[0..cap). Returns how many.
+static size_t msi_local_features(const wchar_t *product, char names[][NPAD_MSI_FEATURE_CHARS],
+                                 size_t cap) {
+    union {
+        FARPROC proc;
+        MsiEnumFeaturesFunc func;
+    } enum_fn;
+    union {
+        FARPROC proc;
+        MsiQueryFeatureStateFunc func;
+    } state_fn;
+    enum_fn.proc = msi_proc("MsiEnumFeaturesW");
+    state_fn.proc = msi_proc("MsiQueryFeatureStateW");
+    if (!enum_fn.proc || !state_fn.proc || !product || !product[0])
+        return 0;
+    size_t count = 0;
+    for (DWORD i = 0; count < cap; i++) {
+        wchar_t feature[NPAD_MSI_FEATURE_CHARS], parent[NPAD_MSI_FEATURE_CHARS];
+        if (enum_fn.func(product, i, feature, parent) != ERROR_SUCCESS)
+            break; // ERROR_NO_MORE_ITEMS, or the enumeration failed
+        if (state_fn.func(product, feature) != NPAD_INSTALLSTATE_LOCAL)
+            continue;
+        // Feature Ids are ASCII identifiers; anything else is skipped here
+        // (update_msi_feature_args would refuse it anyway)
+        bool ascii = true;
+        size_t j = 0;
+        for (; j < NPAD_MSI_FEATURE_CHARS - 1 && feature[j]; j++) {
+            if (feature[j] > 0x7e) {
+                ascii = false;
+                break;
+            }
+            names[count][j] = (char) feature[j];
+        }
+        if (!ascii)
+            continue;
+        names[count][j] = '\0';
+        count++;
+    }
+    return count;
+}
+
 static DWORD WINAPI update_check_thread(LPVOID param) {
     HWND hwnd = (HWND) param;
     UpdateCheckResult *r = calloc(1, sizeof(*r));
     if (!r) {
-        InterlockedExchange(&g_update_busy, 0);
+        // Still report back: the UI thread holds the busy state for this check
+        PostMessageW(hwnd, NPAD_WM_UPDATE_CHECKED, 0, 0);
         return 0;
     }
+    // /releases/latest never names a pre-release, so a release candidate
+    // reads the newest few releases instead and is offered the next candidate
+    // as well as the final release
+    char cur[32];
+    current_version_string(cur, sizeof(cur));
+    bool prerelease = update_is_prerelease(cur);
+    const wchar_t *path = prerelease ? L"/repos/platima/npad/releases?per_page=10"
+                                     : L"/repos/platima/npad/releases/latest";
     size_t len = 0;
-    char *json = http_get_alloc(L"api.github.com", L"/repos/platima/npad/releases/latest",
-                                1024 * 1024, &len, NULL);
+    int status = 0;
+    char *json = http_get_alloc(L"api.github.com", path,
+                                (size_t) (prerelease ? 4 : 1) * 1024 * 1024, &len, NULL, &status);
     if (!json) {
-        snprintf(r->error, sizeof(r->error), "Could not reach github.com to check for updates.");
-    } else if (!update_extract_tag(json, r->tag, sizeof(r->tag))) {
+        if (status != 0 && status != 200)
+            update_http_status_message(status, r->error, sizeof(r->error));
+        else
+            snprintf(r->error, sizeof(r->error),
+                     "Could not reach github.com to check for updates.");
+    } else if (!update_pick_release_tag(json, prerelease, r->tag, sizeof(r->tag))) {
         snprintf(r->error, sizeof(r->error), "Unexpected response from the update server.");
     } else {
         r->ok = true;
     }
     free(json);
-    PostMessageW(hwnd, NPAD_WM_UPDATE_CHECKED, 0, (LPARAM) r);
+    if (!PostMessageW(hwnd, NPAD_WM_UPDATE_CHECKED, 0, (LPARAM) r))
+        free(r); // The window is gone
     return 0;
 }
 
 // Start a check if none is running. manual=true surfaces the result loudly
 // (Help menu / Check Now button); manual=false is the silent launch/auto path.
-// Returns false when a check is already in flight or the thread failed.
+// A manual request while the launch check is still on its way joins it: that
+// check's result is then reported as if just asked for, where it used to do
+// nothing at all and the launch check finished silently.
+// Returns false when a download is in flight or the thread failed.
 static bool start_update_check(Window *window, bool manual) {
     if (!window)
         return false;
-    if (InterlockedCompareExchange(&g_update_busy, 1, 0) != 0)
+    if (g_update_check_running) {
+        if (manual) {
+            g_update_check_manual = true;
+            set_status_message(window, "Checking for updates...");
+        }
+        return true;
+    }
+    if (InterlockedCompareExchange(&g_update_busy, 1, 0) != 0) {
+        if (manual)
+            set_status_message(window, "An update is being downloaded or installed");
         return false;
+    }
     g_update_check_manual = manual;
+    g_update_check_running = true;
     set_status_message(window, "Checking for updates...");
     HANDLE thread = CreateThread(NULL, 0, update_check_thread, window->hwnd, 0, NULL);
     if (!thread) {
+        g_update_check_running = false;
         InterlockedExchange(&g_update_busy, 0);
         set_status_message(window, "Update check failed to start");
         return false;
@@ -3075,12 +3571,124 @@ static const wchar_t *path_basename(const wchar_t *path) {
     return slash ? slash + 1 : path;
 }
 
+// Downloaded installers are named npad-update-<random>-<asset name> in %TEMP%
+#define NPAD_UPDATE_TEMP_PREFIX L"npad-update-"
+
+// Remove this updater's own leftovers older than a week. A declined download
+// is kept for the user to run by hand (npad says where), and every download
+// now has a name of its own, so without this they would pile up. A file still
+// held open (another instance's download in progress) simply fails to delete.
+static void remove_stale_update_files(const wchar_t *temp_dir) {
+    wchar_t pattern[MAX_PATH];
+    _snwprintf(pattern, MAX_PATH - 1, L"%ls" NPAD_UPDATE_TEMP_PREFIX L"*", temp_dir);
+    pattern[MAX_PATH - 1] = L'\0';
+    WIN32_FIND_DATAW fd;
+    HANDLE find = FindFirstFileW(pattern, &fd);
+    if (find == INVALID_HANDLE_VALUE)
+        return;
+    FILETIME now_ft;
+    GetSystemTimeAsFileTime(&now_ft);
+    ULONGLONG now = ((ULONGLONG) now_ft.dwHighDateTime << 32) | now_ft.dwLowDateTime;
+    const ULONGLONG week = 7ULL * 24 * 60 * 60 * 10000000ULL; // 100 ns units
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            continue;
+        ULONGLONG t = ((ULONGLONG) fd.ftLastWriteTime.dwHighDateTime << 32) |
+                      fd.ftLastWriteTime.dwLowDateTime;
+        if (now > t && now - t > week) {
+            wchar_t path[MAX_PATH];
+            _snwprintf(path, MAX_PATH - 1, L"%ls%ls", temp_dir, fd.cFileName);
+            path[MAX_PATH - 1] = L'\0';
+            DeleteFileW(path);
+        }
+    } while (FindNextFileW(find, &fd));
+    FindClose(find);
+}
+
+// Write the already-verified bytes to a NEW file of their own, then hold that
+// file open for reading with no write or delete sharing, and verify it again
+// through that handle: the SHA-256 and, when this copy is signed, the
+// publisher's signature. On success r->path and r->file are what will be
+// launched, and nobody can change the file until r->file is closed.
+//
+// The name is unique per download (CREATE_NEW, never an existing file or
+// link): two instances downloading at once used to write the same file.
+static bool save_verified_installer(UpdateDownloadResult *r, const char *data, size_t len,
+                                    const char *expected, const wchar_t *asset_name) {
+    wchar_t temp_dir[MAX_PATH];
+    DWORD td = GetTempPathW(MAX_PATH, temp_dir);
+    if (td == 0 || td >= MAX_PATH) {
+        snprintf(r->error, sizeof(r->error), "Could not resolve the temporary directory.");
+        return false;
+    }
+    remove_stale_update_files(temp_dir);
+
+    HANDLE out = INVALID_HANDLE_VALUE;
+    for (int attempt = 0; attempt < 16 && out == INVALID_HANDLE_VALUE; attempt++) {
+        LARGE_INTEGER qpc;
+        QueryPerformanceCounter(&qpc);
+        unsigned long tag =
+            (unsigned long) (qpc.QuadPart ^ ((LONGLONG) GetCurrentProcessId() << 20) ^
+                             ((LONGLONG) attempt << 8));
+        _snwprintf(r->path, MAX_PATH - 1, L"%ls" NPAD_UPDATE_TEMP_PREFIX L"%08lx-%ls", temp_dir,
+                   tag & 0xffffffffUL, asset_name);
+        r->path[MAX_PATH - 1] = L'\0';
+        out = CreateFileW(r->path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (out == INVALID_HANDLE_VALUE && GetLastError() != ERROR_FILE_EXISTS)
+            break;
+    }
+    if (out == INVALID_HANDLE_VALUE) {
+        r->path[0] = L'\0';
+        snprintf(r->error, sizeof(r->error), "Could not save the downloaded installer.");
+        return false;
+    }
+    bool written = true;
+    for (size_t done = 0; written && done < len;) {
+        DWORD chunk = (len - done) > 0x10000000 ? 0x10000000 : (DWORD) (len - done);
+        DWORD wrote = 0;
+        written = WriteFile(out, data + done, chunk, &wrote, NULL) && wrote == chunk;
+        done += wrote;
+    }
+    CloseHandle(out);
+
+    // Reopen read-only, sharing only reads: no writer, no delete, no rename
+    // from here until the installer is running
+    r->file = written ? CreateFileW(r->path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                                    FILE_ATTRIBUTE_NORMAL, NULL)
+                      : INVALID_HANDLE_VALUE;
+    const char *problem = NULL;
+    char actual[65];
+    if (r->file == INVALID_HANDLE_VALUE) {
+        problem = "Could not save the downloaded installer.";
+    } else if (!sha256_hex(NULL, 0, r->file, actual) || strcmp(actual, expected) != 0) {
+        problem = "The downloaded installer changed on disk before it could run, so it was "
+                  "deleted.";
+    } else {
+        wchar_t ours[300], theirs[300];
+        UpdateSignature build = this_build_signature(ours, 300);
+        UpdateSignature installer = authenticode_check(r->path, r->file, theirs, 300);
+        problem = update_signature_problem(build, installer, ours[0] && wcscmp(ours, theirs) == 0);
+    }
+    if (problem) {
+        if (r->file != INVALID_HANDLE_VALUE)
+            CloseHandle(r->file);
+        r->file = NULL;
+        DeleteFileW(r->path); // Never leave an unverified installer around
+        r->path[0] = L'\0';
+        snprintf(r->error, sizeof(r->error), "%s", problem);
+        return false;
+    }
+    return true;
+}
+
 static DWORD WINAPI update_download_thread(LPVOID param) {
     UpdateDownloadJob *job = (UpdateDownloadJob *) param;
     UpdateDownloadResult *r = calloc(1, sizeof(*r));
     if (!r) {
+        // Still report back: the UI thread holds the busy state and the
+        // install claim for this download
+        PostMessageW(job->hwnd, NPAD_WM_UPDATE_DOWNLOADED, 0, 0);
         free(job);
-        InterlockedExchange(&g_update_busy, 0);
         return 0;
     }
     snprintf(r->tag, sizeof(r->tag), "%s", job->tag);
@@ -3096,17 +3704,23 @@ static DWORD WINAPI update_download_thread(LPVOID param) {
     size_t exe_len = 0, sum_len = 0;
     char *exe = NULL, *sum = NULL;
 
+    // The package that updates this copy in place: the MSI when Windows
+    // Installer put it here, the setup otherwise. Running the setup over an
+    // MSI install added a second product that shares (and deletes) its files.
+    r->package = detect_update_package(&r->per_machine, r->msi_product);
+
     // The installer for the architecture this npad was built for: an arm64
     // build must never be handed the x64 installer, and a build of any other
     // architecture has no installer to offer at all
-    const char *exe_sfx = update_installer_suffix(update_build_arch(), false);
-    const char *sum_sfx = update_installer_suffix(update_build_arch(), true);
+    const char *exe_sfx = update_package_suffix(update_build_arch(), r->package, false);
+    const char *sum_sfx = update_package_suffix(update_build_arch(), r->package, true);
     if (!exe_sfx || !sum_sfx) {
         snprintf(r->error, sizeof(r->error),
                  "npad %s has no installer for this build's processor architecture.", job->tag);
         HWND hwnd = job->hwnd;
         free(job);
-        PostMessageW(hwnd, NPAD_WM_UPDATE_DOWNLOADED, 0, (LPARAM) r);
+        if (!PostMessageW(hwnd, NPAD_WM_UPDATE_DOWNLOADED, 0, (LPARAM) r))
+            free(r);
         return 0;
     }
 
@@ -3118,7 +3732,8 @@ static DWORD WINAPI update_download_thread(LPVOID param) {
     wchar_t api_path[128];
     _snwprintf(api_path, 127, L"/repos/platima/npad/releases/tags/%ls", wtag);
     api_path[127] = L'\0';
-    char *rel = http_get_alloc(L"api.github.com", api_path, (size_t) 1024 * 1024, NULL, NULL);
+    char *rel =
+        http_get_alloc(L"api.github.com", api_path, (size_t) 4 * 1024 * 1024, NULL, NULL, NULL);
     if (rel) {
         char url[512];
         if (update_find_asset_url(rel, exe_sfx, url, sizeof(url)))
@@ -3139,52 +3754,56 @@ static DWORD WINAPI update_download_thread(LPVOID param) {
     }
 
     // The installer (progress reported) and its published digest
-    exe = http_get_alloc(L"github.com", exe_path, (size_t) 200 * 1024 * 1024, &exe_len, job->hwnd);
+    int exe_status = 0, sum_status = 0;
+    exe = http_get_alloc(L"github.com", exe_path, (size_t) 200 * 1024 * 1024, &exe_len, job->hwnd,
+                         &exe_status);
     if (exe) {
-        sum = http_get_alloc(L"github.com", sum_path, 4096, &sum_len, NULL);
+        sum = http_get_alloc(L"github.com", sum_path, 4096, &sum_len, NULL, &sum_status);
     }
 
     char expected[65], actual[65];
     if (!exe || exe_len == 0) {
-        snprintf(r->error, sizeof(r->error), "Could not download the installer for npad %s.",
-                 job->tag);
+        if (exe_status == 404)
+            snprintf(r->error, sizeof(r->error),
+                     "The release npad %s has no installer for this kind of install (HTTP 404).",
+                     job->tag);
+        else if (exe_status != 0 && exe_status != 200)
+            update_http_status_message(exe_status, r->error, sizeof(r->error));
+        else if (exe_status == 200)
+            snprintf(r->error, sizeof(r->error),
+                     "The download of the installer for npad %s was interrupted.", job->tag);
+        else
+            snprintf(r->error, sizeof(r->error), "Could not download the installer for npad %s.",
+                     job->tag);
     } else if (!sum || !update_parse_sha256(sum, expected)) {
         snprintf(r->error, sizeof(r->error),
                  "Could not download the checksum to verify the installer.");
+    } else if (!sha256_hex(exe, exe_len, NULL, actual) || strcmp(actual, expected) != 0) {
+        // Checked in memory first: a corrupt or tampered download never
+        // reaches the disk at all
+        snprintf(r->error, sizeof(r->error),
+                 "The downloaded installer failed SHA-256 verification, so it was not saved.");
     } else {
-        wchar_t temp_dir[MAX_PATH];
-        if (GetTempPathW(MAX_PATH, temp_dir) == 0) {
-            snprintf(r->error, sizeof(r->error), "Could not resolve the temporary directory.");
-        } else {
-            // Save under whatever the release actually calls it
-            _snwprintf(r->path, MAX_PATH - 1, L"%ls%ls", temp_dir, path_basename(exe_path));
-            r->path[MAX_PATH - 1] = L'\0';
-            FILE *f = _wfopen(r->path, L"wb");
-            bool written = f && fwrite(exe, 1, exe_len, f) == exe_len;
-            if (f)
-                fclose(f);
-            if (!written) {
-                snprintf(r->error, sizeof(r->error), "Could not save the downloaded installer.");
-            } else if (!sha256_file_hex(r->path, actual) || strcmp(actual, expected) != 0) {
-                DeleteFileW(r->path); // Corrupt or tampered: never leave it around
-                snprintf(r->error, sizeof(r->error),
-                         "The downloaded installer failed SHA-256 verification and was "
-                         "deleted.");
-            } else {
-                r->ok = true;
-            }
-        }
+        // Saved under whatever the release actually calls it
+        wchar_t asset[160];
+        _snwprintf(asset, 159, L"%ls", path_basename(exe_path));
+        asset[159] = L'\0';
+        r->ok = save_verified_installer(r, exe, exe_len, expected, asset);
     }
 
     free(exe);
     free(sum);
     HWND hwnd = job->hwnd;
     free(job);
-    PostMessageW(hwnd, NPAD_WM_UPDATE_DOWNLOADED, 0, (LPARAM) r);
+    if (!PostMessageW(hwnd, NPAD_WM_UPDATE_DOWNLOADED, 0, (LPARAM) r)) {
+        // The window is gone: nobody will run it
+        if (r->file)
+            CloseHandle(r->file);
+        free(r);
+    }
     return 0;
 }
 
-// UI-thread handler for the check result: report, or offer the update
 // Spawn the verified-download worker for tag. Returns true when the thread
 // started (the busy flag then stays set until the download result arrives).
 static bool spawn_update_download(Window *window, const char *tag) {
@@ -3202,11 +3821,89 @@ static bool spawn_update_download(Window *window, const char *tag) {
     return true;
 }
 
+// One download-and-install at a time across every npad instance. Each window
+// is its own process with its own launch check, so in "auto" mode two windows
+// opened together each downloaded the installer and each asked to install it.
+// A named mutex is held by the instance whose download (and Install now
+// question) is under way; it is taken and released on the UI thread, and
+// Windows releases it if that instance exits.
+static HANDLE g_install_mutex = NULL;
+static bool g_install_mutex_held = false;
+
+static bool claim_update_install(void) {
+    if (g_install_mutex_held)
+        return true;
+    if (!g_install_mutex)
+        g_install_mutex = CreateMutexW(NULL, FALSE, L"Local\\npad-update-install");
+    if (!g_install_mutex)
+        return true; // Cannot coordinate: carry on alone, as before
+    DWORD wait = WaitForSingleObject(g_install_mutex, 0);
+    if (wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED) {
+        g_install_mutex_held = true;
+        return true;
+    }
+    return false;
+}
+
+static void release_update_install(void) {
+    if (g_install_mutex_held) {
+        ReleaseMutex(g_install_mutex);
+        g_install_mutex_held = false;
+    }
+}
+
+// "Not now" for a version, remembered until the user signs out: a global atom
+// lives as long as the window station, outside any one npad process. Without
+// it every new window's launch check asked again (prompt mode), or downloaded
+// the installer again and asked again (auto mode). A check the user starts by
+// hand ignores this; it is only the automatic paths that stay quiet.
+static void declined_atom_name(const char *tag, wchar_t *out, size_t cap) {
+    _snwprintf(out, cap - 1, L"npad.update.declined.%hs", tag);
+    out[cap - 1] = L'\0';
+}
+
+static bool update_declined_this_session(const char *tag) {
+    wchar_t name[96];
+    declined_atom_name(tag, name, 96);
+    return GlobalFindAtomW(name) != 0;
+}
+
+static void remember_update_declined(const char *tag) {
+    wchar_t name[96];
+    declined_atom_name(tag, name, 96);
+    if (GlobalFindAtomW(name) == 0)
+        GlobalAddAtomW(name);
+}
+
+// Start downloading tag, with g_update_busy already set by the caller. On any
+// failure the busy flag (and the install claim) is released again. Returns
+// true while a download runs.
+static bool begin_update_download(Window *window, const char *tag) {
+    if (!claim_update_install()) {
+        set_status_message(window, "Another npad window is already installing an update");
+        InterlockedExchange(&g_update_busy, 0);
+        updates_page_sync_busy();
+        return false;
+    }
+    char status[96];
+    snprintf(status, sizeof(status), "Downloading npad %s...", tag);
+    set_status_message(window, status);
+    if (!spawn_update_download(window, tag)) {
+        release_update_install();
+        set_status_message(window, "Update download failed to start");
+        InterlockedExchange(&g_update_busy, 0);
+        updates_page_sync_busy();
+        return false;
+    }
+    updates_page_sync_busy();
+    return true;
+}
+
 // Present the "newer version available" TaskDialog (with a Skip option) and
 // act on the choice. Called for a manual check that found a newer release, or
 // an automatic check in "prompt" mode.
 static void prompt_update_available(Window *window, const char *tag, const char *cur) {
-    HWND hwnd = window ? window->hwnd : NULL;
+    HWND hwnd = update_dialog_owner(window);
     char msg[200];
     snprintf(msg, sizeof(msg), "npad %s is available (you have %s).", tag, cur);
     wchar_t *wmsg = utf8_to_wide(msg);
@@ -3232,45 +3929,46 @@ static void prompt_update_available(Window *window, const char *tag, const char 
     int choice = (pressed == IDCANCEL) ? 0 : pressed;
 
     if (choice == 101) {
-        char status[96];
-        snprintf(status, sizeof(status), "Downloading npad %s...", tag);
-        set_status_message(window, status);
-        if (!spawn_update_download(window, tag)) {
-            set_status_message(window, "Update download failed to start");
-            InterlockedExchange(&g_update_busy, 0);
-            updates_page_sync_busy();
-        }
-        return; // Busy flag stays set for the download (or was cleared above)
+        begin_update_download(window, tag);
+        return; // Busy flag stays set for the download (or was cleared there)
     }
     if (choice == 102) {
-        ShellExecuteW(hwnd, L"open", L"https://github.com/platima/npad/releases/latest", NULL, NULL,
-                      SW_SHOWNORMAL);
+        // This release's own notes: /releases/latest is never a pre-release
+        wchar_t url[160];
+        _snwprintf(url, 159, L"https://github.com/platima/npad/releases/tag/%hs", tag);
+        url[159] = L'\0';
+        ShellExecuteW(hwnd, L"open", url, NULL, NULL, SW_SHOWNORMAL);
     } else if (choice == 103) {
         settings_set_string("update_skipped_version", tag);
         settings_save();
         ui_platform_notify_settings_changed();
+    } else {
+        remember_update_declined(tag); // Not now: no automatic asking until sign-out
     }
     InterlockedExchange(&g_update_busy, 0);
-    updates_page_sync_busy();
+    updates_page_refresh();
     apply_update_indicator(window);
 }
 
 static void handle_update_checked(Window *window, UpdateCheckResult *r) {
-    HWND hwnd = window ? window->hwnd : NULL;
+    HWND hwnd = update_dialog_owner(window);
     bool manual = g_update_check_manual;
+    g_update_check_running = false; // A new request now starts a new check
+    g_update_check_manual = false;
     char cur[32];
     current_version_string(cur, sizeof(cur));
 
-    if (!r->ok) {
+    if (!r || !r->ok) {
         // Silent for automatic/launch checks; loud only when the user asked
         if (manual) {
-            wchar_t *w = utf8_to_wide(r->error);
-            MessageBoxW(hwnd, w ? w : L"Update check failed.", L"npad", MB_OK | MB_ICONWARNING);
+            wchar_t *w = utf8_to_wide(r ? r->error : "");
+            MessageBoxW(hwnd, (w && w[0]) ? w : L"Update check failed.", L"npad",
+                        MB_OK | MB_ICONWARNING);
             free(w);
         }
         set_status_message(window, "Update check failed");
         InterlockedExchange(&g_update_busy, 0);
-        updates_page_sync_busy();
+        updates_page_refresh();
         free(r);
         return;
     }
@@ -3289,17 +3987,16 @@ static void handle_update_checked(Window *window, UpdateCheckResult *r) {
     free(skipped);
 
     // A manual check re-surfaces even a skipped version (the user asked); an
-    // automatic check obeys the mode and the skip
-    bool show_prompt = manual ? newer : (surface_auto && strcmp(mode, "prompt") == 0);
-    bool do_download = !manual && surface_auto && strcmp(mode, "auto") == 0;
+    // automatic check obeys the mode and the skip - and stays quiet about a
+    // version the user already said "not now" to since signing in
+    bool quiet = !manual && update_declined_this_session(r->tag);
+    bool show_prompt = manual ? newer : (surface_auto && !quiet && strcmp(mode, "prompt") == 0);
+    bool do_download = !manual && surface_auto && !quiet && strcmp(mode, "auto") == 0;
     free(mode);
+    updates_page_refresh(); // The new "latest" and "last checked"
 
     if (do_download) {
-        char status[96];
-        snprintf(status, sizeof(status), "Downloading npad %s...", r->tag);
-        set_status_message(window, status);
-        if (!spawn_update_download(window, r->tag))
-            InterlockedExchange(&g_update_busy, 0);
+        begin_update_download(window, r->tag); // Clears the busy flag if it cannot start
         updates_page_sync_busy();
         apply_update_indicator(window);
         free(r);
@@ -3326,6 +4023,8 @@ static void handle_update_checked(Window *window, UpdateCheckResult *r) {
         set_status_message(window, "npad is up to date");
     } else if (surface_auto) {
         set_status_message(window, "An update is available (see the Help menu)");
+    } else {
+        set_status_message(window, NULL); // Clear "Checking for updates..."
     }
     InterlockedExchange(&g_update_busy, 0);
     updates_page_sync_busy();
@@ -3339,6 +4038,7 @@ static void handle_update_checked(Window *window, UpdateCheckResult *r) {
 // EnumWindows' callback being invisible to it.
 typedef struct {
     int count;
+    wchar_t titles[3][96]; // The first few windows' titles, to name stragglers
 } NpadWindowTally;
 
 static BOOL CALLBACK count_foreign_enum_proc(HWND hwnd, LPARAM lparam) {
@@ -3348,6 +4048,12 @@ static BOOL CALLBACK count_foreign_enum_proc(HWND hwnd, LPARAM lparam) {
         DWORD pid = 0;
         GetWindowThreadProcessId(hwnd, &pid);
         if (pid != GetCurrentProcessId()) {
+            if (tally->count < 3) {
+                // Reads the stored caption; sends nothing to that window
+                if (InternalGetWindowText(hwnd, tally->titles[tally->count], 96) <= 0)
+                    _snwprintf(tally->titles[tally->count], 95, L"npad");
+                tally->titles[tally->count][95] = L'\0';
+            }
             tally->count++;
         }
     }
@@ -3364,14 +4070,14 @@ static int count_other_npad_windows(void) {
 // Without this the installer races them: setup would reach the file-copy step
 // while npad.exe was still locked, and fall back to its "unable to close all
 // applications" page - the very thing the handoff broadcast exists to avoid.
-// Pumps messages so this window stays responsive while waiting.
-static void wait_for_other_npads(DWORD timeout_ms) {
+// Pumps messages so this window stays responsive while waiting. Returns how
+// many other npad windows are still open.
+static int wait_for_other_npads(DWORD timeout_ms) {
     DWORD start = GetTickCount();
     for (;;) {
-        if (count_other_npad_windows() == 0)
-            return;
-        if (GetTickCount() - start >= timeout_ms)
-            return; // Straggler (a modal dialog, most likely); let setup handle it
+        int left = count_other_npad_windows();
+        if (left == 0 || GetTickCount() - start >= timeout_ms)
+            return left;
         MSG msg;
         while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
@@ -3381,7 +4087,59 @@ static void wait_for_other_npads(DWORD timeout_ms) {
     }
 }
 
-// UI-thread handler for the verified download: confirm, launch, quit
+// Ask every other npad window to park its work and close, and wait for them.
+// One that stays open - waiting on a dialog, unable to park, or running as
+// administrator in a version from before the handoff message was let through
+// UIPI - is named, so the user can close it rather than meet setup's "could
+// not close" page with no idea which window it means.
+static void close_other_npads_for_install(HWND owner) {
+    if (!g_close_handoff_msg)
+        return;
+    for (;;) {
+        broadcast_to_npad_windows(g_close_handoff_msg, 0);
+        if (wait_for_other_npads(4000) == 0)
+            return;
+        NpadWindowTally tally = { 0 };
+        EnumWindows(count_foreign_enum_proc, (LPARAM) &tally);
+        if (tally.count == 0)
+            return;
+
+        wchar_t content[700];
+        int n = _snwprintf(content, 699, L"Still open:");
+        for (int i = 0; i < tally.count && i < 3 && n > 0; i++) {
+            int m = _snwprintf(content + n, (size_t) (699 - n), L"\n    %ls", tally.titles[i]);
+            n = m < 0 ? -1 : n + m;
+        }
+        if (n > 0 && tally.count > 3) {
+            int m =
+                _snwprintf(content + n, (size_t) (699 - n), L"\n    and %d more", tally.count - 3);
+            n = m < 0 ? -1 : n + m;
+        }
+        if (n > 0)
+            _snwprintf(content + n, (size_t) (699 - n),
+                       L"\n\nA window may be waiting for an answer in a dialog, or be running as "
+                       L"administrator, which this npad cannot close. Close it yourself, then "
+                       L"try again.");
+        content[699] = L'\0';
+
+        static const TASKDIALOG_BUTTON buttons[] = {
+            { 101, L"&Try again\nAfter closing the window yourself" },
+            { 102, L"&Install anyway\nSetup asks the window to close, or tells you it cannot" },
+        };
+        TaskDialogSpec spec;
+        ZeroMemory(&spec, sizeof(spec));
+        spec.instruction = L"Another npad window did not close";
+        spec.content = content;
+        spec.icon = TD_WARNING_ICON;
+        spec.buttons = buttons;
+        spec.button_count = 2;
+        spec.default_button = 101;
+        spec.command_links = true;
+        if (show_task_dialog(owner, &spec) != 101)
+            return;
+    }
+}
+
 // Something else changed the file npad has open. Offer the three things a user
 // can sensibly want, and make the safe one the default: Reload discards their
 // unsaved edits, so it must never be what Enter or Esc does.
@@ -3451,71 +4209,251 @@ static void prompt_external_change(Window *window) {
     in_prompt = false;
 }
 
+// Every user-facing close of this window (the close box, File > Exit, Close
+// All from another instance, the update's fallback) comes through here.
+//
+// During a session end the close is a handoff: no prompt (see
+// g_session_ending). Otherwise the editor runs its save prompt - and while
+// that prompt is up, a second request is dropped rather than run: the prompt
+// is modal and pumps messages, so a posted Close All or a second click used to
+// stack a second save prompt on top of the first, which then answered for a
+// document whose first prompt was still waiting.
+static void request_quit(Window *window) {
+    if (g_session_ending) {
+        ui_post_event(UI_EVENT_QUIT_HANDOFF, window, NULL);
+        return;
+    }
+    if (g_quit_prompt_open)
+        return; // The prompt already on screen answers this request too
+    g_quit_prompt_open = true;
+    ui_post_event(UI_EVENT_QUIT, window, NULL);
+    g_quit_prompt_open = false;
+}
+
+// The program and arguments that install r: the setup itself, or msiexec with
+// the MSI (in the same scope as the copy it upgrades, or Windows Installer
+// would add a second product beside it rather than upgrade the first)
+static bool installer_command(const UpdateDownloadResult *r, wchar_t *app, size_t app_cap,
+                              wchar_t *args, size_t args_cap) {
+    if (r->package == UPDATE_PACKAGE_MSI) {
+        UINT n = GetSystemDirectoryW(app, (UINT) app_cap);
+        if (n == 0 || n + 14 > app_cap)
+            return false;
+        _snwprintf(app + n, app_cap - n - 1, L"\\msiexec.exe");
+        app[app_cap - 1] = L'\0';
+        // /passive: a progress bar and no questions, but still a UAC prompt
+        // when an all-users install needs one; /norestart: never reboot
+        _snwprintf(args, args_cap - 1, L"/i \"%ls\" /passive /norestart%ls", r->path,
+                   r->per_machine ? L" ALLUSERS=1" : L"");
+        args[args_cap - 1] = L'\0';
+        // The major upgrade carries every feature over, the Assoc* ones
+        // included, and reinstalling those rewrites the very keys the
+        // Associations page deletes: an update would quietly bring back the
+        // groups the user unticked there. Leave those features out, as the
+        // setup's /MERGETASKS below does for its tasks.
+        char names[32][NPAD_MSI_FEATURE_CHARS];
+        const char *installed[32];
+        size_t count = msi_local_features(r->msi_product, names, 32);
+        for (size_t i = 0; i < count; i++)
+            installed[i] = names[i];
+        const char *drop[ASSOC_GROUP_COUNT];
+        size_t drop_count =
+            assoc_msi_unregistered_features(r->per_machine, drop, ASSOC_GROUP_COUNT);
+        char features[600];
+        if (update_msi_feature_args(installed, count, drop, drop_count, features,
+                                    sizeof(features))) {
+            size_t used = wcslen(args);
+            _snwprintf(args + used, args_cap - used - 1, L"%hs", features);
+            args[args_cap - 1] = L'\0';
+        }
+        return true;
+    }
+    _snwprintf(app, app_cap - 1, L"%ls", r->path);
+    app[app_cap - 1] = L'\0';
+    // Tell setup we were running so it offers to relaunch afterwards. It
+    // cannot detect that itself: npad closes before setup reaches the point
+    // where it looks, so there is no window left for it to find. Inno ignores
+    // parameters it does not recognise, so older installers are safe.
+    //
+    // The association tasks come from the registry as it is NOW, not from
+    // Inno's memory of the original install: its UsePreviousTasks would
+    // otherwise quietly re-register every type the user has since unticked on
+    // Preferences > Associations.
+    _snwprintf(args, args_cap - 1, L"/RELAUNCH=1");
+    args[args_cap - 1] = L'\0';
+    wchar_t merge[200];
+    if (assoc_installer_merge_tasks(merge, 200)) {
+        size_t used = wcslen(args);
+        _snwprintf(args + used, args_cap - used - 1, L" %ls", merge);
+        args[args_cap - 1] = L'\0';
+    }
+    return true;
+}
+
+static void report_installer_not_started(HWND owner, const UpdateDownloadResult *r, DWORD err) {
+    wchar_t reason[256] = L"";
+    if (FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, err, 0,
+                       reason, 256, NULL) == 0)
+        _snwprintf(reason, 255, L"error %lu", (unsigned long) err);
+    reason[255] = L'\0';
+    size_t len = wcslen(reason);
+    while (len > 0 &&
+           (reason[len - 1] == L'\n' || reason[len - 1] == L'\r' || reason[len - 1] == L' '))
+        reason[--len] = L'\0';
+    wchar_t msg[MAX_PATH + 512];
+    _snwprintf(msg, MAX_PATH + 511,
+               L"Windows did not start the installer: %ls\n\nNo npad window was closed. The "
+               L"verified installer is saved at:\n%ls",
+               reason, r->path);
+    msg[MAX_PATH + 511] = L'\0';
+    MessageBoxW(owner, msg, L"npad", MB_OK | MB_ICONWARNING);
+}
+
+// Run the verified installer, then hand every npad window over to it.
+//
+// The installer process is created BEFORE anything closes, suspended: if
+// Windows will not start it (antivirus quarantine, Smart App Control, a
+// policy), nothing has closed and the user is told why. It used to broadcast
+// the handoff first and never check the launch, so every window vanished and
+// nothing came back.
+//
+// The handle that has kept the verified file unchangeable since it was hashed
+// is held through the user's Yes/No, the process creation and a bounded wait
+// for the installer to start, then closed. That does NOT cover what the
+// installer reads later by name: msiexec may reopen the package, and Inno's
+// SetupLdr hands its own path to setup.tmp, which reopens the setup exe for
+// its payload after npad has let go and exited (a running image can still be
+// renamed and replaced). A process running as the same user could swap the
+// file in that window - a same-account residual, since such a process can
+// already run code as the user without npad's help.
+//
+// Returns false, with nothing closed, when the installer could not start.
+static bool install_update(Window *window, UpdateDownloadResult *r, HWND owner) {
+    // Latch BEFORE anything pumps messages: the wait below does, so this
+    // window can be asked to close during it (the user clicking X, or another
+    // instance's Close All). Without the latch already set that close would run
+    // a save prompt, and a "Don't Save" there would be quietly undone by the
+    // handoff snapshot afterwards - resurrecting text the user had just
+    // discarded.
+    g_session_ending = true;
+
+    wchar_t app[MAX_PATH], args[MAX_PATH + 900];
+    if (!installer_command(r, app, MAX_PATH, args, MAX_PATH + 900)) {
+        g_session_ending = false;
+        report_installer_not_started(owner, r, ERROR_PATH_NOT_FOUND);
+        return false;
+    }
+    wchar_t cmdline[2 * MAX_PATH + 920];
+    _snwprintf(cmdline, 2 * MAX_PATH + 919, L"\"%ls\" %ls", app, args);
+    cmdline[2 * MAX_PATH + 919] = L'\0';
+
+    STARTUPINFOW si;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&pi, sizeof(pi));
+    bool created = CreateProcessW(app, cmdline, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, NULL,
+                                  &si, &pi) != FALSE;
+    DWORD err = created ? 0 : GetLastError();
+    // An installer that demands elevation up front can only be started through
+    // ShellExecute (which raises UAC), and not suspended: that one starts after
+    // the others close, and is still checked. Neither of npad's installers asks
+    // for it today (setup elevates itself only when needed, msiexec likewise).
+    if (!created && err != ERROR_ELEVATION_REQUIRED) {
+        g_session_ending = false;
+        report_installer_not_started(owner, r, err);
+        return false;
+    }
+
+    // Close the OTHER instances first and wait for them. Setup cannot replace
+    // a locked npad.exe, and until this existed only the window that started
+    // the update actually closed.
+    close_other_npads_for_install(owner);
+
+    if (created) {
+        ResumeThread(pi.hThread);
+        // Keep the file unchangeable while the installer starts: msiexec
+        // reads the package before its first window, and setup begins on its
+        // own payload. Bounded; neither waits on npad, and what either reads
+        // by name after this is the same-account residual described above.
+        WaitForInputIdle(pi.hProcess, r->package == UPDATE_PACKAGE_MSI ? 10000 : 3000);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    } else {
+        SHELLEXECUTEINFOW sei;
+        ZeroMemory(&sei, sizeof(sei));
+        sei.cbSize = sizeof(sei);
+        sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+        sei.hwnd = owner;
+        sei.lpVerb = L"open";
+        sei.lpFile = app;
+        sei.lpParameters = args;
+        sei.nShow = SW_SHOWNORMAL;
+        if (!ShellExecuteExW(&sei)) {
+            // The others have closed by now, with their work parked; this
+            // window stays, and their documents return at the next launch
+            g_session_ending = false;
+            report_installer_not_started(owner, r, GetLastError());
+            return false;
+        }
+        if (sei.hProcess) {
+            WaitForInputIdle(sei.hProcess, 10000);
+            CloseHandle(sei.hProcess);
+        }
+    }
+    if (r->file) {
+        CloseHandle(r->file);
+        r->file = NULL;
+    }
+
+    // This instance parks its own work and goes last. If it cannot be parked
+    // (a full or read-only profile volume) fall back to asking: the dialog
+    // promised the document would come back, and exiting silently would
+    // destroy it instead.
+    if (!ui_post_event(UI_EVENT_QUIT_HANDOFF, window, NULL)) {
+        g_session_ending = false;
+        request_quit(window);
+    }
+    return true;
+}
+
 static void handle_update_downloaded(Window *window, UpdateDownloadResult *r) {
-    HWND hwnd = window ? window->hwnd : NULL;
-    if (!r->ok) {
-        wchar_t *w = utf8_to_wide(r->error);
-        MessageBoxW(hwnd, w ? w : L"Update download failed.", L"npad", MB_OK | MB_ICONWARNING);
+    HWND owner = update_dialog_owner(window);
+    if (!r || !r->ok) {
+        wchar_t *w = utf8_to_wide(r ? r->error : "");
+        MessageBoxW(owner, (w && w[0]) ? w : L"Update download failed.", L"npad",
+                    MB_OK | MB_ICONWARNING);
         free(w);
         set_status_message(window, "Update download failed");
     } else {
         set_status_message(window, "Update downloaded and verified");
-        wchar_t msg[MAX_PATH + 200];
-        _snwprintf(msg, MAX_PATH + 199,
-                   L"npad %hs was downloaded and its SHA-256 checksum verified.\n\n"
-                   L"Install now? Every npad window will close and reopen once the update "
-                   L"finishes. Unsaved documents are kept and restored as they are - you "
-                   L"won't be asked to save them.",
-                   r->tag);
-        msg[MAX_PATH + 199] = L'\0';
-        if (MessageBoxW(hwnd, msg, L"npad", MB_YESNO | MB_ICONQUESTION) == IDYES) {
-            // Latch BEFORE the broadcast: the wait below pumps messages, so
-            // this window can be asked to close during it (the user clicking X,
-            // or another instance's Close All). Without the latch already set
-            // that close would run a save prompt, and a "Don't Save" there
-            // would be quietly undone by the handoff snapshot afterwards -
-            // resurrecting text the user had just discarded.
-            g_session_ending = true;
-
-            // Close the OTHER instances first and wait for them. Setup cannot
-            // replace a locked npad.exe, and until this existed only the window
-            // that started the update actually closed.
-            if (g_close_handoff_msg) {
-                broadcast_to_npad_windows(g_close_handoff_msg, 0);
-                wait_for_other_npads(4000);
-            }
-            // Tell setup we were running so it offers to relaunch afterwards.
-            // It cannot detect that itself: npad closes below, before setup
-            // starts, so there is no window left for it to find. Inno ignores
-            // parameters it does not recognise, so older installers are safe.
-            //
-            // The association tasks come from the registry as it is NOW, not
-            // from Inno's memory of the original install: its UsePreviousTasks
-            // would otherwise quietly re-register every type the user has
-            // since unticked on Preferences > Associations.
-            wchar_t setup_args[256] = L"/RELAUNCH=1";
-            wchar_t merge[200];
-            if (assoc_installer_merge_tasks(merge, 200)) {
-                size_t used = wcslen(setup_args);
-                _snwprintf(setup_args + used, 255 - used, L" %ls", merge);
-                setup_args[255] = L'\0';
-            }
-            ShellExecuteW(hwnd, L"open", r->path, setup_args, NULL, SW_SHOWNORMAL);
-            // This instance parks its own work and goes last. If it cannot be
-            // parked (a full or read-only profile volume) fall back to asking:
-            // the dialog above promised the document would come back, and
-            // exiting silently would destroy it instead.
-            if (!ui_post_event(UI_EVENT_QUIT_HANDOFF, window, NULL)) {
-                g_session_ending = false;
-                ui_post_event(UI_EVENT_QUIT, window, NULL);
-            }
+        // Says what actually happens: a handoff parks only unsaved documents
+        // (editor_snapshot_handoff), so a window with nothing unsaved is not
+        // reopened - the dialog used to promise every window would be
+        bool msi = r->package == UPDATE_PACKAGE_MSI;
+        wchar_t msg[700];
+        _snwprintf(msg, 699,
+                   L"npad %hs was downloaded and verified.\n\n"
+                   L"Install now? npad will close all of its windows and run the %ls. Unsaved "
+                   L"documents are kept, without asking you to save them, and reopen as they "
+                   L"are %ls. Windows with nothing unsaved are not reopened.",
+                   r->tag, msi ? L"Windows Installer package" : L"installer",
+                   msi ? L"the next time you start npad"
+                       : L"when npad starts again (setup offers to start it when it finishes)");
+        msg[699] = L'\0';
+        if (MessageBoxW(owner, msg, L"npad", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+            install_update(window, r, owner);
         } else {
+            remember_update_declined(r->tag);
             wchar_t note[MAX_PATH + 96];
             _snwprintf(note, MAX_PATH + 95, L"The verified installer was saved to:\n%ls", r->path);
             note[MAX_PATH + 95] = L'\0';
-            MessageBoxW(hwnd, note, L"npad", MB_OK | MB_ICONINFORMATION);
+            MessageBoxW(owner, note, L"npad", MB_OK | MB_ICONINFORMATION);
         }
     }
+    if (r && r->file)
+        CloseHandle(r->file);
+    release_update_install();
     InterlockedExchange(&g_update_busy, 0);
     updates_page_sync_busy();
     apply_update_indicator(window); // The update is still available if declined
@@ -6335,22 +7273,7 @@ static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, L
             wcur[31] = L'\0';
             SetDlgItemTextW(page, ID_PREF_UPD_CURRENT, wcur);
             g_updates_page = page;
-
-            char *latest = settings_get_string("update_latest_version", "");
-            wchar_t *wlatest = utf8_to_wide((latest && latest[0]) ? latest : "unknown");
-            if (wlatest) {
-                SetDlgItemTextW(page, ID_PREF_UPD_LATEST, wlatest);
-                free(wlatest);
-            }
-            free(latest);
-
-            char *last = settings_get_string("update_last_checked", "");
-            wchar_t *wlast = utf8_to_wide((last && last[0]) ? last : "never");
-            if (wlast) {
-                SetDlgItemTextW(page, ID_PREF_UPD_LASTCHECK, wlast);
-                free(wlast);
-            }
-            free(last);
+            prefs_updates_show_status(page);
 
             HWND combo = GetDlgItem(page, ID_PREF_UPD_MODE);
             for (int i = 0; i < UPDATE_MODE_COUNT; i++)
@@ -6384,7 +7307,8 @@ static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, L
                 return TRUE;
             }
             if (id == ID_PREF_UPD_CHECK) {
-                // Manual check from the prefs page (result goes to the main window)
+                // Manual check from the prefs page. The result is reported over
+                // the sheet (update_dialog_owner) and refreshes this page.
                 if (g_main_window)
                     start_update_check(g_main_window, true);
                 updates_page_sync_busy();
@@ -6396,13 +7320,7 @@ static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, L
                 char *latest = settings_get_string("update_latest_version", "");
                 if (latest && latest[0] && g_main_window) {
                     if (InterlockedCompareExchange(&g_update_busy, 1, 0) == 0) {
-                        char status[96];
-                        snprintf(status, sizeof(status), "Downloading npad %s...", latest);
-                        set_status_message(g_main_window, status);
-                        if (!spawn_update_download(g_main_window, latest)) {
-                            set_status_message(g_main_window, "Update download failed to start");
-                            InterlockedExchange(&g_update_busy, 0);
-                        }
+                        begin_update_download(g_main_window, latest);
                     } else {
                         set_status_message(g_main_window, "An update check is already running");
                     }
@@ -6421,7 +7339,7 @@ static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, L
                         apply_update_indicator(g_main_window);
                 }
                 free(latest);
-                prefs_updates_sync_skip(page);
+                updates_page_sync_busy(); // Skip / Install Now, unless a download runs
                 return TRUE;
             }
             break;
@@ -7112,6 +8030,40 @@ void ui_platform_notify_settings_changed(void) {
     }
 }
 
+typedef struct {
+    DWORD pid;
+    bool found;
+} NpadPidWindowQuery;
+
+static BOOL CALLBACK pid_window_enum_proc(HWND hwnd, LPARAM lparam) {
+    NpadPidWindowQuery *q = (NpadPidWindowQuery *) lparam;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == q->pid) {
+        wchar_t cls[64];
+        if (GetClassNameW(hwnd, cls, 64) && wcscmp(cls, NPAD_WINDOW_CLASS) == 0) {
+            q->found = true;
+            return FALSE; // Found: stop enumerating
+        }
+    }
+    return TRUE;
+}
+
+static const wchar_t *image_basename(const wchar_t *image) {
+    const wchar_t *base = wcsrchr(image, L'\\');
+    return base ? base + 1 : image;
+}
+
+// Whether pid is a running npad - the owner of a live session slot, which
+// must not be offered as a crash leftover. Guards against pid reuse by
+// checking the process is npad, which used to mean "its exe is called
+// npad.exe": the portable download (npad-v0.36.0-portable-win-x64.exe) or any
+// renamed copy then saw every other live window's slot as a crash, offered to
+// restore it (a second window bound to the same file) or deleted it. Now a
+// process is npad when it owns an npad document window, or when its exe is
+// any npad*.exe (the portable download, npad-arm64.exe) or has the same name
+// as this one - the latter for a session on another desktop, where windows
+// cannot be enumerated.
 bool ui_platform_pid_is_running(long pid, long long *start_time) {
     if (start_time)
         *start_time = -1;
@@ -7126,18 +8078,21 @@ bool ui_platform_pid_is_running(long pid, long long *start_time) {
     bool running = false;
     DWORD exit_code = 0;
     if (GetExitCodeProcess(proc, &exit_code) && exit_code == STILL_ACTIVE) {
-        // Confirm it is actually npad, guarding against pid reuse by some
-        // other program. Any npad*.exe counts: the portable download keeps
-        // its versioned name (npad-v<v>-portable-win-x64.exe) and the arm64
-        // build may run as npad-arm64.exe.
-        wchar_t image[MAX_PATH];
-        DWORD size = MAX_PATH;
-        if (QueryFullProcessImageNameW(proc, 0, image, &size)) {
-            const wchar_t *base = wcsrchr(image, L'\\');
-            base = base ? base + 1 : image;
-            size_t len = wcslen(base);
-            running = _wcsnicmp(base, L"npad", 4) == 0 && len >= 8 &&
-                      _wcsicmp(base + len - 4, L".exe") == 0;
+        NpadPidWindowQuery q = { (DWORD) pid, false };
+        EnumWindows(pid_window_enum_proc, (LPARAM) &q);
+        running = q.found;
+        if (!running) {
+            wchar_t image[MAX_PATH], self[MAX_PATH];
+            DWORD size = MAX_PATH;
+            DWORD self_len = GetModuleFileNameW(NULL, self, MAX_PATH);
+            if (QueryFullProcessImageNameW(proc, 0, image, &size)) {
+                const wchar_t *base = image_basename(image);
+                size_t len = wcslen(base);
+                bool npad_named = _wcsnicmp(base, L"npad", 4) == 0 && len >= 8 &&
+                                  _wcsicmp(base + len - 4, L".exe") == 0;
+                running = npad_named || (self_len > 0 && self_len < MAX_PATH &&
+                                         _wcsicmp(base, image_basename(self)) == 0);
+            }
         }
         // A recycled pid can also land on another npad, so report when this
         // one started for the caller to compare with the slot's own time
@@ -8944,7 +9899,7 @@ static void handle_command(Window *window, WORD command) {
             }
             break;
         case ID_FILE_EXIT:
-            ui_post_event(UI_EVENT_QUIT, window, NULL);
+            request_quit(window);
             break;
         case ID_EDIT_UNDO:
             ui_post_event(UI_EVENT_EDIT_UNDO, window, NULL);
@@ -9555,8 +10510,9 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         }
 
         case NPAD_WM_UPDATE_CHECKED: {
-            if (lparam)
-                handle_update_checked(window, (UpdateCheckResult *) lparam);
+            // A NULL result (the worker could not allocate one) still ends the
+            // check, or the busy state would never clear
+            handle_update_checked(window, (UpdateCheckResult *) lparam);
             return 0;
         }
 
@@ -9570,8 +10526,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         }
 
         case NPAD_WM_UPDATE_DOWNLOADED: {
-            if (lparam)
-                handle_update_downloaded(window, (UpdateDownloadResult *) lparam);
+            handle_update_downloaded(window, (UpdateDownloadResult *) lparam);
             return 0;
         }
 
@@ -9655,28 +10610,44 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
             // user closing npad and must not prompt. The Restart Manager sends
             // WM_CLOSE after WM_ENDSESSION, and a save prompt there would be an
             // invisible modal dialog stalling the installer until it times out.
-            ui_post_event(g_session_ending ? UI_EVENT_QUIT_HANDOFF : UI_EVENT_QUIT, window, NULL);
+            request_quit(window);
             return 0;
         }
 
         case WM_QUERYENDSESSION: {
             // Windows (or an installer's Restart Manager) is closing npad.
-            // Never veto and never show UI here - MSDN forbids it, and the
-            // window may be invisible, so a prompt would simply hang until
-            // HungAppTimeout and get npad reported as blocking the restart.
-            // Park the work while there is still time, then consent.
-            //
-            // A failed park is ignored here, unlike the update path: there is
-            // nothing useful to do about it. Prompting is forbidden, and
-            // refusing to consent would only get npad killed anyway - before
-            // this handler existed that is exactly what happened, with no
-            // snapshot attempted at all.
+            // Never show UI here - MSDN forbids it, and the window may be
+            // invisible, so a prompt would simply hang until HungAppTimeout
+            // and get npad reported as blocking the restart. Park the work
+            // while there is still time, then consent.
             g_session_ending = true;
-            ui_post_event(UI_EVENT_HANDOFF_SNAPSHOT, window, NULL);
+            if (!ui_post_event(UI_EVENT_HANDOFF_SNAPSHOT, window, NULL)) {
+                // The document is unsaved and could not be parked (a full
+                // disk, an unreachable roaming profile). Consenting would
+                // lose it without a word, so refuse - with a reason, which
+                // Windows shows on its "these apps are preventing shutdown"
+                // screen (where the user can still force it), and which a
+                // Restart Manager reports as an app it could not close: the
+                // same honest outcome the update path already chose. Close
+                // prompts normally again, so the user can save from here.
+                g_session_ending = false;
+                ShutdownBlockReasonCreate(hwnd, L"npad has unsaved changes that could not be "
+                                                L"kept safe. Switch to npad to save them.");
+                g_shutdown_blocked = true;
+                return FALSE;
+            }
+            if (g_shutdown_blocked) {
+                ShutdownBlockReasonDestroy(hwnd);
+                g_shutdown_blocked = false;
+            }
             return TRUE;
         }
 
         case WM_ENDSESSION: {
+            if (g_shutdown_blocked) {
+                ShutdownBlockReasonDestroy(hwnd);
+                g_shutdown_blocked = false;
+            }
             if (!wparam) {
                 // Called off: go back to prompting on close, and drop the mark
                 // so a genuine crash later is still reported as one

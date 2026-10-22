@@ -34,8 +34,12 @@
 
 #define UPDATE_HOST "api.github.com"
 #define UPDATE_PATH "/repos/platima/npad/releases/latest"
-#define RELEASES_URL "https://github.com/platima/npad/releases/latest"
+// A pre-release build reads the newest few releases instead: /releases/latest
+// never names a pre-release, so an rc tester was never told of the next rc
+#define UPDATE_LIST_PATH "/repos/platima/npad/releases?per_page=10"
+#define RELEASE_TAG_URL "https://github.com/platima/npad/releases/tag/"
 #define UPDATE_MAX_BYTES (1024 * 1024)
+#define UPDATE_LIST_MAX_BYTES (4 * 1024 * 1024)
 #define UPDATE_TIMEOUT_SECONDS 20
 
 // One job for the worker: a release lookup, a source detection, or both
@@ -82,6 +86,12 @@ static void fetch_latest(UpdateJob *job) {
         return;
     }
 
+    // Compile-time constants only, so safe on this worker thread
+    char cur[32];
+    npad_gtk_update_current_version(cur, sizeof(cur));
+    bool prerelease = update_is_prerelease(cur);
+    guint max_bytes = prerelease ? UPDATE_LIST_MAX_BYTES : UPDATE_MAX_BYTES;
+
     GError *error = NULL;
     GSocketClient *client = g_socket_client_new();
     g_socket_client_set_tls(client, TRUE); // Validates the certificate against the host
@@ -90,22 +100,26 @@ static void fetch_latest(UpdateJob *job) {
         g_socket_client_connect_to_host(client, UPDATE_HOST, 443, NULL, &error);
     GByteArray *data = NULL;
     if (conn) {
-        static const char request[] = "GET " UPDATE_PATH " HTTP/1.1\r\n"
-                                      "Host: " UPDATE_HOST "\r\n"
-                                      "User-Agent: npad-updater\r\n"
-                                      "Accept: application/vnd.github+json\r\n"
-                                      "Connection: close\r\n"
-                                      "\r\n";
+        char request[512];
+        int request_len = snprintf(request, sizeof(request),
+                                   "GET %s HTTP/1.1\r\n"
+                                   "Host: " UPDATE_HOST "\r\n"
+                                   "User-Agent: npad-updater\r\n"
+                                   "Accept: application/vnd.github+json\r\n"
+                                   "Connection: close\r\n"
+                                   "\r\n",
+                                   prerelease ? UPDATE_LIST_PATH : UPDATE_PATH);
         GOutputStream *out = g_io_stream_get_output_stream(G_IO_STREAM(conn));
         GInputStream *in = g_io_stream_get_input_stream(G_IO_STREAM(conn));
-        if (g_output_stream_write_all(out, request, sizeof(request) - 1, NULL, NULL, &error)) {
+        if (request_len > 0 && (size_t) request_len < sizeof(request) &&
+            g_output_stream_write_all(out, request, (gsize) request_len, NULL, NULL, &error)) {
             data = g_byte_array_new();
             guint8 buf[8192];
             for (;;) {
                 gssize n = g_input_stream_read(in, buf, sizeof(buf), NULL, &error);
                 if (n <= 0)
                     break; // 0 = the server closed the connection: the response is complete
-                if (data->len + (guint) n > UPDATE_MAX_BYTES) {
+                if (data->len + (guint) n > max_bytes) {
                     g_set_error_literal(&error, G_IO_ERROR, G_IO_ERROR_MESSAGE_TOO_LARGE,
                                         "the response was too large");
                     break;
@@ -129,12 +143,16 @@ static void fetch_latest(UpdateJob *job) {
 
     int status = 0;
     char *body = NULL;
+    if (!data) {
+        // The request could not be formed or sent, without an error to show
+        snprintf(job->error, sizeof(job->error), "Could not send the update check request.");
+        return;
+    }
     if (!update_http_parse_response((const char *) data->data, data->len, &status, &body, NULL)) {
         snprintf(job->error, sizeof(job->error), "Unexpected response from the update server.");
     } else if (status != 200) {
-        snprintf(job->error, sizeof(job->error),
-                 "The update server answered with HTTP %d. Try again later.", status);
-    } else if (!update_extract_tag(body, job->tag, sizeof(job->tag))) {
+        update_http_status_message(status, job->error, sizeof(job->error));
+    } else if (!update_pick_release_tag(body, prerelease, job->tag, sizeof(job->tag))) {
         snprintf(job->error, sizeof(job->error), "Unexpected response from the update server.");
     } else {
         job->ok = true;
@@ -391,12 +409,14 @@ static void show_available(Window *window, const char *tag) {
     g_free(prose);
 
     if (response == RESPONSE_NOTES) {
+        // This release's own notes: /releases/latest is never a pre-release
+        char *notes = g_strconcat(RELEASE_TAG_URL, tag, NULL);
         GError *error = NULL;
-        if (!g_app_info_launch_default_for_uri(RELEASES_URL, NULL, &error)) {
-            show_simple(window, GTK_MESSAGE_WARNING, "Could not open the release notes",
-                        RELEASES_URL);
+        if (!g_app_info_launch_default_for_uri(notes, NULL, &error)) {
+            show_simple(window, GTK_MESSAGE_WARNING, "Could not open the release notes", notes);
             g_clear_error(&error);
         }
+        g_free(notes);
     } else if (response == RESPONSE_SKIP) {
         settings_set_string("update_skipped_version", tag);
         settings_save();
@@ -490,9 +510,19 @@ static void job_done(GObject *source_object, GAsyncResult *result, gpointer data
 // Entry points
 // ---------------------------------------------------------------------------
 
+// A manual request while the launch check is still on its way joins it: that
+// check's result is then reported as if just asked for. It used to be refused
+// ("already running") and the launch check then finished silently.
 bool npad_gtk_update_check(Window *window, bool manual) {
-    if (!window || U.busy)
+    if (!window)
         return false;
+    if (U.busy) {
+        if (manual) {
+            U.manual = true;
+            npad_gtk_set_status_message(window, "Checking for updates...");
+        }
+        return true;
+    }
     U.manual = manual;
     npad_gtk_set_status_message(window, "Checking for updates...");
     run_job(true);

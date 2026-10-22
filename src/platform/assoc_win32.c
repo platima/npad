@@ -23,7 +23,8 @@ typedef struct {
 } AssocType;
 
 typedef struct {
-    const char *token; // What the elevated command line names it
+    const char *token;       // What the elevated command line names it
+    const char *msi_feature; // Its Feature Id in installer/npad.wxs
     const AssocType *types;
     int count;
 } AssocGroupDef;
@@ -56,11 +57,11 @@ static const AssocType TYPES_LOG[] = {
 #define COUNT_OF(a) ((int) (sizeof(a) / sizeof((a)[0])))
 
 static const AssocGroupDef GROUPS[ASSOC_GROUP_COUNT] = {
-    { "text", TYPES_TEXT, COUNT_OF(TYPES_TEXT) },
-    { "markdown", TYPES_MARKDOWN, COUNT_OF(TYPES_MARKDOWN) },
-    { "data", TYPES_DATA, COUNT_OF(TYPES_DATA) },
-    { "config", TYPES_CONFIG, COUNT_OF(TYPES_CONFIG) },
-    { "log", TYPES_LOG, COUNT_OF(TYPES_LOG) },
+    { "text", "AssocText", TYPES_TEXT, COUNT_OF(TYPES_TEXT) },
+    { "markdown", "AssocMarkdown", TYPES_MARKDOWN, COUNT_OF(TYPES_MARKDOWN) },
+    { "data", "AssocData", TYPES_DATA, COUNT_OF(TYPES_DATA) },
+    { "config", "AssocConfig", TYPES_CONFIG, COUNT_OF(TYPES_CONFIG) },
+    { "log", "AssocLog", TYPES_LOG, COUNT_OF(TYPES_LOG) },
 };
 
 // ---------------------------------------------------------------------------
@@ -599,6 +600,22 @@ bool assoc_installer_merge_tasks(wchar_t *out, size_t cap) {
     }
     out[cap - 1] = L'\0';
     return true;
+}
+
+size_t assoc_msi_unregistered_features(bool per_machine, const char **out, size_t cap) {
+    if (!out)
+        return 0;
+    // The hive the MSI's HKMU components were written to: HKCU for a per-user
+    // product, HKLM for an all-users one. That is also the hive the
+    // Associations page edits for that copy, so it says what the user chose.
+    bool state[ASSOC_GROUP_COUNT];
+    read_state(per_machine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, state);
+    size_t n = 0;
+    for (int g = 0; g < ASSOC_GROUP_COUNT && n < cap; g++) {
+        if (!state[g])
+            out[n++] = GROUPS[g].msi_feature;
+    }
+    return n;
 }
 
 // Whether npad has any file types recorded in this hive's Capabilities
