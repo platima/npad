@@ -16,10 +16,8 @@
 
 #include "ui_gtk.h"
 
-#include <glib-unix.h>
 #include <langinfo.h>
 #include <locale.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +29,7 @@
 #include "../core/file_ops.h"
 #include "../core/settings.h"
 #include "../core/startup_prof.h"
+#include "../core/time_format.h"
 #include "print_gtk.h"
 
 // Status refreshes are coalesced: caret movement and scrolling fire per
@@ -135,6 +134,14 @@ static void format_count(unsigned long value, char *out, size_t size) {
 // typing over a selection (delete + insert). Edits inside one are held and
 // flushed together at its end - one edit is recorded plainly so typing can
 // still coalesce per word, several become one undo group.
+//
+// A user action does not say whether it was a keystroke, so a one-character
+// paste, cut or Replace would merge with the typing beside it. Those paths
+// therefore make their own step: npad's own commands open an undo group around
+// the action (npad_gtk_replace_selection, npad_gtk_paste_plain, Cut, Delete,
+// the list tools), and the edits GTK makes by itself (Shift+Delete, a
+// middle-click paste, a text drop) get an undo_break on both sides
+// (ui_gtk_edit.c).
 // ---------------------------------------------------------------------------
 
 static void record_edit(Window *window, bool insert, long pos, const char *text, size_t len) {
@@ -815,6 +822,27 @@ static void apply_counts_pref(Window *window) {
 
 static void on_popup_activate(GtkMenuItem *item, gpointer data);
 
+static gboolean destroy_popup_idle(gpointer data) {
+    gtk_widget_destroy(GTK_WIDGET(data));
+    return G_SOURCE_REMOVE;
+}
+
+// A menu closes ("deactivate") before the chosen item activates, so destroying
+// it there would destroy the choice with it: destroy it once that has run
+static void on_popup_deactivate(GtkMenuShell *menu, gpointer data) {
+    (void) data;
+    g_idle_add(destroy_popup_idle, menu);
+}
+
+// Each status-bar popup is built fresh (its radio marks follow the document),
+// so it must also go away again, or every click leaves a menu behind
+static void popup_status_menu(GtkWidget *menu, GtkWidget *anchor) {
+    g_signal_connect(menu, "deactivate", G_CALLBACK(on_popup_deactivate), NULL);
+    gtk_widget_show_all(menu);
+    gtk_menu_popup_at_widget(GTK_MENU(menu), anchor, GDK_GRAVITY_NORTH_WEST, GDK_GRAVITY_SOUTH_WEST,
+                             NULL);
+}
+
 // Popup for the line-ending segment (mirrors Format > Line Endings)
 static void show_line_ending_popup(Window *window, GtkWidget *anchor) {
     static const char *labels[] = { "_Windows (CRLF)", "_Unix (LF)", "_Mac (CR)" };
@@ -830,9 +858,7 @@ static void show_line_ending_popup(Window *window, GtkWidget *anchor) {
         g_signal_connect(item, "activate", G_CALLBACK(on_popup_activate), window);
         gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
     }
-    gtk_widget_show_all(menu);
-    gtk_menu_popup_at_widget(GTK_MENU(menu), anchor, GDK_GRAVITY_NORTH_WEST, GDK_GRAVITY_SOUTH_WEST,
-                             NULL);
+    popup_status_menu(menu, anchor);
 }
 
 // Popup for the encoding segment
@@ -849,9 +875,7 @@ static void show_encoding_popup(Window *window, GtkWidget *anchor) {
         g_signal_connect(item, "activate", G_CALLBACK(on_popup_activate), window);
         gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
     }
-    gtk_widget_show_all(menu);
-    gtk_menu_popup_at_widget(GTK_MENU(menu), anchor, GDK_GRAVITY_NORTH_WEST, GDK_GRAVITY_SOUTH_WEST,
-                             NULL);
+    popup_status_menu(menu, anchor);
 }
 
 static void on_popup_activate(GtkMenuItem *item, gpointer data) {
@@ -1067,16 +1091,25 @@ static void rebuild_recent_menu(Window *window) {
         gtk_widget_set_sensitive(empty, FALSE);
         gtk_menu_shell_append(GTK_MENU_SHELL(menu), empty);
     } else {
-        for (int i = 0; i < count && i < 9; i++) {
-            // "_1 path", with the path's own underscores doubled so they are
-            // shown rather than taken as mnemonics
+        // Ten entries, as on Windows (recent_files_max caps the list at 10)
+        for (int i = 0; i < count && i < 10; i++) {
+            // "_1 path" .. "_9 path", then "1_0 path" (Alt+0, not a second
+            // Alt+1), with the path's own underscores doubled so they are
+            // shown rather than taken as mnemonics. A name that is not valid
+            // UTF-8 is shown in GLib's display form; the item keeps the real
+            // bytes to open.
             GString *label = g_string_new(NULL);
-            g_string_append_printf(label, "_%d ", i + 1);
-            for (const char *p = files[i]; *p; p++) {
+            if (i < 9)
+                g_string_append_printf(label, "_%d ", i + 1);
+            else
+                g_string_append(label, "1_0 ");
+            char *shown = npad_gtk_display_text(files[i]);
+            for (const char *p = shown; *p; p++) {
                 if (*p == '_')
                     g_string_append_c(label, '_');
                 g_string_append_c(label, *p);
             }
+            g_free(shown);
             GtkWidget *item = gtk_menu_item_new_with_mnemonic(label->str);
             g_string_free(label, TRUE);
             g_object_set_data_full(G_OBJECT(item), "npad-path", g_strdup(files[i]), g_free);
@@ -1134,6 +1167,7 @@ static void on_menu_show(GtkWidget *menu, gpointer data) {
             rebuild_recent_menu(window);
             break;
         case 1: // Edit
+            window->edit_menu_open = true;
             apply_edit_command_states(window);
             break;
         case 2: // Format
@@ -1149,6 +1183,7 @@ static void on_menu_hide(GtkWidget *menu, gpointer data) {
     Window *window = g_gtk_main_window;
     if (!window || GPOINTER_TO_INT(data) != 1)
         return;
+    window->edit_menu_open = false;
     for (size_t i = 0; i < G_N_ELEMENTS(k_edit_state_commands); i++)
         set_command_sensitive(window, k_edit_state_commands[i], true);
 }
@@ -1273,7 +1308,8 @@ static void print_document(Window *window, bool preview) {
     char *face = settings_get_string(key, default_face);
     char *text = ui_get_text(window);
     const char *path = editor_get_current_file();
-    char *title = path ? g_path_get_basename(path) : NULL;
+    // The header's &f and the job name are UTF-8 text, whatever the name's bytes
+    char *title = path ? g_filename_display_basename(path) : NULL;
 
     NpadPrintDoc doc = {
         .text = text,
@@ -1290,43 +1326,70 @@ static void print_document(Window *window, bool preview) {
     free(face);
 }
 
-// Notepad's F5 stamp: the locale's short time (no seconds) then short date.
-// Returns false (out empty) when the local time is unavailable.
-static bool format_time_date(char *stamp, size_t size) {
-    stamp[0] = '\0';
+// strftime in the locale's own encoding, handed back as UTF-8 (GTK takes
+// nothing else: a non-UTF-8 locale's "%p" or month name would otherwise be
+// refused by the buffer after the selection had already been deleted)
+static char *format_local_time(const char *fmt, const struct tm *local) {
+    char text[256];
+    size_t n = strftime(text, sizeof(text), fmt, local);
+    if (n == 0)
+        return NULL;
+    char *utf8 = g_locale_to_utf8(text, (gssize) n, NULL, NULL, NULL);
+    if (!utf8)
+        utf8 = g_utf8_make_valid(text, (gssize) n);
+    return utf8;
+}
+
+void npad_gtk_short_time_date(char **time_text, char **date_text) {
+    if (time_text)
+        *time_text = NULL;
+    if (date_text)
+        *date_text = NULL;
     time_t now = time(NULL);
     struct tm local;
     if (!localtime_r(&now, &local))
-        return false;
+        return;
 
-    // The locale's time format minus its seconds field, e.g. "%I:%M:%S %p" ->
-    // "%I:%M %p" (and "%H:%M:%S" -> "%H:%M" in the C locale)
-    char time_fmt[64];
-    const char *src = nl_langinfo(T_FMT);
-    size_t out = 0;
-    for (size_t i = 0; src[i] && out + 1 < sizeof(time_fmt); i++) {
-        if ((src[i] == ':' || src[i] == '.') && src[i + 1] == '%' && src[i + 2] == 'S') {
-            i += 2;
-            continue;
-        }
-        time_fmt[out++] = src[i];
+    // Windows' TIME_NOSECONDS and DATE_SHORTDATE, from the locale's full
+    // formats (core/time_format.c): "%r" or "%T" lose their seconds, "%y"
+    // becomes a four-digit year
+    char fmt[128];
+    if (time_text) {
+        if (!time_format_short_time(nl_langinfo(T_FMT), fmt, sizeof(fmt)))
+            g_strlcpy(fmt, "%H:%M", sizeof(fmt));
+        *time_text = format_local_time(fmt, &local);
+        if (!*time_text)
+            *time_text = format_local_time("%H:%M", &local);
     }
-    time_fmt[out] = '\0';
+    if (date_text) {
+        if (!time_format_short_date(nl_langinfo(D_FMT), fmt, sizeof(fmt)))
+            g_strlcpy(fmt, "%m/%d/%Y", sizeof(fmt));
+        *date_text = format_local_time(fmt, &local);
+        if (!*date_text)
+            *date_text = format_local_time("%m/%d/%Y", &local);
+    }
+}
 
-    char time_text[64] = "";
-    char date_text[64] = "";
-    if (time_fmt[0])
-        strftime(time_text, sizeof(time_text), time_fmt, &local);
-    strftime(date_text, sizeof(date_text), "%x", &local);
-
-    snprintf(stamp, size, "%s %s", time_text, date_text);
-    return true;
+// Notepad's F5 stamp: the locale's short time (no seconds) then short date.
+// Returns NULL when the local time is unavailable; g_free the result.
+static char *time_date_stamp(void) {
+    char *time_text = NULL;
+    char *date_text = NULL;
+    npad_gtk_short_time_date(&time_text, &date_text);
+    char *stamp = NULL;
+    if (time_text || date_text)
+        stamp = g_strstrip(
+            g_strdup_printf("%s %s", time_text ? time_text : "", date_text ? date_text : ""));
+    g_free(time_text);
+    g_free(date_text);
+    return stamp;
 }
 
 static void insert_time_date(Window *window) {
-    char stamp[132];
-    if (format_time_date(stamp, sizeof(stamp)))
+    char *stamp = time_date_stamp();
+    if (stamp)
         npad_gtk_replace_selection(window, stamp);
+    g_free(stamp);
 }
 
 // A .LOG file just opened: stamp a new line at the end, as Notepad does. One
@@ -1334,32 +1397,55 @@ static void insert_time_date(Window *window) {
 void ui_platform_append_time_date_line(Window *window) {
     if (!window)
         return;
-    char stamp[132];
-    if (!format_time_date(stamp, sizeof(stamp)))
+    char *stamp = time_date_stamp();
+    if (!stamp)
         return;
-    char line[140];
-    snprintf(line, sizeof(line), "\n%s\n", stamp);
+    char *line = g_strdup_printf("\n%s\n", stamp);
     GtkTextIter end;
     gtk_text_buffer_get_end_iter(window->buffer, &end);
     gtk_text_buffer_place_cursor(window->buffer, &end);
     npad_gtk_replace_selection(window, line);
     update_status_bar(window);
+    g_free(line);
+    g_free(stamp);
 }
 
 void npad_gtk_replace_selection(Window *window, const char *text) {
     if (!window || !text)
         return;
+    // The group keeps a one-character result (a Replace with "x") from
+    // merging into the word typed before it
+    undo_begin_group(window->undo);
     gtk_text_buffer_begin_user_action(window->buffer);
     gtk_text_buffer_delete_selection(window->buffer, TRUE, TRUE);
     gtk_text_buffer_insert_at_cursor(window->buffer, text, -1);
     gtk_text_buffer_end_user_action(window->buffer);
+    undo_end_group(window->undo);
     scroll_to_cursor(window);
 }
 
+char *npad_gtk_display_text(const char *text) {
+    return text ? g_filename_display_name(text) : g_strdup("");
+}
+
+char *npad_gtk_self_exe_path(void) {
+    char *exe = g_file_read_link("/proc/self/exe", NULL);
+    // A package upgraded under a running npad replaces the file; the kernel
+    // then reports the old inode as "<path> (deleted)"
+    if (exe && g_str_has_suffix(exe, " (deleted)"))
+        exe[strlen(exe) - strlen(" (deleted)")] = '\0';
+    return exe;
+}
+
 void npad_gtk_spawn_self(const char *const *extra_args) {
-    gchar *exe = g_file_read_link("/proc/self/exe", NULL);
-    if (!exe)
-        return;
+    // The installed path when it is there - after an upgrade that is the new
+    // version, which is what the user installed. If it is gone (the copy was
+    // removed, or moved), /proc/self/exe still executes the running image.
+    gchar *exe = npad_gtk_self_exe_path();
+    if (!exe || !g_file_test(exe, G_FILE_TEST_IS_EXECUTABLE)) {
+        g_free(exe);
+        exe = g_strdup("/proc/self/exe");
+    }
     GPtrArray *argv = g_ptr_array_new();
     g_ptr_array_add(argv, exe);
     for (const char *const *a = extra_args; a && *a; a++)
@@ -1369,7 +1455,12 @@ void npad_gtk_spawn_self(const char *const *extra_args) {
     GError *error = NULL;
     if (!g_spawn_async(NULL, (gchar **) argv->pdata, NULL, G_SPAWN_DEFAULT, NULL, NULL, NULL,
                        &error)) {
-        g_warning("npad: could not start another window: %s", error ? error->message : "");
+        // Say so: a New Window that silently does nothing looks like a hang
+        char *shown = npad_gtk_display_text(error ? error->message : "");
+        char *message = g_strdup_printf("npad could not start a new window.\n\n%s", shown);
+        ui_show_message_box(g_gtk_main_window, "npad", message, false);
+        g_free(message);
+        g_free(shown);
         g_clear_error(&error);
     }
     g_ptr_array_free(argv, TRUE);
@@ -1453,7 +1544,11 @@ void npad_gtk_handle_command(Window *window, NpadCommand command) {
             ui_post_event(UI_EVENT_EDIT_PASTE, window, NULL);
             break;
         case NPAD_CMD_EDIT_DELETE:
+            // A step of its own, like Cut: a one-character selection deleted
+            // from the menu must not join the Backspaces next to it
+            undo_begin_group(window->undo);
             gtk_text_buffer_delete_selection(window->buffer, TRUE, TRUE);
+            undo_end_group(window->undo);
             break;
         case NPAD_CMD_EDIT_FIND:
             ui_post_event(UI_EVENT_EDIT_FIND, window, NULL);
@@ -1570,18 +1665,52 @@ static gboolean on_delete_event(GtkWidget *widget, GdkEvent *event, gpointer dat
     (void) widget;
     (void) event;
     // The editor decides (prompting to save) and calls ui_quit() when the
-    // window may close; the window itself is never destroyed from here
-    ui_post_event(UI_EVENT_QUIT, data, NULL);
+    // window may close; the window itself is never destroyed from here.
+    // During a logout the close comes from the desktop, not the user: park
+    // the work instead of a save prompt nobody will answer (Win32's WM_CLOSE
+    // after WM_ENDSESSION).
+    ui_post_event(npad_gtk_session_ending() ? UI_EVENT_QUIT_HANDOFF : UI_EVENT_QUIT, data, NULL);
     return TRUE;
+}
+
+// Whether a size covers (nearly) the whole work area of the window's
+// monitor - what a maximized window measures, title bar and panels allowed for
+static bool size_fills_monitor(GtkWidget *widget, int width, int height) {
+    GdkDisplay *display = gtk_widget_get_display(widget);
+    GdkWindow *gdk = gtk_widget_get_window(widget);
+    GdkMonitor *monitor = (display && gdk) ? gdk_display_get_monitor_at_window(display, gdk) : NULL;
+    if (!monitor)
+        return false;
+    GdkRectangle work;
+    gdk_monitor_get_workarea(monitor, &work);
+    if (work.width <= 0 || work.height <= 0)
+        return false; // Broadway and friends: nothing to measure against
+    return width >= work.width - 16 && height >= work.height - 64;
 }
 
 static gboolean on_configure_event(GtkWidget *widget, GdkEventConfigure *event, gpointer data) {
     (void) event;
     Window *window = data;
-    // Remember the restored size so a maximised window persists its normal
-    // geometry, as GetWindowPlacement does on Win32
-    if (!window->maximized)
-        gtk_window_get_size(GTK_WINDOW(widget), &window->normal_width, &window->normal_height);
+    // Remember the restored geometry so a maximised window persists it, as
+    // GetWindowPlacement does on Win32. The position only exists on X11 (on
+    // Wayland it reads 0,0).
+    if (window->maximized)
+        return FALSE;
+    int width = 0, height = 0;
+    gtk_window_get_size(GTK_WINDOW(widget), &width, &height);
+    // The maximize's own configures (a WM may send several: a move, then a
+    // resize, or a real plus a synthetic ConfigureNotify) can arrive while
+    // the window still reads as restored. A size that fills the monitor is
+    // one of them, so it leaves the restored record alone; a window the user
+    // dragged to nearly full size simply keeps its previous record.
+    if (size_fills_monitor(widget, width, height))
+        return FALSE;
+    window->normal_width = width;
+    window->normal_height = height;
+    if (display_allows_positioning()) {
+        gtk_window_get_position(GTK_WINDOW(widget), &window->normal_x, &window->normal_y);
+        window->normal_pos_known = true;
+    }
     return FALSE;
 }
 
@@ -1628,19 +1757,6 @@ static gboolean on_startup_timer(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
-// Logout or `kill`: the Linux counterpart of WM_ENDSESSION. Park unsaved
-// work without prompting - a dialog nobody will see would only stall the
-// session ending until npad is killed outright - then quit. A failed park is
-// not a reason to stay: refusing would just get npad killed with nothing
-// saved at all.
-static gboolean on_terminate_signal(gpointer data) {
-    (void) data;
-    Window *window = g_gtk_main_window;
-    if (!window || !ui_post_event(UI_EVENT_QUIT_HANDOFF, window, NULL))
-        ui_quit();
-    return G_SOURCE_CONTINUE;
-}
-
 // ---------------------------------------------------------------------------
 // ui_platform_*: lifecycle
 // ---------------------------------------------------------------------------
@@ -1664,7 +1780,9 @@ bool ui_platform_init(void) {
     gtk_window_set_default_icon_name(npad_gtk_app_icon_name());
 
     npad_gtk_instance_init(); // Optional: npad runs without a session bus
-    g_unix_signal_add(SIGTERM, on_terminate_signal, NULL);
+    // Logout, shutdown, kill, a closed terminal, a lost display: park unsaved
+    // work like Windows' WM_ENDSESSION (ui_gtk_session.c)
+    npad_gtk_session_init();
     return true;
 }
 
@@ -1816,8 +1934,12 @@ void ui_platform_hide_window(Window *window) {
 }
 
 void ui_platform_set_window_title(Window *window, const char *title) {
-    if (window && title)
-        gtk_window_set_title(GTK_WINDOW(window->window), title);
+    if (!window || !title)
+        return;
+    // The title carries the file name, whose bytes need not be UTF-8
+    char *shown = npad_gtk_display_text(title);
+    gtk_window_set_title(GTK_WINDOW(window->window), shown);
+    g_free(shown);
 }
 
 void ui_platform_get_window_size(Window *window, int *width, int *height) {
@@ -1842,7 +1964,12 @@ void ui_platform_set_window_size(Window *window, int width, int height) {
 void ui_platform_get_window_position(Window *window, int *x, int *y) {
     if (!window || !x || !y)
         return;
-    if (display_allows_positioning() && gtk_widget_get_visible(window->window)) {
+    if (display_allows_positioning() && window->maximized && window->normal_pos_known) {
+        // Maximized, the window sits in the monitor's corner; what is saved
+        // is where it goes back to (GetWindowPlacement's rcNormalPosition)
+        *x = window->normal_x;
+        *y = window->normal_y;
+    } else if (display_allows_positioning() && gtk_widget_get_visible(window->window)) {
         gtk_window_get_position(GTK_WINDOW(window->window), x, y);
     } else {
         // Wayland: report back what was asked for, so a session there does
@@ -1912,8 +2039,14 @@ void ui_platform_set_window_position(Window *window, int x, int y) {
     }
     window->requested_x = x;
     window->requested_y = y;
-    if (display_allows_positioning())
+    if (display_allows_positioning()) {
+        // Also the restored position until a configure reports the real one:
+        // a window maximized at launch may never be seen restored
+        window->normal_x = x;
+        window->normal_y = y;
+        window->normal_pos_known = true;
         gtk_window_move(GTK_WINDOW(window->window), x, y);
+    }
 }
 
 void ui_platform_set_window_maximized(Window *window, bool maximized) {
@@ -2138,7 +2271,9 @@ void ui_platform_select_all(Window *window) {
         return;
     GtkTextIter start, end;
     gtk_text_buffer_get_bounds(window->buffer, &start, &end);
-    gtk_text_buffer_select_range(window->buffer, &start, &end);
+    // Caret at the end, the anchor at the start, as Notepad and the Win32
+    // build leave it: Shift+arrows then adjust the end of the selection
+    gtk_text_buffer_select_range(window->buffer, &end, &start);
 }
 
 void ui_platform_set_cursor_position(Window *window, int position) {
@@ -2169,19 +2304,49 @@ void ui_platform_cut(Window *window) {
     // With the Markdown tools on, Ctrl+X without a selection cuts the line
     if (npad_gtk_lists_cut_line(window))
         return;
+    bool had_selection = gtk_text_buffer_get_has_selection(window->buffer);
+    // One step of its own: a one-character cut must not join the Backspaces
+    // or typing next to it
+    undo_begin_group(window->undo);
     gtk_text_buffer_cut_clipboard(window->buffer, clipboard_for(window), TRUE);
+    undo_end_group(window->undo);
+    if (had_selection)
+        npad_gtk_clipboard_note_own_text(window);
 }
 
 void ui_platform_copy(Window *window) {
-    if (window)
-        gtk_text_buffer_copy_clipboard(window->buffer, clipboard_for(window));
+    if (!window)
+        return;
+    bool had_selection = gtk_text_buffer_get_has_selection(window->buffer);
+    gtk_text_buffer_copy_clipboard(window->buffer, clipboard_for(window));
+    if (had_selection)
+        npad_gtk_clipboard_note_own_text(window);
+}
+
+// The clipboard's text has arrived (or there was none). The window is looked up
+// again: the request may outlive the one it was made for.
+static void on_paste_text(GtkClipboard *clipboard, const gchar *text, gpointer data) {
+    (void) clipboard;
+    (void) data;
+    Window *window = g_gtk_main_window;
+    if (!window || !text || !text[0])
+        return;
+    // '\n' only and valid UTF-8, like everything else in the buffer
+    char *clean = npad_gtk_normalize_text(text);
+    if (clean && clean[0])
+        npad_gtk_replace_selection(window, clean); // One undo step, even for "x"
+    g_free(clean);
 }
 
 void npad_gtk_paste_plain(Window *window) {
     if (!window)
         return;
-    gtk_text_buffer_paste_clipboard(window->buffer, clipboard_for(window), NULL, TRUE);
-    scroll_to_cursor(window);
+    // npad's own paste rather than gtk_text_buffer_paste_clipboard: that one
+    // ends in a user action of one edit, which the undo history cannot tell
+    // from a keystroke, so pasting "x" after "abc" undid all four at once. It
+    // can also carry text tags (Highlight All's wash) across from text copied
+    // inside npad.
+    gtk_clipboard_request_text(clipboard_for(window), on_paste_text, NULL);
 }
 
 void ui_platform_paste(Window *window) {

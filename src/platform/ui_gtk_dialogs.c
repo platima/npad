@@ -19,7 +19,9 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "../core/editor.h"
 #include "../core/file_ops.h"
+#include "../core/settings.h"
 #include "../main.h"
 
 static GtkWindow *parent_window(Window *parent) {
@@ -47,11 +49,40 @@ static void add_filters(GtkFileChooser *chooser) {
     gtk_file_chooser_add_filter(chooser, all);
 }
 
+// The folder Open starts in: the open document's, else that of the most recent
+// file - Windows' Open remembers the last folder used, which is nearly always
+// one of those. NULL (GTK's own default) when neither exists any more.
+static char *open_dialog_folder(void) {
+    const char *current = editor_get_current_file();
+    if (current && current[0]) {
+        char *folder = g_path_get_dirname(current);
+        if (g_file_test(folder, G_FILE_TEST_IS_DIR))
+            return folder;
+        g_free(folder);
+    }
+    int count = 0;
+    char **recent = settings_get_recent_files(&count);
+    char *folder = NULL;
+    if (recent && count > 0 && recent[0] && recent[0][0]) {
+        folder = g_path_get_dirname(recent[0]);
+        if (!g_file_test(folder, G_FILE_TEST_IS_DIR))
+            g_clear_pointer(&folder, g_free);
+    }
+    if (recent)
+        settings_free_recent_files(recent, count);
+    return folder;
+}
+
 char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *params) {
     GtkFileChooserNative *native = gtk_file_chooser_native_new(
         (params && params->title) ? params->title : "Open", parent_window(parent),
         GTK_FILE_CHOOSER_ACTION_OPEN, "_Open", "_Cancel");
     add_filters(GTK_FILE_CHOOSER(native));
+    char *folder = open_dialog_folder();
+    if (folder) {
+        gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(native), folder);
+        g_free(folder);
+    }
 
     char *result = NULL;
     if (gtk_native_dialog_run(GTK_NATIVE_DIALOG(native)) == GTK_RESPONSE_ACCEPT) {
@@ -78,15 +109,22 @@ char *ui_platform_show_save_dialog(Window *parent, FileDialogParams *params) {
     const char *initial = (params && params->default_filename && params->default_filename[0])
                               ? params->default_filename
                               : "Untitled.txt";
-    if (strchr(initial, '/')) {
+    if (strchr(initial, '/') && g_file_test(initial, G_FILE_TEST_EXISTS)) {
+        // Save As of an existing file: GTK's own way, which keeps the name's
+        // real bytes (set_current_name takes UTF-8 display text, so a name
+        // that is not valid UTF-8 would come back renamed)
+        gtk_file_chooser_set_filename(chooser, initial);
+    } else if (strchr(initial, '/')) {
         gchar *folder = g_path_get_dirname(initial);
-        gchar *base = g_path_get_basename(initial);
+        gchar *base = g_filename_display_basename(initial);
         gtk_file_chooser_set_current_folder(chooser, folder);
         gtk_file_chooser_set_current_name(chooser, base);
         g_free(folder);
         g_free(base);
     } else {
-        gtk_file_chooser_set_current_name(chooser, initial);
+        gchar *base = npad_gtk_display_text(initial);
+        gtk_file_chooser_set_current_name(chooser, base);
+        g_free(base);
     }
 
     // Encoding picker. Choice ids are the TextEncoding values as strings.
@@ -179,10 +217,13 @@ enum { RESPONSE_FIRST = 1, RESPONSE_SECOND = 2 };
 
 SavePromptResult ui_platform_show_save_prompt(Window *parent, const char *filename) {
     // Matches notepad.exe: no icon, the question as the text, and Save /
-    // Don't Save / Cancel with Save as the default
+    // Don't Save / Cancel with Save as the default. The name's bytes need not
+    // be UTF-8, which is all a GTK label takes.
+    char *shown = npad_gtk_display_text(filename ? filename : "Untitled");
     GtkWidget *dialog = gtk_message_dialog_new(
         parent_window(parent), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, GTK_MESSAGE_OTHER,
-        GTK_BUTTONS_NONE, "Do you want to save changes to %s?", filename ? filename : "Untitled");
+        GTK_BUTTONS_NONE, "Do you want to save changes to %s?", shown);
+    g_free(shown);
     gtk_window_set_title(GTK_WINDOW(dialog), "npad");
     gtk_dialog_add_buttons(GTK_DIALOG(dialog), "_Save", RESPONSE_FIRST, "Do_n't Save",
                            RESPONSE_SECOND, "_Cancel", GTK_RESPONSE_CANCEL, NULL);
@@ -204,6 +245,8 @@ SavePromptResult ui_platform_show_save_prompt(Window *parent, const char *filena
 
 UiOpenChoice ui_platform_prompt_binary_open(Window *parent, const char *filename) {
     char *name = file_get_filename(filename);
+    char *shown = npad_gtk_display_text(name ? name : (filename ? filename : ""));
+    free(name);
     GtkWidget *dialog = gtk_message_dialog_new(
         parent_window(parent), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
         GTK_MESSAGE_WARNING, GTK_BUTTONS_NONE, "This file looks like a binary file");
@@ -212,8 +255,8 @@ UiOpenChoice ui_platform_prompt_binary_open(Window *parent, const char *filename
         "\"%s\" does not look like a text file.\n\n"
         "Opening it in npad may show unreadable characters, and saving it from npad "
         "could corrupt it.",
-        name ? name : (filename ? filename : ""));
-    free(name);
+        shown);
+    g_free(shown);
     gtk_window_set_title(GTK_WINDOW(dialog), "npad");
     gtk_dialog_add_buttons(GTK_DIALOG(dialog), "_Open in npad", RESPONSE_FIRST,
                            "Open with the _default app", RESPONSE_SECOND, "_Cancel",
@@ -236,9 +279,11 @@ void ui_platform_open_with_default_app(const char *filename) {
     gchar *uri = g_file_get_uri(file);
     GError *error = NULL;
     if (!g_app_info_launch_default_for_uri(uri, NULL, &error)) {
+        char *shown = npad_gtk_display_text(filename);
         char message[512];
-        snprintf(message, sizeof(message), "Could not open %.300s:\n%.150s", filename,
+        snprintf(message, sizeof(message), "Could not open %.300s:\n%.150s", shown,
                  error ? error->message : "no application is registered for it");
+        g_free(shown);
         ui_platform_show_message_box(g_gtk_main_window, "npad", message, false);
         g_clear_error(&error);
     }

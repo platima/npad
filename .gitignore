@@ -81,6 +81,7 @@ tests/test_text_scan
 tests/test_editor_reload
 tests/test_ui_rules
 tests/test_print_core
+tests/test_time_format
 
 # Test fixtures. Suites now run in a private temporary directory, so these
 # should never appear; older test binaries wrote them into the working

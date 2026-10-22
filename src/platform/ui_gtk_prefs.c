@@ -29,7 +29,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
 
 #include "../core/editor.h"
 #include "../core/file_ops.h"
@@ -126,7 +125,9 @@ static struct {
     GtkWidget *upd_mode, *upd_advice;
     bool upd_seen; // The Updates page has been shown (the advice is wanted)
     // Associations
-    GtkWidget *assoc_status;
+    GtkWidget *assoc_status, *assoc_button;
+    bool assoc_seen; // The Associations page has been shown (xdg-mime is asked)
+    guint serial;    // Which opening of the dialog this is (see g_prefs_serial)
     // Debug
     GtkWidget *debug_view;
 } P;
@@ -1094,6 +1095,8 @@ static void on_skip_clicked(GtkButton *button, gpointer data) {
     npad_gtk_prefs_updates_refresh();
 }
 
+static void refresh_assoc_status(bool asked, bool accepted);
+
 // The advice needs the install source, which costs a dpkg / rpm / pacman
 // query: only ask once the page has been looked at
 static void on_switch_page(GtkNotebook *notebook, GtkWidget *page, guint index, gpointer data) {
@@ -1103,6 +1106,13 @@ static void on_switch_page(GtkNotebook *notebook, GtkWidget *page, guint index, 
     if (index == PAGE_UPDATES && !P.upd_seen) {
         P.upd_seen = true;
         npad_gtk_prefs_updates_refresh();
+    }
+    // Likewise who handles text/plain: xdg-mime is a shell script that can
+    // take a while, so it runs only once the page is looked at, and in the
+    // background
+    if (index == PAGE_ASSOC && !P.assoc_seen) {
+        P.assoc_seen = true;
+        refresh_assoc_status(false, false);
     }
 }
 
@@ -1196,48 +1206,94 @@ static void build_updates(GtkWidget *notebook) {
 // Associations page: the Linux stand-in is one explicit action
 // ---------------------------------------------------------------------------
 
-// g_spawn_sync's status is a wait status on Unix. (g_spawn_check_exit_status is
-// deprecated and its replacement needs GLib 2.70, newer than some targets.)
-static bool exited_cleanly(gint status) {
-    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+// Counts the openings of the dialog. xdg-mime runs in the background, and its
+// answer is shown only if the dialog it was asked for is still the open one.
+static guint g_prefs_serial = 0;
+
+// What an xdg-mime run was for, carried to its completion
+typedef struct {
+    guint serial;
+    bool asked;    // The user clicked the button (otherwise: just showing)
+    bool accepted; // xdg-mime default succeeded
+} AssocRequest;
+
+static AssocRequest *assoc_request_new(bool asked, bool accepted) {
+    AssocRequest *request = g_new0(AssocRequest, 1);
+    request->serial = P.serial;
+    request->asked = asked;
+    request->accepted = accepted;
+    return request;
 }
 
-// The desktop file id currently handling text/plain, or NULL (g_free)
-static char *query_default_text_editor(void) {
-    char *xdg = g_find_program_in_path("xdg-mime");
-    if (!xdg)
-        return NULL;
-    char *argv[] = { xdg, "query", "default", "text/plain", NULL };
-    char *out = NULL;
-    gint status = 0;
-    bool ok = g_spawn_sync(NULL, argv, NULL, G_SPAWN_STDERR_TO_DEV_NULL, NULL, NULL, &out, NULL,
-                           &status, NULL) &&
-              exited_cleanly(status);
-    g_free(xdg);
-    if (ok && out)
-        g_strstrip(out);
-    if (!ok || !out || !out[0]) {
-        g_free(out);
-        return NULL;
-    }
-    return out;
+static bool assoc_request_current(const AssocRequest *request) {
+    return P.dialog && P.assoc_status && P.serial == request->serial;
 }
 
-// Show who handles text/plain now; asked = the user just clicked the button
-static void refresh_assoc_status(bool asked, bool accepted) {
-    char *current = query_default_text_editor();
+static bool subprocess_succeeded(GSubprocess *process) {
+    return g_subprocess_get_if_exited(process) && g_subprocess_get_exit_status(process) == 0;
+}
+
+// Show who handles text/plain now; current is the desktop file id or NULL
+static void show_assoc_status(const AssocRequest *request, const char *current) {
     const char *lead = "";
-    if (asked && !accepted)
+    if (request->asked && !request->accepted)
         lead = "Could not change the default text editor.\n";
-    else if (asked && current && strcmp(current, NPAD_DESKTOP_FILE) == 0)
+    else if (request->asked && current && strcmp(current, NPAD_DESKTOP_FILE) == 0)
         lead = "npad is now the default text editor.\n";
-    else if (asked)
+    else if (request->asked)
         lead = "Requested. Your desktop may need a moment, or a new login, to notice.\n";
     char *text = g_strdup_printf("%sCurrent default for plain text: %s", lead,
                                  current ? current : "unknown");
     gtk_label_set_text(GTK_LABEL(P.assoc_status), text);
     g_free(text);
-    g_free(current);
+}
+
+static void on_assoc_query_done(GObject *source, GAsyncResult *result, gpointer data) {
+    AssocRequest *request = data;
+    GSubprocess *process = G_SUBPROCESS(source);
+    char *out = NULL;
+    bool ok = g_subprocess_communicate_utf8_finish(process, result, &out, NULL, NULL) &&
+              subprocess_succeeded(process);
+    if (ok && out)
+        g_strstrip(out);
+    if (assoc_request_current(request))
+        show_assoc_status(request, (ok && out && out[0]) ? out : NULL);
+    g_free(out);
+    g_free(request);
+}
+
+// Ask xdg-mime who handles text/plain, in the background; the label says so
+// meanwhile. asked / accepted: what the button just did, if anything.
+static void refresh_assoc_status(bool asked, bool accepted) {
+    AssocRequest *request = assoc_request_new(asked, accepted);
+    char *xdg = g_find_program_in_path("xdg-mime");
+    GSubprocess *process =
+        xdg ? g_subprocess_new(G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_SILENCE,
+                               NULL, xdg, "query", "default", "text/plain", NULL)
+            : NULL;
+    g_free(xdg);
+    if (!process) {
+        show_assoc_status(request, NULL);
+        g_free(request);
+        return;
+    }
+    if (!asked)
+        gtk_label_set_text(GTK_LABEL(P.assoc_status),
+                           "Current default for plain text: checking...");
+    // The pending operation holds the process until it completes
+    g_subprocess_communicate_utf8_async(process, NULL, NULL, on_assoc_query_done, request);
+    g_object_unref(process);
+}
+
+static void on_make_default_done(GObject *source, GAsyncResult *result, gpointer data) {
+    AssocRequest *request = data;
+    GSubprocess *process = G_SUBPROCESS(source);
+    bool ok = g_subprocess_wait_finish(process, result, NULL) && subprocess_succeeded(process);
+    if (assoc_request_current(request)) {
+        gtk_widget_set_sensitive(P.assoc_button, TRUE);
+        refresh_assoc_status(true, ok);
+    }
+    g_free(request);
 }
 
 static void on_make_default_clicked(GtkButton *button, gpointer data) {
@@ -1251,16 +1307,20 @@ static void on_make_default_clicked(GtkButton *button, gpointer data) {
             "Install xdg-utils, or use your desktop's Default Applications settings.");
         return;
     }
-    char *argv[] = { xdg, "default", NPAD_DESKTOP_FILE, "text/plain", NULL };
-    gint status = 0;
-    GError *error = NULL;
-    bool ok =
-        g_spawn_sync(NULL, argv, NULL, G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
-                     NULL, NULL, NULL, NULL, &status, &error) &&
-        exited_cleanly(status);
+    GSubprocess *process =
+        g_subprocess_new(G_SUBPROCESS_FLAGS_STDOUT_SILENCE | G_SUBPROCESS_FLAGS_STDERR_SILENCE,
+                         NULL, xdg, "default", NPAD_DESKTOP_FILE, "text/plain", NULL);
     g_free(xdg);
-    g_clear_error(&error);
-    refresh_assoc_status(true, ok);
+    if (!process) {
+        AssocRequest request = { P.serial, true, false };
+        show_assoc_status(&request, NULL);
+        return;
+    }
+    // One run at a time; the button comes back when it has finished
+    gtk_widget_set_sensitive(P.assoc_button, FALSE);
+    gtk_label_set_text(GTK_LABEL(P.assoc_status), "Asking your desktop...");
+    g_subprocess_wait_async(process, NULL, on_make_default_done, assoc_request_new(true, false));
+    g_object_unref(process);
 }
 
 static void build_associations(GtkWidget *notebook) {
@@ -1270,9 +1330,10 @@ static void build_associations(GtkWidget *notebook) {
                    "made the default unless you ask: this runs\n"
                    "xdg-mime default " NPAD_DESKTOP_FILE " text/plain\n"
                    "for your account. Most file managers use that for other text files too.");
-    add_button(page, "Make npad the default text _editor", G_CALLBACK(on_make_default_clicked));
-    P.assoc_status = add_note(page, "");
-    refresh_assoc_status(false, false);
+    P.assoc_button =
+        add_button(page, "Make npad the default text _editor", G_CALLBACK(on_make_default_clicked));
+    // Filled in when the page is first shown (on_switch_page)
+    P.assoc_status = add_note(page, "Current default for plain text: checking...");
 }
 
 // ---------------------------------------------------------------------------
@@ -1408,6 +1469,7 @@ static void show_preferences(Window *window, bool show_debug, int start_page) {
     }
     memset(&P, 0, sizeof(P));
     P.owner = window;
+    P.serial = ++g_prefs_serial;
 
     P.dialog = gtk_dialog_new_with_buttons("Preferences", GTK_WINDOW(window->window),
                                            GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, "_OK",

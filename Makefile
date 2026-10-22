@@ -45,12 +45,12 @@ WINDOWS_ARM64_TARGET = npad-arm64.exe
 WIN_BUILD_DIR ?= build
 
 # Source files
-CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/settings_import.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/startup_prof.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c src/core/find_seed.c src/core/tab_stops.c src/core/text_scan.c src/core/ui_rules.c src/core/print_core.c
+CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/settings_import.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/startup_prof.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c src/core/find_seed.c src/core/tab_stops.c src/core/text_scan.c src/core/ui_rules.c src/core/print_core.c src/core/time_format.c
 SHARED_SOURCES = src/ui_interface.c
 
 # Test sources
 TEST_FRAMEWORK_SOURCES = tests/test_framework.c
-TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/settings_import.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c src/core/find_seed.c src/core/tab_stops.c src/core/text_scan.c src/core/ui_rules.c src/core/print_core.c  # Core sources without UI dependencies
+TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/settings_import.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c src/core/find_seed.c src/core/tab_stops.c src/core/text_scan.c src/core/ui_rules.c src/core/print_core.c src/core/time_format.c  # Core sources without UI dependencies
 
 # Windows GUI specific
 WINDOWS_GUI_SOURCES = src/platform/ui_win32.c src/platform/print_win32.c src/platform/assoc_win32.c src/platform/richedit_text.c src/platform/args_win32.c
@@ -103,7 +103,7 @@ MACOS_TARGET = npad-macos
 # Linux desktop: GTK 3, one binary for both X11 and Wayland (GDK picks the
 # display server at runtime). pkg-config is only consulted when this target
 # is actually built - these are recursively expanded.
-LINUX_GTK_SOURCES = src/platform/ui_gtk.c src/platform/ui_gtk_dialogs.c src/platform/ui_gtk_edit.c src/platform/ui_gtk_find.c src/platform/ui_gtk_lists.c src/platform/ui_gtk_prefs.c src/platform/ui_gtk_instance.c src/platform/ui_gtk_update.c src/platform/print_gtk.c
+LINUX_GTK_SOURCES = src/platform/ui_gtk.c src/platform/ui_gtk_dialogs.c src/platform/ui_gtk_edit.c src/platform/ui_gtk_find.c src/platform/ui_gtk_lists.c src/platform/ui_gtk_prefs.c src/platform/ui_gtk_instance.c src/platform/ui_gtk_session.c src/platform/ui_gtk_update.c src/platform/print_gtk.c
 LINUX_GTK_HEADERS = src/platform/ui_gtk.h src/platform/print_gtk.h
 LINUX_GTK_CFLAGS = $(shell pkg-config --cflags gtk+-3.0)
 LINUX_GTK_LIBS = $(shell pkg-config --libs gtk+-3.0) -lpthread
@@ -315,7 +315,7 @@ format-check:
 # Every suite runs in its own fresh temporary directory with the settings
 # location pointed inside it (tests/test_framework.c), so a run never writes
 # into the checkout or reads the user's real settings.
-TEST_SUITES = file_ops atomic_save error encoding session list_ops update_check settings html_md undo find_seed tab_stops settings_import richedit_text editor_load editor recovery editor_insert text_scan editor_reload ui_rules print_core fuzz
+TEST_SUITES = file_ops atomic_save error encoding session list_ops update_check settings html_md undo find_seed tab_stops settings_import richedit_text editor_load editor recovery editor_insert text_scan editor_reload ui_rules print_core time_format fuzz
 TEST_DEPS = $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_framework.h
 # NPAD_TEST_HOOKS: on Windows a test build keeps settings under
 # %NPAD_TEST_CONFIG_DIR% (which the framework sets) instead of %APPDATA%
@@ -346,7 +346,7 @@ TEST_EXTRA_DEPS_recovery = $(TEST_EXTRA_recovery) tests/stub_ui_recovery.h
 TEST_EXTRA_DEPS_editor_insert = $(TEST_EXTRA_editor_insert)
 TEST_EXTRA_DEPS_editor_reload = $(TEST_EXTRA_editor_reload)
 
-test: test-file-ops test-atomic-save test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-settings-import test-richedit-text test-editor-load test-editor test-recovery test-editor-insert test-text-scan test-editor-reload test-ui-rules test-print-core test-fuzz-quick
+test: test-file-ops test-atomic-save test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-settings-import test-richedit-text test-editor-load test-editor test-recovery test-editor-insert test-text-scan test-editor-reload test-ui-rules test-print-core test-time-format test-fuzz-quick
 	@echo "All tests completed"
 
 test-file-ops: tests/test_file_ops
@@ -440,6 +440,10 @@ test-ui-rules: tests/test_ui_rules
 test-print-core: tests/test_print_core
 	@echo "Running print pagination tests..."
 	./tests/test_print_core
+
+test-time-format: tests/test_time_format
+	@echo "Running time format tests..."
+	./tests/test_time_format
 
 # The property/fuzz suite at its default (small) iteration count, so every
 # `make test` exercises it; `make test-fuzz` runs it longer under sanitizers

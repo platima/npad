@@ -4,7 +4,10 @@
  * The context menu (npad's own, not GTK's stock one), dragging a file onto the
  * window, noticing that the open file changed on disk, and Ctrl+wheel zoom.
  * Each mirrors the Win32 build - show_context_menu, WM_DROPFILES,
- * prompt_external_change and RichEdit's native Ctrl+wheel zoom.
+ * prompt_external_change and RichEdit's native Ctrl+wheel zoom. Also the
+ * text view's own key bindings that Notepad has no counterpart for (Insert's
+ * overtype, Ctrl+. / Ctrl+; emoji), the undo boundaries of the edits GTK makes
+ * by itself, and the clipboard state the Paste items are greyed from.
  *
  * Author: Platima
  * https://npad.dev
@@ -25,6 +28,87 @@
 
 // Drag-and-drop target ids (anything but the text view's own 0)
 enum { NPAD_DND_URI_LIST = 1 };
+
+// ---------------------------------------------------------------------------
+// What the clipboard holds
+//
+// Greying Paste needs to know whether the clipboard has text. Asking when a
+// menu opens (gtk_clipboard_wait_is_text_available) runs a nested main loop
+// until the owning program answers - a stall when it is slow, and redraws and
+// timers running in the middle of opening the menu. Instead the answer is kept
+// current: every owner-change starts an asynchronous targets request, and the
+// menus read the cached result.
+// ---------------------------------------------------------------------------
+
+static GtkClipboard *edit_clipboard(Window *window) {
+    return gtk_widget_get_clipboard(window->text_view, GDK_SELECTION_CLIPBOARD);
+}
+
+static GdkAtom html_target(void) {
+    return gdk_atom_intern_static_string("text/html");
+}
+
+static void on_clipboard_targets(GtkClipboard *clipboard, GdkAtom *atoms, gint count,
+                                 gpointer data) {
+    (void) clipboard;
+    (void) data;
+    Window *window = g_gtk_main_window; // The request may outlive a window
+    if (!window)
+        return;
+    bool html = false;
+    for (gint i = 0; atoms && i < count && !html; i++)
+        html = atoms[i] == html_target();
+    window->clipboard_has_text = atoms && count > 0 && gtk_targets_include_text(atoms, count);
+    window->clipboard_has_html = html;
+    window->clipboard_known = true;
+    // The Edit menu opened before the answer came: correct Paste in place
+    GtkWidget *paste = window->command_items[NPAD_CMD_EDIT_PASTE];
+    if (window->edit_menu_open && paste)
+        gtk_widget_set_sensitive(paste, window->clipboard_has_text);
+}
+
+static void on_clipboard_owner_change(GtkClipboard *clipboard, GdkEvent *event, gpointer data) {
+    (void) event;
+    (void) data;
+    gtk_clipboard_request_targets(clipboard, on_clipboard_targets, NULL);
+}
+
+static bool clipboard_cache_usable(Window *window) {
+    return window->clipboard_known &&
+           gdk_display_supports_selection_notification(gtk_widget_get_display(window->text_view));
+}
+
+bool npad_gtk_clipboard_has_text(Window *window) {
+    if (!window)
+        return false;
+    if (clipboard_cache_usable(window))
+        return window->clipboard_has_text;
+    // A display that cannot report owner changes (or no answer yet): ask
+    return gtk_clipboard_wait_is_text_available(edit_clipboard(window));
+}
+
+bool npad_gtk_clipboard_has_html(Window *window) {
+    if (!window)
+        return false;
+    if (clipboard_cache_usable(window))
+        return window->clipboard_has_html;
+    return gtk_clipboard_wait_is_target_available(edit_clipboard(window), html_target());
+}
+
+void npad_gtk_clipboard_note_own_text(Window *window) {
+    if (!window)
+        return;
+    // Known at once; the owner-change that follows confirms it
+    window->clipboard_has_text = true;
+    window->clipboard_has_html = false;
+    window->clipboard_known = true;
+}
+
+static void setup_clipboard_tracking(Window *window) {
+    GtkClipboard *clipboard = edit_clipboard(window);
+    g_signal_connect(clipboard, "owner-change", G_CALLBACK(on_clipboard_owner_change), NULL);
+    gtk_clipboard_request_targets(clipboard, on_clipboard_targets, NULL); // The state at start
+}
 
 // ---------------------------------------------------------------------------
 // Edit command states (shared by the menu bar and the context menu)
@@ -52,8 +136,7 @@ bool npad_gtk_edit_command_enabled(Window *window, NpadCommand command) {
         case NPAD_CMD_EDIT_DELETE:
             return gtk_text_buffer_get_has_selection(window->buffer);
         case NPAD_CMD_EDIT_PASTE:
-            return gtk_clipboard_wait_is_text_available(
-                gtk_widget_get_clipboard(window->text_view, GDK_SELECTION_CLIPBOARD));
+            return npad_gtk_clipboard_has_text(window);
         default:
             if (command >= NPAD_CMD_LIST_SORT_ASC || command == NPAD_CMD_EDIT_PASTE_MARKDOWN)
                 return npad_gtk_lists_command_enabled(window, command);
@@ -154,7 +237,9 @@ static void insert_file_at(Window *window, const char *path, int x, int y) {
     if (!npad_gtk_text_fits(text)) {
         g_free(text);
         char message[512];
-        snprintf(message, sizeof(message), "Could not insert file: %.300s\nIt is too large.", path);
+        char *shown = npad_gtk_display_text(path); // The dialog takes UTF-8 only
+        snprintf(message, sizeof(message), "Could not insert file: %.300s\nIt is too large.", shown);
+        g_free(shown);
         ui_show_message_box(window, "npad", message, false);
         return;
     }
@@ -167,11 +252,14 @@ static void insert_file_at(Window *window, const char *path, int x, int y) {
         gtk_text_view_get_iter_at_location(view, &where, bx, by);
 
         // The caret goes to the drop point first (which also ends the typing
-        // run in the undo history); the whole insert is one user action
+        // run in the undo history); the whole insert is one undo step, even
+        // when the file holds a single character
         gtk_text_buffer_place_cursor(window->buffer, &where);
+        undo_begin_group(window->undo);
         gtk_text_buffer_begin_user_action(window->buffer);
         gtk_text_buffer_insert_at_cursor(window->buffer, text, (gint) strlen(text));
         gtk_text_buffer_end_user_action(window->buffer);
+        undo_end_group(window->undo);
         gtk_text_view_scroll_mark_onscreen(view, gtk_text_buffer_get_insert(window->buffer));
     }
     g_free(text);
@@ -213,11 +301,15 @@ static gboolean on_drag_motion(GtkWidget *widget, GdkDragContext *context, gint 
 static void on_drag_data_received(GtkWidget *widget, GdkDragContext *context, gint x, gint y,
                                   GtkSelectionData *selection, guint info, guint time,
                                   gpointer data) {
-    if (info != NPAD_DND_URI_LIST)
+    Window *window = data;
+    if (info != NPAD_DND_URI_LIST) {
+        // Text, which GtkTextView inserts itself: a step of its own, even a
+        // single dropped character (the far side is on_text_drop_done)
+        undo_break(window->undo);
         return;
+    }
     g_signal_stop_emission_by_name(widget, "drag-data-received");
 
-    Window *window = data;
     gchar **uris = gtk_selection_data_get_uris(selection);
     gchar *path = NULL;
     // The first local file, as Win32 takes only the first dropped file
@@ -234,6 +326,21 @@ static void on_drag_data_received(GtkWidget *widget, GdkDragContext *context, gi
     window->drag_ctrl = false;
 }
 
+// After GtkTextView inserted dropped text: the typing that follows starts a
+// new step. (Not reached for a file drop, whose emission stops above.)
+static void on_text_drop_done(GtkWidget *widget, GdkDragContext *context, gint x, gint y,
+                              GtkSelectionData *selection, guint info, guint time, gpointer data) {
+    (void) widget;
+    (void) context;
+    (void) x;
+    (void) y;
+    (void) selection;
+    (void) info;
+    (void) time;
+    Window *window = data;
+    undo_break(window->undo);
+}
+
 static void setup_file_drop(Window *window) {
     GtkWidget *view = window->text_view;
     // The text view is already a destination for text; add files to it. A
@@ -246,6 +353,7 @@ static void setup_file_drop(Window *window) {
     gtk_drag_dest_set_target_list(view, targets);
     g_signal_connect(view, "drag-motion", G_CALLBACK(on_drag_motion), window);
     g_signal_connect(view, "drag-data-received", G_CALLBACK(on_drag_data_received), window);
+    g_signal_connect_after(view, "drag-data-received", G_CALLBACK(on_text_drop_done), window);
 }
 
 // ---------------------------------------------------------------------------
@@ -472,6 +580,94 @@ static void setup_inert_scrollbars(Window *window) {
 }
 
 // ---------------------------------------------------------------------------
+// The text view's own bindings
+// ---------------------------------------------------------------------------
+
+// Insert (and keypad Insert) toggles GtkTextView's overtype mode, which
+// Notepad does not have: a stray press would silently start overwriting text,
+// with nothing on screen saying so. Shift+Insert and Ctrl+Insert (paste and
+// copy) are separate bindings and keep working.
+static void on_toggle_overwrite(GtkTextView *view, gpointer data) {
+    (void) data;
+    g_signal_stop_emission_by_name(view, "toggle-overwrite");
+}
+
+// Ctrl+. and Ctrl+; open GTK's emoji chooser; in Notepad they do nothing
+static void on_insert_emoji(GtkTextView *view, gpointer data) {
+    (void) data;
+    g_signal_stop_emission_by_name(view, "insert-emoji");
+}
+
+// Shift+Insert, the text view's own paste binding, goes the way Ctrl+V does:
+// one undo step, '\n' line breaks
+static void on_paste_binding(GtkTextView *view, gpointer data) {
+    g_signal_stop_emission_by_name(view, "paste-clipboard");
+    npad_gtk_paste_plain(data);
+}
+
+// Shift+Delete (the text view's cut binding) runs GTK's cut, one edit: keep
+// it from merging with the edits on either side. Breaks rather than a group,
+// because a group left open by a handler that never ran would swallow every
+// later edit.
+static bool g_cut_had_selection = false;
+
+static void on_cut_binding(GtkTextView *view, gpointer data) {
+    (void) view;
+    Window *window = data;
+    undo_break(window->undo);
+    g_cut_had_selection = gtk_text_buffer_get_has_selection(window->buffer);
+}
+
+static void on_cut_binding_done(GtkTextView *view, gpointer data) {
+    (void) view;
+    Window *window = data;
+    undo_break(window->undo);
+    if (g_cut_had_selection)
+        npad_gtk_clipboard_note_own_text(window);
+    g_cut_had_selection = false;
+}
+
+// A middle-click paste of the PRIMARY selection is GTK's own, asynchronous
+// paste: break before it here, and after it on the buffer's paste-done
+static gboolean on_button_press(GtkWidget *widget, const GdkEventButton *event, gpointer data) {
+    (void) widget;
+    Window *window = data;
+    if (event->type == GDK_BUTTON_PRESS && event->button == GDK_BUTTON_MIDDLE)
+        undo_break(window->undo);
+    return FALSE;
+}
+
+static void on_paste_done(GtkTextBuffer *buffer, GtkClipboard *clipboard, gpointer data) {
+    (void) buffer;
+    (void) clipboard;
+    Window *window = data;
+    undo_break(window->undo);
+}
+
+// A signal by name, if this GTK has it (insert-emoji arrived during 3.22)
+static void connect_if_present(GtkWidget *widget, const char *signal, GCallback handler,
+                               gpointer data, bool after) {
+    if (!g_signal_lookup(signal, G_OBJECT_TYPE(widget)))
+        return;
+    if (after)
+        g_signal_connect_after(widget, signal, handler, data);
+    else
+        g_signal_connect(widget, signal, handler, data);
+}
+
+static void setup_text_view_bindings(Window *window) {
+    GtkWidget *view = window->text_view;
+    gtk_text_view_set_overwrite(GTK_TEXT_VIEW(view), FALSE);
+    connect_if_present(view, "toggle-overwrite", G_CALLBACK(on_toggle_overwrite), window, false);
+    connect_if_present(view, "insert-emoji", G_CALLBACK(on_insert_emoji), window, false);
+    connect_if_present(view, "paste-clipboard", G_CALLBACK(on_paste_binding), window, false);
+    connect_if_present(view, "cut-clipboard", G_CALLBACK(on_cut_binding), window, false);
+    connect_if_present(view, "cut-clipboard", G_CALLBACK(on_cut_binding_done), window, true);
+    g_signal_connect(view, "button-press-event", G_CALLBACK(on_button_press), window);
+    g_signal_connect(window->buffer, "paste-done", G_CALLBACK(on_paste_done), window);
+}
+
+// ---------------------------------------------------------------------------
 // Setup
 // ---------------------------------------------------------------------------
 
@@ -481,4 +677,6 @@ void npad_gtk_edit_init(Window *window) {
     g_signal_connect(window->window, "notify::is-active", G_CALLBACK(on_active_changed), window);
     setup_file_drop(window);
     setup_inert_scrollbars(window);
+    setup_text_view_bindings(window);
+    setup_clipboard_tracking(window);
 }

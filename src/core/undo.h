@@ -13,11 +13,18 @@
  *
  * Grouping follows what a user thinks of as one action:
  *  - typed characters coalesce into one step per word (a run of non-space
- *    characters plus the spaces after it), like gedit and RichEdit
+ *    characters plus the spaces after it), like gedit. RichEdit (the Win32
+ *    build) differs: one undo there removes a whole typing run, Backspaces
+ *    included, so the two builds deliberately undo typing in different sizes
  *  - consecutive single-character deletions in one direction coalesce
- *  - anything multi-character (paste, drop) is a step of its own
+ *  - a multi-character edit (paste, drop) is a step of its own
+ *  - the history cannot tell a one-character edit from a keystroke: any
+ *    single edit may merge with the typing or deletion beside it. A caller
+ *    whose edit is an action of its own (a paste, a cut, a Replace) wraps it
+ *    in a group, or calls undo_break before and after it
  *  - undo_begin_group/undo_end_group make a compound edit (Replace All, a
- *    list transform, replacing a selection) a single step
+ *    list transform, replacing a selection) a single step; a group never
+ *    merges with what came before or after it
  *  - undo_break ends coalescing: call it when the caret moves by any means
  *    other than the edit itself, so typing in two places is two steps
  *
