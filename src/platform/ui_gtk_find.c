@@ -243,16 +243,10 @@ static bool history_push(const char *prefix, const char *value) {
         }
     }
 
-    if (changed) {
-        for (int i = 0; i < FIND_HISTORY_MAX; i++) {
-            char key[48];
-            snprintf(key, sizeof(key), "%s_%d", prefix, i);
-            if (i < count)
-                settings_set_string(key, entries[i]);
-            else
-                settings_remove_key(key);
-        }
-    }
+    // Written as one unit, so a save replaces the whole history rather than
+    // mixing it entry by entry with another window's
+    if (changed)
+        settings_set_list(prefix, entries, count, FIND_HISTORY_MAX);
     for (int i = 0; i < count; i++)
         free(entries[i]);
     return changed;
