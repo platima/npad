@@ -53,7 +53,7 @@ TEST_FRAMEWORK_SOURCES = tests/test_framework.c
 TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/settings_import.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c src/core/find_seed.c src/core/tab_stops.c  # Core sources without UI dependencies
 
 # Windows GUI specific
-WINDOWS_GUI_SOURCES = src/platform/ui_win32.c src/platform/print_win32.c src/platform/assoc_win32.c src/platform/richedit_text.c
+WINDOWS_GUI_SOURCES = src/platform/ui_win32.c src/platform/print_win32.c src/platform/assoc_win32.c src/platform/richedit_text.c src/platform/args_win32.c
 # Delay-loaded DLLs: none of these are needed to open a window, so binding them
 # statically made the loader page them in on every launch - which costs most on
 # a cold start, exactly when startup feels slow. winhttp/bcrypt serve only the
@@ -75,7 +75,13 @@ WIN_LINKER ?= bfd
 comma := ,
 ifeq ($(WIN_LINKER),lld)
 DELAY_DLLTOOL_FLAG = -l
-DELAY_LINK = $(DELAY_LIBS) $(patsubst %,-Wl$(comma)--delayload=%.dll,$(DELAY_DLLS))
+# --dependent-load-flag=0x800 (LOAD_LIBRARY_SEARCH_SYSTEM32) also keeps the
+# loader's own search for imported DLLs out of the exe's folder. GNU ld has no
+# such option; there main() calls SetDefaultDllDirectories first thing, which
+# covers the delay-loaded and runtime-loaded DLLs (the static imports are all
+# KnownDLLs or the side-by-side comctl32).
+DELAY_LINK = $(DELAY_LIBS) $(patsubst %,-Wl$(comma)--delayload=%.dll,$(DELAY_DLLS)) \
+	-Wl,--dependent-load-flag=0x800
 else
 DELAY_DLLTOOL_FLAG = -y
 DELAY_LINK = $(DELAY_LIBS) -ldelayimp
@@ -84,8 +90,9 @@ WINDOWS_GUI_LIBS = -mwindows -lcomctl32 -lgdi32 -lkernel32 -lshell32 -luser32 -l
 WINDOWS_GUI_TARGET = npad.exe
 
 # Windows Terminal specific
-WINDOWS_TERMINAL_SOURCES = src/platform/ui_win32_terminal.c
-WINDOWS_TERMINAL_LIBS = -lkernel32
+WINDOWS_TERMINAL_SOURCES = src/platform/ui_win32_terminal.c src/platform/args_win32.c
+# ole32 + uuid: settings.c finds %APPDATA% with SHGetKnownFolderPath
+WINDOWS_TERMINAL_LIBS = -lkernel32 -lole32 -luuid
 WINDOWS_TERMINAL_TARGET = npad-terminal.exe
 
 # macOS specific (future)
@@ -297,7 +304,7 @@ format-check:
 	find src/ -name "*.c" -o -name "*.h" | xargs $(CLANG_FORMAT) --dry-run --Werror
 
 # Testing targets
-test: test-file-ops test-atomic-save test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-recovery test-richedit-text test-editor-load test-editor test-settings-import
+test: test-file-ops test-atomic-save test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-recovery test-richedit-text test-editor-load test-editor test-settings-import test-editor-insert
 	@echo "All tests completed"
 
 test-richedit-text: tests/test_richedit_text
@@ -313,6 +320,24 @@ test-editor-load: tests/test_editor_load
 test-editor: tests/test_editor
 	@echo "Running editor core tests..."
 	./tests/test_editor
+
+test-editor-insert: tests/test_editor_insert
+	@echo "Running Ctrl+drop insert tests..."
+	./tests/test_editor_insert
+
+# editor.c against scripted UI stubs (in the test file), so the prompts it
+# raises can be answered and counted
+tests/test_editor_insert: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) src/core/editor.c tests/test_editor_insert.c
+	@mkdir -p tests
+	$(CC) $(CFLAGS) -DNPAD_TEST_HOOKS -o $@ $^ -lpthread
+
+# Windows-only: UTF-8 argv from the wide command line, and settings under a
+# non-ASCII directory. Cross-compiled here; run tests/test_win32_unicode.exe
+# on Windows (a test VM: it writes only under %TEMP%). Not part of `make test`.
+test-win32-unicode: tests/test_win32_unicode.exe
+
+tests/test_win32_unicode.exe: tests/test_win32_unicode.c src/platform/args_win32.c $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES)
+	$(MINGW_CC) $(CFLAGS) -DNPAD_TEST_HOOKS -o $@ $^ -lshell32 -lole32 -luuid
 
 test-file-ops: tests/test_file_ops
 	@echo "Running file operations tests..."
@@ -425,8 +450,9 @@ tests/test_list_ops: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_l
 tests/test_update_check: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_update_check.c
 	$(CC) $(CFLAGS) -o tests/test_update_check $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_update_check.c
 
+# NPAD_TEST_HOOKS: settings follow $NPAD_TEST_CONFIG_DIR (see get_settings_directory)
 tests/test_settings: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_settings.c
-	$(CC) $(CFLAGS) -o tests/test_settings $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_settings.c
+	$(CC) $(CFLAGS) -DNPAD_TEST_HOOKS -o tests/test_settings $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_settings.c
 
 tests/test_html_md: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_html_md.c
 	@mkdir -p tests
@@ -470,8 +496,8 @@ clean:
 	rm -f src/platform/npad.res
 	rm -rf build
 	rm -rf dist/npad_* dist/npad-*.rpm dist/npad-*.pkg.tar.zst dist/npad-v*-portable-linux-*.tar.gz
-	rm -f tests/test_file_ops tests/test_atomic_save tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md tests/test_undo tests/test_find_seed tests/test_tab_stops tests/test_recovery tests/test_richedit_text tests/test_editor_load tests/test_editor tests/test_settings_import
-	rm -f tests/test_assoc_win32.exe tests/test_richedit_boundary.exe tests/test_richedit_text.exe tests/test_editor_load.exe
+	rm -f tests/test_file_ops tests/test_atomic_save tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md tests/test_undo tests/test_find_seed tests/test_tab_stops tests/test_recovery tests/test_richedit_text tests/test_editor_load tests/test_editor tests/test_settings_import tests/test_editor_insert
+	rm -f tests/test_assoc_win32.exe tests/test_richedit_boundary.exe tests/test_richedit_text.exe tests/test_editor_load.exe tests/test_win32_unicode.exe
 	rm -rf test_editor_home test_recovery_home
 	rm -f tests/test_file_ops.exe tests/test_atomic_save.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe tests/test_html_md.exe tests/test_undo.exe tests/test_find_seed.exe tests/test_tab_stops.exe tests/test_recovery.exe tests/test_editor.exe tests/test_settings_import.exe
 

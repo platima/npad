@@ -141,17 +141,12 @@ static bool ctrl_is_down(Window *window) {
 }
 
 // Insert a file's text at (x, y) - widget coordinates, the drop point - as a
-// single undo step. A failure is reported the way opening a file reports it.
+// single undo step. The binary, size and read checks are Open's, shared with
+// Win32 (editor_read_file_for_insert), which also reports a failure.
 static void insert_file_at(Window *window, const char *path, int x, int y) {
-    TextFileInfo info;
-    char *content = file_read_text_ex(path, &info);
-    if (!content) {
-        char message[512];
-        snprintf(message, sizeof(message), "Could not open file: %.300s\n%.150s", path,
-                 file_get_last_error());
-        ui_show_message_box(window, "npad", message, false);
+    char *content = editor_read_file_for_insert(path);
+    if (!content)
         return;
-    }
     char *text = npad_gtk_normalize_text(content);
     free(content);
     if (!text)

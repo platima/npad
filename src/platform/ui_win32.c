@@ -13,6 +13,7 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <commdlg.h>
+#include <cderr.h>
 #include <prsht.h>
 #include <richedit.h>
 #include <shellapi.h>
@@ -1281,12 +1282,14 @@ bool ui_platform_init(void) {
         return false;
     }
 
-    // Prefer RichEdit 4.1 (msftedit.dll); fall back to RichEdit 2.0
-    g_richedit_lib = LoadLibraryW(L"msftedit.dll");
+    // Prefer RichEdit 4.1 (msftedit.dll); fall back to RichEdit 2.0. System32
+    // only: neither is a KnownDLL, so a bare LoadLibraryW looks in the exe's
+    // folder first, and a planted copy there would run on every launch
+    g_richedit_lib = LoadLibraryExW(L"msftedit.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (g_richedit_lib) {
         g_richedit_class = MSFTEDIT_CLASS;
     } else {
-        g_richedit_lib = LoadLibraryW(L"riched20.dll");
+        g_richedit_lib = LoadLibraryExW(L"riched20.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (g_richedit_lib) {
             g_richedit_class = L"RichEdit20W";
         } else {
@@ -2150,15 +2153,39 @@ static wchar_t *build_filter(const char *filter) {
     return result;
 }
 
+// Room for any path Windows can name (the \\?\ limit), for the classic dialogs.
+// A MAX_PATH buffer made a longer pick fail with FNERR_BUFFERTOOSMALL, which
+// GetOpenFileNameW reports exactly like Cancel: nothing happened, no word why.
+#define NPAD_DIALOG_PATH_CCH 32768
+
+// Tell the user a classic file dialog failed, rather than treating it as Cancel
+// (CommDlgExtendedError is 0 for a real Cancel)
+static void report_file_dialog_error(HWND owner) {
+    DWORD err = CommDlgExtendedError();
+    if (err == 0)
+        return;
+    wchar_t message[160];
+    if (err == FNERR_BUFFERTOOSMALL) {
+        wcscpy(message, L"The selected file's path is too long for npad to use.");
+    } else {
+        _snwprintf(message, 159, L"The file dialog could not be shown (error 0x%04lX).",
+                   (unsigned long) err);
+        message[159] = L'\0';
+    }
+    MessageBoxW(owner, message, L"npad", MB_OK | MB_ICONWARNING);
+}
+
 static char *show_file_dialog(Window *parent, const FileDialogParams *params, bool save) {
     OPENFILENAMEW ofn;
-    wchar_t filename[MAX_PATH] = L"";
+    wchar_t *filename = calloc(NPAD_DIALOG_PATH_CCH, sizeof(wchar_t));
+    if (!filename)
+        return NULL;
 
     if (save && params && params->default_filename && params->default_filename[0]) {
         wchar_t *wide = utf8_to_wide(params->default_filename);
         if (wide) {
-            wcsncpy(filename, wide, MAX_PATH - 1);
-            filename[MAX_PATH - 1] = L'\0';
+            wcsncpy(filename, wide, NPAD_DIALOG_PATH_CCH - 1);
+            filename[NPAD_DIALOG_PATH_CCH - 1] = L'\0';
             free(wide);
         }
     }
@@ -2171,7 +2198,7 @@ static char *show_file_dialog(Window *parent, const FileDialogParams *params, bo
     ofn.hwndOwner = parent ? parent->hwnd : NULL;
     ofn.hInstance = g_hinstance;
     ofn.lpstrFile = filename;
-    ofn.nMaxFile = MAX_PATH;
+    ofn.nMaxFile = NPAD_DIALOG_PATH_CCH;
     ofn.lpstrFilter = filter;
     ofn.nFilterIndex = 1;
     ofn.lpstrTitle = title;
@@ -2183,11 +2210,137 @@ static char *show_file_dialog(Window *parent, const FileDialogParams *params, bo
     }
 
     BOOL ok = save ? GetSaveFileNameW(&ofn) : GetOpenFileNameW(&ofn);
+    if (!ok)
+        report_file_dialog_error(ofn.hwndOwner);
 
     free(filter);
     free(title);
 
-    return ok ? wide_to_utf8(filename) : NULL;
+    char *result = ok ? wide_to_utf8(filename) : NULL;
+    free(filename);
+    return result;
+}
+
+// Split a '|'-separated filter ("Text Documents (*.txt)|*.txt|All Files
+// (*.*)|*.*") into the shell dialogs' name/spec pairs. *storage owns the text
+// the pairs point into; free both. Returns the pair count (0 on failure).
+static UINT build_filter_specs(const char *filter, COMDLG_FILTERSPEC **specs_out,
+                               wchar_t **storage_out) {
+    *specs_out = NULL;
+    *storage_out = NULL;
+    const char *source =
+        (filter && filter[0]) ? filter : "Text Documents (*.txt)|*.txt|All Files (*.*)|*.*";
+    wchar_t *text = utf8_to_wide(source);
+    if (!text)
+        return 0;
+
+    UINT bars = 0;
+    for (const wchar_t *p = text; *p; p++) {
+        if (*p == L'|')
+            bars++;
+    }
+    UINT pairs = (bars + 1) / 2;
+    COMDLG_FILTERSPEC *specs = pairs ? calloc(pairs, sizeof(COMDLG_FILTERSPEC)) : NULL;
+    if (!specs) {
+        free(text);
+        return 0;
+    }
+
+    UINT count = 0;
+    wchar_t *cursor = text;
+    while (count < pairs && *cursor) {
+        wchar_t *name = cursor;
+        wchar_t *bar = wcschr(name, L'|');
+        if (!bar)
+            break; // A name with no pattern: ignore it
+        *bar = L'\0';
+        wchar_t *spec = bar + 1;
+        wchar_t *next = wcschr(spec, L'|');
+        if (next)
+            *next = L'\0';
+        specs[count].pszName = name;
+        specs[count].pszSpec = spec;
+        count++;
+        if (!next)
+            break;
+        cursor = next + 1;
+    }
+    if (count == 0) {
+        free(specs);
+        free(text);
+        return 0;
+    }
+    *specs_out = specs;
+    *storage_out = text;
+    return count;
+}
+
+// Open using the shell's IFileOpenDialog, as Save As already does. It hands
+// back the chosen path as an allocated string of any length, where the classic
+// GetOpenFileNameW needs a buffer sized in advance (and once failed every pick
+// longer than MAX_PATH as if the user had cancelled). Falls back to the classic
+// dialog if COM fails.
+static char *show_open_dialog_com(Window *parent, const FileDialogParams *params) {
+    IFileOpenDialog *dialog = NULL;
+    HRESULT hr = CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER,
+                                  &IID_IFileOpenDialog, (void **) &dialog);
+    if (FAILED(hr) || !dialog) {
+        return show_file_dialog(parent, params, false);
+    }
+
+    HWND owner = parent ? parent->hwnd : NULL;
+    wchar_t *wtitle = (params && params->title) ? utf8_to_wide(params->title) : NULL;
+    if (wtitle) {
+        dialog->lpVtbl->SetTitle(dialog, wtitle);
+    }
+
+    COMDLG_FILTERSPEC *specs = NULL;
+    wchar_t *spec_text = NULL;
+    UINT spec_count = build_filter_specs(params ? params->filter : NULL, &specs, &spec_text);
+    if (spec_count > 0) {
+        dialog->lpVtbl->SetFileTypes(dialog, spec_count, specs);
+        dialog->lpVtbl->SetFileTypeIndex(dialog, 1);
+    }
+    dialog->lpVtbl->SetDefaultExtension(dialog, L"txt");
+
+    // The classic dialog's OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST, plus a real
+    // file-system path (a library or shell item has none to open)
+    FILEOPENDIALOGOPTIONS options = 0;
+    if (SUCCEEDED(dialog->lpVtbl->GetOptions(dialog, &options))) {
+        dialog->lpVtbl->SetOptions(dialog, options | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST |
+                                               FOS_FILEMUSTEXIST);
+    }
+
+    char *result = NULL;
+    hr = dialog->lpVtbl->Show(dialog, owner);
+    if (SUCCEEDED(hr)) {
+        IShellItem *item = NULL;
+        if (SUCCEEDED(dialog->lpVtbl->GetResult(dialog, &item)) && item) {
+            wchar_t *wresult = NULL;
+            if (SUCCEEDED(item->lpVtbl->GetDisplayName(item, SIGDN_FILESYSPATH, &wresult)) &&
+                wresult) {
+                result = wide_to_utf8(wresult);
+                CoTaskMemFree(wresult);
+            }
+            item->lpVtbl->Release(item);
+        }
+        if (!result) {
+            MessageBoxW(owner, L"npad could not get the path of the selected file.", L"npad",
+                        MB_OK | MB_ICONWARNING);
+        }
+    } else if (hr != HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+        wchar_t message[128];
+        _snwprintf(message, 127, L"The Open dialog could not be shown (error 0x%08lX).",
+                   (unsigned long) hr);
+        message[127] = L'\0';
+        MessageBoxW(owner, message, L"npad", MB_OK | MB_ICONWARNING);
+    }
+
+    dialog->lpVtbl->Release(dialog);
+    free(specs);
+    free(spec_text);
+    free(wtitle);
+    return result;
 }
 
 // Modern Save As using the shell's IFileSaveDialog. Unlike the legacy
@@ -2282,6 +2435,13 @@ static char *show_save_dialog_com(Window *parent, FileDialogParams *params) {
             }
             item->lpVtbl->Release(item);
         }
+    } else if (hr != HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+        // A failure is not a Cancel: say so, or the save silently did nothing
+        wchar_t message[128];
+        _snwprintf(message, 127, L"The Save As dialog could not be shown (error 0x%08lX).",
+                   (unsigned long) hr);
+        message[127] = L'\0';
+        MessageBoxW(parent ? parent->hwnd : NULL, message, L"npad", MB_OK | MB_ICONWARNING);
     }
 
     if (custom) {
@@ -2294,7 +2454,7 @@ static char *show_save_dialog_com(Window *parent, FileDialogParams *params) {
 
 char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *params) {
     // The open dialog never writes back through params
-    return show_file_dialog(parent, (FileDialogParams *) params, false);
+    return show_open_dialog_com(parent, params);
 }
 
 char *ui_platform_show_save_dialog(Window *parent, FileDialogParams *params) {
@@ -2428,12 +2588,12 @@ static int show_task_dialog_ex(HWND owner, const TaskDialogSpec *spec, bool *ver
     // Yes / No with their labels spelled out in the body - which is exactly
     // what the hand-written fallbacks this helper replaced already did.
     wchar_t body[900];
-    int n = _snwprintf(body, 899, L"%s%s%s", spec->instruction ? spec->instruction : L"",
+    int n = _snwprintf(body, 899, L"%ls%ls%ls", spec->instruction ? spec->instruction : L"",
                        spec->content ? L"\n\n" : L"", spec->content ? spec->content : L"");
     if (n < 0)
         n = 0;
     for (int i = 0; i < spec->button_count && i < 2; i++) {
-        int m = _snwprintf(body + n, (size_t) (899 - n), L"\n\n%s: %s", i == 0 ? L"Yes" : L"No",
+        int m = _snwprintf(body + n, (size_t) (899 - n), L"\n\n%ls: %ls", i == 0 ? L"Yes" : L"No",
                            spec->buttons[i].pszButtonText);
         if (m < 0)
             break;
@@ -2953,7 +3113,7 @@ static DWORD WINAPI update_download_thread(LPVOID param) {
     // before. Fall back to the historic name when the release cannot be read.
     bool have_exe = false, have_sum = false;
     wchar_t api_path[128];
-    _snwprintf(api_path, 127, L"/repos/platima/npad/releases/tags/%s", wtag);
+    _snwprintf(api_path, 127, L"/repos/platima/npad/releases/tags/%ls", wtag);
     api_path[127] = L'\0';
     char *rel = http_get_alloc(L"api.github.com", api_path, (size_t) 1024 * 1024, NULL, NULL);
     if (rel) {
@@ -2965,12 +3125,12 @@ static DWORD WINAPI update_download_thread(LPVOID param) {
         free(rel);
     }
     if (!have_exe) {
-        _snwprintf(exe_path, 511, L"/platima/npad/releases/download/%s/npad-%s%hs", wtag, wtag,
+        _snwprintf(exe_path, 511, L"/platima/npad/releases/download/%ls/npad-%ls%hs", wtag, wtag,
                    exe_sfx);
         exe_path[511] = L'\0';
     }
     if (!have_sum) {
-        _snwprintf(sum_path, 511, L"/platima/npad/releases/download/%s/npad-%s%hs", wtag, wtag,
+        _snwprintf(sum_path, 511, L"/platima/npad/releases/download/%ls/npad-%ls%hs", wtag, wtag,
                    sum_sfx);
         sum_path[511] = L'\0';
     }
@@ -2994,7 +3154,7 @@ static DWORD WINAPI update_download_thread(LPVOID param) {
             snprintf(r->error, sizeof(r->error), "Could not resolve the temporary directory.");
         } else {
             // Save under whatever the release actually calls it
-            _snwprintf(r->path, MAX_PATH - 1, L"%s%s", temp_dir, path_basename(exe_path));
+            _snwprintf(r->path, MAX_PATH - 1, L"%ls%ls", temp_dir, path_basename(exe_path));
             r->path[MAX_PATH - 1] = L'\0';
             FILE *f = _wfopen(r->path, L"wb");
             bool written = f && fwrite(exe, 1, exe_len, f) == exe_len;
@@ -3334,7 +3494,7 @@ static void handle_update_downloaded(Window *window, UpdateDownloadResult *r) {
             wchar_t merge[200];
             if (assoc_installer_merge_tasks(merge, 200)) {
                 size_t used = wcslen(setup_args);
-                _snwprintf(setup_args + used, 255 - used, L" %s", merge);
+                _snwprintf(setup_args + used, 255 - used, L" %ls", merge);
                 setup_args[255] = L'\0';
             }
             ShellExecuteW(hwnd, L"open", r->path, setup_args, NULL, SW_SHOWNORMAL);
@@ -3348,7 +3508,7 @@ static void handle_update_downloaded(Window *window, UpdateDownloadResult *r) {
             }
         } else {
             wchar_t note[MAX_PATH + 96];
-            _snwprintf(note, MAX_PATH + 95, L"The verified installer was saved to:\n%s", r->path);
+            _snwprintf(note, MAX_PATH + 95, L"The verified installer was saved to:\n%ls", r->path);
             note[MAX_PATH + 95] = L'\0';
             MessageBoxW(hwnd, note, L"npad", MB_OK | MB_ICONINFORMATION);
         }
@@ -4105,7 +4265,7 @@ static void set_title_bar_dark(HWND hwnd, bool dark) {
     static bool resolved = false;
     if (!resolved) {
         resolved = true;
-        HMODULE dwmapi = LoadLibraryW(L"dwmapi.dll");
+        HMODULE dwmapi = LoadLibraryExW(L"dwmapi.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (dwmapi) {
             union {
                 FARPROC proc;
@@ -5473,13 +5633,16 @@ static void export_settings(HWND owner) {
     if (!src)
         return;
 
-    wchar_t filename[MAX_PATH] = L"npad-settings.json";
+    wchar_t *filename = calloc(NPAD_DIALOG_PATH_CCH, sizeof(wchar_t));
+    if (!filename)
+        return;
+    wcscpy(filename, L"npad-settings.json");
     OPENFILENAMEW ofn;
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = owner;
     ofn.lpstrFile = filename;
-    ofn.nMaxFile = MAX_PATH;
+    ofn.nMaxFile = NPAD_DIALOG_PATH_CCH;
     ofn.lpstrFilter = L"JSON Files (*.json)\0*.json\0All Files (*.*)\0*.*\0";
     ofn.nFilterIndex = 1;
     ofn.lpstrDefExt = L"json";
@@ -5491,7 +5654,10 @@ static void export_settings(HWND owner) {
         free(dest);
         MessageBoxW(owner, ok ? L"Settings exported." : L"Failed to export settings.", L"npad",
                     ok ? (MB_OK | MB_ICONINFORMATION) : (MB_OK | MB_ICONWARNING));
+    } else {
+        report_file_dialog_error(owner);
     }
+    free(filename);
 }
 
 // Replace the current settings with a user-chosen file and reload them
@@ -5499,18 +5665,22 @@ static void import_settings(HWND owner) {
     if (!settings_get_file_path())
         return;
 
-    wchar_t filename[MAX_PATH] = L"";
+    wchar_t *filename = calloc(NPAD_DIALOG_PATH_CCH, sizeof(wchar_t));
+    if (!filename)
+        return;
     OPENFILENAMEW ofn;
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = owner;
     ofn.lpstrFile = filename;
-    ofn.nMaxFile = MAX_PATH;
+    ofn.nMaxFile = NPAD_DIALOG_PATH_CCH;
     ofn.lpstrFilter = L"JSON Files (*.json)\0*.json\0All Files (*.*)\0*.*\0";
     ofn.nFilterIndex = 1;
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY | OFN_EXPLORER;
 
     if (!GetOpenFileNameW(&ofn)) {
+        report_file_dialog_error(owner);
+        free(filename);
         return;
     }
 
@@ -5519,6 +5689,7 @@ static void import_settings(HWND owner) {
     // Picking the wrong file used to wipe every preference and recent file.
     char *src = wide_to_utf8(filename);
     SettingsImportResult result = src ? settings_import_file(src) : SETTINGS_IMPORT_UNREADABLE;
+    free(filename);
     free(src);
     wchar_t *message = utf8_to_wide(settings_import_message(result));
     if (result != SETTINGS_IMPORT_OK) {
@@ -6807,9 +6978,9 @@ static void spawn_self(const wchar_t *extra) {
     // CreateProcess may modify the command line buffer, so pass a copy
     wchar_t cmdline[1024];
     if (extra && extra[0]) {
-        _snwprintf(cmdline, 1023, L"\"%s\" %s", path, extra);
+        _snwprintf(cmdline, 1023, L"\"%ls\" %ls", path, extra);
     } else {
-        _snwprintf(cmdline, 1023, L"\"%s\"", path);
+        _snwprintf(cmdline, 1023, L"\"%ls\"", path);
     }
     cmdline[1023] = L'\0';
 
@@ -6856,7 +7027,7 @@ void ui_platform_launch_recovery_instance(const char *slot_id, int cascade_index
     if (!wslot)
         return;
     wchar_t extra[160];
-    _snwprintf(extra, 159, L"--recover %s --cascade %d", wslot, cascade_index);
+    _snwprintf(extra, 159, L"--recover %ls --cascade %d", wslot, cascade_index);
     extra[159] = L'\0';
     free(wslot);
     spawn_self(extra);
@@ -7429,7 +7600,7 @@ static void apply_update_indicator(Window *window) {
     if (avail) {
         wchar_t *wlatest = utf8_to_wide((latest && latest[0]) ? latest : "new version");
         wchar_t label[96];
-        _snwprintf(label, 95, L"&Update Available (%s)...", wlatest ? wlatest : L"new version");
+        _snwprintf(label, 95, L"&Update Available (%ls)...", wlatest ? wlatest : L"new version");
         label[95] = L'\0';
         free(wlatest);
         ModifyMenuW(window->hmenu, old_cmd, MF_BYCOMMAND | MF_STRING, ID_HELP_UPDATE_AVAILABLE,
@@ -9322,30 +9493,37 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 
         case WM_DROPFILES: {
             HDROP drop = (HDROP) wparam;
-            wchar_t path[MAX_PATH];
-            if (window && DragQueryFileW(drop, 0, path, MAX_PATH) > 0) {
-                char *utf8 = wide_to_utf8(path);
-                if (utf8) {
-                    if (GetKeyState(VK_CONTROL) & 0x8000) {
-                        // Ctrl+Drop inserts the file contents at the caret
-                        TextFileInfo info;
-                        char *content = file_read_text_ex(utf8, &info);
-                        if (content) {
-                            // Breaks normalised, or a CR CR LF would be deleted
-                            wchar_t *wide = richedit_text_from_utf8(content, NULL, NULL);
-                            if (wide) {
-                                SendMessageW(window->edit_hwnd, EM_REPLACESEL, TRUE, (LPARAM) wide);
-                                free(wide);
-                            }
-                            free(content);
-                        }
-                    } else {
-                        ui_post_event(UI_EVENT_FILE_DROPPED, window, utf8);
-                    }
-                    free(utf8);
-                }
+            // Sized to the path rather than MAX_PATH, which cut a longer one
+            // short and so opened (or failed on) some other name
+            UINT length = window ? DragQueryFileW(drop, 0, NULL, 0) : 0;
+            wchar_t *path = length > 0 ? malloc(((size_t) length + 1) * sizeof(wchar_t)) : NULL;
+            bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            char *utf8 = NULL;
+            if (path && DragQueryFileW(drop, 0, path, length + 1) == length) {
+                utf8 = wide_to_utf8(path);
             }
+            free(path);
+            // Done with the drop before anything below can raise a prompt
             DragFinish(drop);
+            if (utf8) {
+                if (ctrl) {
+                    // Ctrl+Drop inserts the file contents at the caret, after
+                    // the same binary, size and read checks as Open
+                    char *content = editor_read_file_for_insert(utf8);
+                    if (content) {
+                        // Breaks normalised, or a CR CR LF would be deleted
+                        wchar_t *wide = richedit_text_from_utf8(content, NULL, NULL);
+                        if (wide) {
+                            SendMessageW(window->edit_hwnd, EM_REPLACESEL, TRUE, (LPARAM) wide);
+                            free(wide);
+                        }
+                        free(content);
+                    }
+                } else {
+                    ui_post_event(UI_EVENT_FILE_DROPPED, window, utf8);
+                }
+                free(utf8);
+            }
             return 0;
         }
 

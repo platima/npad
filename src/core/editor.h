@@ -150,4 +150,12 @@ bool editor_prompt_save_changes(void);
 int editor_default_large_file_mb(void);
 void editor_update_title(void);
 
+// Read a file to insert into the document (Ctrl+drop), after the checks Open
+// makes: a binary-looking file and one over the large-file threshold are each
+// confirmed first, a read failure is reported, and a file npad can only read in
+// part (a NUL in it) is confirmed before that part is used. Returns the text as
+// malloc'd UTF-8 for the caller to insert and free, or NULL when there is
+// nothing to insert - the user declined or the failure was already shown.
+char *editor_read_file_for_insert(const char *filename);
+
 #endif // EDITOR_H

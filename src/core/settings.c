@@ -46,6 +46,7 @@
 #ifdef _WIN32
 #include <shlobj.h>
 #include <windows.h>
+#include <knownfolders.h>
 #else
 #include <fcntl.h>
 #include <pwd.h>
@@ -79,6 +80,8 @@ typedef struct {
 static SettingStore g_store;   // every setting
 static SettingStore g_removed; // keys this instance removed and has not saved yet
 static char *g_settings_file_path = NULL;
+// The directory came from $NPAD_TEST_CONFIG_DIR (NPAD_TEST_HOOKS builds only)
+static bool g_settings_dir_is_test_override = false;
 
 // Helper functions
 static char *get_settings_directory(void);
@@ -284,18 +287,21 @@ bool settings_init(void) {
     if (!g_settings_file_path)
         return false;
 
-#ifndef _WIN32
     // The config directory must exist before anything else writes under it:
     // crash-recovery snapshots go in <dir>/recovery and only create that last
     // level, and a first run (or a newly set $XDG_CONFIG_HOME) reaches here
-    // before any settings save has made the parents
+    // before any settings save has made the parents. Windows too: a fresh
+    // profile has no %APPDATA%\Platima\npad until something creates it.
     char *config_dir = file_get_directory(g_settings_file_path);
     if (config_dir) {
         create_directory_recursive(config_dir);
         free(config_dir);
     }
 
-    if (!file_exists(g_settings_file_path)) {
+#ifndef _WIN32
+    // A test build pointed at its own directory must never read the real
+    // ~/.config/npad, not even to migrate it
+    if (!g_settings_dir_is_test_override && !file_exists(g_settings_file_path)) {
         // Nothing at the new location. An npad that predates $XDG_CONFIG_HOME
         // support kept its settings in ~/.config/npad, so read those instead of
         // starting from defaults. READ only: the old file is neither moved nor
@@ -661,6 +667,46 @@ int settings_reset_except_prefixes(const char *const *keep_prefixes, int prefix_
     return removed;
 }
 
+#ifdef _WIN32
+// A wide string as malloc'd UTF-8, or NULL. Windows hands out paths in UTF-16,
+// and npad's core carries UTF-8 everywhere; the ANSI ("A") APIs would give the
+// code page's bytes instead, which the rest of npad then misreads.
+static char *settings_wide_to_utf8(const wchar_t *wide) {
+    if (!wide)
+        return NULL;
+    int bytes = WideCharToMultiByte(CP_UTF8, 0, wide, -1, NULL, 0, NULL, NULL);
+    if (bytes <= 0)
+        return NULL;
+    char *out = malloc((size_t) bytes);
+    if (!out)
+        return NULL;
+    if (WideCharToMultiByte(CP_UTF8, 0, wide, -1, out, bytes, NULL, NULL) <= 0) {
+        free(out);
+        return NULL;
+    }
+    return out;
+}
+#endif
+
+// Create one directory level (a UTF-8 path); an existing one is fine
+static void make_one_directory(const char *path) {
+#ifdef _WIN32
+    // CreateDirectoryW: the ANSI CreateDirectory would read the UTF-8 bytes in
+    // the code page, so a profile like C:\Users\José made the wrong folder
+    int len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
+    if (len <= 0)
+        return;
+    wchar_t *wide = malloc((size_t) len * sizeof(wchar_t));
+    if (!wide)
+        return;
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, len) > 0)
+        CreateDirectoryW(wide, NULL);
+    free(wide);
+#else
+    mkdir(path, 0700); // Private: settings and recovery snapshots live here
+#endif
+}
+
 // Create a directory and any missing parent directories
 static void create_directory_recursive(const char *path) {
     if (!path || !path[0])
@@ -676,20 +722,12 @@ static void create_directory_recursive(const char *path) {
         if ((*p == '/' || *p == '\\') && *(p - 1) != ':') {
             char saved = *p;
             *p = '\0';
-#ifdef _WIN32
-            CreateDirectory(copy, NULL);
-#else
-            mkdir(copy, 0700); // Private: settings and recovery snapshots live here
-#endif
+            make_one_directory(copy);
             *p = saved;
         }
     }
 
-#ifdef _WIN32
-    CreateDirectory(copy, NULL);
-#else
-    mkdir(copy, 0700);
-#endif
+    make_one_directory(copy);
     free(copy);
 }
 
@@ -1275,18 +1313,71 @@ static char *settings_legacy_file_path(void) {
 }
 #endif
 
-static char *get_settings_directory(void) {
+#ifdef NPAD_TEST_HOOKS
+// Test builds only: $NPAD_TEST_CONFIG_DIR, as malloc'd UTF-8, or NULL when it
+// is unset or empty
+static char *settings_test_config_dir(void) {
 #ifdef _WIN32
-    char path[MAX_PATH];
-    if (SHGetFolderPath(NULL, CSIDL_APPDATA, NULL, 0, path) == S_OK) {
-        char *platima_dir = file_join_paths(path, "Platima");
-        char *npad_dir = file_join_paths(platima_dir, "npad");
+    // The wide environment: getenv would give the ANSI code page's bytes
+    const wchar_t *wide = _wgetenv(L"NPAD_TEST_CONFIG_DIR");
+    return (wide && wide[0]) ? settings_wide_to_utf8(wide) : NULL;
+#else
+    const char *dir = getenv("NPAD_TEST_CONFIG_DIR");
+    if (!dir || !dir[0])
+        return NULL;
+    char *copy = malloc(strlen(dir) + 1);
+    if (copy)
+        strcpy(copy, dir);
+    return copy;
+#endif
+}
+#endif
+
+#if defined(_WIN32) && !defined(NPAD_TEST_HOOKS)
+// %APPDATA%\Platima\npad as UTF-8. SHGetKnownFolderPath answers in UTF-16; the
+// ANSI SHGetFolderPathA it replaces gave the code page's bytes, which file_ops
+// then decoded as UTF-8, so on a profile like C:\Users\José (or any name the
+// code page cannot spell) settings, crash recovery and the update handoff all
+// failed without a word.
+static char *settings_windows_appdata_dir(void) {
+    PWSTR appdata = NULL;
+    char *npad_dir = NULL;
+    if (SUCCEEDED(SHGetKnownFolderPath(&FOLDERID_RoamingAppData, KF_FLAG_CREATE, NULL, &appdata)) &&
+        appdata) {
+        char *base = settings_wide_to_utf8(appdata);
+        char *platima_dir = base ? file_join_paths(base, "Platima") : NULL;
+        npad_dir = platima_dir ? file_join_paths(platima_dir, "npad") : NULL;
         free(platima_dir);
-        return npad_dir;
+        free(base);
     }
-    return NULL;
+    CoTaskMemFree(appdata); // NULL is fine
+    return npad_dir;
+}
+#endif
+
+// The test-hook contract: a build compiled with -DNPAD_TEST_HOOKS uses
+// $NPAD_TEST_CONFIG_DIR when it is set, on every platform, and on Windows
+// gets no directory at all without it, so a test can never reach the real
+// %APPDATA%. (Without the variable, Linux tests steer HOME/XDG_CONFIG_HOME.)
+static char *get_settings_directory(void) {
+#if defined(NPAD_TEST_HOOKS) && defined(_WIN32)
+    char *test_dir = settings_test_config_dir();
+    g_settings_dir_is_test_override = test_dir != NULL;
+    return test_dir; // NULL without the variable: never the real %APPDATA%
+#else
+    g_settings_dir_is_test_override = false;
+#ifdef NPAD_TEST_HOOKS
+    char *test_dir = settings_test_config_dir();
+    if (test_dir) {
+        g_settings_dir_is_test_override = true;
+        return test_dir;
+    }
+#endif
+#ifdef _WIN32
+    return settings_windows_appdata_dir();
 #else
     return settings_resolve_config_dir(getenv("XDG_CONFIG_HOME"), settings_home_dir());
+#endif
 #endif
 }
 

@@ -122,14 +122,14 @@ TEST_CASE(register_writes_the_installer_shape) {
     TEST_ASSERT(get_sz(HKEY_CURRENT_USER, CLASSES L"\\npad.txt\\DefaultIcon", NULL, v,
                        MAX_PATH + 32),
                 "DefaultIcon present");
-    _snwprintf(expect, MAX_PATH + 31, L"%s,0", g_exe);
+    _snwprintf(expect, MAX_PATH + 31, L"%ls,0", g_exe);
     expect[MAX_PATH + 31] = L'\0';
     TEST_ASSERT(wcscmp(v, expect) == 0, "DefaultIcon is <exe>,0");
 
     TEST_ASSERT(get_sz(HKEY_CURRENT_USER, CLASSES L"\\npad.txt\\shell\\open\\command", NULL, v,
                        MAX_PATH + 32),
                 "open command present");
-    _snwprintf(expect, MAX_PATH + 31, L"\"%s\" \"%%1\"", g_exe);
+    _snwprintf(expect, MAX_PATH + 31, L"\"%ls\" \"%%1\"", g_exe);
     expect[MAX_PATH + 31] = L'\0';
     TEST_ASSERT(wcscmp(v, expect) == 0, "open command quotes both the exe and %1");
 

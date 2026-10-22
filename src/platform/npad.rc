@@ -9,7 +9,8 @@
 #include <windows.h>
 #include "resource.h"
 
-// Application manifest: common controls v6 and per-monitor DPI awareness
+// Application manifest: common controls v6, per-monitor DPI awareness, the
+// Windows 10/11 supportedOS, asInvoker and long path awareness
 1 24 "npad.manifest"
 
 // Version Information (keep in sync with src/main.h)
@@ -30,7 +31,10 @@ BEGIN
             VALUE "FileDescription", "npad - Lightweight Text Editor"
             VALUE "FileVersion", "0.36.0.0"
             VALUE "InternalName", "npad"
-            VALUE "LegalCopyright", "Copyright © 2025-2026 Platima"
+            // \251 is the copyright sign (0xA9 in Windows-1252, the code page
+            // windres and llvm-windres read this file in). Keep this file ASCII:
+            // a literal UTF-8 sign compiled as two characters, A-circumflex + sign.
+            VALUE "LegalCopyright", "Copyright \251 2025-2026 Platima"
             VALUE "OriginalFilename", "npad.exe"
             VALUE "ProductName", "npad"
             VALUE "ProductVersion", "0.36.0.0"
@@ -241,7 +245,7 @@ BEGIN
     EDITTEXT        ID_PREF_DEFAULT_ZOOM, 132, 84, 44, 13, ES_AUTOHSCROLL | ES_NUMBER
     PUSHBUTTON      "&Use Current", ID_PREF_USE_CURRENT, 10, 108, 80, 14
     LTEXT           "Copies this window's font type and zoom into the fields above.", IDC_STATIC, 96, 111, 134, 16
-    LTEXT           "Print h&eader:", IDC_STATIC, 10, 140, 60, 8
+    LTEXT           "Print &header:", IDC_STATIC, 10, 140, 60, 8
     EDITTEXT        ID_PREF_PRINT_HEADER, 74, 138, 156, 13, ES_AUTOHSCROLL
     LTEXT           "Print f&ooter:", IDC_STATIC, 10, 158, 60, 8
     EDITTEXT        ID_PREF_PRINT_FOOTER, 74, 156, 156, 13, ES_AUTOHSCROLL

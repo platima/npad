@@ -3,6 +3,7 @@
 LIBRARY comdlg32.dll
 EXPORTS
 ChooseFontW
+CommDlgExtendedError
 GetOpenFileNameW
 GetSaveFileNameW
 PageSetupDlgW

@@ -26,6 +26,7 @@
 #include "core/thread_safety.h"
 #include "ui_interface.h"
 #ifdef _WIN32
+#include "platform/args_win32.h"
 #include "platform/assoc_win32.h"
 #endif
 
@@ -57,6 +58,26 @@ static void gui_error_callback(const npad_error_info_t *error) {
 }
 
 int main(int argc, char *argv[]) {
+#ifdef NPAD_PLATFORM_WINDOWS
+    // Before anything loads a DLL: look for DLLs named without a path in
+    // System32 only. Otherwise the exe's own folder is searched first, and a
+    // portable npad run from Downloads beside a planted msftedit.dll (or
+    // winhttp/bcrypt/msimg32, which the delay-load helper loads by bare name
+    // on first use) would run that DLL's code. None of npad's DLLs lives
+    // anywhere else; the explicit loads also pass LOAD_LIBRARY_SEARCH_SYSTEM32.
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
+
+    // argv from the wide command line, as UTF-8: the narrow one is in the ANSI
+    // code page, so any non-ASCII file name passed by Explorer, Open with,
+    // Send To or a console could not be opened (see args_win32.h)
+    int utf8_argc = 0;
+    char **utf8_argv = args_win32_utf8_argv(GetCommandLineW(), &utf8_argc);
+    if (utf8_argv) {
+        argc = utf8_argc;
+        argv = utf8_argv;
+    }
+#endif
+
     DEBUG_PRINT("npad starting...");
 
     // DPI awareness is declared in the embedded manifest (dpiAware true/PM +
@@ -73,8 +94,11 @@ int main(int argc, char *argv[]) {
     // Errors can be reported from here on (the command line, settings)
     npad_error_init();
 
-    // Parse command line arguments
+    // Parse command line arguments (everything it keeps, it copies)
     parse_command_line(argc, argv);
+#ifdef NPAD_PLATFORM_WINDOWS
+    args_win32_free_argv(utf8_argv, utf8_argc);
+#endif
 
     // Initialize thread safety
     if (!thread_safety_init()) {
