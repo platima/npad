@@ -219,9 +219,9 @@ static bool type_register(HKEY root, const AssocType *t) {
 
     // Explorer's Print verb, as notepad.exe's own txtfile has it: npad /p
     // prints the file, as notepad /p does
-    _snwprintf(sub, 255, L"%s\\%s\\shell\\print\\command", CLASSES, t->progid);
+    _snwprintf(sub, 255, L"%ls\\%ls\\shell\\print\\command", CLASSES, t->progid);
     sub[255] = L'\0';
-    _snwprintf(data, MAX_PATH + 15, L"\"%s\" /p \"%%1\"", exe);
+    _snwprintf(data, MAX_PATH + 15, L"\"%ls\" /p \"%%1\"", exe);
     data[MAX_PATH + 15] = L'\0';
     ok &= reg_set_sz(root, sub, NULL, data);
 
@@ -259,7 +259,7 @@ static void type_unregister(HKEY root, const AssocType *t) {
         bool restored = false;
         if (root == HKEY_LOCAL_MACHINE && t->stock) {
             wchar_t stock_key[256];
-            _snwprintf(stock_key, 255, L"%s\\%s", CLASSES, t->stock);
+            _snwprintf(stock_key, 255, L"%ls\\%ls", CLASSES, t->stock);
             stock_key[255] = L'\0';
             if (reg_key_exists(root, stock_key))
                 restored = reg_set_sz(root, sub, NULL, t->stock);

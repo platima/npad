@@ -1070,7 +1070,7 @@ static PrintProgress *progress_begin(HWND owner, const wchar_t *title) {
                                         progress_proc, 0);
     if (p->dlg) {
         wchar_t line[300];
-        _snwprintf(line, 299, L"Printing %s", title ? title : L"Untitled");
+        _snwprintf(line, 299, L"Printing %ls", title ? title : L"Untitled");
         line[299] = L'\0';
         SetDlgItemTextW(p->dlg, PROGRESS_ID_TITLE, line);
         // Modal to its owner while the job runs: messages are pumped, and the

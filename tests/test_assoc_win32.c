@@ -138,7 +138,7 @@ TEST_CASE(register_writes_the_installer_shape) {
     TEST_ASSERT(get_sz(HKEY_CURRENT_USER, CLASSES L"\\npad.txt\\shell\\print\\command", NULL, v,
                        MAX_PATH + 32),
                 "print command present (Explorer's Print verb)");
-    _snwprintf(expect, MAX_PATH + 31, L"\"%s\" /p \"%%1\"", g_exe);
+    _snwprintf(expect, MAX_PATH + 31, L"\"%ls\" /p \"%%1\"", g_exe);
     expect[MAX_PATH + 31] = L'\0';
     TEST_ASSERT(wcscmp(v, expect) == 0, "print command is the quoted exe, /p, then the quoted %1");
     TEST_ASSERT(key_exists(HKEY_CURRENT_USER, CLASSES L"\\npad.log\\shell\\print\\command"),
