@@ -377,7 +377,9 @@ test: test-file-ops test-atomic-save test-error test-encoding test-session test-
 # code leaves undefined from one relocatable link, then looks for each
 # definition in the stub sources. The Cocoa stub is plain C apart from its
 # #import, so it is also linked for real, as C, against the same object.
-STUB_BACKENDS = $(MACOS_SOURCES) $(LINUX_TERMINAL_SOURCES) $(WINDOWS_TERMINAL_SOURCES)
+# Only the ui_*.c backends: the Windows terminal build also links helpers
+# (args_win32.c, the wide command line) that are not a UI backend.
+STUB_BACKENDS = $(MACOS_SOURCES) $(LINUX_TERMINAL_SOURCES) $(filter src/platform/ui_%,$(WINDOWS_TERMINAL_SOURCES))
 STUB_CHECK_DIR = build/stub-check
 test-platform-stubs: $(STUB_CHECK_DIR)/shared.o $(STUB_CHECK_DIR)/npad-macos-stub
 	@echo "Running platform stub coverage check..."
