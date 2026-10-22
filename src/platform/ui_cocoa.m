@@ -362,6 +362,7 @@ bool ui_platform_is_window_maximized(const Window *window) {
     return false;
 }
 
+// Stub: no other npad windows to cascade past on this platform yet
 int ui_platform_count_main_windows(void) {
     return 0;
 }

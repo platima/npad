@@ -2,8 +2,13 @@
 # Install a pinned, checksum-verified llvm-mingw (clang + lld cross toolchain
 # for Windows) for the Windows on Arm build: `make windows-arm64`.
 # Usage: scripts/install-llvm-mingw.sh [dir]   (default /opt/llvm-mingw; needs curl, xz)
-# Then put <dir>/bin on PATH. Linux x86_64 hosts only (the CI runners); on
-# Windows, use the release's ucrt-x86_64.zip and the same `make windows-arm64`.
+# Then build with `make windows-arm64 LLVM_MINGW=<dir>`, or append (not
+# prepend) <dir>/bin to PATH: llvm-mingw also ships x86_64-w64-mingw32-gcc,
+# -dlltool and -windres, so ahead of MinGW GCC it would also build `make
+# windows` (the Makefile then switches that build to clang + lld rather than
+# failing, but it is no longer the GCC build that ships). Linux x86_64 hosts
+# only (the CI runners); on Windows, use the release's ucrt-x86_64.zip and the
+# same `make windows-arm64`.
 # Bump LLVM_MINGW_VERSION and LLVM_MINGW_SHA256 together; the sum is the
 # release asset's sha256 digest as GitHub shows it.
 # The ucrt flavour: Windows 10 and 11 ship the UCRT, and every Windows on Arm
@@ -22,3 +27,5 @@ echo "$LLVM_MINGW_SHA256  $tmp/llvm-mingw.tar.xz" | sha256sum -c -
 mkdir -p "$dir"
 tar -xJf "$tmp/llvm-mingw.tar.xz" -C "$dir" --strip-components=1
 "$dir/bin/aarch64-w64-mingw32-clang" --version | head -n1
+echo "Build with: make windows-arm64 LLVM_MINGW=$dir"
+echo "  (or append to PATH: export PATH=\"\$PATH:$dir/bin\" - not ahead of MinGW GCC)"
