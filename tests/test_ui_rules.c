@@ -114,6 +114,44 @@ TEST_CASE(font_size_format_and_round_trip) {
     TEST_ASSERT_EQ(10, ui_font_size_tenths_to_points(104), "below half rounds down");
 }
 
+// The GTK build's side of NP-187: Pango sizes are 1/1024 of a point, and a
+// half point written by Windows must come back out unchanged
+TEST_CASE(font_size_scaled) {
+    const int pango = 1024;
+    TEST_ASSERT_EQ(11 * pango, ui_font_size_tenths_to_scaled(110, pango), "11 pt");
+    TEST_ASSERT_EQ(10752, ui_font_size_tenths_to_scaled(105, pango), "10.5 pt");
+    TEST_ASSERT_EQ(6 * pango, ui_font_size_tenths_to_scaled(10, pango), "clamped to 6 pt");
+    TEST_ASSERT_EQ(72 * pango, ui_font_size_tenths_to_scaled(5000, pango), "clamped to 72 pt");
+
+    TEST_ASSERT_EQ(105, ui_font_size_scaled_to_tenths(10752, pango), "10.5 pt back");
+    TEST_ASSERT_EQ(110, ui_font_size_scaled_to_tenths(11 * pango, pango), "11 pt back");
+    TEST_ASSERT_EQ(103, ui_font_size_scaled_to_tenths(10 * pango + 307, pango),
+                   "10.2998 pt rounds to 10.3");
+    TEST_ASSERT_EQ(60, ui_font_size_scaled_to_tenths(0, pango), "unset size clamps to 6 pt");
+    TEST_ASSERT_EQ(60, ui_font_size_scaled_to_tenths(-pango, pango), "negative clamps");
+    TEST_ASSERT_EQ(720, ui_font_size_scaled_to_tenths(LLONG_MAX, pango), "no overflow");
+    TEST_ASSERT_EQ(FONT_SIZE_DEFAULT_TENTHS, ui_font_size_scaled_to_tenths(pango, 0),
+                   "a bad scale gives the default");
+
+    for (int t = 60; t <= 720; t++) {
+        int back = ui_font_size_scaled_to_tenths(ui_font_size_tenths_to_scaled(t, pango), pango);
+        if (back != t) {
+            TEST_ASSERT_EQ(t, back, "every tenth round-trips through Pango units");
+        }
+        back = ui_font_size_scaled_to_tenths(ui_font_size_tenths_to_scaled(t, 10), 10);
+        if (back != t) {
+            TEST_ASSERT_EQ(t, back, "and through a scale of 10");
+        }
+    }
+
+    // What Import Settings brings from Windows reads as the half point
+    settings_clear_all();
+    settings_set_string(FONT_SIZE_KEY, "10.5");
+    TEST_ASSERT_EQ(10752, ui_font_size_tenths_to_scaled(ui_font_size_setting_tenths(), pango),
+                   "a Windows half point shows as 10.5 pt, not the 11 pt default");
+    settings_clear_all();
+}
+
 TEST_CASE(goto_line_parse) {
     int line = -1;
     TEST_ASSERT_EQ(GOTO_LINE_OK, ui_goto_line_parse("1", 10, &line), "first line");
@@ -236,6 +274,7 @@ int main(void) {
     RUN_TEST(interval_settings_read_without_overflow);
     RUN_TEST(font_size_parse);
     RUN_TEST(font_size_format_and_round_trip);
+    RUN_TEST(font_size_scaled);
     RUN_TEST(goto_line_parse);
     RUN_TEST(fit_title_bar_leaves_reachable_windows_alone);
     RUN_TEST(fit_title_bar_pulls_the_caption_back);

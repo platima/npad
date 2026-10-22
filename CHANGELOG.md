@@ -548,14 +548,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Linux: each click on the line-ending or encoding part of the status bar
     no longer leaves a hidden menu behind.
   - Linux: file names that are not valid UTF-8 show correctly in the title
-    bar, Recent Files, the save and binary-file prompts and printouts, and
-    Save As keeps such a name unchanged.
+    bar, Recent Files, the save and binary-file prompts, printouts, the
+    Debug page and `npad --print` errors, and Save As keeps such a name
+    unchanged.
   - Linux: Recent Files lists ten files, as on Windows, and the tenth opens
     with Alt+0. On Windows the tenth no longer shares Alt+1 with the first.
   - Linux: New Window and recovered windows work again after npad is upgraded
     while it is running, and if a window cannot be started npad says so.
   - Windows: half-point font sizes such as 10.5 pt are kept. The font dialog
     only offers 6 to 72 pt, the sizes npad can display.
+  - Linux: a half-point font size such as 10.5 pt, from the font chooser or
+    imported from the Windows build, is kept, shown and printed at that size
+    instead of falling back to 11 pt.
   - Windows: in a High Contrast theme, the default Light scheme (and the
     System scheme) uses the theme's colours, as Notepad does, and updates as
     soon as High Contrast is turned on or off.

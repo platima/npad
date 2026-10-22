@@ -383,9 +383,10 @@ page (Ctrl+Shift+., or Shift+click Preferences). Differences:
 - **Format > Font...** is GTK's font chooser. It edits the font for the font
   type the window is showing (monospace, proportional or OpenDyslexic) and
   the shared size, weight and italic keys, exactly as on Windows; Appearance
-  has buttons for the monospace and proportional fonts directly. Sizes are
-  whole points here: a half-point size saved by the Windows build (`"10.5"`)
-  is not understood and shows at the 11 pt default until a size is chosen.
+  has buttons for the monospace and proportional fonts directly. The size
+  is kept to a tenth of a point and stored as the Windows build stores it
+  (`"11"`, `"10.5"`), so a half-point size imported from Windows shows,
+  prints and saves back unchanged.
 
 ### Check for Updates on Linux
 
@@ -739,7 +740,7 @@ How typing and Find behave.
 | `theme` | string | `light` | Colour scheme: `light`, `dark`, `system` (follow OS), `solarized-light`, `solarized-dark`. On Linux, `system` follows the desktop's light/dark preference live (the xdg-desktop-portal `color-scheme` setting, or GTK's own when there is no portal). On Windows with a High Contrast theme on, `light` and `system` use the High Contrast window and text colours, as Notepad does, and follow it when it is turned on or off; Dark and the Solarized schemes keep their own colours. |
 | `monospace_font` | string | `Consolas` (Linux: `Monospace`) | Face used in monospace mode (picker button). On Linux the default is fontconfig's `Monospace`, since Consolas is not there. |
 | `proportional_font` | string | `Segoe UI` (Linux: `Sans`) | Face used in proportional mode (picker button). |
-| `font_size` / `font_weight` / `font_italic` | number/int/bool | `11`/`400`/`false` | Shared font metrics, set via the font pickers or Format > Font. `font_size` is 6-72 points; on Windows it may be a half point (`"10.5"`), and whole sizes are stored as plain integers (`"11"`). The Linux build reads whole points only. `font_weight` is 100-900 on both platforms. Printing uses the same weight and italic, at the nearest whole point (10.5 prints at 11). |
+| `font_size` / `font_weight` / `font_italic` | number/int/bool | `11`/`400`/`false` | Shared font metrics, set via the font pickers or Format > Font. `font_size` is 6-72 points; it may be a half point (`"10.5"`; the Linux font chooser keeps any tenth), and whole sizes are stored as plain integers (`"11"`), which older versions also read. `font_weight` is 100-900 on both platforms. Printing uses the same weight and italic, on Windows at the nearest whole point (10.5 prints at 11); the Linux build prints the size as it is. |
 | `opendyslexic_enabled` | bool | `false` | Use the OpenDyslexic font (reading assistance). Requires the font to be installed; reverts with a hint if it is not. |
 | `opendyslexic_font` | string | `OpenDyslexic` | Face used when OpenDyslexic mode is on. |
 | `status_bar_visible` | bool | `true` | Show the status bar (also View > Status Bar). |
@@ -1245,9 +1246,10 @@ folder at all without it) and ignored by the npad you install.
   own width, so the editor's word-wrap setting does not affect the output:
   lines too long for the printable width are re-wrapped there, broken at a
   space rather than mid-word. The page uses the font that window is currently
-  showing, with its weight and italic, at the same point size (a half-point
-  size prints at the nearest whole point, 10.5 at 11). An emoji or other
-  character outside the Basic Multilingual Plane is never split across lines.
+  showing, with its weight and italic, at the same point size (on Windows a
+  half-point size prints at the nearest whole point, 10.5 at 11; on Linux it
+  prints as it is). An emoji or other character outside the Basic
+  Multilingual Plane is never split across lines.
   - While a job is prepared and sent, a small window shows which page is being
     sent ("Printing *name*", "Sending page N of M") and has a **Cancel**
     button; the document is disabled meanwhile. Cancelling there, or in a

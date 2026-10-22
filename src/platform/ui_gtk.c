@@ -30,6 +30,7 @@
 #include "../core/settings.h"
 #include "../core/startup_prof.h"
 #include "../core/time_format.h"
+#include "../core/ui_rules.h"
 #include "print_gtk.h"
 
 // Status refreshes are coalesced: caret movement and scrolling fire per
@@ -396,7 +397,8 @@ static void apply_view_css(Window *window) {
     const char *default_face = NPAD_GTK_DEFAULT_MONO_FONT;
     const char *key = active_font_key(window, &default_face);
     char *face = settings_get_string(key, default_face);
-    int size = clamp_int(settings_get_int("font_size", 11), 6, 72);
+    // Tenths of a point: a half point saved by Windows ("10.5") is kept
+    int size_tenths = ui_font_size_setting_tenths();
     int weight = clamp_int(settings_get_int("font_weight", 400), 100, 900);
     bool italic = settings_get_bool("font_italic", false);
 
@@ -411,7 +413,7 @@ static void apply_view_css(Window *window) {
     // g_ascii_dtostr, not printf: a locale with a decimal comma would write
     // "10,5pt", which CSS rejects - silently, leaving the old font in place
     char points[G_ASCII_DTOSTR_BUF_SIZE];
-    g_ascii_dtostr(points, sizeof(points), size * window->zoom / 100.0);
+    g_ascii_dtostr(points, sizeof(points), size_tenths / 10.0 * window->zoom / 100.0);
 
     char *theme = settings_get_string("theme", "light");
     const char *bg = NULL;
@@ -1315,7 +1317,7 @@ static void print_document(Window *window, bool preview) {
         .text = text,
         .title = title,
         .font_family = face,
-        .font_size = clamp_int(settings_get_int("font_size", 11), 6, 72),
+        .font_size = ui_font_size_setting_tenths() / 10.0,
         .font_weight = clamp_int(settings_get_int("font_weight", 400), 100, 900),
         .font_italic = settings_get_bool("font_italic", false),
     };
@@ -2089,10 +2091,16 @@ int ui_platform_count_main_windows(void) {
 
 static void print_file_error(const char *what, const char *detail) {
     fprintf(stderr, "npad: %s%s%s\n", what, detail ? ": " : "", detail ? detail : "");
+    // Either may hold the file name's bytes; the dialog takes UTF-8 only
+    char *shown = npad_gtk_display_text(what);
     GtkWidget *dialog = gtk_message_dialog_new(NULL, GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
-                                               GTK_BUTTONS_OK, "%s", what);
-    if (detail && detail[0])
-        gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dialog), "%s", detail);
+                                               GTK_BUTTONS_OK, "%s", shown);
+    g_free(shown);
+    if (detail && detail[0]) {
+        shown = npad_gtk_display_text(detail);
+        gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dialog), "%s", shown);
+        g_free(shown);
+    }
     gtk_window_set_title(GTK_WINDOW(dialog), "npad");
     gtk_dialog_run(GTK_DIALOG(dialog));
     gtk_widget_destroy(dialog);
@@ -2137,13 +2145,14 @@ int ui_platform_print_file(const char *path) {
     const char *default_face = NPAD_GTK_DEFAULT_MONO_FONT;
     const char *key = font_key_for(mono, &default_face);
     char *face = settings_get_string(key, default_face);
-    char *title = g_path_get_basename(path);
+    // The &f header and the job name are UTF-8 text, whatever the name's bytes
+    char *title = g_filename_display_basename(path);
 
     NpadPrintDoc doc = {
         .text = text,
         .title = title,
         .font_family = face,
-        .font_size = clamp_int(settings_get_int("font_size", 11), 6, 72),
+        .font_size = ui_font_size_setting_tenths() / 10.0,
         .font_weight = clamp_int(settings_get_int("font_weight", 400), 100, 900),
         .font_italic = settings_get_bool("font_italic", false),
     };

@@ -38,6 +38,7 @@
 #include "../core/settings_import.h"
 #include "../core/startup_prof.h"
 #include "../core/tab_stops.h"
+#include "../core/ui_rules.h"
 #include "../core/update_check.h"
 #include "../main.h"
 
@@ -554,13 +555,14 @@ static void load_widgets(void) {
 // shared size / weight / italic keys, exactly what apply_view_css reads
 static void choose_font(GtkWindow *parent, const char *font_key, const char *default_face) {
     char *face = settings_get_string(font_key, default_face);
-    int size = settings_get_int("font_size", 11);
+    int size_tenths = ui_font_size_setting_tenths(); // "10.5" from Windows stays 10.5
     int weight = settings_get_int("font_weight", 400);
     bool italic = settings_get_bool("font_italic", false);
 
     PangoFontDescription *initial = pango_font_description_new();
     pango_font_description_set_family(initial, face ? face : default_face);
-    pango_font_description_set_size(initial, size * PANGO_SCALE);
+    pango_font_description_set_size(initial,
+                                    ui_font_size_tenths_to_scaled(size_tenths, PANGO_SCALE));
     pango_font_description_set_weight(initial, (PangoWeight) weight);
     pango_font_description_set_style(initial, italic ? PANGO_STYLE_ITALIC : PANGO_STYLE_NORMAL);
     free(face);
@@ -583,8 +585,10 @@ static void choose_font(GtkWindow *parent, const char *font_key, const char *def
                     settings_set_string(font_key, family);
                 g_free(family);
             }
-            int points = (pango_font_description_get_size(chosen) + PANGO_SCALE / 2) / PANGO_SCALE;
-            settings_set_int("font_size", points < 6 ? 6 : (points > 72 ? 72 : points));
+            // To the nearest tenth, stored as Windows does ("11", "10.5"),
+            // so a half point survives and a whole size stays an integer
+            ui_font_size_set_tenths(ui_font_size_scaled_to_tenths(
+                pango_font_description_get_size(chosen), PANGO_SCALE));
             int new_weight = (int) pango_font_description_get_weight(chosen);
             settings_set_int("font_weight",
                              new_weight < 100 ? 100 : (new_weight > 900 ? 900 : new_weight));
@@ -1340,25 +1344,38 @@ static void build_associations(GtkWidget *notebook) {
 // Debug page (hidden: Ctrl+Shift+. or Shift+click on Preferences)
 // ---------------------------------------------------------------------------
 
+// "label: value\n" with value (a path, or an environment string, which hold
+// bytes rather than text) in its UTF-8 display form: a GtkTextBuffer rejects
+// invalid UTF-8, and Copy Diagnostics hands the same text to the clipboard
+static void append_shown(GString *out, const char *label, const char *value, const char *suffix) {
+    char *shown = npad_gtk_display_text(value ? value : "?");
+    g_string_append_printf(out, "%s: %s%s\n", label, shown, suffix ? suffix : "");
+    g_free(shown);
+}
+
 static char *build_diagnostics_text(void) {
     GString *out = g_string_new(NULL);
     g_string_append_printf(out, "npad %s\n", NPAD_VERSION);
 
     char *exe = g_file_read_link("/proc/self/exe", NULL);
-    g_string_append_printf(out, "Executable: %s\n", exe ? exe : "?");
+    append_shown(out, "Executable", exe, NULL);
     g_free(exe);
 
     g_string_append_printf(out, "GTK: %u.%u.%u (built against %d.%d.%d)\n", gtk_get_major_version(),
                            gtk_get_minor_version(), gtk_get_micro_version(), GTK_MAJOR_VERSION,
                            GTK_MINOR_VERSION, GTK_MICRO_VERSION);
     GdkDisplay *display = gdk_display_get_default();
+    // The display name is $DISPLAY / $WAYLAND_DISPLAY, a socket path or name
+    char *display_name = npad_gtk_display_text(display ? gdk_display_get_name(display) : "?");
     g_string_append_printf(out, "Display backend: %s (%s)\n",
-                           display ? G_OBJECT_TYPE_NAME(display) : "none",
-                           display ? gdk_display_get_name(display) : "?");
-    const char *session = g_getenv("XDG_SESSION_TYPE");
-    const char *desktop = g_getenv("XDG_CURRENT_DESKTOP");
-    g_string_append_printf(out, "Session: %s, desktop %s\n", session ? session : "?",
-                           desktop ? desktop : "?");
+                           display ? G_OBJECT_TYPE_NAME(display) : "none", display_name);
+    g_free(display_name);
+    char *session = npad_gtk_display_text(g_getenv("XDG_SESSION_TYPE"));
+    char *desktop = npad_gtk_display_text(g_getenv("XDG_CURRENT_DESKTOP"));
+    g_string_append_printf(out, "Session: %s, desktop %s\n", session[0] ? session : "?",
+                           desktop[0] ? desktop : "?");
+    g_free(session);
+    g_free(desktop);
     gchar *theme = NULL;
     g_object_get(gtk_settings_get_default(), "gtk-theme-name", &theme, NULL);
     g_string_append_printf(out, "GTK theme: %s\n", theme ? theme : "?");
@@ -1366,19 +1383,23 @@ static char *build_diagnostics_text(void) {
     char *colours = npad_gtk_theme_diagnostics();
     g_string_append(out, colours);
     g_free(colours);
-    const char *locale = setlocale(LC_ALL, NULL);
-    g_string_append_printf(out, "Locale: %s\n", locale ? locale : "?");
+    append_shown(out, "Locale", setlocale(LC_ALL, NULL), NULL); // From $LANG / $LC_*
 
     const char *settings_path = settings_get_file_path();
-    if (settings_path)
-        g_string_append_printf(out, "Settings: %s (%d entries)\n", settings_path, settings_count());
+    if (settings_path) {
+        char entries[32];
+        snprintf(entries, sizeof(entries), " (%d entries)", settings_count());
+        append_shown(out, "Settings", settings_path, entries);
+    }
 
     char *recovery_dir = editor_session_dir();
     if (recovery_dir) {
         int slot_count = 0;
         char **slots = session_list_slots(recovery_dir, &slot_count);
         session_free_slots(slots, slot_count);
-        g_string_append_printf(out, "Recovery: %s (%d slots)\n", recovery_dir, slot_count);
+        char slots_text[32];
+        snprintf(slots_text, sizeof(slots_text), " (%d slots)", slot_count);
+        append_shown(out, "Recovery", recovery_dir, slots_text);
         free(recovery_dir);
     }
 

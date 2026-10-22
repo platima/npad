@@ -102,6 +102,14 @@ void ui_font_size_set_tenths(int tenths);
 // point up.
 int ui_font_size_tenths_to_points(int tenths);
 
+// Sizes in 1/scale of a point (Pango's PANGO_SCALE units): tenths to that
+// unit, clamped first; and a size in that unit to tenths, rounded to the
+// nearest tenth and clamped (a non-positive scale gives the default size).
+// With a scale of 10 or more every tenth survives the round trip, so a
+// "10.5" read on Linux goes back out as "10.5".
+int ui_font_size_tenths_to_scaled(int tenths, int scale);
+int ui_font_size_scaled_to_tenths(long long size, int scale);
+
 // ---------------------------------------------------------------------------
 // Go To Line
 // ---------------------------------------------------------------------------

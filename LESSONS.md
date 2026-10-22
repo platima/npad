@@ -675,6 +675,15 @@ with `strtol` / `strtoll` and range checks, fall back to the default on
 malformed text, clamp in core (`ui_rules.c`), and compute timer periods in 64
 bits.
 
+**`font_size` looks like an int key, but it is a decimal.** Windows stores a
+half point as `"10.5"`; the strict `settings_get_int` rejects that and returns
+its default, so the GTK build (which read it that way) showed an imported
+10.5 pt font at 11 pt, and its chooser would have saved the 11 back. → Read
+and write it only through `ui_font_size_setting_tenths` /
+`ui_font_size_set_tenths`, converting to Pango units with
+`ui_font_size_tenths_to_scaled` / `ui_font_size_scaled_to_tenths`. A key one
+platform widens must be widened on every platform that reads it.
+
 ## Core: text model
 
 **Detect a limitation where you can prove it, not where you guessed it.** The

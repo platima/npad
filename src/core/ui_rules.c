@@ -157,6 +157,25 @@ int ui_font_size_tenths_to_points(int tenths) {
     return (ui_font_size_clamp_tenths(tenths) + 5) / 10;
 }
 
+int ui_font_size_tenths_to_scaled(int tenths, int scale) {
+    if (scale <= 0)
+        scale = 1;
+    // At most 720 tenths, so this stays in range for any int scale
+    long long scaled = ((long long) ui_font_size_clamp_tenths(tenths) * scale + 5) / 10;
+    return scaled > INT_MAX ? INT_MAX : (int) scaled;
+}
+
+int ui_font_size_scaled_to_tenths(long long size, int scale) {
+    if (scale <= 0)
+        return FONT_SIZE_DEFAULT_TENTHS;
+    if (size <= 0)
+        return ui_font_size_clamp_tenths(0);
+    // Past the clamp already; stop before the multiply could overflow
+    if (size > (long long) FONT_SIZE_MAX_PT * scale)
+        return FONT_SIZE_MAX_PT * 10;
+    return clamp_ll((size * 10 + scale / 2) / scale, FONT_SIZE_MIN_PT * 10, FONT_SIZE_MAX_PT * 10);
+}
+
 // ---------------------------------------------------------------------------
 // Go To Line
 // ---------------------------------------------------------------------------
