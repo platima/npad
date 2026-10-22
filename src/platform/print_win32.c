@@ -7,6 +7,7 @@
 
 #include "print_win32.h"
 #include "../core/settings.h"
+#include "../ui_interface.h"
 #include <commdlg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -154,7 +155,10 @@ static void page_setup_save(const PageSetup *ps) {
     settings_set_int("print_paper_size", ps->paper_size);
     settings_set_int("print_paper_width", ps->paper_width);
     settings_set_int("print_paper_length", ps->paper_length);
-    settings_save();
+    // Broadcast as well as save: otherwise every other window keeps printing
+    // with the old setup and writes it back over this one when it exits
+    if (settings_save())
+        ui_notify_settings_changed();
 }
 
 static wchar_t *wide_dup(const wchar_t *s) {

@@ -45,12 +45,12 @@ WINDOWS_ARM64_TARGET = npad-arm64.exe
 WIN_BUILD_DIR ?= build
 
 # Source files
-CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/startup_prof.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c src/core/find_seed.c src/core/tab_stops.c
+CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/settings_import.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/startup_prof.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c src/core/find_seed.c src/core/tab_stops.c
 SHARED_SOURCES = src/ui_interface.c
 
 # Test sources
 TEST_FRAMEWORK_SOURCES = tests/test_framework.c
-TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c src/core/find_seed.c src/core/tab_stops.c  # Core sources without UI dependencies
+TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/settings_import.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c src/core/find_seed.c src/core/tab_stops.c  # Core sources without UI dependencies
 
 # Windows GUI specific
 WINDOWS_GUI_SOURCES = src/platform/ui_win32.c src/platform/print_win32.c src/platform/assoc_win32.c src/platform/richedit_text.c
@@ -297,7 +297,7 @@ format-check:
 	find src/ -name "*.c" -o -name "*.h" | xargs $(CLANG_FORMAT) --dry-run --Werror
 
 # Testing targets
-test: test-file-ops test-atomic-save test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-recovery test-richedit-text test-editor-load test-editor
+test: test-file-ops test-atomic-save test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-recovery test-richedit-text test-editor-load test-editor test-settings-import
 	@echo "All tests completed"
 
 test-richedit-text: tests/test_richedit_text
@@ -365,6 +365,10 @@ test-tab-stops: tests/test_tab_stops
 test-recovery: tests/test_recovery
 	@echo "Running crash recovery tests..."
 	./tests/test_recovery
+
+test-settings-import: tests/test_settings_import
+	@echo "Running settings import tests..."
+	./tests/test_settings_import
 
 # Windows-only: the file type association module against a registry sandbox.
 # Cross-compiled here; run tests/test_assoc_win32.exe on Windows. Not part of
@@ -454,6 +458,10 @@ tests/test_editor: src/core/editor.c $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURC
 	@mkdir -p tests
 	$(CC) $(CFLAGS) -o $@ src/core/editor.c $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/stub_ui_editor.c tests/test_editor.c -lpthread
 
+tests/test_settings_import: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_settings_import.c
+	@mkdir -p tests
+	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+
 # Cleanup
 clean:
 	rm -f $(WINDOWS_GUI_TARGET) $(WINDOWS_TERMINAL_TARGET) $(MACOS_TARGET) $(LINUX_GTK_TARGET) $(LINUX_TERMINAL_TARGET)
@@ -462,10 +470,10 @@ clean:
 	rm -f src/platform/npad.res
 	rm -rf build
 	rm -rf dist/npad_* dist/npad-*.rpm dist/npad-*.pkg.tar.zst dist/npad-v*-portable-linux-*.tar.gz
-	rm -f tests/test_file_ops tests/test_atomic_save tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md tests/test_undo tests/test_find_seed tests/test_tab_stops tests/test_recovery tests/test_richedit_text tests/test_editor_load tests/test_editor
+	rm -f tests/test_file_ops tests/test_atomic_save tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md tests/test_undo tests/test_find_seed tests/test_tab_stops tests/test_recovery tests/test_richedit_text tests/test_editor_load tests/test_editor tests/test_settings_import
 	rm -f tests/test_assoc_win32.exe tests/test_richedit_boundary.exe tests/test_richedit_text.exe tests/test_editor_load.exe
 	rm -rf test_editor_home test_recovery_home
-	rm -f tests/test_file_ops.exe tests/test_atomic_save.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe tests/test_html_md.exe tests/test_undo.exe tests/test_find_seed.exe tests/test_tab_stops.exe tests/test_recovery.exe tests/test_editor.exe
+	rm -f tests/test_file_ops.exe tests/test_atomic_save.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe tests/test_html_md.exe tests/test_undo.exe tests/test_find_seed.exe tests/test_tab_stops.exe tests/test_recovery.exe tests/test_editor.exe tests/test_settings_import.exe
 
 # Installation (Linux). PREFIX defaults to /usr/local; DESTDIR stages the tree
 # for packaging. Only the GTK desktop app is installed: the ncurses variant is
@@ -591,4 +599,4 @@ help:
 	@echo "  DEBUG=1          - Enable debug build"
 	@echo "  VERSION          - Version string (auto-detected from git)"
 
-.PHONY: all windows windows-gui windows-arm64 windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm pacman tarball lint format format-check test test-file-ops test-atomic-save test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-recovery test-richedit-text test-editor-load test-editor help detect-platform
+.PHONY: all windows windows-gui windows-arm64 windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm pacman tarball lint format format-check test test-file-ops test-atomic-save test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-recovery test-richedit-text test-editor-load test-editor test-settings-import help detect-platform
