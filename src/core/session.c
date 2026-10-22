@@ -133,7 +133,7 @@ static unsigned random_nonce(void) {
 void session_make_slot_id(char *out, size_t size) {
     if (!out || size == 0)
         return;
-    // Nonce in the middle, pid last: npad up to 0.36.0-rc1 takes the pid from
+    // Nonce in the middle, pid last: npad up to 0.36.0-rc3 takes the pid from
     // after the last '-', so it still sees this window as alive
     snprintf(out, size, "%lx-%x-%x", (unsigned long) time(NULL), random_nonce() & 0xffffu,
              (unsigned) session_getpid());

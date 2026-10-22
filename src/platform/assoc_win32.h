@@ -77,11 +77,16 @@ int assoc_machine_cli(const wchar_t *changes);
 // token that is not an exact match is ignored. An empty list changes nothing.
 int assoc_machine_apply_changes(const wchar_t *changes);
 
-// A /MERGETASKS="..." argument for npad's own installer that selects exactly
-// the association tasks currently registered for the existing installation,
-// so an update does not quietly re-apply the task ticks from the original
-// install over changes made on this page. Returns false (and writes an empty
-// string) when there is no existing Inno installation to match.
+// A /MERGETASKS="..." argument for npad's own installer that only deselects:
+// it lists, negated (!assoc\<group>), each association group NOT registered
+// for the existing installation, so an update does not quietly re-apply the
+// task ticks from the original install over a group unticked on this page.
+// It never selects a task. An installer task does more than this page does
+// (it can take ownership of the file type), so registered groups are left to
+// setup's own record (LESSONS.md: "Never positively select an installer
+// task"). Returns false (and writes an empty string) when there is nothing to
+// pass: no Inno installation, both a per-user and an all-users one (setup
+// will ask which to upgrade), or every group registered.
 bool assoc_installer_merge_tasks(wchar_t *out, size_t cap);
 
 // The MSI's counterpart: the installer/npad.wxs Feature Ids (AssocText,

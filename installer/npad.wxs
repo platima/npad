@@ -9,8 +9,11 @@
 
   Scope: per-user by default; machine-wide with ALLUSERS=1 (or the documented
   dual-purpose form, ALLUSERS=2 MSIINSTALLPERUSER=""):
-    msiexec /i npad.msi /qn                  (current user)
-    msiexec /i npad.msi /qn ALLUSERS=1       (system-wide; needs elevation)
+    msiexec /i npad.msi /qn /norestart                (current user)
+    msiexec /i npad.msi /qn /norestart ALLUSERS=1     (system-wide; needs elevation)
+  Always pass /norestart with /qn: if npad.exe is in use and cannot be closed,
+  a quiet install otherwise reboots the PC without asking (exit code 3010
+  with it: a restart completes the install).
   Every scope-dependent choice below (PATH, fonts, extension defaults) tests
   MachineScope, which is true for both machine-wide spellings. Testing
   MSIINSTALLPERUSER alone was wrong: the package sets it to 1, and Windows
@@ -21,13 +24,15 @@
 
   Feature selection for deployments (defaults mirror the Inno installer):
     Main (required), PathEnv + OpenWith + AssocText + NotepadAlias + Fonts (on
-    by default), AssocMarkdown / AssocData / AssocConfig / AssocLog (off;
-    enable via e.g. ADDLOCAL=AssocData,AssocConfig).
+    by default), AssocMarkdown / AssocData / AssocConfig / AssocLog (off).
+    ADDLOCAL replaces the default set rather than adding to it, so list every
+    feature wanted, Main included (a list without Main installs no npad.exe):
+    e.g. ADDLOCAL=Main,PathEnv,OpenWith,AssocText,NotepadAlias,Fonts,AssocData.
     OpenWith only adds npad to the shell's "Open with" chooser for any file
     type; it never changes a default handler.
     PathEnv adds the install dir to PATH so 'npad' resolves from a terminal
-    (per-user PATH, or the machine PATH under ALLUSERS=1); suppress with
-    ADDLOCAL negation or a transform if unwanted.
+    (per-user PATH, or the machine PATH under ALLUSERS=1); leave it out of the
+    ADDLOCAL list to skip it, or REMOVE=PathEnv on an installed copy.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <?ifndef NpadExe ?>

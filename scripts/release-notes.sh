@@ -52,7 +52,7 @@ Every change in this release: [CHANGELOG.md](https://github.com/$repo/blob/$tag/
 
 **Windows** (\`x64\` for most PCs, \`arm64\` for Windows on Arm)
 - \`npad-$tag-setup-win-x64.exe\` / \`npad-$tag-setup-win-arm64.exe\` - installer (per-user by default; system-wide available)
-- \`npad-$tag-msi-win-x64.msi\` / \`npad-$tag-msi-win-arm64.msi\` - MSI for silent or managed deployment (\`msiexec /i <file> /qn\`)
+- \`npad-$tag-msi-win-x64.msi\` / \`npad-$tag-msi-win-arm64.msi\` - MSI for silent or managed deployment (\`msiexec /i <file> /qn /norestart\`)
 - \`npad-$tag-portable-win-x64.exe\` / \`npad-$tag-portable-win-arm64.exe\` - portable, no installation
 
 **Linux** (GTK 3 desktop app for X11 and Wayland; amd64, arm64 and riscv64, where riscv64 needs Debian 13 / Ubuntu 24.04 or newer)

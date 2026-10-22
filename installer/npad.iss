@@ -66,8 +66,9 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ChangesAssociations=yes
 ; The 'addtopath' task edits PATH via [Code]; broadcast the change at the end
 ChangesEnvironment=yes
-; Close a running npad so its exe can be replaced (npad's own save prompt still
-; runs), but do NOT let the Restart Manager silently bring it back. Setup
+; Close a running npad so its exe can be replaced (npad shows no save prompt:
+; it parks unsaved documents for the next start, and refuses only when it
+; cannot park them), but do NOT let the Restart Manager bring it back. Setup
 ; relaunches it itself, and only when there was something to relaunch: a
 ; [Run] checkbox interactively, CurStepChanged(ssPostInstall) automatically
 ; for a per-user silent install. DeinitializeSetup covers a cancelled or

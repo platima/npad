@@ -17,8 +17,8 @@
     left running and reported with its PID, for the user to deal with.
   - npad runs against a throwaway profile, never the real settings.json or
     crash-recovery folder. npad finds its settings through
-    SHGetFolderPath(CSIDL_APPDATA), which follows USERPROFILE (APPDATA= alone
-    does not move it) unless the user's AppData is redirected; that is
+    SHGetKnownFolderPath(FOLDERID_RoamingAppData), which follows USERPROFILE
+    (APPDATA= alone does not move it) unless the user's AppData is redirected; that is
     checked before anything starts, and the real settings.json's hash is
     compared before and after as a tripwire.
 #>

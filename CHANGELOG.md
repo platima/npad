@@ -8,33 +8,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.36.0] - Unreleased
 
 ### ✨ Highlights
+- **Saving can no longer cost you the file** (Windows and Linux). A save is
+  flushed to disk before it replaces the original, so a power cut just after
+  Save cannot leave an empty file. It keeps the file's permissions, owner and
+  attributes (on Linux an SSH key stays private and a script keeps its execute
+  bit; on Windows a downloaded file keeps its Mark-of-the-Web), and it saves
+  through a symbolic link instead of replacing it. A file in a folder you
+  cannot write to now saves in place, with a safety copy. npad asks before
+  overwriting bytes it could not read exactly, auto-save never overwrites a
+  change another program made, and on Windows lines ending in CR CR LF are no
+  longer joined when such a file is opened and saved.
+- **Unsaved work and settings are kept in more cases** (Windows and Linux). On
+  Linux, logging out, shutting down or closing the terminal npad was started
+  from now keeps unsaved documents and brings them back on the next start, as
+  Windows already did. Recovered documents are no longer deleted when the
+  "npad may have closed unexpectedly" question is dismissed or interrupted.
+  With several npad windows open, closing one no longer undoes settings
+  changed in another, and importing the wrong file in Preferences > Backup no
+  longer wipes your preferences.
+- **Windows: non-English file and user names work.** Files such as Résumé.txt,
+  or Japanese names on a Western system, now open when double-clicked in
+  Explorer, chosen with Open with or Send To, or named on the command line.
+  Users whose profile folder has a name like `C:\Users\José` keep their
+  settings, recent files and crash recovery, and can update npad with unsaved
+  work.
+- **More like Notepad** (Windows and Linux). A file whose first line is `.LOG`
+  gets the time and date added at the end each time it is opened. Starting
+  npad with a file that does not exist offers to create it, and
+  `npad /p file.txt` prints straight to the default printer. The Insert key
+  no longer switches on a hidden overtype mode, and Ctrl+E no longer changes
+  the line ending. On Windows, tab characters line up every 8 characters as
+  in Notepad, and printing shows its progress with a Cancel button.
 - **Tab can insert spaces instead of a tab character** (Windows and Linux).
-  Turn on *Tab key inserts spaces up to the next tab stop* in Preferences >
-  General and Tab types just the spaces that reach the next stop (width 1-16,
-  default 4), so text lines up whatever it follows. Off by default, as in
-  Notepad; a selection is replaced, one Tab is one undo step, Shift+Tab is
-  untouched, and the Markdown Spaces indent follows the same width.
-- **Linux: Check for Updates.** Help > Check for Updates tells you when a
-  newer npad is out and how to get it the way you installed it: your system's
-  updater (or the `apt` / `dnf` / `pacman` command) when npad came from its
-  repository, the repository or a download when you installed a package by
-  hand, the release page for a portable copy. It never downloads or installs
-  anything itself. Preferences gains the Updates page, off by default as on
-  Windows.
-- **npad for Arch Linux.** Each release now has a native pacman package for
-  x86_64, aarch64 (Arch Linux ARM) and riscv64 (the Arch RISC-V port), and
-  the signed repository at <https://pkg.npad.dev> serves it, so on Arch
-  `pacman -Syu` keeps npad current (the install commands are in the README;
-  `install.sh` does them for you). An `npad-bin` package for the AUR is ready
-  to publish.
-- **A portable Linux download.** Each release now has
-  `npad-v<version>-portable-linux-x86_64.tar.gz` (and `-aarch64`, `-riscv64`) beside the
-  .deb and .rpm: unpack it and run `./npad`, on any glibc distro with GTK 3,
-  including ones with no .deb or .rpm such as Arch. Its README.txt gives the
-  commands to add npad to your applications menu under `~/.local`. It is the
-  same binary the packages install; for automatic updates, the apt and dnf
-  repositories at <https://pkg.npad.dev> remain the recommended route.
-- **Linux: Ctrl+Tab switches Preferences pages**, as it does on Windows.
+  Turn on *Insert spaces up to the next tab stop* under *Tab key* in
+  Preferences > Editor, and Tab types just the spaces that reach the next stop
+  (*Tab width* 1-16, default 4), so text lines up whatever it follows. Off by
+  default, as in Notepad; a selection is replaced, one Tab is one undo step,
+  Shift+Tab is untouched, and the Markdown Spaces indent follows the same
+  width.
+- **Linux: more ways to install and update npad.** Each release has a native
+  pacman package for Arch Linux (x86_64, aarch64 and riscv64), served by the
+  signed repository at <https://pkg.npad.dev> so `pacman -Syu` keeps npad
+  current (an `npad-bin` AUR package is ready to publish), and a portable
+  `npad-v<version>-portable-linux-<arch>.tar.gz` for any glibc distro with
+  GTK 3 that has no npad package. Help > Check for Updates tells you when a
+  newer npad is out and how to get it the way you installed it; it never
+  installs anything itself, and the launch check is off by default, as on
+  Windows. For automatic updates, the apt, dnf and pacman repositories remain
+  the recommended route.
 
 ### 🆕 Features
 - **Tab inserts spaces** (Windows and Linux; `tab_inserts_spaces`, default
@@ -44,8 +65,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   character already on the line advances to the next stop like any other.
   A selection is replaced, exactly as Notepad replaces it with a tab. One
   press is one undo step. Ctrl, Alt and Shift+Tab are left alone. It is a
-  general editing option, so it sits on the General page rather than
-  Markdown, and works without Basic Markdown support. The arithmetic is in
+  general editing option, so it sits on Preferences > Editor (*Tab key* >
+  *Insert spaces up to the next tab stop*, with *Tab width*) rather than the
+  Markdown page, and works without Basic Markdown support. The arithmetic is in
   `core/tab_stops` with unit tests, shared by both builds; both apply it
   live to every open instance.
 - **The Markdown tools' Spaces indent uses the same width** while Tab
@@ -107,6 +129,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `~/.local` steps. Releases attach it with a `.sha256` (so `CHECKSUMS.txt`
   lists it), release validation checks each tarball's ELF architecture, and
   the release notes list it under Linux downloads.
+- **Notepad's .LOG** (Windows and Linux, as in Notepad). A file whose first
+  line is exactly `.LOG` gets a line break, the current time and date (as
+  Edit > Time/Date inserts them) and another line break at the end each time
+  it is opened, with the caret there, ready for the next entry. It is one
+  undoable edit, and nothing is written until you save. Reload from disk and
+  crash recovery do not add a stamp.
+- **A missing file named on the command line can be created** (Windows and
+  Linux). Starting npad with a file name that does not exist now asks, as
+  Notepad does, "Cannot find the ... file. Do you want to create a new
+  file?". Yes creates the file and opens it, so Save goes straight back to
+  that name; No starts an Untitled document.
+- **Print without a dialog** (Windows and Linux). `npad /p file.txt`
+  (Windows) and `npad --print file.txt` (both) print a file straight to the
+  default printer, with no print dialog, then exit, as `notepad /p` does.
+  Before, `/p` was opened as a file name. It uses the Defaults page's font and
+  Page Setup's margins, paper and header/footer, and exits with 0 when
+  printed, 2 when cancelled and 1 when it could not print (on Linux, "There
+  is no printer to print to." when there is none). On Windows, Explorer's Print
+  command for the file types npad is registered for runs it, from both
+  installers and Preferences > Associations.
+- **Printing shows its progress** (Windows and Linux). On Windows a small
+  window shows which page is being sent and has a Cancel button; before, npad
+  simply stopped responding until the job had spooled. On Linux, GTK's
+  progress window, with Cancel, is shown while the job is sent.
+- **Paste as Markdown understands more** (Windows and Linux): tables
+  (including cells copied from Excel) become Markdown tables, code copied from
+  VS Code or Windows Terminal becomes a fenced code block, and Word's bullet
+  and numbered lists become Markdown lists.
 
 ### 🔄 Changed
 - **Preferences gain an Editor page** (Windows and Linux): *Fill Find with
@@ -120,6 +170,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Linux: About matches Windows** - the author is named in the text, and
   GTK's Credits button, which the Windows About box has no counterpart for,
   is gone.
+- **Windows: tab characters line up every 8 characters**, as in Notepad,
+  instead of every half inch, so Makefiles, TSV files and tab-indented code
+  look the same at any font size, zoom level and display scale.
+- **Ctrl+E no longer cycles the line ending** (Windows and Linux). It changed
+  the file in a way Undo could not reverse, on the key Windows 10 Notepad uses
+  for Search with Bing. Use Format > Line Endings, or click the line ending in
+  the status bar.
+- **F3 after closing Find or Replace** searches for whatever was in the Find
+  box, even if you never pressed Find Next (Windows and Linux). Before, this
+  depended on whether Highlight all matches was on.
+- **Reset All Preferences now also resets "Wrap around by default"** to off
+  (Windows and Linux). The other Find/Replace options and the search history
+  are still kept, and both platforms now reset from one shared list.
+- **Crash-recovery snapshots are written only when the document has
+  changed** since the last one (Windows and Linux), so a large unsaved file no
+  longer briefly freezes the window every 30 seconds.
+- **Linux: undo history is also capped at 256 MB of text.** The oldest steps
+  go first and the newest is always kept, so long sessions of Replace All on
+  a big file cannot use unbounded memory.
+- **Print Preview takes the same keys on Windows and Linux**: Page Up/Down,
+  Home/End and +/- each work with or without Ctrl, and + also works on the =
+  key and the keypad.
+- **Windows: Page Setup shows margins in millimetres on metric systems**, as
+  Notepad does. Saved margins keep their exact values.
+- **Linux: File > Open starts in the current document's folder**, or in the
+  folder of the most recent file.
+- **A settings.json that cannot be read in full is kept** as
+  `settings.json.corrupt` before npad saves a repaired file, so nothing in it
+  is lost for good (Windows and Linux).
+- **Pre-release (rc) builds are told about newer pre-releases** as well as
+  final releases, and "View the release notes" opens that release's own page
+  (Windows and Linux).
+- **Windows: the Install now question says what will happen**: unsaved
+  documents come back as they were, and windows with nothing unsaved are not
+  reopened.
+- **Windows: npad's manifest** now declares that it supports Windows 10 and
+  11, runs without elevation (asInvoker) and accepts long paths.
+- **Checking downloads**: the release notes and `CHECKSUMS.txt` now say to run
+  `sha256sum -c --ignore-missing CHECKSUMS.txt` in the download folder, which
+  checks just the files you downloaded instead of failing on the ones you did
+  not (on Windows, compare `Get-FileHash` or `certutil -hashfile` with the
+  file's line).
 
 ### 🐛 Fixed
 - **Arch package: a pre-release no longer looks like the final release.**
@@ -151,6 +243,532 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CHECKSUMS.txt`. `build-installers.ps1 -FileVersion` (passed the tag by
   installers.yml) now names the files; the version inside them stays the
   numeric one MSI and Inno Setup require.
+- **Saving and opening files**
+  - Linux: saving no longer changes a file's permissions or owner. A private
+    0600 file (an SSH key, `.netrc`, `.env`) stays private, scripts keep their
+    execute bit, set-uid and set-gid bits survive, and ACLs and extended
+    attributes are kept.
+  - Windows: saving keeps a file's permissions, owner, Hidden/System
+    attributes, creation date and Mark-of-the-Web, so a downloaded script
+    still triggers SmartScreen after you edit it.
+  - Saving through a symbolic link edits the file the link points to and
+    leaves the link in place (dotfile managers such as stow and chezmoi), and
+    saving one name of a hard-linked file updates every name.
+  - Saves are flushed to disk before they replace the original, so a power
+    cut just after Save can no longer leave an empty or zero-filled file. This
+    also covers crash-recovery snapshots.
+  - Files you can edit but whose folder you cannot write to (a web root,
+    `C:\ProgramData`, a Docker bind mount, a log another program holds open)
+    can now be saved, as in Notepad. npad writes them in place, keeps a safety
+    copy in its recovery folder while it does (not in `/tmp` or `%TEMP%`, so
+    the copy survives a power cut and reboot), and puts the original back if
+    anything goes wrong.
+  - Files with very long names or paths (about 80 CJK characters on Linux,
+    deep OneDrive folders on Windows) can now be saved.
+  - Files that npad cannot save back byte for byte now get a question before
+    Save overwrites them, and auto-save leaves them alone: UTF-8-with-BOM
+    files with invalid bytes, UTF-16 files with an odd byte count or broken
+    surrogate pairs, and on Windows ANSI files with invalid multi-byte
+    sequences.
+  - Windows: files containing characters the edit control cannot hold exactly
+    (the Unicode line and paragraph separators U+2028/U+2029, U+FFFD, U+FFFC,
+    BEL and some noncharacters) are no longer silently saved with
+    substitutes. Save explains this and asks for a different file name, and
+    auto-save leaves such files alone.
+  - Windows: lines ending in CR CR LF (common after a file went through Python
+    text mode, git autocrlf or an FTP ASCII transfer) are no longer joined
+    when the file is opened, reloaded, restored, pasted above a line or
+    inserted with Ctrl+drop, so saving no longer fuses them. Vertical tab
+    characters are kept on save instead of quietly becoming line breaks.
+  - Save As onto the file that is already open gets Save's protections: npad
+    asks before writing over bytes it could not read exactly, and refuses to
+    overwrite a file it could load only part of (binary data) instead of
+    relying on the system's "replace?" prompt.
+  - Save As on a file npad could only partly load (one with binary data)
+    suggests "<name> (text).txt" and refuses to overwrite the original under
+    any name, including a hard link.
+  - A Save As that failed or was declined no longer switches the document to
+    the encoding chosen in the dialog, so the next Ctrl+S cannot silently
+    rewrite the original in that encoding.
+  - Documents restored after a crash, an update or a restart keep these
+    protections. npad remembers (or checks the original again) whether the
+    file was only partly loaded, held bytes it could not decode or, on
+    Windows, characters the edit control cannot hold, so neither Save nor
+    auto-save overwrites it without asking.
+  - If a file cannot be shown at all (too large, or out of memory), Open and
+    Reload say so and leave the current document as it was. Before, npad
+    could bind the new file name to the old text, and Save would write that
+    text over the new file. Save and Save As also explain when npad cannot
+    read the document's text back, and on Windows such a save fails instead
+    of writing part of the document.
+  - Files over 2 GB are refused with a clear "too large to open" message. On
+    Linux such a file (opened or Ctrl+dropped in) used to show an empty or
+    partial document that Save could write over the original. On Windows the
+    large-file warning now appears for these files, and saves of 2 GB or more
+    no longer fail with "Failed to verify written data".
+  - Windows: a very large ANSI file (over about 1 GB of high-byte text) is
+    refused with an error. Before, it opened as an empty document that Save
+    would write over the file.
+  - UTF-16 files without a byte order mark open correctly at any length and
+    no longer trigger the "looks like a binary file" prompt, and saving them
+    no longer adds a byte order mark.
+  - Windows: saving as ANSI writes '?' for characters the code page cannot
+    hold, as the warning says, instead of look-alikes that change the meaning
+    (∞ was saved as 8, ł as l).
+  - Windows: on Chinese, Japanese and Korean systems, an invalid byte at the
+    end of a line in an ANSI file no longer merges that line with the next.
+    With Windows' "Beta: Use Unicode UTF-8" option on, ANSI files are read in
+    the system's legacy code page instead of becoming replacement characters.
+  - Linux: ANSI files from Windows show curly quotes, dashes and the euro sign
+    correctly (read as Windows-1252, not Latin-1), and typing € in an ANSI
+    document saves it instead of '?'.
+  - A file with equal numbers of two kinds of line ending is no longer saved
+    with a third kind it never used (for example LF + CR becoming CRLF).
+  - Reload from disk says why when the file cannot be read (for example while
+    another program has it locked) instead of silently doing nothing, and
+    asks first when the file has been replaced by a binary or very large one,
+    as Open does.
+  - Ctrl+dragging a file into npad asks first, as Open does, when the file
+    looks binary, is over the large-file warning size or can only be partly
+    read, and says so when the file cannot be read. On Windows a failed read
+    used to do nothing.
+  - Windows: files with non-English names (for example Résumé.txt, or
+    Japanese names on a Western system) open when double-clicked in Explorer,
+    chosen with Open with or Send To, or named on the command line. npad used
+    to read its command line in the ANSI code page.
+  - Windows: files in folders with very long paths can be chosen in the Open
+    dialog and dragged onto the window, and paths over 260 characters work
+    when Windows long paths are enabled. An Open or Save As dialog that fails
+    now says so instead of behaving like Cancel.
+  - Windows: "Could not open file" gives the real reason (for example "No
+    such file or directory"), not "Bad file descriptor".
+  - Linux: opening a folder says it is a folder, where before it showed an
+    "8796093022208.0 MB" warning and then "Out of memory".
+  - Linux: a change made on disk right after npad saves or opens a file (same
+    size, within the same second, for example by a formatter or `sed -i`) is
+    now detected.
+  - Windows: temporary files and crash-recovery snapshots in folders with
+    non-ASCII names (for example a user profile named Café) are deleted
+    properly.
+- **Auto-save**
+  - Auto-save no longer overwrites changes another program made to the file,
+    or recreates a file that was deleted or moved. It pauses and says so in
+    the status bar until you save. With Watch for file changes on, Ctrl+S on
+    a file another program has changed now asks before replacing it; No opens
+    Save As so you can keep both versions.
+  - Auto-save never writes while one of npad's own questions or file dialogs
+    is open, so "Don't Save" really means nothing was saved.
+  - Windows: a failing auto-save (a read-only or locked file, a lost network
+    share) no longer opens another error box every interval. The reason is
+    shown in the status bar instead.
+  - After you answer the save-time "changed by another program" question, the
+    separate "This file has changed on disk" dialog no longer appears on top
+    of the Save As dialog or an error box.
+- **Unsaved work and crash recovery**
+  - Linux: logging out, shutting down or restarting, closing the terminal npad
+    was started from, or losing the X display now keeps your unsaved work.
+    npad works with the desktop's session manager (GNOME, Cinnamon, MATE,
+    Xfce) and the system's shutdown, and brings the documents back on the next
+    start. An npad started with `nohup`, or in the background from a script,
+    still keeps running when its terminal closes.
+  - Recovered documents are no longer deleted when the "npad may have closed
+    unexpectedly" question is interrupted by an update, Close All, signing out
+    or shutting down, or (on Linux) closed with Esc or the close box. Only
+    answering No discards them; otherwise they are offered again next time.
+  - If a recovered document cannot be read (for example because antivirus has
+    it locked), npad says so and keeps it for the next launch instead of
+    deleting it.
+  - Choosing Don't Save and then New or Open no longer leaves the discarded
+    text behind to reappear after a later crash or update.
+  - A restored document is saved for recovery straight away, not only at the
+    next 30-second snapshot, and one brought back after an update stays
+    protected even with crash recovery turned off.
+  - Opening a file (by double-click, say) no longer hides documents that an
+    update or restart parked, or that a crash left behind. They reopen in
+    windows of their own, and crashed ones are still offered first.
+  - No more false "changed on disk" prompt for a document restored after an
+    update or a restart. A change made to the file while npad was closed is
+    still reported.
+  - Turning crash recovery off removes the recovery snapshots of every open
+    npad window, not just the one where it was switched off.
+  - Documents left half-restored by an interrupted recovery, or by a first
+    snapshot that was cut short, are offered again instead of staying hidden
+    on disk.
+  - Two npad windows started at the same moment no longer both offer the same
+    crashed documents. Before, answering No in one could delete what the
+    other was restoring.
+  - Crashed documents are no longer hidden when, after a reboot, their old
+    process number belongs to another program (on Linux, including another
+    user's program).
+  - An older npad (0.35, or a 0.36.0 release candidate) running next to
+    windows of this version no longer mistakes their live snapshots for crash
+    leftovers.
+  - Windows: the portable npad (or `npad-arm64.exe`, or a renamed copy) no
+    longer treats your other open npad windows as crashed and offers to
+    restore their documents.
+  - Windows: after a restart or an installer run, npad no longer leaves blank
+    Untitled windows when a normal launch has already restored the documents.
+  - Windows: with unsaved work that could not be kept safe (a full disk, an
+    unreachable profile), signing out or shutting down no longer loses it
+    silently. npad holds up the shutdown and says why.
+  - Windows: users whose profile folder has a non-English name (such as
+    `C:\Users\José`) keep their settings, recent files and window position,
+    get crash recovery, and can update or restart npad with unsaved work.
+    Before, all of these failed without an error.
+- **Settings**
+  - With several npad windows open, closing one no longer undoes settings
+    changed in another, and a settings change in one window no longer erases
+    another window's unsaved Recent Files entry, search options or search
+    history. npad now saves only what each window actually changed, merged
+    into the settings file as it is at that moment, and saves Recent Files and
+    the Find/Replace history as whole lists, so a file is never listed twice
+    and no gap can hide the rest of the history.
+  - Clear Recent Files sticks: another open npad window no longer writes the
+    old list back when it closes, and entries only another window had are
+    cleared too.
+  - If settings.json cannot be read at a given moment (for example while
+    another program holds it), npad keeps the settings it already has instead
+    of falling back to defaults and then saving those over your file.
+  - Import Settings accepts only an npad settings file. Picking the wrong file
+    (another program's settings.json, a text file, a file with nested values)
+    used to wipe every preference and recent file; now nothing changes and
+    npad says why. Your previous settings are kept as `settings.json.bak`, the
+    new file is written safely, so a full disk can no longer leave
+    settings.json half written, and a settings file re-saved as UTF-16 by
+    another editor now imports.
+  - Windows: after Import Settings the Preferences window closes, so pressing
+    OK can no longer put the old values back over the imported ones.
+  - Windows: Preferences saves only the settings you changed. Opening a tab no
+    longer freezes the large-file warning threshold at today's value or
+    undoes a change made in another window. Apply and OK save once, Cancel
+    saves nothing, and if a save fails npad tells you and keeps the window
+    open. A change another window saves while you press OK or Apply is picked
+    up once your Apply finishes, instead of discarding your changes.
+  - Linux: closing Preferences after a failed Apply no longer discards recent
+    files or search history from that session; only the settings the Apply
+    wrote are undone.
+  - Windows: File > Page Setup changes reach every open npad window, instead
+    of being undone when another window closed.
+  - Opening a file no longer permanently removes Recent Files entries on a
+    drive that is offline for the moment, such as a sleeping NAS or an
+    unplugged USB stick. On Windows they stay listed (opening a missing one
+    says so); on Linux they are hidden until the drive is back.
+  - A hand-edited or script-written settings.json is read correctly. Accented
+    characters written as `\u` escapes (as Python writes them) no longer come
+    out garbled, a nested value no longer causes every later setting to be
+    lost, a backslash in a setting's name no longer doubles on every save, and
+    numbers and true/false keep their JSON types when npad saves (5 stays 5,
+    not "5").
+  - A setting with an invalid value, such as "ten" for the Recent Files count
+    or an empty large-file limit, falls back to its default instead of reading
+    as 0 and silently turning the feature off.
+  - Windows: a very large auto-save interval, recovery snapshot interval or
+    large-file warning size can no longer overflow. Before, it could make
+    auto-save run every second or turn the large-file warning off. Values are
+    kept within the same ranges as on Linux, and Preferences shows the value
+    actually saved.
+  - Exported settings files are valid JSON even when a search term contains a
+    tab or other control character, and settings keep their order in the file
+    instead of reversing on every save.
+  - A settings.json too large to load (over 8 MB) is moved aside instead of
+    being read into memory to copy it, also when it grew after npad started.
+    A kept `settings.json.corrupt` is never overwritten; later copies are
+    named `settings.json.corrupt.1`, `.2` and so on.
+- **Find and Replace**
+  - Windows: Replace now replaces matches that differ only in the case of an
+    accented or other non-English letter (for example CAFÉ found for café).
+    Before, it skipped them and could keep finding the same match for ever.
+  - Linux: Replace now replaces matches that Find Next found written a
+    different way in Unicode, such as an accented letter stored as a letter
+    plus an accent mark, instead of skipping them.
+  - In the Replace dialog, Find Next and Replace always search down, as in
+    Windows Notepad. They no longer follow the Up/Down direction last chosen
+    in the Find dialog.
+  - Windows: a single Ctrl+Z undoes all of a Replace All, as on Linux,
+    instead of one Ctrl+Z per replacement. It is also faster on documents
+    with many matches.
+  - Windows: the status bar's "Match 2 of 5" disappears as soon as you type,
+    and no longer comes back a moment after you close Find.
+  - Windows: Highlight all matches updates when you pick an earlier search
+    from the drop-down list, and as soon as Find opens.
+  - Windows: pressing Ctrl+F or Ctrl+H while Find or Replace is open keeps
+    what you had typed in the box, as on Linux.
+  - Windows: Find/Replace options (Wrap around and Up/Down included) are saved
+    and shared with other npad windows as soon as you change them, as on
+    Linux, instead of only when you press a button. An open Find or Replace
+    dialog follows changes made in another window (Reset All Preferences
+    included), and closing it no longer puts the old options back.
+  - Linux: the Find and Replace drop-down lists show the terms you have just
+    searched for without having to close and reopen the dialog.
+- **Editing**
+  - Undo steps match what you did. On Linux a one-character paste, cut,
+    Delete, Replace or Replace All is its own step, so pasting "x" after
+    typing "abc" no longer undoes all four characters at once. On Windows a
+    Tab that inserts spaces, Enter on an empty Markdown bullet and inserted
+    Time/Date are each one step, instead of undoing together with the next
+    word you type.
+  - Pressing Insert no longer switches on a hidden overtype mode that
+    silently overwrote text (Windows and Linux). Notepad has no such mode.
+  - Linux: paste turns Windows line breaks into normal ones and no longer
+    carries Highlight all's colouring into the pasted text.
+  - Windows: changing the font or colour scheme in a document that contains
+    emoji no longer adds a hidden undo step. Redo survives, the first Ctrl+Z
+    undoes your real last edit, an unchanged file is no longer marked
+    modified, a backward selection stays backward, and the emoji keep their
+    colour glyphs.
+  - Windows: emoji no longer turn into boxes when you move the window to a
+    monitor with a different scaling, or reconnect over Remote Desktop at
+    another DPI.
+  - Windows: with Word Wrap on, the status bar's Col counts from the start of
+    the current line instead of the start of the document. Ln/Col no longer
+    copies the document on every caret move, so arrowing through large files
+    stays responsive.
+  - Windows: opening menus or pressing shortcuts such as Ctrl+S no longer
+    freezes npad for up to 40 seconds when a Recent Files entry is on a
+    sleeping network share.
+  - Windows: a second close request while the "Save changes?" prompt is open
+    no longer stacks another prompt on top.
+  - Windows: pasting reads the clipboard text safely even when another
+    program's clipboard data is missing its terminator.
+  - Go To Line opens with the current line filled in (Windows and Linux). An
+    out-of-range number shows a message and leaves the dialog open so you can
+    correct it, instead of closing it, and a very large number no longer
+    jumps to the top of a word-wrapped document.
+  - Linux: Time/Date (F5) and the print header's time leave out the seconds
+    in every locale and show a four-digit year, like Notepad. A non-UTF-8
+    locale no longer deletes the selected text instead of inserting the stamp.
+  - Linux: Select All leaves the caret at the end of the document, as in
+    Notepad.
+  - Linux: Ctrl+. and Ctrl+; no longer open GTK's emoji picker.
+  - Linux: with the Markdown tools or Tab-inserts-spaces on, an input method
+    (CJK, compose keys) gets Enter and Tab first, so confirming a composition
+    no longer continues a list or inserts spaces.
+  - Linux: opening the Edit menu, the right-click menu or Preferences no
+    longer stalls while npad waits on the clipboard owner or on xdg-mime.
+  - Linux: each click on the line-ending or encoding part of the status bar
+    no longer leaves a hidden menu behind.
+  - Linux: file names that are not valid UTF-8 show correctly in the title
+    bar, Recent Files, the save and binary-file prompts and printouts, and
+    Save As keeps such a name unchanged.
+  - Linux: Recent Files lists ten files, as on Windows, and the tenth opens
+    with Alt+0. On Windows the tenth no longer shares Alt+1 with the first.
+  - Linux: New Window and recovered windows work again after npad is upgraded
+    while it is running, and if a window cannot be started npad says so.
+  - Windows: half-point font sizes such as 10.5 pt are kept. The font dialog
+    only offers 6 to 72 pt, the sizes npad can display.
+  - Windows: in a High Contrast theme, the default Light scheme (and the
+    System scheme) uses the theme's colours, as Notepad does, and updates as
+    soon as High Contrast is turned on or off.
+  - Windows: with the Markdown tools on, the right-click menu no longer has
+    duplicate shortcut letters (U, T, D and P).
+  - Windows: the font dialog opened from Preferences blocks the Preferences
+    window while it is open.
+  - Windows: in Preferences > Defaults, the print header field's shortcut is
+    now Alt+H, so it no longer clashes with Alt+E for the default encoding.
+  - Windows: a fatal start-up error, such as the window failing to open, is
+    shown in a message box instead of npad silently not starting.
+  - Windows: the copyright line in npad.exe's file properties shows ©
+    instead of "Â©".
+- **Window position**
+  - Windows: with the taskbar at the top or left of the screen, the window no
+    longer creeps further up or left each time it opens, and a window whose
+    title bar had gone off-screen is moved back where it can be grabbed. On
+    monitors offset vertically, a window whose title bar is on one monitor and
+    most of its body on another is no longer moved down when npad starts.
+  - A window closed while maximized opens maximized straight away, without
+    first flashing at its normal size (Windows and Linux).
+  - Linux (X11): a window closed while maximized is restored to where it was,
+    not to the corner of the screen, even on window managers that send
+    several configure events while maximizing.
+- **Markdown tools and rich paste** (Windows and Linux)
+  - Sort Lines and Unique Lines are fast on large documents: a 100,000-line
+    log sorts in a fraction of a second instead of over a minute with the
+    window frozen.
+  - With Markdown support on, Ctrl+V (Lists paste) changes only content that
+    contains a list. Code copied from VS Code, terminal output and spreadsheet
+    cells paste as their normal text, with indentation and columns intact.
+  - Lists pasted from Google Docs, LibreOffice and similar apps keep each
+    bullet on the same line as its text. Line breaks and text after a nested
+    list stay indented under their item.
+  - Paste as Markdown from Google Docs no longer wraps the whole paste in
+    stray `**` lines, and keeps the document's real bold and italic.
+  - Paste as Markdown writes bold, italic, code and links only around real
+    text. Empty formatting no longer turns into a horizontal rule, and
+    emphasis no longer runs across paragraphs.
+  - Paste as Markdown nests items under numbered list items correctly, keeps
+    a list's starting number (and gives a list that starts above 1 right
+    after text its own paragraph), keeps a quote inside a list item in the
+    item and a list inside a quote its markers, keeps every column of a table
+    (merged cells included), keeps the `#` of a heading such as "Issue #", and
+    escapes text that Markdown would otherwise read as formatting (backticks
+    in code, brackets in link text, URLs with spaces). Line breaks are
+    removed from link and image addresses.
+  - Escapes in Convert Delimiters, Find/Replace and the custom indent prefix:
+    an emoji written as a `\u` surrogate pair (`\uD83D\uDE00`) now works, and
+    `\0` no longer silently cuts the text short.
+  - Unindent now removes a custom indent prefix that starts with spaces or a
+    tab (for example "  - " or a tab followed by "* ").
+- **Printing**
+  - Windows: ticking "Print to file" in the Print dialog asks where to save
+    the file, instead of sending the job to the printer anyway.
+  - Windows: cancelling Microsoft Print to PDF's save prompt no longer says
+    the document could not be printed.
+  - Windows: bold and italic editor fonts print, and show in Print Preview,
+    as bold and italic.
+  - Windows: Print Preview and printing of very long lines (for example a
+    large one-line JSON file) are much faster.
+  - Windows: printing no longer splits an emoji or other character outside
+    the Basic Multilingual Plane across two lines, or prints one that follows
+    a tab near the right margin past the margin.
+  - Windows: Print Preview follows a Windows light/dark switch under the
+    System colour scheme, opens on the same monitor as its document, and
+    turns one page per wheel notch, so a touchpad swipe no longer skips many
+    pages. Enter presses its focused toolbar button.
+  - Windows: Close All while Print Preview is open (or while a print dialog is
+    up) no longer leaves the document usable under its own save prompt. The
+    preview closes first, and a close that arrives during printing waits
+    until printing has finished. An update that finishes downloading while
+    Print Preview is open no longer closes the preview; the install prompt
+    appears once you close it.
+- **Updates** (Windows unless noted)
+  - Install now no longer closes every npad window when Windows refuses to
+    start the installer (antivirus, Smart App Control). The installer is
+    started first, and you are told why if it cannot run.
+  - A copy installed from the MSI now updates with the MSI, in the same
+    per-user or all-users scope, instead of gaining a second per-user install
+    in Add/Remove Programs. Only the copy the MSI installed updates through
+    it, so a portable copy on the same PC no longer upgrades the MSI install,
+    and an MSI update no longer brings back file associations you unticked
+    on Preferences > Associations.
+  - An update installer with a valid signature is no longer rejected as "not
+    valid" on a PC that has not yet cached the signing root certificate.
+  - An npad running as administrator now closes for an in-app update like the
+    others. Any window that does not close is named, with an option to try
+    again.
+  - In "prompt" or "download and install automatically" mode, saying "not
+    now" is remembered until you sign out, so each new window no longer
+    downloads and asks again. Two windows can no longer download the update
+    at the same time.
+  - Preferences > Updates refreshes after Check Now, and update messages
+    started there appear over the Preferences window.
+  - Help > Check for Updates while the start-up check is still running now
+    reports that check's result, instead of doing nothing (Windows and Linux).
+  - Update errors now say what happened, for example GitHub's rate limit,
+    instead of always "Could not reach github.com" (Windows and Linux).
+- **Installers** (Windows)
+  - Uninstalling an all-users npad no longer strips .txt, .log, .ini and .xml
+    of Windows' own file type (name, icon, New > Text Document). Setup now
+    claims a file type only when no other program owns it, and uninstall
+    hands back what was there.
+  - The MSI installed with `ALLUSERS=1` now installs the bundled fonts and
+    adds npad to the machine PATH, not just the installing account's PATH.
+  - Re-running setup with "Open 'notepad' with npad" or "Add npad to the PATH"
+    unticked now turns them off.
+  - Fonts installed for just you now work straight away, without signing out
+    first. This needs Windows 10 version 1803 or later: setup still runs on
+    any Windows 10 (Windows Server 2016 and 1607 LTSB included), but a
+    per-user install on an older build leaves the bundled fonts out, because
+    those builds have no per-user font store. OpenDyslexic is registered once,
+    under its OpenType name, not twice.
+  - npad comes back after a per-user silent install, started only once setup
+    has finished (so a font preset chosen with `/MERGETASKS=fontdefaults2`
+    shows straight away and is kept), and after a setup that was cancelled or
+    failed after closing it. Its windows are restored.
+  - An all-users install no longer offers to set the default fonts, which
+    changed the elevating administrator's settings instead of yours.
+- **Releases**
+  - Release downloads are complete from the moment a release appears.
+    Releases are now prepared privately and published only after every file
+    is attached and checked, so the in-app updater can no longer find a new
+    release whose installer is still uploading.
+  - `CHECKSUMS.txt` lists every download; it had silently left out the .deb
+    packages.
+  - Linux: a .deb built without nfpm (`make deb`'s fallback) now marks a
+    release candidate as one, so apt replaces it with the final release.
+
+### 🔒 Security
+- **Saves cannot be redirected** (Windows and Linux). Temporary files used
+  while saving now have random names and are created exclusively, so another
+  account cannot redirect a save with a planted link, and several npad
+  windows saving at once no longer break each other's saves.
+- **"Open with the default app" asks first** (Windows and Linux) when the
+  file is a program, script, shortcut or installer, and warns that opening it
+  may run it.
+- **Linux: crash-recovery snapshots and settings.json are private to your
+  account** (folders 0700, files 0600). An existing recovery folder is
+  tightened as soon as npad looks into it at startup, so leftovers from older
+  versions stop being readable by other users straight away.
+- **The internal `--recover` option only accepts npad's own recovery ids**
+  (Windows and Linux), so a crafted command line can no longer rename or
+  delete files elsewhere.
+- **Windows: the updater runs exactly the file it verified.** The download is
+  checked in memory, saved under a name of its own and kept locked until the
+  installer starts. A digitally signed npad accepts only an installer signed
+  by the same publisher.
+- **Windows: system DLLs load only from System32.** A portable npad run from a
+  folder such as Downloads can no longer be tricked into loading a planted
+  DLL that sits beside it.
+- **Windows: fewer senders for npad's own window messages.** Only an elevated
+  npad (Run as administrator) accepts them from lower-integrity processes, so
+  that settings changes, Close All and the update handoff reach it; a normal
+  npad accepts them only at its own integrity level.
+
+### 🔧 Internal
+- **Release checks come first.** A release stops before anything is built if
+  the tag, `src/main.h`, `npad.rc`, the CHANGELOG entry or (for a final
+  release) the AppStream metainfo disagree
+  (`scripts/check-release-version.sh`), and CI checks the same on every
+  change. A release is created as a draft,
+  filled, validated and only then published; `CHECKSUMS.txt` is built from
+  every asset's own `.sha256` and checked against a paginated asset listing.
+  Dry runs keep the `CHECKSUMS.txt` they would have published as the
+  `npad-dry-run-checksums` workflow artifact. `scripts/release.sh` runs the
+  gate and the local checks, then prints the dry-run and tag commands; it
+  tags and pushes only with `--push`.
+- **Pinned and least-privilege CI.** Workflow actions are pinned by commit,
+  the signing client and Inno Setup by version and hash, and every release
+  job gets only the permissions it needs. Dependabot's GitHub Actions bumps
+  target the linux integration branch instead of main.
+- **More checks in CI.** The unit tests run under ASan/UBSan, on Windows x64
+  with the compiler that builds the shipped npad.exe (once per job, with the
+  registry test behind the Makefile's `NPAD_ALLOW_REGISTRY_TESTS` gate), and
+  natively on Windows on Arm. CI checks that the x64 and arm64 builds still
+  delay-load their optional DLLs and that every file the installers reference
+  exists, and it now also runs for changes to README.md, DOCUMENTATION.md and
+  CHANGELOG.md.
+- **New test targets.** `make test-windows` builds the unit tests as Windows
+  programs and runs them when you are on Windows (the registry test only with
+  `NPAD_ALLOW_REGISTRY_TESTS=1`). `make test-sanitize` runs the unit tests
+  under AddressSanitizer and UBSan, and `make test-fuzz` runs seeded random
+  tests of the settings reader, crash-recovery files, HTML paste, the list
+  tools and update version ordering. `make test` gains suites for atomic
+  saves, the editor core, print pagination, time formats, RichEdit text
+  conversion, the release scripts and the platform stubs.
+- **Isolated, portable tests.** Each suite runs in its own temporary folder
+  with its own settings location, so the tests never write into the source
+  tree or touch your real npad settings. Test builds (`-DNPAD_TEST_HOOKS`)
+  keep their settings in `$NPAD_TEST_CONFIG_DIR`, and on Windows get no
+  settings folder at all without it. The tests pass on Windows itself: two
+  suites no longer crash, test files are written byte for byte, and every
+  test exe has an asInvoker manifest, so `test_update_check.exe` no longer
+  asks for administrator rights. A failing test no longer also prints PASSED,
+  and a test interrupted half way no longer makes every later run fail.
+- **Developer scripts leave your desktop alone** (Windows).
+  `measure-startup.ps1`, `probe-prefs.ps1` and `probe-installer.ps1` no
+  longer close or kill other programs. They touch only the npad or setup they
+  started, close it gracefully, run npad minimized without activating it and
+  with a temporary private profile, and report anything that would not exit.
+  `probe-prefs.ps1` defaults to the real Find (2107) and Replace (2108)
+  command IDs; its old example posted File > Save and Save As.
+- **Build fixes.** `make windows` builds even when llvm-mingw's bin folder
+  comes first on PATH, and `make windows-arm64 LLVM_MINGW=<dir>` finds
+  llvm-mingw without PATH. `make linux` no longer fails when the ncurses
+  development package is missing: it builds the desktop app and skips the
+  unfinished terminal stub, saying how to get it (headers found through a
+  CFLAGS `-I` count). The macOS stub links again, and `make test` checks that
+  every stub backend has all the functions the shared code needs.
+  `build-installers.ps1` requires WiX 6 (CI's 6.0.2) and says how to install
+  it. Wide format strings use `%ls` and `%hs` throughout.
 
 ## [0.35.0] - 2026-10-17
 

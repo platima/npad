@@ -978,7 +978,7 @@ static bool handle_markdown_tab(HWND hwnd) {
     return false; // Plain Tab types a tab, classic Notepad behavior
 }
 
-// "Tab inserts spaces" (Preferences > General; a general editing preference,
+// "Tab inserts spaces" (Preferences > Editor; a general editing preference,
 // not a Markdown one): a plain Tab types the spaces that reach the next tab
 // stop instead of a tab character. The column is counted in characters from
 // the start of the line by core/tab_stops, from the line's text converted to

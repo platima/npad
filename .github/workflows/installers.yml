@@ -105,8 +105,10 @@ jobs:
     needs: build-arm64-exe
     runs-on: windows-latest
     # The app registration's federated credential is bound to this GitHub
-    # environment (subject repo:platima/npad:environment:release), which is
-    # matched on every ref - a Tag credential would have to name each tag
+    # environment (the repository emits ID-based subjects,
+    # repo:platima@<owner_id>/npad@<repo_id>:environment:release - see
+    # LESSONS.md), which is matched on every ref - a Tag credential would have
+    # to name each tag
     environment: release
     permissions:
       contents: read

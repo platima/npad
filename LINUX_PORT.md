@@ -96,6 +96,15 @@ check under a private `dbus-run-session` (with other npad windows on the
 session bus it rightly stands down). Not verified: a real apt / dnf / pacman /
 AUR install reporting its own advice, and a desktop without glib-networking.
 
+**Session end (v0.36.0)** is ported (`ui_gtk_session.c`): unsaved work is
+parked as a handoff snapshot, with no prompt, on a logout through the
+session manager (`org.gnome.SessionManager` - GNOME, Cinnamon, MATE, Budgie -
+and `org.xfce.SessionManager`), a shutdown or reboot (a logind *delay*
+inhibitor), SIGTERM, SIGHUP, SIGINT and the loss of the X display, and
+restored silently by the next launch. SIGTERM parking was verified in
+Broadway (above); the session-manager logout, the logind inhibitor and the
+display-loss handler still need a pass on a real desktop.
+
 **Batch F (v0.35.0):** the `system` colour scheme follows the desktop live, the
 settings directory honours `$XDG_CONFIG_HOME`, an off-screen saved position is
 repaired on X11, and the installed icon is used everywhere. Verified: the
@@ -117,12 +126,17 @@ make linux-gtk          # produces ./npad-linux
 ```
 
 One binary covers X11 and Wayland - GDK picks the display server at runtime.
-`make linux` also builds the (stub) terminal variant; `make install` puts the
+`make linux` also builds the (stub) terminal variant, but only when the
+ncurses headers are installed (it says so and skips it otherwise;
+`make linux-terminal` needs `libncurses-dev`); `make install` puts the
 desktop build at `/usr/local/bin/npad`.
 
 Debian 12 / 13, Linux Mint 22 and LMDE all ship GTK 3.24, which is what this
 targets. Nothing beyond GTK (and the GLib/Pango it brings) is linked: the
-D-Bus messaging is GLib's own GDBus.
+D-Bus messaging is GLib's own GDBus, and the X display-loss handler finds
+`XSetIOErrorHandler` with `dlopen`/`dlsym` in the libX11 that GDK has already
+loaded, so `-lX11` is not on the link line (glibc 2.34, already the floor,
+needs no `-ldl` for that).
 
 ## Testing from Windows (WSL)
 
@@ -136,22 +150,26 @@ rsync -a --delete --exclude '*.exe' --exclude dist/ --exclude build/ \
 cd ~/.cache/npad-wsl/tree && make test linux-gtk
 ```
 
-Keep the mirror at least three directories below `/`: the existing
-`path_traversal_protection` test reads `../../../etc/passwd` and fails from a
-shallow path (LESSONS.md).
+The unit tests run each suite in its own temporary folder, with `HOME` and
+`XDG_CONFIG_HOME` pointed inside it, so the mirror can sit at any depth and a
+test run never touches your real `~/.config/npad`. `make test-sanitize` and
+`make test-fuzz` run the suites under ASan and UBSan; under WSL's kernel they
+need ASLR off for the test process, which the Makefile arranges itself
+(`setarch <arch> -R`, see `SANITIZE_RUN`).
 
 To look at the running app without opening windows on the Windows desktop,
 use GTK's **Broadway** backend, which renders the app as a web page:
 
 ```bash
-broadwayd :5 &
-GDK_BACKEND=broadway BROADWAY_DISPLAY=:5 ./npad-linux somefile.txt &
-# then open http://localhost:8085 in Claude's browser pane
+broadwayd :N &      # N: a display whose port, 8080+N, is free (ss -ltn)
+GDK_BACKEND=broadway BROADWAY_DISPLAY=:N ./npad-linux somefile.txt &
+# then open http://localhost:<8080+N> in Claude's browser pane
 ```
 
-Several sessions may share one WSL: Broadway display `:5` (page on port 8085)
-and `:7` (8087) have been taken by others - pick an unused number (`:23` is
-port 8103), keep your own PID files, and never `pkill broadwayd` / `pkill npad*`.
+Several sessions may share one WSL and its Broadway displays, so do not reuse
+a display number from this file or LESSONS.md: right before starting, pick an
+N whose port 8080+N is free (`ss -ltn`), keep your own PID files, stop only
+those PIDs, and never `pkill broadwayd` / `pkill npad*`.
 
 To print without a printer, set `NPAD_PRINT_EXPORT=/path/out.pdf` before
 launching: Ctrl+P then writes a PDF with no dialog. Inspect it with
@@ -173,9 +191,9 @@ term in the settings history (`find_hist_0`) or the document and drive the
 engine headless (a throwaway program that `#include`s `ui_gtk_find.c`
 against a real GtkTextBuffer works); combo-box popups do not paint; the
 screenshot trails the last action by a frame (wait, then shoot twice); and
-parallel sessions share broadwayd - use your own display number
-(`broadwayd :7` is port 8087) and a renamed copy of the binaries, because a
-sibling's `pkill broadwayd` kills yours too.
+parallel sessions share broadwayd - use your own display number (one whose
+port, 8080+N, is free right now) and a renamed copy of the binaries, because
+a sibling's `pkill broadwayd` kills yours too.
 
 More from the Preferences round: the harness `key` action cannot deliver
 Ctrl+comma or Ctrl+Shift+period - dispatch `KeyboardEvent`s on `document`
@@ -222,10 +240,13 @@ src/platform/ui_gtk_edit.c      context menu, file drops, external-change prompt
 src/platform/ui_gtk_find.c      Find / Replace / Go To
 src/platform/ui_gtk_lists.c     Markdown list tools: menu, transforms, Tab / Enter, cut line, rich paste
 src/platform/ui_gtk_prefs.c     Preferences dialog and Format > Font
-src/platform/print_gtk.c        Page Setup, Print and Print Preview (GtkPrintOperation)
+src/platform/ui_gtk_update.c    Check for Updates: the lookup and the "how this copy updates" advice
+src/platform/ui_gtk_session.c   session end: session manager, logind inhibitor, signals, X display loss
+src/platform/print_gtk.c        Page Setup, Print and Print Preview (GtkPrintOperation), npad --print
 src/platform/ui_gtk_instance.c  cross-instance messaging over D-Bus, and the desktop
                                 light/dark preference from the xdg-desktop-portal
 src/core/undo.c                 platform-neutral undo history (tests/test_undo.c)
+src/core/time_format.c          Time/Date and print &t/&d without seconds (tests/test_time_format.c)
 ```
 
 ### Conventions
@@ -233,7 +254,14 @@ src/core/undo.c                 platform-neutral undo history (tests/test_undo.c
 - **Text model.** The GtkTextBuffer holds `\n` only. `ui_set_text` normalises
   CRLF / CR on the way in; `ui_get_text` returns `\n` and the core converts to
   the document's line ending when it saves. Invalid UTF-8 is repaired with
-  `g_utf8_make_valid` rather than dropped.
+  `g_utf8_make_valid` rather than dropped, and the load then counts as altered
+  (`ui_text_altered_by_load`), so Save diverts to Save As, as Win32 does for
+  characters RichEdit cannot hold. `ui_set_text` returns false, leaving the
+  buffer and the document as they were, for text over `G_MAXINT` bytes
+  (`npad_gtk_text_fits`; GTK's `-1` lengths go negative or wrap there); the
+  Ctrl+drop insert applies the same cap. Pass explicit `(gint)` lengths. ANSI
+  is Windows-1252 here, not Latin-1 (`file_ops.c`), so a Windows file's curly
+  quotes and euro sign survive.
 - **Positions are GTK character offsets** (Unicode code points) everywhere in
   the GTK layer and in the undo history. Never mix in byte indexes
   (`gtk_text_iter_get_line_index` and friends) without converting.
@@ -244,7 +272,17 @@ src/core/undo.c                 platform-neutral undo history (tests/test_undo.c
   undo group. **Any compound programmatic edit must be wrapped in
   `gtk_text_buffer_begin_user_action` / `end_user_action`** - that is what
   makes Replace All or a list transform a single undo step.
-  `npad_gtk_replace_selection` does this for the simple case.
+  `npad_gtk_replace_selection` does this for the simple case. A
+  one-character edit cannot be told from a keystroke, so every single edit
+  that is not typing (paste, cut, Delete, Replace, a file insert) must be
+  grouped by its caller, or it merges into the word being typed. Paste is
+  npad's own (`gtk_clipboard_request_text`, inserted inside a group in the
+  callback, LF-normalised), because GTK's asynchronous paste arrives after
+  any group around the call has closed. Edits GTK starts by itself
+  (middle-click PRIMARY paste, Shift+Delete, text drops) get `undo_break` on
+  both sides instead of a group. The history is bounded by 10,000 steps and
+  `UNDO_DEFAULT_MAX_BYTES` (256 MB) of stored text, oldest first; the newest
+  step is always kept.
 - **Commands.** Every menu item and shortcut is an `NpadCommand` dispatched by
   `npad_gtk_handle_command`. Unported commands are listed in
   `command_available()`; delete the case when a feature lands, and the menu
@@ -260,11 +298,38 @@ src/core/undo.c                 platform-neutral undo history (tests/test_undo.c
   must skip work when nothing changed (the theme and CSS already compare
   before applying - reloading either restyles the whole document).
 - **Locale.** `gtk_init` sets the process locale from the environment, so
-  `%f` / `atof` in core become locale-dependent (a decimal comma in de_DE).
-  Only `settings_*_double` does that today and nothing calls it; use
-  `g_ascii_dtostr` / `g_ascii_strtod` in the GTK layer.
+  `%f` / `atof` / `isspace` in core become locale-dependent (a decimal comma
+  in de_DE). The settings reader uses its own JSON whitespace test, and
+  `settings_*_double` converts to and from `.` at the boundary; elsewhere use
+  `g_ascii_dtostr` / `g_ascii_strtod` in the GTK layer. Time/Date and the
+  print `&t` / `&d` codes come from `core/time_format.c` applied to the
+  locale's `T_FMT` / `D_FMT`, converted with `g_locale_to_utf8` (a non-UTF-8
+  locale used to delete the selection instead of inserting the stamp).
+- **File names are bytes.** A path that is not valid UTF-8 is shown through
+  `npad_gtk_display_text()` (title, Recent Files labels, prompts) and
+  `g_filename_display_basename` (print titles), but opened and saved with its
+  real bytes; Save As of an existing file uses `gtk_file_chooser_set_filename`
+  so those bytes survive.
+- **No synchronous waits in menus or dialogs.** Edit-menu greying reads a
+  per-window clipboard-targets cache kept by `owner-change` (not
+  `gtk_clipboard_wait_*`), and Preferences > Associations runs `xdg-mime`
+  through asynchronous `GSubprocess` calls.
 - **Names:** private helpers are `npad_gtk_*` (never bare `gtk_*`, which is
   GTK's own namespace). The application id is `io.github.platima.npad`.
+- **Every backend implements every `ui_platform_*` the shared code calls.**
+  `make test` (`test-platform-stubs`, `scripts/check-platform-stubs.sh`)
+  fails when the Cocoa, ncurses or Win32-terminal stub lacks one. Added in
+  0.36: `ui_set_status_message` (a transient status-bar note; NULL clears it),
+  `ui_append_time_date_line` (the .LOG stamp), `ui_ask_question` (Yes, No or
+  dismissed: anything irreversible acts only on an explicit No, and GTK maps
+  Esc, the close box and a dialog destroyed under `gtk_dialog_run` to
+  dismissed), `ui_set_text` returning bool plus `ui_text_altered_by_load`,
+  `ui_print_file` (`--print`) and `ui_pid_is_running` reporting the process
+  start time. In core: `editor_open_startup_file` (the missing-file
+  question), `editor_is_program_file`, `editor_read_file_for_insert`
+  (Ctrl+drop's questions) and `npad_error_log_stderr`. `NPAD_ERROR_FATAL` now
+  only logs, and error callbacks run outside the error lock, so a callback may
+  report again: the POSIX mutexes are not recursive (see `thread_safety.h`).
 
 ### Cross-instance messaging (D-Bus)
 
@@ -281,7 +346,12 @@ ignore their own.
 
 Instance count = names with the prefix (minus our own); "is pid a live npad"
 = `NameHasOwner`, falling back to `/proc/<pid>/comm` for an npad in another
-login session. Without a session bus all of this is a silent no-op.
+login session - but never for another user's process (`kill(pid, 0)` failing
+with EPERM counts as not npad, which also holds under `hidepid=2`). A
+recovery slot's owner also has to match the slot's time with the process
+start time (`/proc/<pid>/stat` field 22 plus `btime`), so a pid reused after
+a reboot does not hide a crashed slot. Without a session bus all of this is a
+silent no-op.
 
 To watch it: `dbus-monitor --session "interface=io.github.platima.npad.Instance"`.
 
@@ -332,7 +402,10 @@ Decisions taken in the foundation round. Each is easy to revisit.
 - **"Text Documents" filter** matches by type (`text/plain` and every subtype,
   plus `*.txt`) rather than by extension: most Linux text files have no
   `.txt`. Save As does not append `.txt`.
-- **Fonts:** `Monospace` / `Sans` defaults, resolved by fontconfig.
+- **Fonts:** `Monospace` / `Sans` defaults, resolved by fontconfig. Sizes
+  are whole points: Win32 now stores a half-point `font_size` (`"10.5"`),
+  which the strict integer reader here does not accept, so such a file shows
+  at the 11 pt default until a size is picked on Linux.
 - **Column numbers** count code points, so an emoji is one column; Windows
   counts UTF-16 units (two). Notepad itself does the latter.
 - **Tab inserts spaces** (`tab_inserts_spaces`, `tab_width`; shared rule in
@@ -346,8 +419,17 @@ Decisions taken in the foundation round. Each is easy to revisit.
   step (unlike a typed replacement, below).
 - **Typing over a selection** undoes in two steps (the replacement plus its
   first character, then the rest of the word); RichEdit does one.
-- **Undo history** keeps 10,000 steps (typing coalesces per word); Windows
-  keeps 100,000 RichEdit actions.
+- **Undo history** keeps 10,000 steps or 256 MB of text, whichever comes
+  first; Windows keeps 100,000 RichEdit actions. Typing coalesces one word
+  per step, like gedit, while RichEdit undoes a whole typing run, Backspaces
+  included, in one step (`core/undo.h` says the same). Both make a paste,
+  cut, Delete, Replace or Replace All a step of its own.
+- **Recent Files** leaves out of the menu a file that cannot be reached at the
+  moment (it stays in the list and returns); Win32 lists every entry without
+  touching the disk and reports a missing one when it is picked, because an
+  existence check there could stall the menu on a sleeping network share.
+- **File > Open** starts in the current document's folder, or the most recent
+  file's, which approximates the last folder Windows' Open dialog remembers.
 - **Print dialog and Page Setup are GTK's.** Margins have no field in GTK's
   paper dialog, so npad's Page Setup is its own small dialog (margins) that
   opens GTK's for paper and orientation. Orientation saves as portrait (1) or
@@ -374,10 +456,16 @@ Decisions taken in the foundation round. Each is easy to revisit.
   staged keys, saves, broadcasts and re-applies, OK does that and closes,
   Cancel drops them. As on Windows the font buttons, Clear Recent Files,
   Export / Import, the xdg-mime button and Reset act at once. The dialog is
-  modal, as the property sheet is.
+  modal, as the property sheet is. After Import Settings it stays open with
+  its controls reloaded from the imported file; Win32 closes the sheet, so
+  that OK cannot write the pre-import values back. A failed Apply reverts
+  only the keys it wrote when the dialog closes, keeping the window's other
+  unsaved changes (Recent Files, search history).
 - **Associations is one action**, "Make npad the default text editor"
   (`xdg-mime default io.github.platima.npad.desktop text/plain`), never run
-  unless clicked. The page shows `xdg-mime query default text/plain`.
+  unless clicked. The page shows `xdg-mime query default text/plain`, asked
+  when the page is first shown. Both run as asynchronous `GSubprocess` calls
+  (the button greys meanwhile), so a slow `xdg-mime` never stalls the dialog.
 - **No application-icon choice** (`icon_style` has no Linux UI): the icon
   comes from the icon theme. The only automatic variation is the window icon
   following the dark scheme (`io.github.platima.npad-dark`, chosen in
@@ -427,11 +515,15 @@ version.
 - [x] Modeless Find dialog: match case, whole word, up/down, wrap around,
       interpret escapes (`list_unescape`), Highlight All (a GtkTextTag)
 - [x] Find Next / Previous (F3 / Shift+F3) without the dialog
-- [x] Replace, Replace All (one undo step - wrap in a user action)
+- [x] Replace, Replace All (one undo step - wrap in a user action). The
+      Replace dialog always searches down; Replace accepts the selection
+      only when re-running the same search from its start finds exactly it
 - [x] Search history, options persisted under the Win32 keys, re-read in
       `npad_gtk_find_reload_settings`
 - [x] "Match n of m" / not-found messages like Win32
-- [x] Go To Line (Ctrl+G, and clicking Ln/Col) - logical lines
+- [x] Go To Line (Ctrl+G, and clicking Ln/Col) - logical lines, filled with
+      the current line, staying open on an out-of-range number (the shared
+      `ui_goto_line_parse` check)
 - [x] Notepad behaviours from DOCUMENTATION.md "Behaviour notes"
 - [x] Ctrl+F / Ctrl+H fill "Find what" from a single-line selection
       (`find_seed_selection`, default on, shared rule in `core/find_seed`),
@@ -443,14 +535,20 @@ version.
       or Shift+click Preferences)
 - [x] OK / Cancel / Apply; Apply writes only the changed keys, saves and calls
       `ui_notify_settings_changed()`
-- [x] General page: a **Fill Find with the selected text** checkbox bound to
-      `FIND_SEED_KEY` (`core/find_seed.h`, default on). Reset removes that key
-      explicitly - it starts with `find_`, which the keep-list preserves
-      (see `reset_all_preferences` in `ui_win32.c`)
-- [x] Export / import / reset settings
+- [x] Editor page: **Fill Find with the selected text** bound to
+      `FIND_SEED_KEY` and **Wrap around by default** bound to `FIND_WRAP_KEY`
+      (`core/find_seed.h`; defaults on and off), plus the Tab key group. Reset
+      removes both keys explicitly - they start with `find_`, which the
+      keep-list preserves. The keep-list and those removals are defined once,
+      in `settings_reset_all_preferences()` (`core/settings.c`), which both
+      platforms call
+- [x] Export / import / reset settings (Import's rules are core's
+      `settings_import_file`, shared with Win32)
 - [x] Format > Font: GtkFontChooserDialog writing the font keys
 - [x] Linux replacements for the Windows-only pages: Associations is a "make
-      npad the default text editor" action (`xdg-mime`), Updates is dropped
+      npad the default text editor" action (`xdg-mime`, run asynchronously);
+      Updates checks and advises but never installs (v0.36.0, see the
+      deliberate differences)
 - [ ] On a real desktop: `xdg-mime` against GNOME / Cinnamon's own default-app
       database, the portal file chooser behind Export / Import, and
       Shift+click on the Preferences menu item
