@@ -46,7 +46,8 @@ TEST_CASE(reset_clears_preferences) {
     settings_set_string("theme", "solarized-dark");       // Appearance
     settings_set_bool("auto_save_enabled", true);         // General
     settings_set_int("recent_files_max", 5);              // General (NOT a recent_file_ key)
-    settings_set_bool("find_seed_selection", false);      // General, under the kept find_ prefix
+    settings_set_bool("find_seed_selection", false);      // Editor, under the kept find_ prefix
+    settings_set_bool("find_wrap_around", true);          // Editor, under the kept find_ prefix
 
     settings_reset_all_preferences();
 
@@ -61,6 +62,8 @@ TEST_CASE(reset_clears_preferences) {
                 "recent_files_max is a preference, not a preserved recent_file_ key");
     TEST_ASSERT(!settings_has_key("find_seed_selection"),
                 "the find-seeding preference is reset although it starts with find_");
+    TEST_ASSERT(!settings_has_key("find_wrap_around"),
+                "Wrap around by default is a preference too, and is reset");
     settings_clear_all();
 }
 
@@ -72,7 +75,7 @@ TEST_CASE(reset_preserves_kept_categories) {
     settings_set_int("window_width", 800);
     settings_set_bool("window_maximized", true);
     settings_set_bool("find_match_case", true);
-    settings_set_bool("find_wrap_around", true);
+    settings_set_bool("find_whole_word", true);
     settings_set_string("find_hist_0", "needle");
     settings_set_string("replace_hist_0", "thread");
 
@@ -84,7 +87,7 @@ TEST_CASE(reset_preserves_kept_categories) {
     TEST_ASSERT(settings_has_key("window_width"), "window width kept");
     TEST_ASSERT(settings_has_key("window_maximized"), "window maximized kept");
     TEST_ASSERT(settings_has_key("find_match_case"), "find option kept");
-    TEST_ASSERT(settings_has_key("find_wrap_around"), "find option kept");
+    TEST_ASSERT(settings_has_key("find_whole_word"), "find option kept");
     TEST_ASSERT(settings_has_key("find_hist_0"), "find history kept");
     TEST_ASSERT(settings_has_key("replace_hist_0"), "replace history kept");
     settings_clear_all();

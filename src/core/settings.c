@@ -33,7 +33,7 @@
 #include "settings.h"
 #include "error.h"
 #include "file_ops.h"
-#include "find_seed.h" // FIND_SEED_KEY, removed by Reset All Preferences
+#include "find_seed.h" // FIND_SEED_KEY and FIND_WRAP_KEY, removed by Reset All Preferences
 #include "thread_safety.h"
 #include <ctype.h>
 #include <errno.h>
@@ -714,7 +714,7 @@ static void make_one_directory(const char *path) {
 static const char *const RESET_KEEP_PREFIXES[] = {
     "recent_file_", // recent files list (recent_files_max is a pref -> reset)
     "window_",      // window geometry
-    "find_",        // find options + find history
+    "find_",        // the Find/Replace dialog's options + find history
     "replace_",     // replace history
 };
 
@@ -722,7 +722,8 @@ static const char *const RESET_KEEP_PREFIXES[] = {
 // the prefix reset, or the Preferences checkbox would survive a "reset to
 // defaults". Prefer naming a new preference outside the kept prefixes.
 static const char *const RESET_ALWAYS_REMOVE[] = {
-    FIND_SEED_KEY, // Preferences > General, not search state
+    FIND_SEED_KEY, // Preferences > Editor, not search state
+    FIND_WRAP_KEY, // "Wrap around by default" on Preferences > Editor (NP-199)
 };
 
 int settings_reset_all_preferences(void) {

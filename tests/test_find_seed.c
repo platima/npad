@@ -119,11 +119,10 @@ TEST_CASE(preference_defaults_on_and_follows_setting) {
     settings_clear_all();
 }
 
-// Reset All Preferences keeps the find_ prefix (search state) and then
-// removes the find_ keys a Preferences page shows - both platforms' resets
-// run exactly this sequence
+// Reset All Preferences keeps the find_ prefix (search state) but removes
+// the find_ keys a Preferences page shows. settings_reset_all_preferences is
+// what both platforms' Reset buttons run.
 TEST_CASE(reset_clears_find_preferences_but_keeps_search_state) {
-    static const char *const keep[] = { "recent_file_", "window_", "find_", "replace_" };
     settings_clear_all();
     settings_set_bool(FIND_SEED_KEY, false);
     settings_set_bool(FIND_WRAP_KEY, true);
@@ -133,8 +132,7 @@ TEST_CASE(reset_clears_find_preferences_but_keeps_search_state) {
     settings_set_string("replace_hist_0", "thread");
     settings_set_bool("word_wrap", true);
 
-    settings_reset_except_prefixes(keep, (int) (sizeof(keep) / sizeof(keep[0])));
-    find_reset_preference_keys();
+    settings_reset_all_preferences();
 
     TEST_ASSERT(find_seed_enabled(), "Fill Find from the selection is back to its default (on)");
     TEST_ASSERT(!settings_has_key(FIND_WRAP_KEY), "wrap-around preference removed");

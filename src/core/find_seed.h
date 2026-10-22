@@ -11,8 +11,6 @@
  *
  * Also here, because every platform needs the same answer:
  *
- *   - find_reset_preference_keys(): the find_ keys Reset All Preferences
- *     must reset even though it keeps the find_ prefix (search state)
  *   - find_replace_ranges(): Replace All's result, built in one pass so the
  *     UI can apply it as ONE edit (one undo step)
  *
@@ -56,12 +54,6 @@ bool find_seed_enabled(void);
 //
 // Returns a malloc'd string the caller frees.
 char *find_seed_text(const char *selection, bool escape_backslashes);
-
-// Reset All Preferences keeps every find_ key (search options and history are
-// search state, not preferences). Call this after that prefix reset to remove
-// the find_ keys that ARE preferences - the ones a Preferences page shows -
-// so they return to their defaults like every other preference.
-void find_reset_preference_keys(void);
 
 // One match for find_replace_ranges: offsets in code units into the text,
 // end exclusive

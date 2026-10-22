@@ -90,14 +90,6 @@ char *find_seed_text(const char *selection, bool escape_backslashes) {
     return out;
 }
 
-void find_reset_preference_keys(void) {
-    // Both are checkboxes on Preferences > Editor. Everything else under find_
-    // (match case, whole word, direction, highlight, escapes, history) is set
-    // only in the Find/Replace dialog and stays across a reset.
-    settings_remove_key(FIND_SEED_KEY);
-    settings_remove_key(FIND_WRAP_KEY);
-}
-
 wchar_t *find_replace_ranges(const wchar_t *text, size_t len, const FindRange *ranges, size_t count,
                              const wchar_t *replacement, size_t *out_len) {
     if (out_len)
