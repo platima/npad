@@ -23,6 +23,7 @@
 #include "../src/core/file_ops.h"
 #include "../src/core/session.h"
 #include "../src/core/settings.h"
+#include "../src/core/thread_safety.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -221,7 +222,8 @@ TEST_CASE(truncated_is_rechecked_for_a_pre_036_slot) {
 
 // UTF-8 with a BOM and one byte that is not UTF-8: it decodes to a
 // replacement character, so a save would not write the 0xFF back
-static const char g_lossy[] = "\xEF\xBB\xBF" "ok \xFF here";
+static const char g_lossy[] = "\xEF\xBB\xBF"
+                              "ok \xFF here";
 
 TEST_CASE(decode_lossy_survives_a_handoff) {
     begin();
@@ -671,6 +673,8 @@ TEST_CASE(config_and_settings_are_private) {
 }
 
 int main(void) {
+    // The settings store locks g_settings_mutex; npad's main() creates it
+    thread_safety_init();
     TEST_INIT();
 
     char cwd[400];

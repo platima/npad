@@ -46,7 +46,7 @@ bool ui_set_text(Window *window, const char *text) {
     return true;
 }
 
-bool ui_text_altered_by_load(Window *window) {
+bool ui_text_altered_by_load(const Window *window) {
     (void) window;
     return false;
 }
@@ -72,8 +72,7 @@ void ui_clear_text(Window *window) {
     ui_set_text(window, "");
 }
 
-bool ui_show_message_box(Window *parent, const char *title, const char *message,
-                         bool is_question) {
+bool ui_show_message_box(Window *parent, const char *title, const char *message, bool is_question) {
     (void) parent;
     (void) title;
     g_message_boxes++;

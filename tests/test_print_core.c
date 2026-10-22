@@ -29,8 +29,8 @@ typedef struct {
     int cap;
     long long measured_units; // Every unit handed to fit()
     long fit_calls;
-    bool unmeasurable;       // fit() fails, extent() works
-    int fail_emit_after;     // emit() fails once this many runs exist (0: never)
+    bool unmeasurable;   // fit() fails, extent() works
+    int fail_emit_after; // emit() fails once this many runs exist (0: never)
     int keep_going_calls;
     int cancel_after_checks; // keep_going() says stop on this call (0: never)
 } Rec;
@@ -158,8 +158,7 @@ TEST_CASE(wraps_after_the_last_space_that_fits) {
 TEST_CASE(breaks_mid_word_when_there_is_no_space) {
     Rec r = { 0 };
     int pages = 0;
-    TEST_ASSERT_EQ(PRINT_PAGINATE_OK, paginate_str(&r, "abcdefghijklmnop", 50, 50, &pages),
-                   "ok");
+    TEST_ASSERT_EQ(PRINT_PAGINATE_OK, paginate_str(&r, "abcdefghijklmnop", 50, 50, &pages), "ok");
     TEST_ASSERT_EQ(4, r.count, "16 units at 5 per line");
     for (int i = 0; i < 3; i++)
         TEST_ASSERT_EQ(5, r.runs[i].len, "full lines of 5");
@@ -170,8 +169,7 @@ TEST_CASE(breaks_mid_word_when_there_is_no_space) {
 TEST_CASE(line_breaks_blank_lines_and_trailing_break) {
     Rec r = { 0 };
     int pages = 0;
-    TEST_ASSERT_EQ(PRINT_PAGINATE_OK, paginate_str(&r, "a\r\n\r\nb\rc\n", 1000, 50, &pages),
-                   "ok");
+    TEST_ASSERT_EQ(PRINT_PAGINATE_OK, paginate_str(&r, "a\r\n\r\nb\rc\n", 1000, 50, &pages), "ok");
     TEST_ASSERT_EQ(3, r.count, "a, b, c");
     TEST_ASSERT_EQ(0, r.runs[0].line, "a on line 0");
     TEST_ASSERT_EQ(2, r.runs[1].line, "a blank line, then b");

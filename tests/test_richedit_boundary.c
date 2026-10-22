@@ -160,7 +160,9 @@ TEST_CASE(normalize_matches_core_break_rules) {
 TEST_CASE(invalid_utf8_is_reported_as_replaced) {
     size_t len = 0;
     bool replaced = false;
-    wchar_t *wide = richedit_text_from_utf8("a\xFF" "b", &len, &replaced);
+    wchar_t *wide = richedit_text_from_utf8("a\xFF"
+                                            "b",
+                                            &len, &replaced);
     TEST_ASSERT_NOT_NULL(wide, "still converts");
     TEST_ASSERT(replaced, "a bad byte is reported");
     TEST_ASSERT(len == 3 && wide[1] == 0xFFFD, "as U+FFFD");
@@ -184,12 +186,9 @@ TEST_CASE(cr_cr_lf_is_not_deleted) {
 }
 
 TEST_CASE(mixed_breaks_match_core_conversion) {
-    const char *cases[] = { "a\r\nb\rc\nd\r\n\n\re\r\r\nf\r\n",
-                            "a\n\rb\n\rc\n",
-                            "abc\r",
-                            "\r\n",
-                            "\r\r\r\n\n\n",
-                            "" };
+    const char *cases[] = {
+        "a\r\nb\rc\nd\r\n\n\re\r\r\nf\r\n", "a\n\rb\n\rc\n", "abc\r", "\r\n", "\r\r\r\n\n\n", ""
+    };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         bool ok = false;
         TEST_ASSERT(load_utf8(cases[i], &ok), "loads exactly");
@@ -260,12 +259,15 @@ TEST_CASE(rewritten_characters_are_reported) {
     // Each was seen changed by msftedit on Windows 11 (LS and PS become
     // breaks, the rest spaces). VT is listed too: GT_USECRLF used to turn it
     // into a break on the way out, and the verdict must stay right for it.
+    // A hex escape needs the literal split after it; clang-format would move
+    // each "b" onto its own line, away from its comment
+    // clang-format off
     const char *altered[] = {
-        "a\vb",             // VT
+        "a\vb",              // VT
         "a\xE2\x80\xA8" "b", // U+2028
         "a\xE2\x80\xA9" "b", // U+2029
-        "a\x07" "b",        // BEL
-        "Jos\xEF\xBF\xBD",  // U+FFFD
+        "a\x07" "b",         // BEL
+        "Jos\xEF\xBF\xBD",   // U+FFFD
         "a\xEF\xBF\xBC" "b", // U+FFFC
         "a\xEF\xBF\xB9" "b", // U+FFF9
         "a\xEF\xBF\xBE" "b", // U+FFFE
@@ -273,6 +275,7 @@ TEST_CASE(rewritten_characters_are_reported) {
         "a\xEF\xB7\x90" "b", // U+FDD0
         "a\xEF\xB7\xAF" "b", // U+FDEF
     };
+    // clang-format on
     for (size_t i = 0; i < sizeof(altered) / sizeof(altered[0]); i++) {
         bool ok = false;
         bool exact = load_utf8(altered[i], &ok);
@@ -346,21 +349,25 @@ TEST_CASE(change_beyond_the_first_verify_chunk_is_reported) {
 // --- Text that must round-trip exactly -------------------------------------------
 
 TEST_CASE(tricky_text_round_trips_exactly) {
+    // Hex-escape splits, kept beside their comments as above
+    // clang-format off
     const char *cases[] = {
         "{\\rtf1 Hello}",
-        "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Arial;}}\\f0\\b Bold\\b0  text\\par\r\nline2\\par\r\n}\r\n",
+        "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Arial;}}\\f0\\b Bold\\b0  "
+        "text\\par\r\nline2\\par\r\n}\r\n",
         "{\\urtf1 Hello}",
         "x{\\rtf1 Hello}",
-        "a\xF0\x9F\x98\x80" "b",          // U+1F600
-        "a\xF0\xA0\x80\x80" "b",          // U+20000 (CJK Ext B)
-        "a\xF4\x8F\xBF\xBF" "b",          // U+10FFFF
-        "\ta\tb\t\tc\r\n\t\r\n",          // tabs
-        "a\fb",                           // FF loads as itself via EM_SETTEXTEX
-        "a\vb",                           // VT: stored intact, read without GT_USECRLF
-        "a\xC2\xA0" "b\xC2\xAD" "c\xC2\x85" "d", // NBSP, SHY, NEL
-        "a\xEF\xBB\xBF" "b",              // U+FEFF in the middle
+        "a\xF0\x9F\x98\x80" "b",                    // U+1F600
+        "a\xF0\xA0\x80\x80" "b",                    // U+20000 (CJK Ext B)
+        "a\xF4\x8F\xBF\xBF" "b",                    // U+10FFFF
+        "\ta\tb\t\tc\r\n\t\r\n",                    // tabs
+        "a\fb",                                     // FF loads as itself via EM_SETTEXTEX
+        "a\vb",                                     // VT: stored intact, read without GT_USECRLF
+        "a\xC2\xA0" "b\xC2\xAD" "c\xC2\x85" "d",    // NBSP, SHY, NEL
+        "a\xEF\xBB\xBF" "b",                        // U+FEFF in the middle
         "caf\xC3\xA9 na\xC3\xAFve",
     };
+    // clang-format on
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         bool ok = false;
         bool exact = load_utf8(cases[i], &ok);
@@ -422,7 +429,9 @@ TEST_CASE(get_text_copies_the_whole_text) {
     // EM_GETTEXTEX's copied count must equal the precise CRLF length for
     // every shape of break, or richedit_get_text refuses (a short copy would
     // be saved over the file)
-    const char *cases[] = { "a", "a\r\n", "\r\n\r\n", "a\rb", "\r", "a\r\r\nb", "x\xF0\x9F\x98\x80\r\n" };
+    const char *cases[] = {
+        "a", "a\r\n", "\r\n\r\n", "a\rb", "\r", "a\r\r\nb", "x\xF0\x9F\x98\x80\r\n"
+    };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         bool ok = false;
         load_utf8(cases[i], &ok);
@@ -443,8 +452,14 @@ TEST_CASE(files_round_trip_through_the_control) {
     } files[] = {
 #define FILE_CASE(name, lit, exact) { name, lit, sizeof(lit) - 1, exact }
         FILE_CASE("crcrlf_utf8", "a\r\r\nb\r\r\nc\r\n", true),
-        FILE_CASE("crcrlf_bom", "\xEF\xBB\xBF" "a\r\r\nb\r\n", true),
-        FILE_CASE("crcrlf_utf16le", "\xFF\xFE" "a\0\r\0\r\0\n\0b\0\r\0\n\0", true),
+        FILE_CASE("crcrlf_bom",
+                  "\xEF\xBB\xBF"
+                  "a\r\r\nb\r\n",
+                  true),
+        FILE_CASE("crcrlf_utf16le",
+                  "\xFF\xFE"
+                  "a\0\r\0\r\0\n\0b\0\r\0\n\0",
+                  true),
         FILE_CASE("crcrlf_ansi", "caf\xE9\r\r\nb\r\n", true),
         FILE_CASE("lf_file", "a\nb\n\nc", true),
         FILE_CASE("rtf_file", "{\\rtf1 Hello}\r\n", true),
@@ -484,8 +499,8 @@ static bool create_control(void) {
     if (!RegisterClassW(&wc))
         return false;
     // Never shown: the control is a child of a window that stays hidden
-    g_parent = CreateWindowExW(0, wc.lpszClassName, L"", WS_OVERLAPPEDWINDOW, 0, 0, 800, 600,
-                               NULL, NULL, wc.hInstance, NULL);
+    g_parent = CreateWindowExW(0, wc.lpszClassName, L"", WS_OVERLAPPEDWINDOW, 0, 0, 800, 600, NULL,
+                               NULL, wc.hInstance, NULL);
     if (!g_parent)
         return false;
     // npad's own style with word wrap off

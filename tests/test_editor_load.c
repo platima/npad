@@ -78,7 +78,7 @@ bool ui_set_text(Window *window, const char *text) {
     return true;
 }
 
-bool ui_text_altered_by_load(Window *window) {
+bool ui_text_altered_by_load(const Window *window) {
     (void) window;
     return g_altered;
 }

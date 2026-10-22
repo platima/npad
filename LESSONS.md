@@ -1556,7 +1556,10 @@ reached only by a `goto` inside an `#if` becomes `unusedLabelConfiguration`.
 
 **cppcheck runs with `--platform=win32A`, where `long` is 32 bits.** A
 digit-accumulating parse guarded only by `r <= 999999999` still overflows on
-`r * 10` there. → Saturate before multiplying.
+`r * 10` there. → Saturate before multiplying. For the same reason a
+`strtol` result checked against `INT_MIN` / `INT_MAX` is
+`compareValueOutOfTypeRangeError` (always false) to 2.13 → parse with
+`strtoll` into a `long long`, which is 64 bits everywhere.
 
 **clang-format 18 can misread a `for` header as a template.** It turned `width
 < count; width = width > count / 2 ? ...` into `width<count; width = width>

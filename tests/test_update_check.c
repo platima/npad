@@ -359,7 +359,8 @@ TEST_CASE(msi_package_suffixes) {
     TEST_ASSERT_STR_EQ("-msi-win-x64.msi", update_package_suffix("x64", UPDATE_PACKAGE_MSI, false),
                        "x64 MSI");
     TEST_ASSERT_STR_EQ("-msi-win-arm64.msi.sha256",
-                       update_package_suffix("arm64", UPDATE_PACKAGE_MSI, true), "arm64 MSI digest");
+                       update_package_suffix("arm64", UPDATE_PACKAGE_MSI, true),
+                       "arm64 MSI digest");
     TEST_ASSERT_STR_EQ("-setup-win-x64.exe",
                        update_package_suffix("x64", UPDATE_PACKAGE_SETUP, false), "setup");
     TEST_ASSERT(update_package_suffix("x86", UPDATE_PACKAGE_MSI, false) == NULL, "no x86 MSI");
@@ -422,8 +423,9 @@ TEST_CASE(dir_holds_exe) {
     TEST_ASSERT(update_dir_holds_exe("C:\\Users\\me\\AppData\\Local\\Programs\\npad\\",
                                      "C:\\Users\\me\\AppData\\Local\\Programs\\npad\\npad.exe"),
                 "Inno's InstallLocation, trailing backslash");
-    TEST_ASSERT(update_dir_holds_exe("c:\\program files\\NPAD", "C:\\Program Files\\npad\\npad.exe"),
-                "case and no trailing separator");
+    TEST_ASSERT(
+        update_dir_holds_exe("c:\\program files\\NPAD", "C:\\Program Files\\npad\\npad.exe"),
+        "case and no trailing separator");
     TEST_ASSERT(update_dir_holds_exe("C:/Tools/npad/", "C:\\Tools\\npad\\npad.exe"),
                 "either separator");
     TEST_ASSERT(!update_dir_holds_exe("C:\\Tools", "C:\\Tools\\npad\\npad.exe"), "a parent");

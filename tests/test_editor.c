@@ -36,10 +36,10 @@ extern EditorState g_editor; // White-box access for the failure cases
 
 // Every file a test may create, removed before and after the run
 static const char *const k_files[] = {
-    P("a.txt"),         P("ansi.txt"),     P("utf16.txt"),   P("blob.dat"),
+    P("a.txt"),           P("ansi.txt"),      P("utf16.txt"), P("blob.dat"),
     P("blob (text).txt"), P("blob_link.dat"), P("runme"),     P("renamed.dat"),
-    P("plain.dat"),     P("tool.exe"),     P("pic.png"),     P("log.txt"),
-    P("new.txt"),       P("other.txt"),    P("snap.txt"),    P("settings.json"),
+    P("plain.dat"),       P("tool.exe"),      P("pic.png"),   P("log.txt"),
+    P("new.txt"),         P("other.txt"),     P("snap.txt"),  P("settings.json"),
 };
 
 static void make_dir(const char *path) {
@@ -365,9 +365,11 @@ TEST_CASE(truncated_save_as_never_targets_the_original) {
     g_stub.save_dialog_result = P("blob (text).txt");
     TEST_ASSERT(editor_save_file(), "saved elsewhere");
     TEST_ASSERT_EQ(boxes + 1, g_stub.message_boxes, "one explanation");
-    TEST_ASSERT(disk_equals(P("blob (text).txt"), "head text"), "the fragment went to the new file");
+    TEST_ASSERT(disk_equals(P("blob (text).txt"), "head text"),
+                "the fragment went to the new file");
     TEST_ASSERT_EQ(210, disk_size(P("blob.dat")), "the original is untouched");
-    TEST_ASSERT(!g_editor.file_info.truncated, "the new file is complete, so Save may overwrite it");
+    TEST_ASSERT(!g_editor.file_info.truncated,
+                "the new file is complete, so Save may overwrite it");
 }
 
 // NP-115: "Open with the default app" on a binary file ran programs silently
@@ -397,8 +399,8 @@ TEST_CASE(programs_ask_before_the_default_app) {
     editor_open_file(P("tool.exe"));
     TEST_ASSERT_EQ(1, g_stub.default_app_opens, "Yes hands it over");
 
-    static const unsigned char png[] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n',
-                                         0x00, 0x00, 0x00, 0x0D, 'I', 'H', 'D', 'R' };
+    static const unsigned char png[] = { 0x89, 'P',  'N',  'G',  '\r', '\n', 0x1A, '\n',
+                                         0x00, 0x00, 0x00, 0x0D, 'I',  'H',  'D',  'R' };
     write_bytes(P("pic.png"), png, sizeof(png));
     int boxes = g_stub.message_boxes;
     editor_open_file(P("pic.png"));

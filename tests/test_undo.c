@@ -473,9 +473,9 @@ TEST_CASE(byte_limit_drops_oldest_keeps_newest) {
                    "default byte budget is 256 MB");
     undo_set_max_bytes(u, 10);
     Doc doc = { "" };
-    type_text(&doc, u, 0, "aaaa");  // 4 bytes
-    type_text(&doc, u, 4, "bbbb");  // 8
-    type_text(&doc, u, 8, "cccc");  // 12: over budget, the oldest goes
+    type_text(&doc, u, 0, "aaaa"); // 4 bytes
+    type_text(&doc, u, 4, "bbbb"); // 8
+    type_text(&doc, u, 8, "cccc"); // 12: over budget, the oldest goes
     TEST_ASSERT_EQ(8, (long) undo_total_bytes(u), "oldest step dropped to fit the budget");
     TEST_ASSERT(undo_undo(u, &k_target, &doc, NULL, NULL), "newest undoes");
     TEST_ASSERT(undo_undo(u, &k_target, &doc, NULL, NULL), "second newest undoes");

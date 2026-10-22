@@ -632,9 +632,10 @@ static void on_cut_binding_done(GtkTextView *view, gpointer data) {
 // paste: break before it here, and after it on the buffer's paste-done
 static gboolean on_button_press(GtkWidget *widget, const GdkEventButton *event, gpointer data) {
     (void) widget;
-    Window *window = data;
-    if (event->type == GDK_BUTTON_PRESS && event->button == GDK_BUTTON_MIDDLE)
+    if (event->type == GDK_BUTTON_PRESS && event->button == GDK_BUTTON_MIDDLE) {
+        Window *window = data;
         undo_break(window->undo);
+    }
     return FALSE;
 }
 

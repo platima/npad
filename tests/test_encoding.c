@@ -376,13 +376,19 @@ TEST_CASE(utf16_without_bom_tolerates_zero_low_bytes) {
     char *content = NULL;
     TEST_ASSERT(roundtrip_bytes(le, sizeof(le), &info, &content), "Round-trips exactly");
     TEST_ASSERT_EQ(NPAD_ENC_UTF16_LE, info.encoding, "Detected as UTF-16 LE");
-    TEST_ASSERT_STR_EQ("a\xE4\xB8\x80" "b\xC4\x80" "c", content, "U+4E00 and U+0100 decoded");
+    TEST_ASSERT_STR_EQ("a\xE4\xB8\x80"
+                       "b\xC4\x80"
+                       "c",
+                       content, "U+4E00 and U+0100 decoded");
     free(content);
 
     const unsigned char be[] = { 0, 'a', 0x4E, 0x00, 0, 'b', 0x01, 0x00, 0, 'c' };
     TEST_ASSERT(roundtrip_bytes(be, sizeof(be), &info, &content), "Round-trips exactly");
     TEST_ASSERT_EQ(NPAD_ENC_UTF16_BE, info.encoding, "Detected as UTF-16 BE");
-    TEST_ASSERT_STR_EQ("a\xE4\xB8\x80" "b\xC4\x80" "c", content, "U+4E00 and U+0100 decoded");
+    TEST_ASSERT_STR_EQ("a\xE4\xB8\x80"
+                       "b\xC4\x80"
+                       "c",
+                       content, "U+4E00 and U+0100 decoded");
     free(content);
     test_cleanup_temp_file(TEST_FILE);
 }
@@ -455,13 +461,17 @@ TEST_CASE(utf16_unpaired_surrogates_are_flagged) {
     char *content = NULL;
     TEST_ASSERT(!roundtrip_bytes(high, sizeof(high), &info, &content),
                 "An unpaired surrogate cannot be saved back");
-    TEST_ASSERT_STR_EQ("a\xEF\xBF\xBD" "b", content, "Lone high surrogate becomes U+FFFD");
+    TEST_ASSERT_STR_EQ("a\xEF\xBF\xBD"
+                       "b",
+                       content, "Lone high surrogate becomes U+FFFD");
     TEST_ASSERT(info.decode_lossy, "And the load is flagged");
     free(content);
 
     const unsigned char low[] = { 0xFF, 0xFE, 0x00, 0xDC, 'b', 0 };
     TEST_ASSERT(!roundtrip_bytes(low, sizeof(low), &info, &content), "Not saved back either");
-    TEST_ASSERT_STR_EQ("\xEF\xBF\xBD" "b", content, "Lone low surrogate becomes U+FFFD");
+    TEST_ASSERT_STR_EQ("\xEF\xBF\xBD"
+                       "b",
+                       content, "Lone low surrogate becomes U+FFFD");
     TEST_ASSERT(info.decode_lossy, "And the load is flagged");
     free(content);
 
@@ -526,14 +536,14 @@ TEST_CASE(ansi_lossy_detection) {
 TEST_CASE(ansi_is_windows_1252_off_windows) {
     // "Quote" in curly quotes, an en dash and a euro sign, as Windows writes
     // them. Read as Latin-1 these were C1 controls (U+0093, U+0094, ...).
-    const unsigned char data[] = { 0x93, 'Q', 'u', 'o', 't', 'e', 0x94, ' ',
-                                   0x96, ' ', 0x80, '5' };
+    const unsigned char data[] = { 0x93, 'Q', 'u', 'o', 't', 'e', 0x94, ' ', 0x96, ' ', 0x80, '5' };
     TextFileInfo info;
     char *content = NULL;
     TEST_ASSERT(roundtrip_bytes(data, sizeof(data), &info, &content), "Round-trips exactly");
     TEST_ASSERT_EQ(NPAD_ENC_ANSI, info.encoding, "Detected as ANSI");
-    TEST_ASSERT_STR_EQ("\xE2\x80\x9CQuote\xE2\x80\x9D \xE2\x80\x93 \xE2\x82\xAC" "5", content,
-                       "Decoded as Windows-1252");
+    TEST_ASSERT_STR_EQ("\xE2\x80\x9CQuote\xE2\x80\x9D \xE2\x80\x93 \xE2\x82\xAC"
+                       "5",
+                       content, "Decoded as Windows-1252");
     TEST_ASSERT(!info.decode_lossy, "Windows-1252 decoding loses nothing");
     free(content);
     test_cleanup_temp_file(TEST_FILE);

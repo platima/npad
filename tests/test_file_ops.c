@@ -211,7 +211,6 @@ TEST_CASE(count_stats_whitespace_runs) {
 // happened not to exist from the working directory - it failed from a
 // checkout three levels below /, and asserted nothing about security.
 
-
 // --- Binary / embedded-NUL detection --------------------------------------
 //
 // npad carries text as NUL-terminated strings, so a file containing a NUL
@@ -422,7 +421,7 @@ int main(void) {
     RUN_TEST(stamp_equality_rejects_nulls);
     RUN_TEST(absolute_path_resolution);
     RUN_TEST(same_file_is_recognised_by_identity);
-    
+
     // Cleanup error system
     npad_error_cleanup();
     

@@ -125,7 +125,7 @@ bool ui_set_text(Window *window, const char *text);
 // text exactly (Win32 RichEdit rewrites a few characters, such as U+2028 and
 // U+FFFD, and either platform replaces invalid UTF-8). The core must
 // then not save over the source file without telling the user.
-bool ui_text_altered_by_load(Window *window);
+bool ui_text_altered_by_load(const Window *window);
 char *ui_get_text(Window *window);
 void ui_clear_text(Window *window);
 bool ui_has_selection(Window *window);

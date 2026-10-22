@@ -38,7 +38,7 @@ extern void ui_platform_get_default_window_rect(int *x, int *y, int *width, int 
 
 // Platform text functions
 extern bool ui_platform_set_text(Window *window, const char *text);
-extern bool ui_platform_text_altered_by_load(Window *window);
+extern bool ui_platform_text_altered_by_load(const Window *window);
 extern char *ui_platform_get_text(Window *window);
 extern void ui_platform_clear_text(Window *window);
 extern bool ui_platform_has_selection(Window *window);
@@ -177,7 +177,7 @@ bool ui_set_text(Window *window, const char *text) {
     return ui_platform_set_text(window, text);
 }
 
-bool ui_text_altered_by_load(Window *window) {
+bool ui_text_altered_by_load(const Window *window) {
     return ui_platform_text_altered_by_load(window);
 }
 

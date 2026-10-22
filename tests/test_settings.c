@@ -576,7 +576,8 @@ TEST_CASE(reader_skips_nested_values_and_keeps_them) {
     settings_set_int("n", 7);
     TEST_ASSERT(settings_save(), "save works");
     text = get_file(SHARED_FILE);
-    TEST_ASSERT(text && strstr(text, "\"n\": \"7\""), "a changed number is written as npad writes it");
+    TEST_ASSERT(text && strstr(text, "\"n\": \"7\""),
+                "a changed number is written as npad writes it");
     free(text);
 
     // Bare text that is not valid JSON is not written back bare
@@ -903,7 +904,8 @@ TEST_CASE(recent_files_are_saved_as_a_whole_list) {
     char got[256];
 
     // Window A has [a,b,c] and reopens b: [b,a,c], position 2 unchanged
-    start_instance("{\"recent_file_0\": \"a\", \"recent_file_1\": \"b\", \"recent_file_2\": \"c\"}");
+    start_instance(
+        "{\"recent_file_0\": \"a\", \"recent_file_1\": \"b\", \"recent_file_2\": \"c\"}");
     TEST_ASSERT(settings_add_recent_file("b"), "add works");
     // Meanwhile window B saved [y,a,b,c]
     put_file(SHARED_FILE, "{\"recent_file_0\": \"y\", \"recent_file_1\": \"a\","
@@ -960,8 +962,8 @@ TEST_CASE(history_list_has_no_gap_after_a_merge) {
 TEST_CASE(discard_one_unsaved_change_keeps_the_rest) {
     // A failed Preferences Apply undoes only what it wrote
     start_instance("{\"theme\": \"dark\"}");
-    settings_set_string("theme", "light");      // The Apply that failed to save
-    settings_set_string("added_by_apply", "1"); // A key the file does not have
+    settings_set_string("theme", "light");       // The Apply that failed to save
+    settings_set_string("added_by_apply", "1");  // A key the file does not have
     settings_add_recent_file("/tmp/opened.txt"); // Unrelated: must survive
     settings_discard_unsaved_change("theme");
     settings_discard_unsaved_change("added_by_apply");

@@ -35,13 +35,12 @@
 
 // --- Scripted UI -----------------------------------------------------------
 
-static int g_boxes;         // Message boxes shown
-static int g_questions;     // ...of which were yes/no questions
-static bool g_answer;       // What every question is answered
+static int g_boxes;     // Message boxes shown
+static int g_questions; // ...of which were yes/no questions
+static bool g_answer;   // What every question is answered
 static char g_last_box[1024];
 
-bool ui_show_message_box(Window *parent, const char *title, const char *message,
-                         bool is_question) {
+bool ui_show_message_box(Window *parent, const char *title, const char *message, bool is_question) {
     (void) parent;
     (void) title;
     g_boxes++;
@@ -93,7 +92,7 @@ bool ui_set_text(Window *window, const char *text) {
     (void) text;
     return true;
 }
-bool ui_text_altered_by_load(Window *window) {
+bool ui_text_altered_by_load(const Window *window) {
     (void) window;
     return false;
 }

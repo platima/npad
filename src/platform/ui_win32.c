@@ -2100,7 +2100,7 @@ bool ui_platform_set_text(Window *window, const char *text) {
     return true;
 }
 
-bool ui_platform_text_altered_by_load(Window *window) {
+bool ui_platform_text_altered_by_load(const Window *window) {
     return window && window->text_altered;
 }
 

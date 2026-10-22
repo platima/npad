@@ -88,7 +88,7 @@ bool ui_platform_set_text(Window *window, const char *text) {
     return false; // No text view: nothing was loaded
 }
 
-bool ui_platform_text_altered_by_load(Window *window) {
+bool ui_platform_text_altered_by_load(const Window *window) {
     (void) window;
     return false;
 }

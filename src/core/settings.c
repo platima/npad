@@ -467,7 +467,9 @@ char *settings_get_string(const char *key, const char *default_value) {
 static bool parse_int_text(const char *s, int *out) {
     char *end = NULL;
     errno = 0;
-    long v = strtol(s, &end, 10);
+    // long long, not long: long is 32 bits on Windows, where an INT_MIN /
+    // INT_MAX range check on it is always false (cppcheck's win32A run)
+    long long v = strtoll(s, &end, 10);
     if (end == s)
         return false;
     while (isspace((unsigned char) *end))
