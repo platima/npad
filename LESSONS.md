@@ -1667,7 +1667,12 @@ relative path such as `tests/../x` works only if it creates that folder itself
 **A suite can pass on Linux and crash on Windows.** An uninitialised
 `CRITICAL_SECTION` crashes where a zeroed pthread mutex happens to work, so any
 suite that touches the settings store must call `thread_safety_init()` first
-(`test_find_seed` and `test_tab_stops` did not). `fopen(..., "w")` on Windows
+(`test_find_seed` and `test_tab_stops` did not; later `test_ui_rules` crashed
+natively the same way, and `test_editor_reload` reaches the store through
+`editor.c`). That includes suites that only call a core module which reads
+settings (`editor.c`, `ui_rules.c`, `find_seed.c`, `tab_stops.c`,
+`settings_import.c`), not just ones that call `settings_*` themselves; a
+Linux-only run never shows the miss. `fopen(..., "w")` on Windows
 turns every `\n` into `\r\n`, so a fixture written in text mode fails byte
 counts only there: write fixtures with `"wb"`. And `tests/test_framework.h`
 declares a non-static `test_file_exists()`, so a static helper of that name in

@@ -10,6 +10,7 @@
 #include "test_framework.h"
 #include "../src/core/ui_rules.h"
 #include "../src/core/settings.h"
+#include "../src/core/thread_safety.h"
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
@@ -225,6 +226,9 @@ TEST_CASE(fit_title_bar_degenerate_inputs) {
 }
 
 int main(void) {
+    // The settings store is guarded by g_settings_mutex, which must be
+    // initialised first: on Windows an uninitialised CRITICAL_SECTION crashes
+    thread_safety_init();
     TEST_INIT();
 
     RUN_TEST(intervals_clamp_to_the_gtk_ranges);

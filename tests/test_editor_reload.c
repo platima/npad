@@ -12,6 +12,7 @@
 #include "test_framework.h"
 #include "../src/core/editor.h"
 #include "../src/core/settings.h"
+#include "../src/core/thread_safety.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -343,6 +344,9 @@ TEST_CASE(config_directory_is_the_throwaway_one) {
 }
 
 int main(void) {
+    // The editor reads settings, guarded by g_settings_mutex, which must be
+    // initialised first: on Windows an uninitialised CRITICAL_SECTION crashes
+    thread_safety_init();
     TEST_INIT(); // Before anything can resolve the config directory
 
     RUN_TEST(config_directory_is_the_throwaway_one);
