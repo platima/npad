@@ -41,11 +41,13 @@
 #include "../core/startup_prof.h"
 #include "../core/tab_stops.h"
 #include "../core/text_scan.h"
+#include "../core/ui_rules.h"
 #include "assoc_win32.h"
 #include "print_win32.h"
 #include "richedit_text.h"
 #include "../core/update_check.h"
 #include "resource.h"
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -303,6 +305,10 @@ struct Window {
     bool line_cut_pending;      // Last Ctrl+X was a whole-line cut (paste-above mode)
     DWORD line_cut_clip_seq;    // Clipboard sequence number right after that cut
     bool update_item_available; // Help update item currently shows "Update Available"
+    // Maximize asked for before the window was first shown: the first show
+    // then uses SW_SHOWMAXIMIZED, so the window never appears (and paints) at
+    // its restored size first (see ui_platform_show_window)
+    bool show_maximized;
 };
 
 // Global variables
@@ -437,7 +443,8 @@ static void replace_sel_one_step(HWND edit, const wchar_t *text);
 static void apply_word_wrap(Window *window);
 static void update_menu_states(Window *window);
 static void rebuild_recent_menu(Window *window);
-static void show_font_dialog(Window *window, const char *font_key, const char *default_face);
+static void show_font_dialog(Window *window, HWND owner, const char *font_key,
+                             const char *default_face);
 static void show_goto_dialog(Window *window);
 static void show_preferences_dialog(const Window *window, int start_page, bool show_debug);
 static void reload_and_apply_settings(Window *window);
@@ -577,24 +584,20 @@ static bool read_system_light_theme(void) {
     return read_personalize_light(L"SystemUsesLightTheme");
 }
 
-// Whether apps should use dark mode according to the OS setting
+// Whether apps should use dark mode according to the OS setting (the app
+// surface's setting, AppsUseLightTheme; missing means light)
 static bool read_system_dark_mode(void) {
-    bool dark = false;
-    HKEY hkey;
-    DWORD value = 1;
-    DWORD size = sizeof(value);
-    if (RegOpenKeyExW(HKEY_CURRENT_USER,
-                      L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", 0,
-                      KEY_READ, &hkey) == ERROR_SUCCESS) {
-        DWORD type = REG_DWORD;
-        if (RegQueryValueExW(hkey, L"AppsUseLightTheme", NULL, &type, (LPBYTE) &value, &size) ==
-                ERROR_SUCCESS &&
-            type == REG_DWORD && size == sizeof(DWORD)) {
-            dark = (value == 0);
-        }
-        RegCloseKey(hkey);
-    }
-    return dark;
+    return !read_personalize_light(L"AppsUseLightTheme");
+}
+
+// Whether a High Contrast theme is on. Notepad then draws in the theme's own
+// window colours, which is what a High Contrast user relies on.
+static bool high_contrast_on(void) {
+    HIGHCONTRASTW hc;
+    ZeroMemory(&hc, sizeof(hc));
+    hc.cbSize = sizeof(hc);
+    return SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(hc), &hc, 0) &&
+           (hc.dwFlags & HCF_HIGHCONTRASTON) != 0;
 }
 
 // Resolve the "theme" setting to editor colors and whether the scheme is
@@ -610,7 +613,18 @@ static bool theme_colors(COLORREF *bg, COLORREF *fg) {
     char *theme = settings_get_string("theme", "light");
     const char *t = theme ? theme : "light";
 
-    if (strcmp(t, "dark") == 0) {
+    // Light (the default, and what Notepad is) and System follow a High
+    // Contrast theme's window colours instead of fixed white on black, as
+    // notepad.exe does. The other schemes are a deliberate choice, so they
+    // keep their own colours. Not dark: the High Contrast theme draws its
+    // own frame, and forcing dark scroll bars or a dark caption over it
+    // would fight it.
+    bool follow_high_contrast =
+        (strcmp(t, "light") == 0 || strcmp(t, "system") == 0) && high_contrast_on();
+
+    if (follow_high_contrast) {
+        dark = false; // back / text keep the system colours read above
+    } else if (strcmp(t, "dark") == 0) {
         dark = true;
         back = RGB(30, 30, 30);
         text = RGB(220, 220, 220);
@@ -664,8 +678,11 @@ static COLORREF g_frame_color = CLR_INVALID;
 // 1809+). Both are resolved dynamically: uxtheme is not otherwise imported, and
 // a missing export must degrade to today's light bars rather than fail to load.
 //
-// AllowDark rather than ForceDark: it permits dark theming per control instead
-// of imposing it process-wide on every common control npad owns.
+// The mode is ForceDark or ForceLight, derived from npad's own scheme (see
+// apply_preferred_app_mode), never AllowDark: AllowDark follows the Windows
+// AppsUseLightTheme setting instead, which is wrong in both directions for an
+// app with its own colour scheme. SetWindowTheme("DarkMode_Explorer") then
+// themes the edit control's bars only once that mode allows dark.
 typedef enum {
     PAM_DEFAULT = 0,
     PAM_ALLOWDARK = 1,  // Dark applied only if WINDOWS is dark - not what npad wants
@@ -1683,7 +1700,21 @@ void ui_platform_destroy_window(Window *window) {
 
 void ui_platform_show_window(Window *window) {
     if (window && window->hwnd) {
-        ShowWindow(window->hwnd, SW_SHOW);
+        // A saved maximized state is applied by the first show itself.
+        // Showing at the restored size and maximizing afterwards painted the
+        // window twice and visibly jumped on every launch.
+        if (window->show_maximized) {
+            window->show_maximized = false;
+            ShowWindow(window->hwnd, SW_SHOWMAXIMIZED);
+            // Should whoever launched npad override the first show (a shortcut
+            // set to "Normal window"), still maximize as before; one set to
+            // "Minimized" is respected
+            if (!IsZoomed(window->hwnd) && !IsIconic(window->hwnd)) {
+                ShowWindow(window->hwnd, SW_MAXIMIZE);
+            }
+        } else {
+            ShowWindow(window->hwnd, SW_SHOW);
+        }
         UpdateWindow(window->hwnd);
         // Deferred startup work (crash-recovery scan) runs shortly after the
         // window is up. WM_TIMER is lowest-priority, so the first paint always
@@ -1715,6 +1746,36 @@ void ui_platform_set_window_title(Window *window, const char *title) {
 
 // Size/position getters use the *restored* geometry (WINDOWPLACEMENT) so a
 // maximized window persists its normal size, not the maximized rect.
+//
+// rcNormalPosition is in WORKSPACE coordinates, not screen coordinates: they
+// are relative to the work area, so with a taskbar at the top or left of the
+// monitor they are offset by the taskbar's size. The setters below (and the
+// first-run default, and the cascade) work in screen coordinates, so saving
+// the raw value made the window creep by one taskbar per session until its
+// title bar was off the top of the screen. Convert on the way out, the same
+// way Windows converts on the way in: by the offset of the work area of the
+// monitor the rectangle is on.
+static bool get_normal_rect_screen(HWND hwnd, RECT *out) {
+    WINDOWPLACEMENT wp;
+    ZeroMemory(&wp, sizeof(wp));
+    wp.length = sizeof(wp);
+    if (!GetWindowPlacement(hwnd, &wp))
+        return false;
+    RECT r = wp.rcNormalPosition;
+    // Tool windows are the exception that already uses screen coordinates
+    if (!(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW)) {
+        HMONITOR mon = MonitorFromRect(&r, MONITOR_DEFAULTTOPRIMARY);
+        MONITORINFO mi;
+        ZeroMemory(&mi, sizeof(mi));
+        mi.cbSize = sizeof(mi);
+        if (mon && GetMonitorInfoW(mon, &mi)) {
+            OffsetRect(&r, mi.rcWork.left - mi.rcMonitor.left, mi.rcWork.top - mi.rcMonitor.top);
+        }
+    }
+    *out = r;
+    return true;
+}
+
 void ui_platform_get_window_size(Window *window, int *width, int *height) {
     if (window && window->hwnd && width && height) {
         WINDOWPLACEMENT wp;
@@ -1737,11 +1798,10 @@ void ui_platform_set_window_size(Window *window, int width, int height) {
 
 void ui_platform_get_window_position(Window *window, int *x, int *y) {
     if (window && window->hwnd && x && y) {
-        WINDOWPLACEMENT wp;
-        wp.length = sizeof(wp);
-        if (GetWindowPlacement(window->hwnd, &wp)) {
-            *x = wp.rcNormalPosition.left;
-            *y = wp.rcNormalPosition.top;
+        RECT r;
+        if (get_normal_rect_screen(window->hwnd, &r)) {
+            *x = r.left;
+            *y = r.top;
         } else {
             *x = 0;
             *y = 0;
@@ -1751,18 +1811,58 @@ void ui_platform_get_window_position(Window *window, int *x, int *y) {
 
 void ui_platform_set_window_position(Window *window, int x, int y) {
     if (window && window->hwnd) {
-        SetWindowPos(window->hwnd, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+        SetWindowPos(window->hwnd, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 
         // If the restored position is not on any monitor (e.g. a display was
         // disconnected since last run), fall back to the default position
         if (MonitorFromWindow(window->hwnd, MONITOR_DEFAULTTONULL) == NULL) {
-            SetWindowPos(window->hwnd, NULL, 100, 100, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+            SetWindowPos(window->hwnd, NULL, 100, 100, 0, 0,
+                         SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+
+        // Still on a monitor is not the same as usable: a window whose title
+        // bar sits above the work area (under a top taskbar, or off the top
+        // of the screen - which the old workspace-coordinate save could
+        // produce) overlaps the monitor but cannot be dragged. Bring the
+        // caption back onto the nearest work area; a window that can already
+        // be grabbed is left exactly where it was.
+        //
+        // The monitor is chosen from the caption strip, not the whole window
+        // (MonitorFromWindow picks the largest overlap): on a mixed layout the
+        // caption can sit on one monitor while most of the body hangs over a
+        // neighbour whose work area starts lower, and fitting against that
+        // neighbour would push a perfectly grabbable window down. A caption
+        // under a top taskbar or off-screen still maps to the nearest monitor.
+        RECT wr;
+        if (GetWindowRect(window->hwnd, &wr)) {
+            int dpi = (int) get_window_dpi(window->hwnd);
+            int caption = MulDiv(32, dpi, 96);
+            RECT cap = { wr.left, wr.top, wr.right, wr.top + caption };
+            HMONITOR mon = MonitorFromRect(&cap, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO mi;
+            ZeroMemory(&mi, sizeof(mi));
+            mi.cbSize = sizeof(mi);
+            if (!mon || !GetMonitorInfoW(mon, &mi))
+                return;
+            UiRect work = { mi.rcWork.left, mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom };
+            int nx = wr.left, ny = wr.top;
+            if (ui_fit_title_bar(&nx, &ny, wr.right - wr.left, caption, MulDiv(120, dpi, 96),
+                                 &work)) {
+                SetWindowPos(window->hwnd, NULL, nx, ny, 0, 0,
+                             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            }
         }
     }
 }
 
 void ui_platform_set_window_maximized(Window *window, bool maximized) {
     if (window && window->hwnd) {
+        // Before the first show, only remember it: ui_platform_show_window
+        // shows the window maximized in one step
+        if (!IsWindowVisible(window->hwnd)) {
+            window->show_maximized = maximized;
+            return;
+        }
         ShowWindow(window->hwnd, maximized ? SW_MAXIMIZE : SW_RESTORE);
     }
 }
@@ -2802,26 +2902,79 @@ static int show_task_dialog_ex(HWND owner, const TaskDialogSpec *spec, bool *ver
         return IDCANCEL;
     }
 
-    // Fallback for a machine without comctl32 v6. A message box cannot show
-    // more than two named choices, so the first two custom buttons become
-    // Yes / No with their labels spelled out in the body - which is exactly
-    // what the hand-written fallbacks this helper replaced already did.
+    // Fallback for a machine without comctl32 v6 (latent: npad's manifest
+    // asks for v6, so TaskDialogIndirect is always there in practice). A
+    // message box cannot show more than two named choices, so the first two
+    // custom buttons become Yes / No with their labels spelled out in the
+    // body, and Cancel is added whenever a choice would otherwise be lost.
+    //
+    // The spec's default must stay the Enter default here too. Without this
+    // mapping Yes was always the default - which for the external-change
+    // prompt is Reload, the one choice that discards the user's edits.
+    int default_index = -1; // Index of the default custom button, -1 for Cancel
+    for (int i = 0; i < spec->button_count; i++) {
+        if (spec->buttons[i].nButtonID == spec->default_button) {
+            default_index = i;
+            break;
+        }
+    }
+    int shown = spec->button_count >= 2 ? 2 : 1;
+    // A default beyond the two shown buttons is reachable only as Cancel, and
+    // a third choice is otherwise simply dropped: offer Cancel for both
+    bool default_on_cancel = default_index < 0 || default_index >= shown;
+    bool with_cancel = spec->cancel_button || default_on_cancel || spec->button_count > shown;
+
     wchar_t body[900];
     int n = _snwprintf(body, 899, L"%ls%ls%ls", spec->instruction ? spec->instruction : L"",
                        spec->content ? L"\n\n" : L"", spec->content ? spec->content : L"");
     if (n < 0)
         n = 0;
-    for (int i = 0; i < spec->button_count && i < 2; i++) {
-        int m = _snwprintf(body + n, (size_t) (899 - n), L"\n\n%ls: %ls", i == 0 ? L"Yes" : L"No",
-                           spec->buttons[i].pszButtonText);
+    for (int i = 0; i <= shown; i++) {
+        const wchar_t *label = NULL;
+        const wchar_t *key = NULL;
+        if (i < shown) {
+            label = spec->buttons[i].pszButtonText;
+            key = shown == 1 ? L"OK" : (i == 0 ? L"Yes" : L"No");
+        } else if (with_cancel && !spec->cancel_button && default_index >= shown) {
+            label = spec->buttons[default_index].pszButtonText; // Cancel stands for it
+            key = L"Cancel";
+        }
+        if (!label || n >= 899)
+            continue;
+        // Mnemonic ampersands and the command-link second line read badly in
+        // a message box: drop the former and put the latter after a dash
+        wchar_t clean[200];
+        int c = 0;
+        for (const wchar_t *p = label; *p && c < 196; p++) {
+            if (*p == L'&')
+                continue;
+            if (*p == L'\n') {
+                clean[c++] = L' ';
+                clean[c++] = L'-';
+                clean[c++] = L' ';
+                continue;
+            }
+            clean[c++] = *p;
+        }
+        clean[c] = L'\0';
+        int m = _snwprintf(body + n, (size_t) (899 - n), L"\n\n%ls: %ls", key, clean);
         if (m < 0)
             break;
         n += m;
     }
     body[899] = L'\0';
 
-    UINT type = (spec->button_count >= 2) ? (spec->cancel_button ? MB_YESNOCANCEL : MB_YESNO)
-                                          : (spec->cancel_button ? MB_OKCANCEL : MB_OK);
+    UINT type;
+    if (shown >= 2)
+        type = with_cancel ? MB_YESNOCANCEL : MB_YESNO;
+    else
+        type = with_cancel ? MB_OKCANCEL : MB_OK;
+    if (default_on_cancel && with_cancel)
+        type |= (shown >= 2) ? MB_DEFBUTTON3 : MB_DEFBUTTON2;
+    else if (default_index == 1)
+        type |= MB_DEFBUTTON2;
+    else
+        type |= MB_DEFBUTTON1;
     if (spec->icon == TD_WARNING_ICON)
         type |= MB_ICONWARNING;
     else if (spec->icon == TD_INFORMATION_ICON)
@@ -2834,6 +2987,9 @@ static int show_task_dialog_ex(HWND owner, const TaskDialogSpec *spec, bool *ver
         return spec->buttons[0].nButtonID;
     if (res == IDNO && spec->button_count >= 2)
         return spec->buttons[1].nButtonID;
+    // Cancel (and Esc) chose the default when Cancel was standing in for it
+    if (res == IDCANCEL && !spec->cancel_button && default_index >= shown)
+        return spec->buttons[default_index].nButtonID;
     return IDCANCEL;
 }
 
@@ -5664,8 +5820,11 @@ void ui_platform_set_auto_save_timer(Window *window, int seconds) {
         return;
 
     KillTimer(window->hwnd, NPAD_AUTO_SAVE_TIMER_ID);
-    if (seconds > 0) {
-        SetTimer(window->hwnd, NPAD_AUTO_SAVE_TIMER_ID, (UINT) seconds * 1000, NULL);
+    // 64-bit and capped: (UINT) seconds * 1000 wrapped, so a huge interval
+    // became a sub-second auto-save
+    UINT ms = ui_interval_to_timer_ms(seconds);
+    if (ms > 0) {
+        SetTimer(window->hwnd, NPAD_AUTO_SAVE_TIMER_ID, ms, NULL);
     }
 }
 
@@ -5674,8 +5833,9 @@ void ui_platform_set_session_timer(Window *window, int seconds) {
         return;
 
     KillTimer(window->hwnd, NPAD_SESSION_TIMER_ID);
-    if (seconds > 0) {
-        SetTimer(window->hwnd, NPAD_SESSION_TIMER_ID, (UINT) seconds * 1000, NULL);
+    UINT ms = ui_interval_to_timer_ms(seconds);
+    if (ms > 0) {
+        SetTimer(window->hwnd, NPAD_SESSION_TIMER_ID, ms, NULL);
     }
 }
 
@@ -5845,21 +6005,18 @@ static void build_char_format(const Window *window, CHARFORMAT2W *cf) {
     const char *default_face = DEFAULT_MONO_FONT;
     const char *key = active_font_key(window, &default_face);
     char *face = settings_get_string(key, default_face);
-    int size = settings_get_int("font_size", 11);
+    // Tenths of a point, clamped to 6-72 pt, so a 10.5 pt choice is kept
+    int tenths = ui_font_size_setting_tenths();
     int weight = settings_get_int("font_weight", FW_NORMAL);
     bool italic = settings_get_bool("font_italic", false);
 
-    if (size < 6)
-        size = 6;
-    if (size > 72)
-        size = 72;
     if (weight < FW_THIN || weight > FW_HEAVY) // A hand edit; wWeight is a WORD
         weight = FW_NORMAL;
 
     ZeroMemory(cf, sizeof(*cf));
     cf->cbSize = sizeof(*cf);
     cf->dwMask = CFM_FACE | CFM_SIZE | CFM_WEIGHT | CFM_ITALIC | CFM_COLOR;
-    cf->yHeight = size * 20; // Twips
+    cf->yHeight = tenths * 2; // Twips: 20 per point, so 2 per tenth
     cf->wWeight = (WORD) weight;
     cf->dwEffects = italic ? CFE_ITALIC : 0;
     theme_colors(NULL, &cf->crTextColor); // Match the current scheme's text color
@@ -6159,13 +6316,17 @@ static void apply_font(Window *window) {
 }
 
 // Show the font chooser and save the selection to font_key (face) plus the
-// shared size/weight/italic settings.
-static void show_font_dialog(Window *window, const char *font_key, const char *default_face) {
+// shared size/weight/italic settings. owner is the window the chooser is modal
+// to: the main window from the Format menu, but the Preferences sheet when
+// opened from there - owned by the main window (which the sheet has already
+// disabled), the chooser left the sheet itself live underneath it.
+static void show_font_dialog(Window *window, HWND owner, const char *font_key,
+                             const char *default_face) {
     if (!window || !window->edit_hwnd)
         return;
 
     char *face = settings_get_string(font_key, default_face);
-    int size = settings_get_int("font_size", 11);
+    int tenths = ui_font_size_setting_tenths();
     int weight = settings_get_int("font_weight", FW_NORMAL);
     bool italic = settings_get_bool("font_italic", false);
     if (weight < FW_THIN || weight > FW_HEAVY)
@@ -6177,7 +6338,7 @@ static void show_font_dialog(Window *window, const char *font_key, const char *d
 
     LOGFONTW lf;
     ZeroMemory(&lf, sizeof(lf));
-    lf.lfHeight = -MulDiv(size, log_pixels_y, 72);
+    lf.lfHeight = -MulDiv(tenths, log_pixels_y, 720);
     lf.lfWeight = weight;
     lf.lfItalic = italic ? TRUE : FALSE;
     wchar_t *wide_face = utf8_to_wide(face ? face : default_face);
@@ -6191,10 +6352,15 @@ static void show_font_dialog(Window *window, const char *font_key, const char *d
     CHOOSEFONTW cf;
     ZeroMemory(&cf, sizeof(cf));
     cf.lStructSize = sizeof(cf);
-    cf.hwndOwner = window->hwnd;
+    cf.hwndOwner = owner ? owner : window->hwnd;
     cf.lpLogFont = &lf;
-    cf.Flags = CF_SCREENFONTS | CF_INITTOLOGFONTSTRUCT | CF_NOSCRIPTSEL;
+    // CF_LIMITSIZE: the chooser itself refuses sizes outside the 6-72 pt the
+    // editor (and printing, and GTK) can show, instead of storing 96 and
+    // silently drawing 72
+    cf.Flags = CF_SCREENFONTS | CF_INITTOLOGFONTSTRUCT | CF_NOSCRIPTSEL | CF_LIMITSIZE;
     cf.nFontType = SCREEN_FONTTYPE;
+    cf.nSizeMin = FONT_SIZE_MIN_PT;
+    cf.nSizeMax = FONT_SIZE_MAX_PT;
 
     if (ChooseFontW(&cf)) {
         char *new_face = wide_to_utf8(lf.lfFaceName);
@@ -6202,7 +6368,9 @@ static void show_font_dialog(Window *window, const char *font_key, const char *d
             settings_set_string(font_key, new_face);
             free(new_face);
         }
-        settings_set_int("font_size", cf.iPointSize / 10); // iPointSize is tenths of a point
+        // iPointSize is tenths of a point; stored as "10.5", or "11" for a
+        // whole size, so a half point survives the round trip
+        ui_font_size_set_tenths(cf.iPointSize);
         settings_set_int("font_weight", (int) lf.lfWeight);
         settings_set_bool("font_italic", lf.lfItalic != 0);
 
@@ -6435,18 +6603,22 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
         case WM_INITDIALOG:
             CheckDlgButton(page, ID_PREF_AUTOSAVE_ENABLED,
                            editor_is_auto_save_enabled() ? BST_CHECKED : BST_UNCHECKED);
+            // The boxes hold no more digits than their largest value (the
+            // GTK spin ranges, ui_rules.h); Apply clamps what remains
+            SendDlgItemMessageW(page, ID_PREF_AUTOSAVE_INTERVAL, EM_LIMITTEXT, 5, 0);
+            SendDlgItemMessageW(page, ID_PREF_LARGE_FILE_MB, EM_LIMITTEXT, 7, 0);
+            SendDlgItemMessageW(page, ID_PREF_RECENT_MAX, EM_LIMITTEXT, 2, 0);
+            SendDlgItemMessageW(page, ID_PREF_SESSION_INTERVAL, EM_LIMITTEXT, 5, 0);
             SetDlgItemInt(page, ID_PREF_AUTOSAVE_INTERVAL, (UINT) editor_get_auto_save_interval(),
                           FALSE);
-            SetDlgItemInt(
-                page, ID_PREF_LARGE_FILE_MB,
-                (UINT) settings_get_int("large_file_warning_mb", editor_default_large_file_mb()),
-                FALSE);
+            SetDlgItemInt(page, ID_PREF_LARGE_FILE_MB,
+                          (UINT) ui_large_file_mb_setting(editor_default_large_file_mb()), FALSE);
             SetDlgItemInt(page, ID_PREF_RECENT_MAX, (UINT) settings_get_int("recent_files_max", 10),
                           FALSE);
             CheckDlgButton(page, ID_PREF_SESSION_ENABLED,
                            editor_is_session_resume_enabled() ? BST_CHECKED : BST_UNCHECKED);
-            SetDlgItemInt(page, ID_PREF_SESSION_INTERVAL,
-                          (UINT) settings_get_int("session_interval", 30), FALSE);
+            SetDlgItemInt(page, ID_PREF_SESSION_INTERVAL, (UINT) ui_session_interval_setting(),
+                          FALSE);
             CheckDlgButton(page, ID_PREF_CTRL_N_WINDOW,
                            settings_get_bool("ctrl_n_new_window", false) ? BST_CHECKED
                                                                          : BST_UNCHECKED);
@@ -6508,10 +6680,16 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                     changed = true;
                 }
 
+                // Each number is clamped to its range in 64 bits (a UINT
+                // above INT_MAX used to turn negative), and a clamped value is
+                // written back so the box shows what was actually stored
                 if (prefs_changed(page, ID_PREF_AUTOSAVE_INTERVAL)) {
                     UINT interval = GetDlgItemInt(page, ID_PREF_AUTOSAVE_INTERVAL, &ok, FALSE);
-                    if (ok && interval > 0) {
-                        editor_set_auto_save_interval((int) interval);
+                    if (ok) {
+                        int clamped = ui_clamp_auto_save_interval((long long) interval);
+                        editor_set_auto_save_interval(clamped);
+                        if ((UINT) clamped != interval)
+                            SetDlgItemInt(page, ID_PREF_AUTOSAVE_INTERVAL, (UINT) clamped, FALSE);
                         changed = true;
                     }
                 }
@@ -6521,7 +6699,10 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                 if (prefs_changed(page, ID_PREF_LARGE_FILE_MB)) {
                     UINT large_mb = GetDlgItemInt(page, ID_PREF_LARGE_FILE_MB, &ok, FALSE);
                     if (ok) {
-                        settings_set_int("large_file_warning_mb", (int) large_mb);
+                        int clamped = ui_clamp_large_file_mb((long long) large_mb);
+                        settings_set_int(LARGE_FILE_MB_KEY, clamped);
+                        if ((UINT) clamped != large_mb)
+                            SetDlgItemInt(page, ID_PREF_LARGE_FILE_MB, (UINT) clamped, FALSE);
                         changed = true;
                     }
                 }
@@ -6531,6 +6712,7 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                     if (ok) {
                         if (recent_max > MAX_RECENT_MENU_FILES) {
                             recent_max = MAX_RECENT_MENU_FILES;
+                            SetDlgItemInt(page, ID_PREF_RECENT_MAX, recent_max, FALSE);
                         }
                         settings_set_int("recent_files_max", (int) recent_max);
                         changed = true;
@@ -6544,8 +6726,11 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                 if (prefs_changed(page, ID_PREF_SESSION_INTERVAL)) {
                     UINT session_interval =
                         GetDlgItemInt(page, ID_PREF_SESSION_INTERVAL, &ok, FALSE);
-                    if (ok && session_interval > 0) {
-                        settings_set_int("session_interval", (int) session_interval);
+                    if (ok) {
+                        int clamped = ui_clamp_session_interval((long long) session_interval);
+                        settings_set_int(SESSION_INTERVAL_KEY, clamped);
+                        if ((UINT) clamped != session_interval)
+                            SetDlgItemInt(page, ID_PREF_SESSION_INTERVAL, (UINT) clamped, FALSE);
                         session_changed = true;
                     }
                 }
@@ -6768,12 +6953,15 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
                 (code == CBN_SELCHANGE && id == ID_PREF_SCHEME)) {
                 mark_prefs_dirty(page);
             }
+            // Owned by the sheet, so the sheet is disabled while it is open
             if (id == ID_PREF_FONT_MONO) {
-                show_font_dialog(g_main_window, "monospace_font", DEFAULT_MONO_FONT);
+                show_font_dialog(g_main_window, GetParent(page), "monospace_font",
+                                 DEFAULT_MONO_FONT);
                 return TRUE;
             }
             if (id == ID_PREF_FONT_PROP) {
-                show_font_dialog(g_main_window, "proportional_font", DEFAULT_PROP_FONT);
+                show_font_dialog(g_main_window, GetParent(page), "proportional_font",
+                                 DEFAULT_PROP_FONT);
                 return TRUE;
             }
             break;
@@ -7943,23 +8131,47 @@ static void show_preferences_dialog(const Window *window, int start_page, bool s
         reload_and_apply_settings(g_main_window);
 }
 
-// Go To Line dialog (resource-based, truly modal)
+// Go To Line dialog (resource-based, truly modal). Like notepad.exe it opens
+// on the caret's line, and a number past the end (or 0) is reported without
+// closing, so it can be corrected in place. lparam is the Window.
 static INT_PTR CALLBACK goto_proc(HWND dialog, UINT msg, WPARAM wparam, LPARAM lparam) {
-    (void) lparam;
     switch (msg) {
-        case WM_INITDIALOG:
+        case WM_INITDIALOG: {
+            Window *window = (Window *) lparam;
+            SetWindowLongPtrW(dialog, DWLP_USER, (LONG_PTR) window);
             position_dialog_on_owner(dialog);
-            SetDlgItemInt(dialog, ID_GOTO_EDIT, 1, FALSE);
+            int line = 1, column = 1;
+            ui_platform_get_cursor_line_column(window, &line, &column);
+            SetDlgItemInt(dialog, ID_GOTO_EDIT, (UINT) (line > 0 ? line : 1), FALSE);
             SendDlgItemMessageW(dialog, ID_GOTO_EDIT, EM_SETSEL, 0, -1);
             SetFocus(GetDlgItem(dialog, ID_GOTO_EDIT));
             return FALSE;
+        }
 
         case WM_COMMAND:
             switch (LOWORD(wparam)) {
                 case IDOK: {
-                    BOOL ok = FALSE;
-                    UINT line = GetDlgItemInt(dialog, ID_GOTO_EDIT, &ok, FALSE);
-                    EndDialog(dialog, ok ? (INT_PTR) line : 0);
+                    Window *window = (Window *) GetWindowLongPtrW(dialog, DWLP_USER);
+                    // Read as text: GetDlgItemInt accepts up to UINT_MAX, and
+                    // a line above INT_MAX wrapped negative and went to the top
+                    wchar_t wide[32];
+                    wide[0] = L'\0';
+                    GetDlgItemTextW(dialog, ID_GOTO_EDIT, wide, 32);
+                    char text[32];
+                    int n = 0;
+                    for (const wchar_t *p = wide; *p && n < 31; p++)
+                        text[n++] = (*p < 128) ? (char) *p : '?';
+                    text[n] = '\0';
+                    int line = 0;
+                    if (ui_goto_line_parse(text, ui_platform_get_line_count(window), &line) ==
+                        GOTO_LINE_OK) {
+                        EndDialog(dialog, (INT_PTR) line);
+                        return TRUE;
+                    }
+                    MessageBoxW(dialog, L"The line number is beyond the total number of lines",
+                                L"npad - Go To Line", MB_OK);
+                    SendDlgItemMessageW(dialog, ID_GOTO_EDIT, EM_SETSEL, 0, -1);
+                    SetFocus(GetDlgItem(dialog, ID_GOTO_EDIT));
                     return TRUE;
                 }
                 case IDCANCEL:
@@ -7979,9 +8191,10 @@ static void show_goto_dialog(Window *window) {
     if (!window || !window->edit_hwnd)
         return;
 
-    INT_PTR line =
-        DialogBoxParamW(g_hinstance, MAKEINTRESOURCEW(IDD_GOTO), window->hwnd, goto_proc, 0);
-    if (line <= 0)
+    // The dialog only returns a line that exists (1..line count, so <= INT_MAX)
+    INT_PTR line = DialogBoxParamW(g_hinstance, MAKEINTRESOURCEW(IDD_GOTO), window->hwnd, goto_proc,
+                                   (LPARAM) window);
+    if (line <= 0 || line > INT_MAX)
         return;
 
     // Logical lines, so the number matches what Ln shows and what the file
@@ -8646,8 +8859,11 @@ static void list_indent_default(Window *window, bool unindent) {
 }
 
 // Append the Markdown-tool items into an existing menu (used by both the
-// Markdown menu-bar popup and the right-click context menu).
-static void populate_list_menu(HMENU menu) {
+// Markdown menu-bar popup and the right-click context menu). context selects
+// alternative mnemonics for the four items whose usual letter is already taken
+// by the context menu's own Undo, Cut, Paste and Delete - the same labels GTK
+// uses, so the right-click menu has no duplicate access keys on either platform.
+static void populate_list_menu(HMENU menu, bool context) {
     // The indent/unindent shortcut labels track the active binding
     bool brackets = settings_get_bool("list_indent_shortcut_brackets", false);
 
@@ -8661,7 +8877,8 @@ static void populate_list_menu(HMENU menu) {
     AppendMenuW(menu, MF_STRING | MF_POPUP, (UINT_PTR) sort, L"&Sort");
     AppendMenuW(menu, MF_STRING, ID_LIST_UNIQUE, L"Uni&que");
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(menu, MF_STRING, ID_LIST_CONVERT_DELIM, L"Convert &Delimiters...");
+    AppendMenuW(menu, MF_STRING, ID_LIST_CONVERT_DELIM,
+                context ? L"Convert De&limiters..." : L"Convert &Delimiters...");
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
 
     HMENU indent = CreatePopupMenu();
@@ -8675,13 +8892,15 @@ static void populate_list_menu(HMENU menu) {
     AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 4, L"Asterisk, &leading space (\" * \")");
     AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 5, L"Hyphen, l&eading space (\" - \")");
     AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 6, L"&Custom...");
-    AppendMenuW(menu, MF_STRING | MF_POPUP, (UINT_PTR) indent, L"Inden&t");
-    AppendMenuW(menu, MF_STRING, ID_LIST_UNINDENT,
-                brackets ? L"&Unindent\tCtrl+[" : L"&Unindent\tShift+Tab");
+    AppendMenuW(menu, MF_STRING | MF_POPUP, (UINT_PTR) indent, context ? L"I&ndent" : L"Inden&t");
+    const wchar_t *unindent = context ? (brackets ? L"Un&indent\tCtrl+[" : L"Un&indent\tShift+Tab")
+                                      : (brackets ? L"&Unindent\tCtrl+[" : L"&Unindent\tShift+Tab");
+    AppendMenuW(menu, MF_STRING, ID_LIST_UNINDENT, unindent);
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
     // Rich-text paste, fully converted to markdown (Ctrl+V / Ctrl+Shift+V modes
     // are configurable in Preferences; this item is always a full conversion)
-    AppendMenuW(menu, MF_STRING, ID_EDIT_PASTE_MARKDOWN, L"&Paste as Markdown");
+    AppendMenuW(menu, MF_STRING, ID_EDIT_PASTE_MARKDOWN,
+                context ? L"Paste as &Markdown" : L"&Paste as Markdown");
 }
 
 // Redrawing the menu bar twice in a row flashes it. A settings broadcast
@@ -8712,7 +8931,7 @@ static void apply_list_tools_menu(Window *window) {
     }
     if (enabled) {
         HMENU list = CreatePopupMenu();
-        populate_list_menu(list);
+        populate_list_menu(list, false);
         InsertMenuW(window->hmenu, 3, MF_BYPOSITION | MF_POPUP | MF_STRING, (UINT_PTR) list,
                     L"&Markdown");
         window->list_menu_present = true;
@@ -8916,7 +9135,8 @@ static bool print_context_build(Window *window, PrintContext *pc) {
     char *face_utf8 = settings_get_string(key, default_face);
     pc->face = face_utf8 ? utf8_to_wide(face_utf8) : NULL;
     free(face_utf8);
-    pc->point_size = settings_get_int("font_size", 11);
+    // Printing takes whole points; a half-point size rounds up
+    pc->point_size = ui_font_size_tenths_to_points(ui_font_size_setting_tenths());
     return true;
 }
 
@@ -10023,10 +10243,11 @@ static void show_context_menu(Window *window, int x, int y) {
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(menu, MF_STRING, ID_EDIT_SELECT_ALL, L"Select &All");
 
-    // List tools mirror the List menu when enabled
+    // List tools mirror the Markdown menu when enabled, with mnemonics that
+    // do not collide with the items above (Undo, Cut, Paste, Delete)
     if (settings_get_bool("list_tools_enabled", false)) {
         AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-        populate_list_menu(menu);
+        populate_list_menu(menu, true);
     }
 
     apply_edit_command_states(window, menu);
@@ -10315,7 +10536,7 @@ static void handle_command(Window *window, WORD command) {
         case ID_FORMAT_FONT: {
             const char *def = DEFAULT_MONO_FONT;
             const char *key = active_font_key(window, &def);
-            show_font_dialog(window, key, def);
+            show_font_dialog(window, window->hwnd, key, def);
             break;
         }
         case ID_VIEW_ZOOM_IN:
@@ -10909,9 +11130,25 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 #endif
                     apply_theme(window); // Also re-applies the icon
                 }
+            } else if (wparam == SPI_SETHIGHCONTRAST && window) {
+                // High Contrast switched on or off: Light and System follow
+                // its colours (theme_colors). apply_theme is idempotent, so
+                // a broadcast that changes nothing restamps nothing.
+                apply_theme(window);
             }
             break;
         }
+
+        case WM_SYSCOLORCHANGE:
+        case WM_THEMECHANGED:
+            // The system colours (a High Contrast theme's among them) changed.
+            // Common controls only hear WM_SYSCOLORCHANGE from their parent.
+            if (window) {
+                if (msg == WM_SYSCOLORCHANGE && window->status_hwnd)
+                    SendMessageW(window->status_hwnd, WM_SYSCOLORCHANGE, wparam, lparam);
+                apply_theme(window);
+            }
+            break;
 
         case WM_DPICHANGED: {
             if (window) {

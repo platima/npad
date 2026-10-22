@@ -162,7 +162,9 @@ int main(int argc, char *argv[]) {
     }
 
     // Window geometry: use the saved state if present, otherwise a large
-    // DPI-correct default centred on the work area (first run).
+    // DPI-correct default centred on the work area (first run). Positions are
+    // screen coordinates on every platform (Win32 converts its workspace-
+    // coordinate placement when it reads it).
     int x, y, width, height;
     bool maximized = false;
     if (settings_has_key("window_width")) {
@@ -188,11 +190,13 @@ int main(int argc, char *argv[]) {
     // UI events always see a valid main window
     editor_set_main_window(main_window);
 
-    // Show the window, restoring maximized state if applicable
-    ui_show_window(main_window);
+    // Restore the maximized state BEFORE the first show, so the window
+    // appears maximized rather than painting at its restored size and then
+    // jumping (Win32 shows it with SW_SHOWMAXIMIZED; GTK maximizes on map)
     if (maximized) {
         ui_set_window_maximized(main_window, true);
     }
+    ui_show_window(main_window);
 
     // Open startup file if specified (offering to create it when missing,
     // as Notepad does)

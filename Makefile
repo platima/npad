@@ -45,12 +45,12 @@ WINDOWS_ARM64_TARGET = npad-arm64.exe
 WIN_BUILD_DIR ?= build
 
 # Source files
-CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/settings_import.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/startup_prof.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c src/core/find_seed.c src/core/tab_stops.c src/core/text_scan.c
+CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/settings_import.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/startup_prof.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c src/core/find_seed.c src/core/tab_stops.c src/core/text_scan.c src/core/ui_rules.c
 SHARED_SOURCES = src/ui_interface.c
 
 # Test sources
 TEST_FRAMEWORK_SOURCES = tests/test_framework.c
-TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/settings_import.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c src/core/find_seed.c src/core/tab_stops.c src/core/text_scan.c  # Core sources without UI dependencies
+TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/settings_import.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c src/core/find_seed.c src/core/tab_stops.c src/core/text_scan.c src/core/ui_rules.c  # Core sources without UI dependencies
 
 # Windows GUI specific
 WINDOWS_GUI_SOURCES = src/platform/ui_win32.c src/platform/print_win32.c src/platform/assoc_win32.c src/platform/richedit_text.c src/platform/args_win32.c
@@ -315,7 +315,7 @@ format-check:
 # Every suite runs in its own fresh temporary directory with the settings
 # location pointed inside it (tests/test_framework.c), so a run never writes
 # into the checkout or reads the user's real settings.
-TEST_SUITES = file_ops atomic_save error encoding session list_ops update_check settings html_md undo find_seed tab_stops settings_import richedit_text editor_load editor recovery editor_insert text_scan editor_reload fuzz
+TEST_SUITES = file_ops atomic_save error encoding session list_ops update_check settings html_md undo find_seed tab_stops settings_import richedit_text editor_load editor recovery editor_insert text_scan editor_reload ui_rules fuzz
 TEST_DEPS = $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_framework.h
 # NPAD_TEST_HOOKS: on Windows a test build keeps settings under
 # %NPAD_TEST_CONFIG_DIR% (which the framework sets) instead of %APPDATA%
@@ -346,7 +346,7 @@ TEST_EXTRA_DEPS_recovery = $(TEST_EXTRA_recovery) tests/stub_ui_recovery.h
 TEST_EXTRA_DEPS_editor_insert = $(TEST_EXTRA_editor_insert)
 TEST_EXTRA_DEPS_editor_reload = $(TEST_EXTRA_editor_reload)
 
-test: test-file-ops test-atomic-save test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-settings-import test-richedit-text test-editor-load test-editor test-recovery test-editor-insert test-text-scan test-editor-reload test-fuzz-quick
+test: test-file-ops test-atomic-save test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-settings-import test-richedit-text test-editor-load test-editor test-recovery test-editor-insert test-text-scan test-editor-reload test-ui-rules test-fuzz-quick
 	@echo "All tests completed"
 
 test-file-ops: tests/test_file_ops
@@ -425,8 +425,6 @@ test-editor-insert: tests/test_editor_insert
 	@echo "Running Ctrl+drop insert tests..."
 	./tests/test_editor_insert
 
-# The property/fuzz suite at its default (small) iteration count, so every
-# `make test` exercises it; `make test-fuzz` runs it longer under sanitizers
 test-text-scan: tests/test_text_scan
 	@echo "Running text scan tests..."
 	./tests/test_text_scan
@@ -435,6 +433,12 @@ test-editor-reload: tests/test_editor_reload
 	@echo "Running editor reload tests..."
 	./tests/test_editor_reload
 
+test-ui-rules: tests/test_ui_rules
+	@echo "Running window and dialog rule tests..."
+	./tests/test_ui_rules
+
+# The property/fuzz suite at its default (small) iteration count, so every
+# `make test` exercises it; `make test-fuzz` runs it longer under sanitizers
 test-fuzz-quick: tests/test_fuzz
 	@echo "Running property/fuzz tests (quick)..."
 	./tests/test_fuzz
@@ -684,4 +688,4 @@ help:
 	@echo "  DEBUG=1          - Enable debug build"
 	@echo "  VERSION          - Version string (auto-detected from git)"
 
-.PHONY: all windows windows-gui windows-arm64 windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm pacman tarball lint format format-check test test-file-ops test-atomic-save test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-settings-import test-richedit-text test-editor-load test-editor test-recovery test-editor-insert test-text-scan test-editor-reload test-fuzz-quick test-windows test-windows-build test-assoc-win32 test-richedit-win32 test-win32-unicode test-sanitize test-fuzz help detect-platform
+.PHONY: all windows windows-gui windows-arm64 windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm pacman tarball lint format format-check test test-file-ops test-atomic-save test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-settings-import test-richedit-text test-editor-load test-editor test-recovery test-editor-insert test-text-scan test-editor-reload test-ui-rules test-fuzz-quick test-windows test-windows-build test-assoc-win32 test-richedit-win32 test-win32-unicode test-sanitize test-fuzz help detect-platform

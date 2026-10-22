@@ -79,6 +79,7 @@ tests/test_editor_insert
 tests/test_fuzz
 tests/test_text_scan
 tests/test_editor_reload
+tests/test_ui_rules
 
 # Test fixtures. Suites now run in a private temporary directory, so these
 # should never appear; older test binaries wrote them into the working
