@@ -185,12 +185,22 @@ expect 1 "a missing LICENSE (LicenseFile=, Source:, Source=) fails" refs
 inst
 rm "$tmp/inst/src/platform/npad-light.ico"
 expect 1 "a deleted icon (the v0.28.0 failure) fails" refs
+# A fixture edited by sed must differ from the real file, or the case below it
+# would pass for the wrong reason (the real file passes the check) or fail for
+# one (the line it edits is gone)
+edited_iss() {
+	if cmp -s "$repo/installer/npad.iss" "$tmp/inst/installer/npad.iss"; then
+		bad "$1 (the fixture edit no longer matches installer/npad.iss)"
+	else
+		expect 1 "$1" refs
+	fi
+}
 inst
 sed 's/IntelOneMono-Bold.ttf"; DestDir/IntelOneMono-Heavy.ttf"; DestDir/' "$repo/installer/npad.iss" >"$tmp/inst/installer/npad.iss"
-expect 1 "a font fetch-fonts.ps1 does not download fails" refs
+edited_iss "a font fetch-fonts.ps1 does not download fails"
 inst
-sed 's/fonts\\Roboto\\\*\.ttf/fonts\\Roboto\\*.woff/' "$repo/installer/npad.iss" >"$tmp/inst/installer/npad.iss"
-expect 1 "a font wildcard that matches nothing fails" refs
+sed 's/fonts\\Roboto\\Roboto-Regular\.ttf"/fonts\\Roboto\\*.woff"/' "$repo/installer/npad.iss" >"$tmp/inst/installer/npad.iss"
+edited_iss "a font wildcard that matches nothing fails"
 
 echo
 echo "release scripts: $passed passed, $failed failed"
