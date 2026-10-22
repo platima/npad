@@ -35,6 +35,7 @@
 #include "../core/find_seed.h"
 #include "../core/html_md.h"
 #include "../core/list_ops.h"
+#include "../core/print_core.h"
 #include "../core/session.h"
 #include "../core/settings.h"
 #include "../core/settings_import.h"
@@ -434,6 +435,9 @@ static HWND preview_active_window(void);
 static HACCEL preview_active_accelerators(void);
 static void preview_close_active(void);
 static void preview_retheme_active(void);
+static void preview_recolour_active(void);
+static void print_flush_deferred(void);
+static void print_theme_window(HWND hwnd);
 static void apply_font(Window *window);
 static void apply_font_default(Window *window);
 static void refresh_font_binding(Window *window);
@@ -1326,6 +1330,26 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, L
 // Platform lifecycle
 // ---------------------------------------------------------------------------
 
+// Per-monitor DPI entry points, which Windows 10 1607 added
+static void load_dpi_functions(void) {
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (user32) {
+        union {
+            FARPROC proc;
+            GetDpiForWindowFunc func;
+        } dpi_fn;
+        dpi_fn.proc = GetProcAddress(user32, "GetDpiForWindow");
+        g_GetDpiForWindow = dpi_fn.func;
+
+        union {
+            FARPROC proc;
+            GetSystemMetricsForDpiFunc func;
+        } metrics_fn;
+        metrics_fn.proc = GetProcAddress(user32, "GetSystemMetricsForDpi");
+        g_GetSystemMetricsForDpi = metrics_fn.func;
+    }
+}
+
 bool ui_platform_init(void) {
     g_hinstance = GetModuleHandleW(NULL);
 
@@ -1358,23 +1382,7 @@ bool ui_platform_init(void) {
         }
     }
 
-    HMODULE user32 = GetModuleHandleW(L"user32.dll");
-    if (user32) {
-        union {
-            FARPROC proc;
-            GetDpiForWindowFunc func;
-        } dpi_fn;
-        dpi_fn.proc = GetProcAddress(user32, "GetDpiForWindow");
-        g_GetDpiForWindow = dpi_fn.func;
-
-        union {
-            FARPROC proc;
-            GetSystemMetricsForDpiFunc func;
-        } metrics_fn;
-        metrics_fn.proc = GetProcAddress(user32, "GetSystemMetricsForDpi");
-        g_GetSystemMetricsForDpi = metrics_fn.func;
-    }
-
+    load_dpi_functions();
     init_dark_mode_support();
 
     if (!register_window_class()) {
@@ -1391,6 +1399,11 @@ bool ui_platform_init(void) {
     // COM apartment for the shell Save dialog (IFileSaveDialog). Tolerate an
     // already-initialised apartment (RPC_E_CHANGED_MODE / S_FALSE).
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+
+    // A close or prompt held back while printing is replayed when it ends,
+    // and the print progress window is themed like the rest of npad
+    print_set_idle_hook(print_flush_deferred);
+    print_set_window_hook(print_theme_window);
 
     // Theme default is Light; "system" follows the OS, "dark"/solarized override
     g_dark_mode = resolve_theme_dark_mode();
@@ -1873,6 +1886,8 @@ bool ui_platform_is_window_maximized(const Window *window) {
     return IsZoomed(window->hwnd) != 0;
 }
 
+static void default_rect_in_work_area(const RECT *area, int *x, int *y, int *width, int *height);
+
 void ui_platform_get_default_window_rect(int *x, int *y, int *width, int *height) {
     RECT work;
     if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0)) {
@@ -1882,7 +1897,25 @@ void ui_platform_get_default_window_rect(int *x, int *y, int *width, int *height
         work.right = GetSystemMetrics(SM_CXSCREEN);
         work.bottom = GetSystemMetrics(SM_CYSCREEN);
     }
+    default_rect_in_work_area(&work, x, y, width, height);
+}
 
+// The same default size, centred on the work area of the monitor hwnd is on
+// (the primary monitor's when that cannot be found). For a window that
+// belongs with another, such as Print Preview with its document.
+static void default_rect_on_monitor_of(HWND hwnd, int *x, int *y, int *width, int *height) {
+    HMONITOR monitor = hwnd ? MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) : NULL;
+    MONITORINFO mi;
+    ZeroMemory(&mi, sizeof(mi));
+    mi.cbSize = sizeof(mi);
+    if (monitor && GetMonitorInfoW(monitor, &mi))
+        default_rect_in_work_area(&mi.rcWork, x, y, width, height);
+    else
+        ui_platform_get_default_window_rect(x, y, width, height);
+}
+
+static void default_rect_in_work_area(const RECT *area, int *x, int *y, int *width, int *height) {
+    RECT work = *area;
     int work_w = work.right - work.left;
     int work_h = work.bottom - work.top;
 
@@ -3055,6 +3088,11 @@ size_t ui_platform_system_memory_mb(void) {
 
 SavePromptResult ui_platform_show_save_prompt(Window *parent, const char *filename) {
     HWND hwnd = parent ? parent->hwnd : NULL;
+    // Never over an open Print Preview: closing it later would re-enable the
+    // document under this prompt. WM_CLOSE has already done this on the usual
+    // path; this covers any other route here.
+    if (!print_is_busy())
+        preview_close_active();
 
     char message[512];
     snprintf(message, sizeof(message), "Do you want to save changes to %.400s?",
@@ -6109,7 +6147,7 @@ static void apply_word_wrap(Window *window) {
 // The settings key (and default) for the font face the editor is currently
 // showing. OpenDyslexic overrides both; otherwise the Monospace toggle
 // selects between the monospace and proportional faces.
-static const char *active_font_key(const Window *window, const char **default_face) {
+static const char *font_key_for(bool monospace, const char **default_face) {
     // Only honour OpenDyslexic when the font is actually installed, so a
     // stale/imported setting cannot leave the editor stuck on a substituted
     // fallback face (which would also make the mono/proportional toggle
@@ -6120,8 +6158,7 @@ static const char *active_font_key(const Window *window, const char **default_fa
             *default_face = OPENDYSLEXIC_FONT;
         return "opendyslexic_font";
     }
-    // Font type is per-window view state (see monospace_current)
-    if (!window || window->monospace_current) {
+    if (monospace) {
         if (default_face)
             *default_face = DEFAULT_MONO_FONT;
         return "monospace_font";
@@ -6129,6 +6166,11 @@ static const char *active_font_key(const Window *window, const char **default_fa
     if (default_face)
         *default_face = DEFAULT_PROP_FONT;
     return "proportional_font";
+}
+
+static const char *active_font_key(const Window *window, const char **default_face) {
+    // Font type is per-window view state (see monospace_current)
+    return font_key_for(!window || window->monospace_current, default_face);
 }
 
 static int CALLBACK font_enum_proc(const LOGFONTW *lf, const TEXTMETRICW *tm, DWORD type,
@@ -9273,8 +9315,25 @@ typedef struct {
     wchar_t *path; // NULL for an unsaved document
     const wchar_t *name;
     wchar_t *face; // NULL falls back to the print module's default
-    int point_size;
+    PrintFont font;
 } PrintContext;
+
+// The font a window of the given font type shows - face, size, weight and
+// italic - which is what gets printed. face is allocated; the caller frees it.
+static void print_font_for(bool monospace, PrintFont *font, wchar_t **face) {
+    const char *default_face = DEFAULT_MONO_FONT;
+    const char *key = font_key_for(monospace, &default_face);
+    char *face_utf8 = settings_get_string(key, default_face);
+    *face = face_utf8 ? utf8_to_wide(face_utf8) : NULL;
+    free(face_utf8);
+    font->face = *face;
+    // Tenths of a point, clamped as the editor clamps them; printing takes
+    // whole points, so a half-point size rounds up
+    font->point_size = ui_font_size_tenths_to_points(ui_font_size_setting_tenths());
+    // Bold and italic too: GTK always printed them, Win32 dropped them
+    font->weight = settings_get_int("font_weight", FW_NORMAL);
+    font->italic = settings_get_bool("font_italic", false);
+}
 
 static bool print_context_build(Window *window, PrintContext *pc) {
     ZeroMemory(pc, sizeof(*pc));
@@ -9291,13 +9350,7 @@ static bool print_context_build(Window *window, PrintContext *pc) {
     pc->name = pc->path ? path_basename(pc->path) : L"Untitled";
 
     // Use the font this window is showing, not a fixed default
-    const char *default_face = DEFAULT_MONO_FONT;
-    const char *key = active_font_key(window, &default_face);
-    char *face_utf8 = settings_get_string(key, default_face);
-    pc->face = face_utf8 ? utf8_to_wide(face_utf8) : NULL;
-    free(face_utf8);
-    // Printing takes whole points; a half-point size rounds up
-    pc->point_size = ui_font_size_tenths_to_points(ui_font_size_setting_tenths());
+    print_font_for(!window || window->monospace_current, &pc->font, &pc->face);
     return true;
 }
 
@@ -9305,6 +9358,86 @@ static void print_context_free(PrintContext *pc) {
     free(pc->text);
     free(pc->path);
     free(pc->face);
+}
+
+static void print_file_message(const wchar_t *text) {
+    MessageBoxW(NULL, text, L"npad", MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+}
+
+// npad /p FILE, as notepad.exe /p: print the file to the default printer with
+// no print dialog, then exit. No document window is created and no editor
+// state is touched - no recovery snapshot, no recent-files entry, no settings
+// written. The progress window (with Cancel) is the only UI, plus a message
+// if the file cannot be read or there is no printer.
+static int print_file_run(const char *path) {
+    g_hinstance = GetModuleHandleW(NULL);
+    INITCOMMONCONTROLSEX icex;
+    icex.dwSize = sizeof(icex);
+    icex.dwICC = ICC_STANDARD_CLASSES;
+    InitCommonControlsEx(&icex);
+    load_dpi_functions();
+    init_dark_mode_support();
+    print_set_window_hook(print_theme_window);
+
+    if (!path || !path[0]) {
+        print_file_message(L"No file was given to print.\n\nUsage: npad /p <file>");
+        return 1;
+    }
+
+    TextFileInfo info;
+    char *content = file_read_text_ex(path, &info);
+    if (!content) {
+        char message[600];
+        snprintf(message, sizeof(message), "Could not open %.300s:\n%.200s", path,
+                 file_get_last_error());
+        wchar_t *wide = utf8_to_wide(message);
+        print_file_message(wide ? wide : L"The file could not be opened.");
+        free(wide);
+        return 1;
+    }
+    wchar_t *text = utf8_to_wide(content);
+    free(content);
+    wchar_t *wpath = utf8_to_wide(path);
+    if (!text) {
+        free(wpath);
+        print_file_message(L"There is not enough memory to print this file.");
+        return 1;
+    }
+
+    // The font a new window would open with: the Defaults font type
+    bool mono =
+        settings_get_bool("default_font_mono", settings_get_bool("monospace_enabled", true));
+    PrintFont font;
+    wchar_t *face = NULL;
+    print_font_for(mono, &font, &face);
+
+    PrintResult result =
+        print_document_default(text, wpath ? path_basename(wpath) : L"Untitled", &font);
+    if (result == PRINT_RESULT_NO_PRINTER)
+        print_file_message(L"There is no default printer to print to.\n\n"
+                           L"Add a printer, or choose a default one, in Windows Settings.");
+    else if (result == PRINT_RESULT_FAILED)
+        print_file_message(L"The document could not be printed.");
+
+    free(face);
+    free(wpath);
+    free(text);
+    // 0 printed, 2 cancelled by the user, 1 anything else
+    if (result == PRINT_RESULT_PRINTED)
+        return 0;
+    return result == PRINT_RESULT_CANCELLED ? 2 : 1;
+}
+
+int ui_platform_print_file(const char *path) {
+    // The STA ui_platform_init sets up for the shell dialogs. A printer
+    // driver's own UI runs in this process from inside StartDoc - Microsoft
+    // Print to PDF and the FILE: port ask for a file name there - and may
+    // count on it, as the normal print path always has it
+    HRESULT com = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    int code = print_file_run(path);
+    if (SUCCEEDED(com)) // S_FALSE too: every successful call is balanced
+        CoUninitialize();
+    return code;
 }
 
 // ---------------------------------------------------------------------------
@@ -9347,7 +9480,7 @@ typedef struct {
     wchar_t *text;  // The snapshot this preview was built from
     wchar_t *title; //
     wchar_t face[LF_FACESIZE];
-    int point_size;
+    PrintFont print_font; // Its face points at the buffer above
 
     int page;  // 1-based, leftmost visible
     int pages; // Total
@@ -9357,7 +9490,10 @@ typedef struct {
     int max_scroll_x, max_scroll_y;
     int band_h;
     UINT dpi;
+    int wheel_accum; // Wheel delta not yet worth a page flip
 
+    bool themed; // The colours below are for `dark`
+    bool dark;
     COLORREF backdrop;
     COLORREF shadow;
     COLORREF border;
@@ -9521,8 +9657,17 @@ static void preview_refresh(PreviewWindow *pv) {
     InvalidateRect(pv->hwnd, NULL, FALSE);
 }
 
+// Also run on every "ImmersiveColorSet" (theme or accent change, possibly one
+// per wallpaper slide), so it repaints only when the colours actually change
 static void preview_apply_theme(PreviewWindow *pv) {
     bool dark = theme_colors(NULL, NULL);
+    // The icon follows Windows' own theme in the "system" icon mode, which can
+    // change without the scheme's dark flag changing
+    apply_window_icon_hwnd(pv->hwnd);
+    if (pv->themed && pv->dark == dark)
+        return;
+    pv->themed = true;
+    pv->dark = dark;
     // The paper is always white - it is paper. Only the backdrop follows npad.
     pv->backdrop = dark ? RGB(24, 24, 24) : RGB(0x80, 0x80, 0x80);
     pv->shadow = dark ? RGB(0, 0, 0) : RGB(0x50, 0x50, 0x50);
@@ -9532,7 +9677,6 @@ static void preview_apply_theme(PreviewWindow *pv) {
     // are two full-height white bars against a near-black canvas - exactly
     // what the editor's gutter needed fixing for
     apply_scroll_bar_theme(pv->hwnd, dark);
-    apply_window_icon_hwnd(pv->hwnd);
     InvalidateRect(pv->hwnd, NULL, TRUE);
 }
 
@@ -9689,8 +9833,7 @@ static void preview_scroll_by(PreviewWindow *pv, int dx, int dy) {
 // font. The document snapshot itself never changes: the owner is disabled
 // while the preview is open, so it cannot be edited underneath.
 static void preview_rebuild(PreviewWindow *pv) {
-    PrintLayout *rebuilt =
-        print_layout_create(pv->text, pv->title, pv->face[0] ? pv->face : NULL, pv->point_size);
+    PrintLayout *rebuilt = print_layout_create(pv->text, pv->title, &pv->print_font);
     if (!rebuilt)
         return;
     print_layout_free(pv->layout);
@@ -9833,11 +9976,19 @@ static LRESULT CALLBACK preview_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
                 return 0;
             int delta = GET_WHEEL_DELTA_WPARAM(wparam);
             if (pv->max_scroll_y > 0) {
+                pv->wheel_accum = 0;
                 preview_scroll_by(pv, 0, -MulDiv(delta, MulDiv(48, pv->dpi, 96), WHEEL_DELTA));
-            } else if (delta < 0) {
-                SendMessageW(hwnd, WM_COMMAND, PV_ID_NEXT, 0);
-            } else if (delta > 0) {
-                SendMessageW(hwnd, WM_COMMAND, PV_ID_PREV, 0);
+                return 0;
+            }
+            // The whole page is in view, so the wheel turns pages. One page
+            // per notch's worth of delta: a touchpad sends a stream of small
+            // deltas, and flipping on each one skipped many pages per swipe.
+            int pages = print_wheel_pages(&pv->wheel_accum, delta);
+            int step = pv->two_up ? 2 : 1;
+            if (pages != 0) {
+                pv->page += pages * step;
+                pv->scroll_y = 0;
+                preview_refresh(pv);
             }
             return 0;
         }
@@ -9887,8 +10038,7 @@ static LRESULT CALLBACK preview_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
                     // is owned by the PREVIEW, so it is reachable regardless -
                     // and enabling the document here would let it be closed,
                     // freeing this structure, while we are still on the stack.
-                    PrintResult result = print_document(
-                        hwnd, pv->text, pv->title, pv->face[0] ? pv->face : NULL, pv->point_size);
+                    PrintResult result = print_document(hwnd, pv->text, pv->title, &pv->print_font);
                     if (result == PRINT_RESULT_FAILED) {
                         MessageBoxW(hwnd, L"The document could not be printed.", L"npad",
                                     MB_OK | MB_ICONWARNING);
@@ -9948,6 +10098,22 @@ static LRESULT CALLBACK preview_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
                 case IDCANCEL:
                     preview_destroy(pv);
                     return 0;
+                case IDOK: {
+                    // Enter on a focused toolbar button. The preview is not a
+                    // dialog, so the dialog manager never made the focused
+                    // button the default one: it reports Enter as IDOK and
+                    // nothing pressed the button. Press it here.
+                    HWND focus = GetFocus();
+                    if (focus && IsChild(hwnd, focus) && IsWindowEnabled(focus)) {
+                        for (int i = 0; i < PV_BUTTON_COUNT; i++) {
+                            if (pv->button[i] == focus) {
+                                SendMessageW(focus, BM_CLICK, 0, 0);
+                                break;
+                            }
+                        }
+                    }
+                    return 0;
+                }
                 default:
                     break;
             }
@@ -9980,15 +10146,20 @@ static LRESULT CALLBACK preview_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
                     SetActiveWindow(pv->owner);
                 if (pv->haccel)
                     DestroyAcceleratorTable(pv->haccel);
+                // An update prompt held back while this preview was open
+                // follows now (only posts; the handler checks again)
+                bool was_active = (g_preview == pv);
                 if (pv->font)
                     DeleteObject(pv->font);
                 print_layout_free(pv->layout);
                 free(pv->text);
                 free(pv->title);
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                if (g_preview == pv)
+                if (was_active)
                     g_preview = NULL;
                 free(pv);
+                if (was_active)
+                    print_flush_deferred();
             }
             return 0;
 
@@ -10024,7 +10195,7 @@ static bool register_preview_class(void) {
 }
 
 static void show_print_preview(Window *owner, const wchar_t *text, const wchar_t *title,
-                               const wchar_t *face, int point_size) {
+                               const PrintFont *font) {
     if (!owner || !owner->hwnd)
         return;
     if (g_preview) {
@@ -10047,15 +10218,18 @@ static void show_print_preview(Window *owner, const wchar_t *text, const wchar_t
     pv->owner = owner->hwnd;
     pv->text = preview_wcsdup(text);
     pv->title = preview_wcsdup(title ? title : L"Untitled");
-    if (face)
-        wcsncpy(pv->face, face, LF_FACESIZE - 1);
-    pv->point_size = point_size;
+    if (font) {
+        pv->print_font = *font;
+        if (font->face)
+            wcsncpy(pv->face, font->face, LF_FACESIZE - 1);
+    }
+    pv->print_font.face = pv->face[0] ? pv->face : NULL;
     pv->page = 1;
     pv->zoom_pct = 0; // Fit
     pv->dpi = get_window_dpi(owner->hwnd);
 
     pv->layout =
-        (pv->text && pv->title) ? print_layout_create(pv->text, pv->title, face, point_size) : NULL;
+        (pv->text && pv->title) ? print_layout_create(pv->text, pv->title, &pv->print_font) : NULL;
     if (old_cursor)
         SetCursor(old_cursor);
 
@@ -10071,8 +10245,11 @@ static void show_print_preview(Window *owner, const wchar_t *text, const wchar_t
     if (pv->pages < 1)
         pv->pages = 1;
 
+    // On the document's monitor, not the primary one: the preview disables
+    // the document, and opening on another screen left the user looking at a
+    // window that would not respond
     int x = 0, y = 0, w = 800, h = 600;
-    ui_platform_get_default_window_rect(&x, &y, &w, &h);
+    default_rect_on_monitor_of(owner->hwnd, &x, &y, &w, &h);
 
     pv->hwnd = CreateWindowExW(0, NPAD_PREVIEW_CLASS, L"Print Preview - npad",
                                WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_HSCROLL | WS_VSCROLL, x,
@@ -10087,8 +10264,8 @@ static void show_print_preview(Window *owner, const wchar_t *text, const wchar_t
         return;
     }
 
-    // The window is placed from the primary monitor's work area, so re-read
-    // the DPI from where it actually landed rather than from the owner
+    // Re-read the DPI from where the window actually landed rather than
+    // trusting the owner's
     pv->dpi = get_window_dpi(pv->hwnd);
 
     for (int i = 0; i < PV_BUTTON_COUNT; i++) {
@@ -10100,12 +10277,31 @@ static void show_print_preview(Window *owner, const wchar_t *text, const wchar_t
         CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP, 0, 0, 10, 10,
                         pv->hwnd, (HMENU) (INT_PTR) PV_ID_INDICATOR, g_hinstance, NULL);
 
+    // The same keys as the GTK preview: each works bare and with Ctrl, and
+    // "+" works typed (Shift+=) as well as on the "=" key and the keypad. A
+    // virtual-key accelerator matches only its exact Ctrl/Shift state, so
+    // every combination needs its own entry.
     ACCEL accel[] = {
-        { FVIRTKEY, VK_ESCAPE, PV_ID_CLOSE },       { FVIRTKEY, VK_PRIOR, PV_ID_PREV },
-        { FVIRTKEY, VK_NEXT, PV_ID_NEXT },          { FVIRTKEY, VK_HOME, PV_ID_FIRST },
-        { FVIRTKEY, VK_END, PV_ID_LAST },           { FCONTROL | FVIRTKEY, 'P', PV_ID_PRINT },
-        { FVIRTKEY, VK_OEM_PLUS, PV_ID_ZOOM_IN },   { FVIRTKEY, VK_ADD, PV_ID_ZOOM_IN },
-        { FVIRTKEY, VK_OEM_MINUS, PV_ID_ZOOM_OUT }, { FVIRTKEY, VK_SUBTRACT, PV_ID_ZOOM_OUT },
+        { FVIRTKEY, VK_ESCAPE, PV_ID_CLOSE },
+        { FCONTROL | FVIRTKEY, 'P', PV_ID_PRINT },
+        { FVIRTKEY, VK_PRIOR, PV_ID_PREV },
+        { FCONTROL | FVIRTKEY, VK_PRIOR, PV_ID_PREV },
+        { FVIRTKEY, VK_NEXT, PV_ID_NEXT },
+        { FCONTROL | FVIRTKEY, VK_NEXT, PV_ID_NEXT },
+        { FVIRTKEY, VK_HOME, PV_ID_FIRST },
+        { FCONTROL | FVIRTKEY, VK_HOME, PV_ID_FIRST },
+        { FVIRTKEY, VK_END, PV_ID_LAST },
+        { FCONTROL | FVIRTKEY, VK_END, PV_ID_LAST },
+        { FVIRTKEY, VK_OEM_PLUS, PV_ID_ZOOM_IN },
+        { FSHIFT | FVIRTKEY, VK_OEM_PLUS, PV_ID_ZOOM_IN },
+        { FCONTROL | FVIRTKEY, VK_OEM_PLUS, PV_ID_ZOOM_IN },
+        { FCONTROL | FSHIFT | FVIRTKEY, VK_OEM_PLUS, PV_ID_ZOOM_IN },
+        { FVIRTKEY, VK_ADD, PV_ID_ZOOM_IN },
+        { FCONTROL | FVIRTKEY, VK_ADD, PV_ID_ZOOM_IN },
+        { FVIRTKEY, VK_OEM_MINUS, PV_ID_ZOOM_OUT },
+        { FCONTROL | FVIRTKEY, VK_OEM_MINUS, PV_ID_ZOOM_OUT },
+        { FVIRTKEY, VK_SUBTRACT, PV_ID_ZOOM_OUT },
+        { FCONTROL | FVIRTKEY, VK_SUBTRACT, PV_ID_ZOOM_OUT },
     };
     pv->haccel = CreateAcceleratorTableW(accel, (int) (sizeof(accel) / sizeof(accel[0])));
 
@@ -10144,6 +10340,11 @@ static void preview_close_active(void) {
     g_preview = NULL;
 }
 
+static void preview_recolour_active(void) {
+    if (g_preview && g_preview->hwnd)
+        preview_apply_theme(g_preview);
+}
+
 static void preview_retheme_active(void) {
     if (!g_preview)
         return;
@@ -10151,6 +10352,54 @@ static void preview_retheme_active(void) {
     // Margins, orientation and the header/footer are settings too, so a change
     // from another instance invalidates the pagination, not just the colours
     preview_rebuild(g_preview);
+}
+
+// ---------------------------------------------------------------------------
+// Prompts that would land under Print Preview or a print job
+//
+// The preview disables its document, and Page Setup, the print dialog and a
+// spooling job pump messages. So a close request (Close All from another
+// window) or a posted prompt could reach the disabled document anyway: its
+// save prompt then opened over an owner that was already disabled - which a
+// dialog does not re-enable when it ends - and closing the preview re-enabled
+// the document under its own prompt. Now an idle preview is closed first
+// (it is only a snapshot), and anything arriving while a print dialog or job
+// is on the stack waits until it has finished.
+// ---------------------------------------------------------------------------
+
+static bool g_close_deferred = false;
+static UpdateDownloadResult *g_update_deferred = NULL;
+
+// The print module's idle hook, and the preview's WM_DESTROY: replay whatever
+// was held back. Only posts, so the handlers decide again whether it can run.
+static void print_flush_deferred(void) {
+    HWND hwnd = (g_main_window && g_main_window->hwnd) ? g_main_window->hwnd : NULL;
+    if (!hwnd)
+        return;
+    if (g_update_deferred &&
+        PostMessageW(hwnd, NPAD_WM_UPDATE_DOWNLOADED, 0, (LPARAM) g_update_deferred))
+        g_update_deferred = NULL; // Now owned by the posted message
+    if (g_close_deferred) {
+        g_close_deferred = false;
+        PostMessageW(hwnd, WM_CLOSE, 0, 0);
+    }
+}
+
+// Before the document shows a prompt of its own. False while a print dialog
+// or job is on the stack: the caller must hold the prompt back until
+// print_flush_deferred replays it. Otherwise any preview is closed first.
+static bool prepare_for_document_prompt(void) {
+    if (print_is_busy())
+        return false;
+    preview_close_active();
+    return true;
+}
+
+// The print module's window hook: the progress window gets the scheme's title
+// bar and npad's icon, like every other npad window
+static void print_theme_window(HWND hwnd) {
+    set_title_bar_dark(hwnd, theme_colors(NULL, NULL));
+    apply_window_icon_hwnd(hwnd);
 }
 
 static void create_menu(Window *window) {
@@ -10582,8 +10831,7 @@ static void handle_command(Window *window, WORD command) {
             PrintContext pc;
             if (!print_context_build(window, &pc))
                 return;
-            if (print_document(window->hwnd, pc.text, pc.name, pc.face, pc.point_size) ==
-                PRINT_RESULT_FAILED) {
+            if (print_document(window->hwnd, pc.text, pc.name, &pc.font) == PRINT_RESULT_FAILED) {
                 MessageBoxW(window->hwnd, L"The document could not be printed.", L"npad",
                             MB_OK | MB_ICONWARNING);
             }
@@ -10595,7 +10843,7 @@ static void handle_command(Window *window, WORD command) {
             PrintContext pc;
             if (!print_context_build(window, &pc))
                 return;
-            show_print_preview(window, pc.text, pc.name, pc.face, pc.point_size);
+            show_print_preview(window, pc.text, pc.name, &pc.font);
             print_context_free(&pc);
             return;
         }
@@ -11272,6 +11520,17 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         }
 
         case NPAD_WM_UPDATE_DOWNLOADED: {
+            // A NULL result (the worker could not allocate one) still ends the
+            // busy state at once. A real one is a prompt owned by this window,
+            // so it must not open under Print Preview or inside a print
+            // dialog's loop. Nor does a download finishing in the background
+            // close a preview the user is reading (WM_CLOSE does: the user
+            // asked for it); the prompt waits for the preview to close or the
+            // job to end.
+            if (lparam && (g_preview || print_is_busy())) {
+                g_update_deferred = (UpdateDownloadResult *) lparam;
+                return 0;
+            }
             handle_update_downloaded(window, (UpdateDownloadResult *) lparam);
             return 0;
         }
@@ -11310,11 +11569,18 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 #endif
                     apply_theme(window); // Also re-applies the icon
                 }
+                // Print Preview gets this broadcast too, but its window proc
+                // does not handle it: under the "system" scheme the preview
+                // kept the old backdrop, title bar and scroll bars. Colours only -
+                // nothing about pagination changes with the Windows theme.
+                preview_recolour_active();
             } else if (wparam == SPI_SETHIGHCONTRAST && window) {
                 // High Contrast switched on or off: Light and System follow
                 // its colours (theme_colors). apply_theme is idempotent, so
-                // a broadcast that changes nothing restamps nothing.
+                // a broadcast that changes nothing restamps nothing. An open
+                // preview takes the same colours.
                 apply_theme(window);
+                preview_recolour_active();
             }
             break;
         }
@@ -11383,6 +11649,13 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
             // user closing npad and must not prompt. The Restart Manager sends
             // WM_CLOSE after WM_ENDSESSION, and a save prompt there would be an
             // invisible modal dialog stalling the installer until it times out.
+            // The save prompt must not open under Print Preview, nor inside a
+            // print dialog or job (Close All reaches this window regardless).
+            // A session-end handoff never prompts, so it goes ahead.
+            if (!g_session_ending && !prepare_for_document_prompt()) {
+                g_close_deferred = true;
+                return 0;
+            }
             request_quit(window);
             return 0;
         }

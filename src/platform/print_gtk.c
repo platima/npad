@@ -8,6 +8,7 @@
 #include "print_gtk.h"
 
 #include <langinfo.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -285,6 +286,7 @@ typedef struct {
     GArray *runs;       // PrintRun, in page order
     GArray *page_first; // guint: index of each page's first run, plus a final sentinel
     int page_count;
+    bool began; // begin-print ran: a printer was found and the job started
 } PrintJob;
 
 static void job_free(gpointer data) {
@@ -628,6 +630,7 @@ static void job_paginate(PrintJob *job, GtkPrintContext *context) {
 
 static void on_begin_print(GtkPrintOperation *op, GtkPrintContext *context, gpointer data) {
     PrintJob *job = data;
+    job->began = true;
     job_paginate(job, context);
     gtk_print_operation_set_n_pages(op, job->page_count);
 }
@@ -829,10 +832,18 @@ static void on_preview_close(GtkButton *button, gpointer data) {
     preview_close(data, PREVIEW_THEN_NOTHING);
 }
 
+// The same keys as the Windows preview: Esc closes, Ctrl+P prints, Page
+// Up/Down turn pages, Home/End go to the first/last page and +/- zoom - each
+// of the last three with or without Ctrl, and "+" also on the "=" key and the
+// keypad. Windows took them bare and GTK only with Ctrl, so each platform's
+// muscle memory failed on the other.
 static gboolean on_preview_key(GtkWidget *widget, const GdkEventKey *event, gpointer data) {
     (void) widget;
     PreviewState *ps = data;
     bool ctrl = (event->state & GDK_CONTROL_MASK) != 0;
+    // Alt combinations belong to the buttons' mnemonics
+    if (event->state & GDK_MOD1_MASK)
+        return FALSE;
     switch (event->keyval) {
         case GDK_KEY_Escape:
             preview_close(ps, PREVIEW_THEN_NOTHING);
@@ -844,32 +855,28 @@ static gboolean on_preview_key(GtkWidget *widget, const GdkEventKey *event, gpoi
             preview_close(ps, PREVIEW_THEN_PRINT);
             return TRUE;
         case GDK_KEY_Page_Down:
+        case GDK_KEY_KP_Page_Down:
             preview_goto(ps, ps->page + 1);
             return TRUE;
         case GDK_KEY_Page_Up:
+        case GDK_KEY_KP_Page_Up:
             preview_goto(ps, ps->page - 1);
             return TRUE;
         case GDK_KEY_Home:
-            if (!ctrl)
-                return FALSE;
+        case GDK_KEY_KP_Home:
             preview_goto(ps, 0);
             return TRUE;
         case GDK_KEY_End:
-            if (!ctrl)
-                return FALSE;
+        case GDK_KEY_KP_End:
             preview_goto(ps, ps->job->page_count - 1);
             return TRUE;
         case GDK_KEY_plus:
         case GDK_KEY_equal:
         case GDK_KEY_KP_Add:
-            if (!ctrl)
-                return FALSE;
             preview_set_zoom(ps, ps->zoom + PREVIEW_ZOOM_STEP);
             return TRUE;
         case GDK_KEY_minus:
         case GDK_KEY_KP_Subtract:
-            if (!ctrl)
-                return FALSE;
             preview_set_zoom(ps, ps->zoom - PREVIEW_ZOOM_STEP);
             return TRUE;
         default:
@@ -1007,10 +1014,14 @@ static void show_error(GtkWindow *parent, const char *what, const char *detail) 
     gtk_widget_destroy(dialog);
 }
 
-void npad_gtk_print_run(GtkWindow *parent, const NpadPrintDoc *doc, bool preview) {
-    if (!doc)
-        return;
+// Run one print operation. action is PRINT_DIALOG (File > Print), PREVIEW
+// (File > Print Preview) or PRINT (npad --print: the default printer, no
+// dialog). Errors are reported to the user here. began (may be NULL) says
+// whether the job got as far as begin-print.
+static GtkPrintOperationResult print_operation_run(GtkWindow *parent, const NpadPrintDoc *doc,
+                                                   GtkPrintOperationAction action, bool *began) {
     PrintJob *job = job_new(doc);
+    bool preview = (action == GTK_PRINT_OPERATION_ACTION_PREVIEW);
 
     GtkPrintOperation *op = gtk_print_operation_new();
     // The job lives exactly as long as the operation, which a preview keeps
@@ -1029,20 +1040,26 @@ void npad_gtk_print_run(GtkWindow *parent, const NpadPrintDoc *doc, bool preview
     g_signal_connect(op, "draw-page", G_CALLBACK(on_draw_page), job);
     g_signal_connect(op, "preview", G_CALLBACK(on_preview_requested), job);
 
-    GtkPrintOperationAction action =
-        preview ? GTK_PRINT_OPERATION_ACTION_PREVIEW : GTK_PRINT_OPERATION_ACTION_PRINT_DIALOG;
-
     // Print without a dialog, straight to a PDF: how the output is checked on
     // a machine with no printer (and the only way to script it)
     const char *export_path = g_getenv("NPAD_PRINT_EXPORT");
     if (export_path && export_path[0] && !preview) {
         gtk_print_operation_set_export_filename(op, export_path);
         action = GTK_PRINT_OPERATION_ACTION_EXPORT;
+    } else if (!preview) {
+        // GTK's own progress window, with Cancel, while the job is prepared
+        // and sent - the same as the Windows build's
+        gtk_print_operation_set_show_progress(op, TRUE);
     }
 
     GError *error = NULL;
     GtkPrintOperationResult result = gtk_print_operation_run(op, action, parent, &error);
+    if (began)
+        *began = job->began; // job is freed with op, below
     if (result == GTK_PRINT_OPERATION_RESULT_ERROR) {
+        if (!parent) // npad --print: also say so where a script can see it
+            fprintf(stderr, "npad: could not print this document%s%s\n", error ? ": " : "",
+                    error ? error->message : "");
         show_error(parent, "npad could not print this document.", error ? error->message : NULL);
     } else if (result == GTK_PRINT_OPERATION_RESULT_APPLY) {
         // Take the new reference before dropping the old one: the operation may
@@ -1054,6 +1071,39 @@ void npad_gtk_print_run(GtkWindow *parent, const NpadPrintDoc *doc, bool preview
     }
     g_clear_error(&error);
     g_object_unref(op);
+    return result;
+}
+
+void npad_gtk_print_run(GtkWindow *parent, const NpadPrintDoc *doc, bool preview) {
+    if (!doc)
+        return;
+    print_operation_run(parent, doc,
+                        preview ? GTK_PRINT_OPERATION_ACTION_PREVIEW
+                                : GTK_PRINT_OPERATION_ACTION_PRINT_DIALOG,
+                        NULL);
+}
+
+int npad_gtk_print_file(const NpadPrintDoc *doc) {
+    if (!doc)
+        return 1;
+    // ACTION_PRINT prints with the current print settings and no dialog;
+    // with none (a fresh process) that is the default printer
+    bool began = false;
+    GtkPrintOperationResult result =
+        print_operation_run(NULL, doc, GTK_PRINT_OPERATION_ACTION_PRINT, &began);
+    if (result == GTK_PRINT_OPERATION_RESULT_APPLY)
+        return 0;
+    if (result == GTK_PRINT_OPERATION_RESULT_CANCEL && !began) {
+        // GTK's unix backend starts an ACTION_PRINT at CANCEL and changes it
+        // only when it finds a printer, so with none (virtual ones such as
+        // Print to File are skipped) this is not the user's Cancel: say so,
+        // as the Windows build does with no default printer
+        const char *what = "There is no printer to print to.";
+        fprintf(stderr, "npad: %s\n", what);
+        show_error(NULL, what, NULL);
+        return 1;
+    }
+    return result == GTK_PRINT_OPERATION_RESULT_CANCEL ? 2 : 1; // 2: Cancel in the progress window
 }
 
 void npad_gtk_print_cleanup(void) {

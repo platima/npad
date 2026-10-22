@@ -33,6 +33,11 @@ void npad_gtk_print_page_setup(GtkWindow *parent);
 // File > Print (preview == false) and File > Print Preview (preview == true)
 void npad_gtk_print_run(GtkWindow *parent, const NpadPrintDoc *doc, bool preview);
 
+// npad --print: print to the default printer with no print dialog, showing
+// only GTK's progress window. Returns the exit code: 0 printed, 2 cancelled,
+// 1 failed (after telling the user why).
+int npad_gtk_print_file(const NpadPrintDoc *doc);
+
 // Release the session's print settings (shutdown)
 void npad_gtk_print_cleanup(void);
 

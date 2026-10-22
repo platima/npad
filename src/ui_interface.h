@@ -110,6 +110,12 @@ void ui_get_default_window_rect(int *x, int *y, int *width, int *height);
 // Number of npad main windows open on this desktop, across all instances
 int ui_count_main_windows(void);
 
+// npad /p FILE (Windows) or npad --print FILE: print the file to the default
+// printer with no print dialog, as notepad.exe /p does, and return the exit
+// code (0 printed, 2 cancelled, 1 failed). Called INSTEAD of ui_init - the
+// platform does only the set-up printing needs and opens no document window.
+int ui_print_file(const char *path);
+
 // Text editing
 // Replaces the document with text. Returns false if it could not be loaded at
 // all (too large for the control, or out of memory): the window then still

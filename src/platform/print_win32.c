@@ -6,13 +6,19 @@
  */
 
 #include "print_win32.h"
+#include "../core/print_core.h"
 #include "../core/settings.h"
 #include "../ui_interface.h"
 #include <commdlg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+
+// The pagination in print_core works on UTF-16 units, which is what wchar_t
+// is on Windows
+typedef char print_wchar_is_utf16[sizeof(wchar_t) == sizeof(uint16_t) ? 1 : -1];
 
 // notepad.exe's defaults, in thousandths of an inch. Stored in that unit
 // rather than the locale-dependent one PAGESETUPDLG uses, so a settings file
@@ -28,11 +34,35 @@
 // Tab stops every 8 characters, as notepad prints them
 #define TAB_COLUMNS 8
 
-// Longest run handed to GetTextExtentExPointW at once. The call is linear in
-// the length passed, so a single multi-megabyte line without a break would
-// otherwise be measured repeatedly; whatever fits is emitted and the remainder
-// continues on the same output line.
-#define MEASURE_CHUNK 4096
+// Page Setup, the print dialog and a spooling job all pump messages; this
+// counts how many are under way so the UI layer can hold back a close or a
+// prompt until they are done (print_is_busy)
+static int g_busy = 0;
+static void (*g_idle_hook)(void) = NULL;
+static void (*g_window_hook)(HWND) = NULL;
+
+static void busy_begin(void) {
+    g_busy++;
+}
+
+static void busy_end(void) {
+    if (g_busy > 0)
+        g_busy--;
+    if (g_busy == 0 && g_idle_hook)
+        g_idle_hook();
+}
+
+bool print_is_busy(void) {
+    return g_busy > 0;
+}
+
+void print_set_idle_hook(void (*hook)(void)) {
+    g_idle_hook = hook;
+}
+
+void print_set_window_hook(void (*hook)(HWND hwnd)) {
+    g_window_hook = hook;
+}
 
 typedef struct {
     int left, right, top, bottom; // Thousandths of an inch, from the sheet edge
@@ -184,6 +214,28 @@ static wchar_t *load_hf(const char *key, const wchar_t *fallback) {
     return wide;
 }
 
+// LOCALE_IMEASURE: "0" metric, "1" U.S.
+static bool locale_is_metric(void) {
+    wchar_t buf[4] = { 0 };
+    if (GetLocaleInfoW(LOCALE_USER_DEFAULT, LOCALE_IMEASURE, buf, 4) > 0)
+        return buf[0] == L'0';
+    return false;
+}
+
+// A stored margin (thousandths of an inch) in the unit the dialog shows
+static int margin_to_dialog(int stored, bool metric) {
+    return metric ? print_margin_to_mm100(stored) : stored;
+}
+
+// What the dialog returned, back to thousandths of an inch. A field the user
+// left alone keeps its stored value exactly, so accepting the dialog in
+// millimetres never nudges a margin by the rounding between the two units.
+static int margin_from_dialog(int returned, int shown, int stored, bool metric) {
+    if (returned == shown)
+        return stored;
+    return metric ? print_margin_from_mm100(returned) : returned;
+}
+
 void print_show_page_setup(HWND owner) {
     PageSetup ps;
     page_setup_load(&ps);
@@ -192,13 +244,18 @@ void print_show_page_setup(HWND owner) {
     ZeroMemory(&psd, sizeof(psd));
     psd.lStructSize = sizeof(psd);
     psd.hwndOwner = owner;
-    // Work in thousandths of an inch throughout, so the value stored in
-    // settings does not depend on the machine's measurement system
-    psd.Flags = PSD_INTHOUSANDTHSOFINCHES | PSD_MARGINS;
-    psd.rtMargin.left = ps.left;
-    psd.rtMargin.right = ps.right;
-    psd.rtMargin.top = ps.top;
-    psd.rtMargin.bottom = ps.bottom;
+    // Shown in the locale's unit, as notepad.exe and the GTK build do; stored
+    // in thousandths of an inch whatever the machine's measurement system, so
+    // a settings file means the same thing everywhere. Forcing inches made a
+    // metric user type 0.79 for a 20 mm margin.
+    bool metric = locale_is_metric();
+    psd.Flags = (metric ? PSD_INHUNDREDTHSOFMILLIMETERS : PSD_INTHOUSANDTHSOFINCHES) | PSD_MARGINS;
+    RECT shown;
+    shown.left = margin_to_dialog(ps.left, metric);
+    shown.right = margin_to_dialog(ps.right, metric);
+    shown.top = margin_to_dialog(ps.top, metric);
+    shown.bottom = margin_to_dialog(ps.bottom, metric);
+    psd.rtMargin = shown;
 
     // Seed the dialog with the default printer's own DEVMODE (the full one,
     // driver-private tail included) with our persisted choices applied on
@@ -220,11 +277,13 @@ void print_show_page_setup(HWND owner) {
     }
     device_free(&dev);
 
-    if (PageSetupDlgW(&psd)) {
-        ps.left = psd.rtMargin.left;
-        ps.right = psd.rtMargin.right;
-        ps.top = psd.rtMargin.top;
-        ps.bottom = psd.rtMargin.bottom;
+    busy_begin();
+    BOOL accepted = PageSetupDlgW(&psd);
+    if (accepted) {
+        ps.left = margin_from_dialog(psd.rtMargin.left, shown.left, ps.left, metric);
+        ps.right = margin_from_dialog(psd.rtMargin.right, shown.right, ps.right, metric);
+        ps.top = margin_from_dialog(psd.rtMargin.top, shown.top, ps.top, metric);
+        ps.bottom = margin_from_dialog(psd.rtMargin.bottom, shown.bottom, ps.bottom, metric);
         if (psd.hDevMode) {
             const DEVMODEW *dm = GlobalLock(psd.hDevMode);
             page_setup_read(&ps, dm);
@@ -238,6 +297,7 @@ void print_show_page_setup(HWND owner) {
         GlobalFree(psd.hDevMode);
     if (psd.hDevNames)
         GlobalFree(psd.hDevNames);
+    busy_end();
 }
 
 // ---------------------------------------------------------------------------
@@ -373,7 +433,9 @@ static bool device_acquire_default(PrintDevice *dev) {
     PRINTDLGW pd;
     ZeroMemory(&pd, sizeof(pd));
     pd.lStructSize = sizeof(pd);
-    pd.Flags = PD_RETURNDEFAULT; // hDevMode/hDevNames must be NULL on entry
+    // hDevMode/hDevNames must be NULL on entry. PD_NOWARNING: no message box
+    // when there is no printer - the callers handle that themselves.
+    pd.Flags = PD_RETURNDEFAULT | PD_NOWARNING;
     if (!PrintDlgW(&pd))
         return false; // No default printer, or no spooler
 
@@ -493,169 +555,68 @@ static void layout_compute_body(PrintLayout *l, const PageSetup *ps) {
     }
 }
 
-// Where the next output line goes, and how the page fills up
-typedef struct {
-    int page;
-    int line_on_page;
-} Cursor;
+// What pagination measures with and reports to: the printer DC, the layout
+// the runs go into, and the progress window that can cancel a long job
+typedef struct PrintProgress PrintProgress;
+static bool progress_keep_going(const PrintProgress *p);
 
-static int cursor_y(const PrintLayout *l, const Cursor *c) {
-    return l->text_area.top + c->line_on_page * l->line_h;
+typedef struct {
+    PrintLayout *layout;
+    HDC dc;
+    PrintProgress *progress; // NULL for a preview, which has no Cancel
+} MeasureCtx;
+
+static bool measure_fit(void *ctx, const uint16_t *s, int len, int max_extent, int *fit, int *dx) {
+    const MeasureCtx *m = ctx;
+    SIZE sz;
+    // The only API that reports how many characters fit a width. Note the
+    // returned SIZE covers the whole string, not the prefix - the fitted
+    // width is the last cumulative entry in dx.
+    return GetTextExtentExPointW(m->dc, (const wchar_t *) s, len, max_extent, fit, dx, &sz) != 0;
 }
 
-static void cursor_break(const PrintLayout *l, Cursor *c) {
-    c->line_on_page++;
-    if (c->line_on_page >= l->lines_per_page) {
-        c->page++;
-        c->line_on_page = 0;
-    }
+static bool measure_extent(void *ctx, const uint16_t *s, int len, int *width) {
+    const MeasureCtx *m = ctx;
+    SIZE sz = { 0, 0 };
+    if (!GetTextExtentPoint32W(m->dc, (const wchar_t *) s, len, &sz))
+        return false;
+    *width = (int) sz.cx;
+    return true;
+}
+
+static bool measure_emit(void *ctx, int page, int line, int x, size_t offset, int len) {
+    const MeasureCtx *m = ctx;
+    PrintLayout *l = m->layout;
+    return layout_add_run(l, page, l->text_area.left + x, l->text_area.top + line * l->line_h,
+                          (int) offset, len);
+}
+
+static bool measure_keep_going(void *ctx) {
+    const MeasureCtx *m = ctx;
+    return progress_keep_going(m->progress);
 }
 
 // Paginate the whole document against dc, which must be the printer's DC or
-// information context with the print font already selected.
-static bool layout_paginate(PrintLayout *l, HDC dc) {
-    const wchar_t *text = l->text;
-    size_t total = wcslen(text);
-    Cursor c = { 1, 0 };
-    INT *dx = NULL;
-    int dx_cap = 0;
-    bool ok = true;
-
-    size_t pos = 0;
-    for (;;) {
-        size_t eol = pos;
-        while (eol < total && text[eol] != L'\r' && text[eol] != L'\n')
-            eol++;
-
-        size_t i = pos;
-        int x = 0;
-        while (i < eol && ok) {
-            if (text[i] == L'\t') {
-                // Tabs advance to the next stop rather than drawing a glyph
-                int next = ((x / l->tab_w) + 1) * l->tab_w;
-                if (next < l->wrap_w) {
-                    x = next;
-                } else if (x > 0) {
-                    cursor_break(l, &c); // The stop is past the column: wrap
-                    x = 0;
-                }
-                // Already at the margin with no stop that fits: stay put, or
-                // every tab would burn a blank line of its own
-                i++;
-                continue;
-            }
-
-            size_t seg_end = i;
-            while (seg_end < eol && text[seg_end] != L'\t')
-                seg_end++;
-            int seg_len = (int) (seg_end - i);
-            int chunk = seg_len > MEASURE_CHUNK ? MEASURE_CHUNK : seg_len;
-
-            int avail = l->wrap_w - x;
-            if (avail <= 0) {
-                cursor_break(l, &c);
-                x = 0;
-                avail = l->wrap_w;
-            }
-
-            if (chunk > dx_cap) {
-                INT *grown = realloc(dx, (size_t) chunk * sizeof(INT));
-                if (!grown) {
-                    ok = false;
-                    break;
-                }
-                dx = grown;
-                dx_cap = chunk;
-            }
-
-            int fit = chunk;
-            SIZE sz;
-            // The only API that reports how many characters fit a width.
-            // Note the returned SIZE covers the whole string, not the prefix -
-            // the fitted width is the last cumulative entry in dx.
-            bool measured = (GetTextExtentExPointW(dc, text + i, chunk, avail, &fit, dx, &sz) != 0);
-            if (!measured)
-                fit = chunk; // dx is then undefined; the width is re-measured below
-            bool wrapped = (fit < chunk);
-            if (fit < 1) {
-                if (x > 0) {
-                    // Nothing fits in what is left of the line: start a new one
-                    // and measure again from the margin
-                    cursor_break(l, &c);
-                    x = 0;
-                    continue;
-                }
-                fit = 1; // A single character wider than the column: emit it
-                wrapped = true;
-            }
-            if (wrapped) {
-                // Break at a space rather than mid-word, when there is one
-                int brk = fit;
-                while (brk > 0 && text[i + brk] != L' ' && text[i + brk] != L'\t')
-                    brk--;
-                if (brk > 0)
-                    fit = brk + 1;
-            }
-
-            if (!layout_add_run(l, c.page, l->text_area.left + x, cursor_y(l, &c), (int) i, fit)) {
-                ok = false;
-                break;
-            }
-            i += (size_t) fit;
-
-            if (wrapped) {
-                // The rest of this segment goes on a new line, so the pen
-                // position is about to be reset - do not bother measuring it.
-                // (dx is only guaranteed filled for the characters that FIT,
-                // and the space back-scan above can push fit one past that.)
-                if (i < eol) {
-                    cursor_break(l, &c);
-                    x = 0;
-                }
-                // If nothing is left, the end-of-logical-line break below
-                // covers it. Breaking here as well would insert a blank line.
-            } else if (measured && fit <= dx_cap) {
-                x += dx[fit - 1];
-            } else {
-                SIZE run_size = { 0, 0 };
-                if (GetTextExtentPoint32W(dc, text + i - fit, fit, &run_size))
-                    x += (int) run_size.cx;
-                else
-                    x = l->wrap_w; // Unmeasurable: force a break rather than overlap
-            }
-        }
-
-        if (!ok)
-            break;
-        cursor_break(l, &c); // The logical line ends here
-
-        if (eol >= total)
-            break;
-        pos = eol;
-        if (text[pos] == L'\r')
-            pos++;
-        if (pos < total && text[pos] == L'\n')
-            pos++;
-        if (pos >= total)
-            break; // A trailing break leaves one empty line and nothing after
-    }
-
-    free(dx);
-
+// information context with the print font already selected
+static PrintPaginateResult layout_paginate(PrintLayout *l, HDC dc, int avg_char_width,
+                                           PrintProgress *progress) {
+    MeasureCtx ctx = { l, dc, progress };
+    PrintPaginateOps ops = { measure_fit, measure_extent, measure_emit,
+                             progress ? measure_keep_going : NULL, &ctx };
+    PrintPaginateGeometry geometry = { l->wrap_w, l->tab_w, l->lines_per_page, avg_char_width };
+    int pages = 1;
+    PrintPaginateResult result =
+        print_paginate((const uint16_t *) l->text, wcslen(l->text), &geometry, &ops, &pages);
     // Pages past the last drawn line are blank, so they are not pages
-    l->page_count = 1;
-    for (int r = 0; r < l->run_count; r++) {
-        if (l->runs[r].page > l->page_count)
-            l->page_count = l->runs[r].page;
-    }
-    return ok;
+    l->page_count = pages;
+    return result;
 }
 
 // Select the print font on dc and derive every metric pagination needs.
 // read_metrics is false only for the synthetic no-printer page, whose geometry
 // is already filled in and must not be replaced by the measuring DC's.
-static bool layout_prepare(PrintLayout *l, HDC dc, const wchar_t *face, int point_size,
-                           bool read_metrics) {
+static PrintPaginateResult layout_prepare(PrintLayout *l, HDC dc, const PrintFont *font,
+                                          bool read_metrics, PrintProgress *progress) {
     PageSetup ps;
     page_setup_load(&ps);
 
@@ -665,25 +626,33 @@ static bool layout_prepare(PrintLayout *l, HDC dc, const wchar_t *face, int poin
 
     wchar_t face_buf[LF_FACESIZE];
     face_buf[0] = L'\0';
-    if (face && face[0]) {
-        wcsncpy(face_buf, face, LF_FACESIZE - 1);
+    if (font && font->face && font->face[0]) {
+        wcsncpy(face_buf, font->face, LF_FACESIZE - 1);
         face_buf[LF_FACESIZE - 1] = L'\0';
     }
-    int pt = point_size;
+    int pt = font ? font->point_size : 11;
     if (pt < 6)
         pt = 6;
     if (pt > 72)
         pt = 72;
+    // Bold and italic as the editor shows them: the GTK build always carried
+    // them through, and Win32 printed every document in regular weight
+    int weight = font ? font->weight : FW_NORMAL;
+    if (weight <= 0)
+        weight = FW_NORMAL;
+    if (weight > FW_HEAVY)
+        weight = FW_HEAVY;
+    BOOL italic = (font && font->italic) ? TRUE : FALSE;
 
     // OUT_TT_ONLY_PRECIS stops a driver substituting a printer-resident font
     // with different metrics, which would make the preview and the printed
     // page disagree about where lines wrap.
     l->font =
-        CreateFontW(-MulDiv(pt, l->dpi_y, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        CreateFontW(-MulDiv(pt, l->dpi_y, 72), 0, 0, 0, weight, italic, FALSE, FALSE,
                     DEFAULT_CHARSET, OUT_TT_ONLY_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
                     DEFAULT_PITCH | FF_DONTCARE, face_buf[0] ? face_buf : L"Consolas");
     if (!l->font)
-        return false;
+        return PRINT_PAGINATE_NO_MEMORY;
 
     HFONT old = (HFONT) SelectObject(dc, l->font);
 
@@ -721,11 +690,11 @@ static bool layout_prepare(PrintLayout *l, HDC dc, const wchar_t *face, int poin
     if (l->wrap_w < 1)
         l->wrap_w = 1;
 
-    bool ok = layout_paginate(l, dc);
+    PrintPaginateResult result = layout_paginate(l, dc, tm.tmAveCharWidth, progress);
 
     if (old)
         SelectObject(dc, old);
-    return ok;
+    return result;
 }
 
 // Geometry for a machine with no printer at all: Microsoft Print to PDF can be
@@ -770,8 +739,8 @@ static void layout_synthesise_paper(PrintLayout *l) {
     l->vert_res = l->phys_h;
 }
 
-PrintLayout *print_layout_create(const wchar_t *text, const wchar_t *doc_title, const wchar_t *face,
-                                 int point_size) {
+PrintLayout *print_layout_create(const wchar_t *text, const wchar_t *doc_title,
+                                 const PrintFont *font) {
     PrintLayout *l = calloc(1, sizeof(*l));
     if (!l)
         return NULL;
@@ -802,14 +771,14 @@ PrintLayout *print_layout_create(const wchar_t *text, const wchar_t *doc_title, 
     bool ok;
     if (dc) {
         l->has_printer = true;
-        ok = layout_prepare(l, dc, face, point_size, true);
+        ok = layout_prepare(l, dc, font, true, NULL) == PRINT_PAGINATE_OK;
     } else {
         // Font metrics depend on the realised ppem, not on the destination
         // surface, so a screen-compatible memory DC measures a synthetic
         // 600 dpi device faithfully.
         layout_synthesise_paper(l);
         dc = CreateCompatibleDC(NULL);
-        ok = (dc != NULL) && layout_prepare(l, dc, face, point_size, false);
+        ok = (dc != NULL) && layout_prepare(l, dc, font, false, NULL) == PRINT_PAGINATE_OK;
     }
 
     if (dc)
@@ -903,10 +872,19 @@ void print_layout_draw_page(const PrintLayout *l, HDC hdc, int page) {
         draw_hf(hdc, l->header, &hr, page, l->title, false);
     }
 
-    for (int i = 0; i < l->run_count; i++) {
+    // Runs are stored in page order, so a page's runs are found by bisection.
+    // Scanning every run for every page made printing (and each preview paint
+    // of a late page) cost the whole document per page.
+    int lo = 0, hi = l->run_count;
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (l->runs[mid].page < page)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    for (int i = lo; i < l->run_count && l->runs[i].page == page; i++) {
         const PrintRun *r = &l->runs[i];
-        if (r->page != page)
-            continue;
         TextOutW(hdc, r->x, r->y, l->text + r->offset, r->len);
     }
 
@@ -921,6 +899,213 @@ void print_layout_draw_page(const PrintLayout *l, HDC hdc, int page) {
     SetBkMode(hdc, old_bk);
     if (old)
         SelectObject(hdc, old);
+}
+
+// ---------------------------------------------------------------------------
+// Progress and Cancel
+//
+// Spooling a long document took the UI thread for as long as it lasted, with
+// nothing on screen and no way to stop it. A small modeless window now shows
+// the page being sent and has Cancel; SetAbortProc and the pagination's own
+// keep_going pump messages so it stays live.
+// ---------------------------------------------------------------------------
+
+#define PROGRESS_ID_TITLE 100
+#define PROGRESS_ID_STATUS 101
+
+struct PrintProgress {
+    HWND dlg;
+    HWND owner;
+    bool owner_disabled; // We disabled it, so we re-enable it
+    bool cancelled;
+};
+
+// SetAbortProc's callback is handed only the DC, so the job in flight lives
+// here. There is only ever one: print_document refuses to nest.
+static PrintProgress *g_progress = NULL;
+static bool g_in_print = false;
+
+// A DLGTEMPLATEEX, written field by field: DS_SHELLFONT (Segoe UI rather than
+// MS Sans Serif) needs the extended form, which has no struct in the headers,
+// and a template in memory keeps the resource script out of it
+#define PROGRESS_TEMPLATE_DWORDS 256
+
+static void tmpl_word(WORD **p, WORD v) {
+    *(*p)++ = v;
+}
+
+static void tmpl_dword(WORD **p, DWORD v) {
+    tmpl_word(p, LOWORD(v));
+    tmpl_word(p, HIWORD(v));
+}
+
+static void tmpl_string(WORD **p, const wchar_t *s) {
+    do {
+        tmpl_word(p, (WORD) *s);
+    } while (*s++);
+}
+
+static void tmpl_align(WORD **p) {
+    *p = (WORD *) (((ULONG_PTR) *p + 3) & ~(ULONG_PTR) 3);
+}
+
+static void tmpl_item(WORD **p, DWORD style, short x, short y, short cx, short cy, DWORD id,
+                      WORD cls, const wchar_t *text) {
+    tmpl_align(p);
+    tmpl_dword(p, 0); // helpID
+    tmpl_dword(p, 0); // exStyle
+    tmpl_dword(p, style | WS_CHILD | WS_VISIBLE);
+    tmpl_word(p, (WORD) x);
+    tmpl_word(p, (WORD) y);
+    tmpl_word(p, (WORD) cx);
+    tmpl_word(p, (WORD) cy);
+    tmpl_dword(p, id);
+    tmpl_word(p, 0xFFFF); // Predefined class by ordinal
+    tmpl_word(p, cls);
+    tmpl_string(p, text);
+    tmpl_word(p, 0); // No creation data
+}
+
+static const DLGTEMPLATE *progress_template(DWORD *buf) {
+    WORD *p = (WORD *) buf;
+    tmpl_word(&p, 1);      // dlgVer
+    tmpl_word(&p, 0xFFFF); // signature: DLGTEMPLATEEX
+    tmpl_dword(&p, 0);     // helpID
+    tmpl_dword(&p, 0);     // exStyle
+    tmpl_dword(&p, DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU);
+    tmpl_word(&p, 3); // Controls
+    tmpl_word(&p, 0);
+    tmpl_word(&p, 0);
+    tmpl_word(&p, 210); // Width and height in dialog units
+    tmpl_word(&p, 62);
+    tmpl_word(&p, 0); // No menu
+    tmpl_word(&p, 0); // Default dialog class
+    tmpl_string(&p, L"npad");
+    tmpl_word(&p, 8); // Point size
+    tmpl_word(&p, FW_NORMAL);
+    tmpl_word(&p, MAKEWORD(FALSE, DEFAULT_CHARSET)); // italic, charset
+    tmpl_string(&p, L"MS Shell Dlg");
+
+    tmpl_item(&p, SS_LEFT | SS_NOPREFIX | SS_ENDELLIPSIS, 10, 9, 190, 9, PROGRESS_ID_TITLE, 0x0082,
+              L"");
+    tmpl_item(&p, SS_LEFT | SS_NOPREFIX, 10, 22, 190, 9, PROGRESS_ID_STATUS, 0x0082,
+              L"Preparing pages...");
+    tmpl_item(&p, BS_DEFPUSHBUTTON | WS_TABSTOP, 150, 40, 50, 14, IDCANCEL, 0x0080, L"Cancel");
+    return (const DLGTEMPLATE *) buf;
+}
+
+static void progress_cancel(HWND dlg) {
+    if (g_progress)
+        g_progress->cancelled = true;
+    SetDlgItemTextW(dlg, PROGRESS_ID_STATUS, L"Cancelling...");
+    EnableWindow(GetDlgItem(dlg, IDCANCEL), FALSE);
+}
+
+static INT_PTR CALLBACK progress_proc(HWND dlg, UINT msg, WPARAM wparam, LPARAM lparam) {
+    (void) lparam;
+    switch (msg) {
+        case WM_INITDIALOG:
+            if (g_window_hook)
+                g_window_hook(dlg);
+            return TRUE;
+        case WM_COMMAND:
+            if (LOWORD(wparam) == IDCANCEL) {
+                progress_cancel(dlg);
+                return TRUE;
+            }
+            break;
+        case WM_CLOSE:
+            progress_cancel(dlg);
+            return TRUE;
+        default:
+            break;
+    }
+    return FALSE;
+}
+
+// Keep the progress window (and everything else) responsive. A WM_QUIT seen
+// here is put back for the main loop and pumping stops for now: the job runs
+// to its end and the application quits after it.
+static void progress_pump(const PrintProgress *p) {
+    MSG msg;
+    while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
+        if (msg.message == WM_QUIT) {
+            PostQuitMessage((int) msg.wParam);
+            break;
+        }
+        // Only for messages bound for the progress window: the dialog manager
+        // must not see keys meant for anything else (see LESSONS.md)
+        if (p && p->dlg && (msg.hwnd == p->dlg || IsChild(p->dlg, msg.hwnd)) &&
+            IsDialogMessageW(p->dlg, &msg))
+            continue;
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+}
+
+static bool progress_keep_going(const PrintProgress *p) {
+    if (!p)
+        return true;
+    progress_pump(p);
+    return !p->cancelled;
+}
+
+static BOOL CALLBACK print_abort_proc(HDC hdc, int code) {
+    (void) hdc;
+    (void) code;
+    return progress_keep_going(g_progress) ? TRUE : FALSE;
+}
+
+// Works without a window too (no Cancel then, but the job still prints)
+static PrintProgress *progress_begin(HWND owner, const wchar_t *title) {
+    PrintProgress *p = calloc(1, sizeof(*p));
+    if (!p)
+        return NULL;
+    p->owner = owner;
+    g_progress = p;
+
+    DWORD buf[PROGRESS_TEMPLATE_DWORDS];
+    ZeroMemory(buf, sizeof(buf));
+    p->dlg = CreateDialogIndirectParamW(GetModuleHandleW(NULL), progress_template(buf), owner,
+                                        progress_proc, 0);
+    if (p->dlg) {
+        wchar_t line[300];
+        _snwprintf(line, 299, L"Printing %s", title ? title : L"Untitled");
+        line[299] = L'\0';
+        SetDlgItemTextW(p->dlg, PROGRESS_ID_TITLE, line);
+        // Modal to its owner while the job runs: messages are pumped, and the
+        // window must not start a second print or edit what is being printed
+        if (owner && IsWindowEnabled(owner)) {
+            EnableWindow(owner, FALSE);
+            p->owner_disabled = true;
+        }
+        ShowWindow(p->dlg, SW_SHOW);
+        UpdateWindow(p->dlg);
+    }
+    return p;
+}
+
+static void progress_set_page(const PrintProgress *p, int page, int count) {
+    if (!p || !p->dlg || p->cancelled)
+        return;
+    wchar_t line[64];
+    _snwprintf(line, 63, L"Sending page %d of %d", page, count);
+    line[63] = L'\0';
+    SetDlgItemTextW(p->dlg, PROGRESS_ID_STATUS, line);
+}
+
+static void progress_end(PrintProgress *p) {
+    if (!p)
+        return;
+    // Before DestroyWindow, not after: re-enabling the owner only once the
+    // progress window is gone lets Windows activate another application
+    if (p->owner_disabled)
+        EnableWindow(p->owner, TRUE);
+    if (p->dlg)
+        DestroyWindow(p->dlg);
+    if (g_progress == p)
+        g_progress = NULL;
+    free(p);
 }
 
 // ---------------------------------------------------------------------------
@@ -944,11 +1129,110 @@ static UINT_PTR CALLBACK print_dialog_hook(HWND dlg, UINT msg, WPARAM wparam, LP
     return 0;
 }
 
-PrintResult print_document(HWND owner, const wchar_t *text, const wchar_t *doc_title,
-                           const wchar_t *face, int point_size) {
-    if (!text)
-        return PRINT_RESULT_FAILED;
+// Cancel on a prompt the spooler or driver shows - Microsoft Print to PDF's
+// and Print to file's "save as" - surfaces as a failed StartDoc with one of
+// these. It is the user's choice, not something that went wrong.
+static bool is_cancel_error(DWORD error) {
+    return error == ERROR_CANCELLED || error == ERROR_PRINT_CANCELLED;
+}
 
+// Apply the Page Setup choices (orientation AND paper) before any metric is
+// read. The dialog may have handed back a DEVMODE describing a different
+// sheet - Windows 11's modern dialog does so unless the user ticks "let the
+// app change my printing preferences" - and the preview was measured against
+// ours.
+static void apply_page_setup_to_dc(HDC hdc, HGLOBAL devmode, const PageSetup *ps) {
+    if ((ps->orientation == 0 && ps->paper_size == 0) || !devmode)
+        return;
+    DEVMODEW *dm = GlobalLock(devmode);
+    if (dm) {
+        page_setup_apply(ps, dm);
+        ResetDCW(hdc, dm);
+        GlobalUnlock(devmode);
+    }
+}
+
+// Lay out against hdc and send every page. output is DOCINFO's lpszOutput:
+// NULL for the printer's own port, "FILE:" for Print to file.
+static PrintResult print_render(HWND owner, HDC hdc, const wchar_t *output, const wchar_t *text,
+                                const wchar_t *doc_title, const PrintFont *font) {
+    // Lay out against the printer the user actually chose, which need not be
+    // the default one a preview measured
+    PrintLayout *l = calloc(1, sizeof(*l));
+    if (!l)
+        return PRINT_RESULT_FAILED;
+    l->text = wide_dup(text);
+    l->title = wide_dup(doc_title ? doc_title : L"Untitled");
+    l->header = load_hf("print_header", HEADER_DEFAULT);
+    l->footer = load_hf("print_footer", FOOTER_DEFAULT);
+    l->has_printer = true;
+    if (!l->text || !l->title) {
+        print_layout_free(l);
+        return PRINT_RESULT_FAILED;
+    }
+
+    PrintProgress *progress = progress_begin(owner, l->title);
+    PrintResult result = PRINT_RESULT_PRINTED;
+    PrintPaginateResult paginated = layout_prepare(l, hdc, font, true, progress);
+    if (paginated == PRINT_PAGINATE_CANCELLED || (progress && progress->cancelled))
+        result = PRINT_RESULT_CANCELLED;
+    else if (paginated != PRINT_PAGINATE_OK)
+        result = PRINT_RESULT_FAILED;
+
+    if (result == PRINT_RESULT_PRINTED) {
+        SetAbortProc(hdc, print_abort_proc);
+
+        DOCINFOW di;
+        ZeroMemory(&di, sizeof(di));
+        di.cbSize = sizeof(di);
+        di.lpszDocName = l->title;
+        di.lpszOutput = output;
+
+        if (StartDocW(hdc, &di) <= 0) {
+            DWORD error = GetLastError();
+            result = (is_cancel_error(error) || (progress && progress->cancelled))
+                         ? PRINT_RESULT_CANCELLED
+                         : PRINT_RESULT_FAILED;
+        } else {
+            for (int page = 1; page <= l->page_count; page++) {
+                progress_set_page(progress, page, l->page_count);
+                if (!progress_keep_going(progress)) {
+                    result = PRINT_RESULT_CANCELLED;
+                    break;
+                }
+                if (StartPage(hdc) <= 0) {
+                    DWORD error = GetLastError();
+                    result = is_cancel_error(error) ? PRINT_RESULT_CANCELLED : PRINT_RESULT_FAILED;
+                    break;
+                }
+                print_layout_draw_page(l, hdc, page);
+                if (EndPage(hdc) <= 0) {
+                    // SP_APPABORT when the abort procedure said stop
+                    DWORD error = GetLastError();
+                    result = (is_cancel_error(error) || (progress && progress->cancelled))
+                                 ? PRINT_RESULT_CANCELLED
+                                 : PRINT_RESULT_FAILED;
+                    break;
+                }
+            }
+            if (result == PRINT_RESULT_PRINTED) {
+                if (EndDoc(hdc) <= 0) {
+                    DWORD error = GetLastError();
+                    result = is_cancel_error(error) ? PRINT_RESULT_CANCELLED : PRINT_RESULT_FAILED;
+                }
+            } else {
+                AbortDoc(hdc);
+            }
+        }
+    }
+
+    progress_end(progress);
+    print_layout_free(l);
+    return result;
+}
+
+static PrintResult print_with_dialog(HWND owner, const wchar_t *text, const wchar_t *doc_title,
+                                     const PrintFont *font) {
     PageSetup ps;
     page_setup_load(&ps);
 
@@ -990,80 +1274,83 @@ PrintResult print_document(HWND owner, const wchar_t *text, const wchar_t *doc_t
         device_free(&dev);
     }
 
+    PrintResult result;
     if (!PrintDlgW(&pd)) {
-        if (pd.hDevMode)
-            GlobalFree(pd.hDevMode);
-        if (pd.hDevNames)
-            GlobalFree(pd.hDevNames);
-        return PRINT_RESULT_CANCELLED;
+        result = PRINT_RESULT_CANCELLED;
+    } else if (!pd.hDC) {
+        result = PRINT_RESULT_FAILED;
+    } else {
+        apply_page_setup_to_dc(pd.hDC, pd.hDevMode, &ps);
+        // The classic dialog has a "Print to file" box. Ticked, the job has to
+        // be pointed at the FILE: port, which makes the spooler ask for the
+        // file name; left at NULL it went to the printer regardless. (Copies
+        // need nothing here: since Vista the DC carries them.)
+        const wchar_t *output = (pd.Flags & PD_PRINTTOFILE) ? L"FILE:" : NULL;
+        result = print_render(owner, pd.hDC, output, text, doc_title, font);
     }
 
-    HDC hdc = pd.hDC;
-    if (!hdc) {
-        if (pd.hDevMode)
-            GlobalFree(pd.hDevMode);
-        if (pd.hDevNames)
-            GlobalFree(pd.hDevNames);
-        return PRINT_RESULT_FAILED;
-    }
-
-    // Apply the Page Setup choices (orientation AND paper) before any metric
-    // is read. The dialog may have handed back a DEVMODE describing a
-    // different sheet - Windows 11's modern dialog does so unless the user
-    // ticks "let the app change my printing preferences" - and the preview
-    // was measured against ours.
-    if ((ps.orientation != 0 || ps.paper_size != 0) && pd.hDevMode) {
-        DEVMODEW *dm = GlobalLock(pd.hDevMode);
-        if (dm) {
-            page_setup_apply(&ps, dm);
-            ResetDCW(hdc, dm);
-            GlobalUnlock(pd.hDevMode);
-        }
-    }
-
-    // Lay out against the printer the user actually chose, which need not be
-    // the default one a preview measured
-    PrintLayout *l = calloc(1, sizeof(*l));
-    bool ok = (l != NULL);
-    if (ok) {
-        l->text = wide_dup(text);
-        l->title = wide_dup(doc_title ? doc_title : L"Untitled");
-        l->header = load_hf("print_header", HEADER_DEFAULT);
-        l->footer = load_hf("print_footer", FOOTER_DEFAULT);
-        l->has_printer = true;
-        ok =
-            (l->text != NULL && l->title != NULL) && layout_prepare(l, hdc, face, point_size, true);
-    }
-
-    if (ok) {
-        DOCINFOW di;
-        ZeroMemory(&di, sizeof(di));
-        di.cbSize = sizeof(di);
-        di.lpszDocName = l->title;
-
-        ok = (StartDocW(hdc, &di) > 0);
-        for (int page = 1; ok && page <= l->page_count; page++) {
-            if (StartPage(hdc) <= 0) {
-                ok = false;
-                break;
-            }
-            print_layout_draw_page(l, hdc, page);
-            if (EndPage(hdc) <= 0) {
-                ok = false;
-                break;
-            }
-        }
-        if (ok)
-            EndDoc(hdc);
-        else
-            AbortDoc(hdc);
-    }
-
-    print_layout_free(l);
-    DeleteDC(hdc);
+    if (pd.hDC)
+        DeleteDC(pd.hDC);
     if (pd.hDevMode)
         GlobalFree(pd.hDevMode);
     if (pd.hDevNames)
         GlobalFree(pd.hDevNames);
-    return ok ? PRINT_RESULT_PRINTED : PRINT_RESULT_FAILED;
+    return result;
+}
+
+PrintResult print_document(HWND owner, const wchar_t *text, const wchar_t *doc_title,
+                           const PrintFont *font) {
+    if (!text)
+        return PRINT_RESULT_FAILED;
+    // Messages are pumped while a job spools; nothing reachable should start
+    // a second one, and if something did it must not run inside the first
+    if (g_in_print)
+        return PRINT_RESULT_CANCELLED;
+    g_in_print = true;
+    busy_begin();
+    PrintResult result = print_with_dialog(owner, text, doc_title, font);
+    g_in_print = false;
+    busy_end();
+    return result;
+}
+
+PrintResult print_document_default(const wchar_t *text, const wchar_t *doc_title,
+                                   const PrintFont *font) {
+    if (!text)
+        return PRINT_RESULT_FAILED;
+    if (g_in_print)
+        return PRINT_RESULT_CANCELLED;
+    g_in_print = true;
+    busy_begin();
+
+    PageSetup ps;
+    page_setup_load(&ps);
+
+    // The default printer's DC, with no dialog; PD_NOWARNING because the
+    // caller reports a missing printer itself
+    PRINTDLGW pd;
+    ZeroMemory(&pd, sizeof(pd));
+    pd.lStructSize = sizeof(pd);
+    pd.Flags = PD_RETURNDEFAULT | PD_RETURNDC | PD_NOWARNING;
+
+    PrintResult result;
+    if (!PrintDlgW(&pd)) {
+        result = PRINT_RESULT_NO_PRINTER;
+    } else if (!pd.hDC) {
+        result = PRINT_RESULT_FAILED;
+    } else {
+        apply_page_setup_to_dc(pd.hDC, pd.hDevMode, &ps);
+        result = print_render(NULL, pd.hDC, NULL, text, doc_title, font);
+    }
+
+    if (pd.hDC)
+        DeleteDC(pd.hDC);
+    if (pd.hDevMode)
+        GlobalFree(pd.hDevMode);
+    if (pd.hDevNames)
+        GlobalFree(pd.hDevNames);
+
+    g_in_print = false;
+    busy_end();
+    return result;
 }

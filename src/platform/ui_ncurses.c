@@ -372,3 +372,10 @@ bool ui_platform_is_window_maximized(const Window *window) {
 int ui_platform_count_main_windows(void) {
     return 0;
 }
+
+// Stub: the terminal build cannot print
+int ui_platform_print_file(const char *path) {
+    (void) path;
+    fprintf(stderr, "npad: printing is not available in the terminal build\n");
+    return 1;
+}
