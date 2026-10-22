@@ -51,6 +51,10 @@ bool ui_show_message_box(Window *parent, const char *title, const char *message,
     return is_question ? g_answer : true;
 }
 
+UiAnswer ui_ask_question(Window *parent, const char *title, const char *message) {
+    return ui_show_message_box(parent, title, message, true) ? UI_ANSWER_YES : UI_ANSWER_NO;
+}
+
 static void reset_ui(bool answer) {
     g_boxes = 0;
     g_questions = 0;
@@ -84,9 +88,17 @@ char *ui_get_text(Window *window) {
     (void) window;
     return NULL;
 }
-void ui_set_text(Window *window, const char *text) {
+bool ui_set_text(Window *window, const char *text) {
     (void) window;
     (void) text;
+    return true;
+}
+bool ui_text_altered_by_load(Window *window) {
+    (void) window;
+    return false;
+}
+void ui_append_time_date_line(Window *window) {
+    (void) window;
 }
 void ui_set_text_modified(Window *window, bool modified) {
     (void) window;
@@ -101,6 +113,10 @@ void ui_set_status_info(Window *window, const char *encoding_name, const char *e
     (void) encoding_name;
     (void) eol_name;
 }
+void ui_set_status_message(Window *window, const char *message) {
+    (void) window;
+    (void) message;
+}
 bool ui_is_dark_mode(void) {
     return false;
 }
@@ -114,8 +130,10 @@ void ui_launch_recovery_instance(const char *slot_id, int cascade_index) {
 void ui_open_with_default_app(const char *filename) {
     (void) filename;
 }
-bool ui_pid_is_running(long pid) {
+bool ui_pid_is_running(long pid, long long *start_time) {
     (void) pid;
+    if (start_time)
+        *start_time = 0;
     return false;
 }
 UiOpenChoice ui_prompt_binary_open(Window *parent, const char *filename) {
