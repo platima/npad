@@ -48,6 +48,13 @@ TEST_CASE(time_drops_a_seconds_unit) {
     TEST_ASSERT_STR_EQ("%p %I\xEC\x8B\x9C %M\xEB\xB6\x84",
                        short_time("%p %I\xEC\x8B\x9C %M\xEB\xB6\x84 %S\xEC\xB4\x88"),
                        "no trailing space is left behind");
+    // A unit after a space goes with the seconds, and a field after it stays
+    // with one space before it
+    TEST_ASSERT_STR_EQ("%H h %M min", short_time("%H h %M min %S s"), "spaced seconds unit");
+    TEST_ASSERT_STR_EQ("%H h %M min %Z", short_time("%H h %M min %S s %Z"),
+                       "a zone after the spaced unit stays, one space before it");
+    TEST_ASSERT_STR_EQ("%I %M %p", short_time("%I %M %S %p"),
+                       "a field after the seconds is not a unit");
 }
 
 TEST_CASE(time_keeps_modifiers_and_literals) {
@@ -70,6 +77,9 @@ TEST_CASE(date_gets_four_digit_years) {
     TEST_ASSERT_STR_EQ("%m/%d/%Y", short_date("%D"), "%D expanded");
     TEST_ASSERT_STR_EQ("%-d/%-m/%-Y", short_date("%-d/%-m/%-y"), "flags kept on the year");
     TEST_ASSERT_STR_EQ("%Ey", short_date("%Ey"), "an era year is not a two-digit year");
+    TEST_ASSERT_STR_EQ("%Y/%Om/%Od", short_date("%Oy/%Om/%Od"),
+                       "alternative digits: %Oy is still two digits, and there is no %OY");
+    TEST_ASSERT_STR_EQ("%-Y", short_date("%-Oy"), "flags kept, the O dropped");
     TEST_ASSERT_STR_EQ("%Y\xE5\xB9\xB4%m\xE6\x9C\x88%d\xE6\x97\xA5",
                        short_date("%Y\xE5\xB9\xB4%m\xE6\x9C\x88%d\xE6\x97\xA5"), "ja_JP unchanged");
     TEST_ASSERT_STR_EQ("%m/%d/%Y", short_date(""), "empty D_FMT");

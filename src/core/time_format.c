@@ -85,15 +85,28 @@ bool time_format_short_time(const char *fmt, char *out, size_t cap) {
         size_t n = conversion_length(fmt + i, &conv);
         if (conv == 'S') {
             // The seconds go, with the separator that leads into them
-            // ("%M:%S") or, when there is none, the unit that follows them
-            // (ja_JP and ko_KR write a "seconds" character after %S)
+            // ("%M:%S") or, when there is none, the unit that follows them,
+            // attached (ja_JP and ko_KR write a "seconds" character after %S)
+            // or after spaces ("%S s"); a field that follows (%p, %Z) is never
+            // taken for a unit
             if (o.len > 0 && strchr(":.,", o.buf[o.len - 1])) {
                 o.buf[--o.len] = '\0';
                 i += n;
             } else {
                 i += n;
-                while (fmt[i] && fmt[i] != '%' && fmt[i] != ' ')
-                    i++;
+                size_t unit = i;
+                while (fmt[unit] == ' ')
+                    unit++;
+                if (fmt[unit] && fmt[unit] != '%') {
+                    while (fmt[unit] && fmt[unit] != '%' && fmt[unit] != ' ')
+                        unit++;
+                    i = unit;
+                }
+                // The space that led into the seconds now separates what came
+                // before from what follows: one space, not two
+                if (o.len > 0 && o.buf[o.len - 1] == ' ')
+                    while (fmt[i] == ' ')
+                        i++;
             }
             continue;
         }
@@ -120,9 +133,12 @@ bool time_format_short_date(const char *fmt, char *out, size_t cap) {
         }
         char conv = '\0';
         size_t n = conversion_length(fmt + i, &conv);
-        bool modified = n >= 3 && (fmt[i + n - 2] == 'E' || fmt[i + n - 2] == 'O');
-        if (conv == 'y' && !modified) {
-            out_bytes(&o, fmt + i, n - 1); // Keep any flags: "%-y" -> "%-Y"
+        char modifier = n >= 3 ? fmt[i + n - 2] : '\0';
+        if (conv == 'y' && modifier != 'E') {
+            // A two-digit year, also with O (alternative digits: still two
+            // digits). Keep any flags ("%-y" -> "%-Y"); drop the O, as
+            // strftime has no %OY. %Ey is an era year and stays.
+            out_bytes(&o, fmt + i, modifier == 'O' ? n - 2 : n - 1);
             out_str(&o, "Y");
         } else if (conv == 'D') {
             out_str(&o, "%m/%d/%Y");
