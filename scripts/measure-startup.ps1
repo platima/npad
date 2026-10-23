@@ -18,6 +18,13 @@
 
   A large "pre-creation" number means the delay is not npad's code.
 
+  Each run's npad is the script's own: it is found by its PID, closed with
+  WM_CLOSE to its own window, and runs against a throwaway profile (so your
+  settings.json, window position and crash-recovery folder are untouched;
+  see probe-common.ps1). The script refuses to start while npad is already
+  open - it never closes your windows for you - and never force-kills: if a
+  run's npad does not exit, the measurement stops and that PID is reported.
+
 .EXAMPLE
   .\measure-startup.ps1 -Runs 15
   .\measure-startup.ps1 -Exe "C:\Users\me\AppData\Local\Programs\npad\npad.exe" -Runs 30 -DelaySeconds 20
@@ -28,64 +35,69 @@ param(
     [int]$Runs = 15,
     # Idle gap between runs. Raise this (e.g. 60+) to let caches and
     # reputation results go cold, which is when slow launches happen.
-    [int]$DelaySeconds = 2
+    [int]$DelaySeconds = 2,
+    # Measure even though npad is already open. Your windows are still left
+    # alone, but a running copy keeps the image warm, so the numbers are not
+    # cold starts.
+    [switch]$AllowRunning,
+    # A profile folder to reuse (kept afterwards); default is a fresh temp one
+    [string]$ProfileDir
 )
 
-if (-not (Test-Path $Exe)) { throw "npad not found at: $Exe  (pass -Exe <path>)" }
+. (Join-Path $PSScriptRoot 'probe-common.ps1')
 
-Add-Type @"
-using System; using System.Runtime.InteropServices;
-public class NP {
-  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindowExW(IntPtr p, IntPtr a, string c, string t);
-  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
-  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
-  [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeoutW(IntPtr h, uint m, IntPtr w, IntPtr l, uint f, uint t, out IntPtr r);
+if (-not (Test-Path -LiteralPath $Exe)) { throw "npad not found at: $Exe  (pass -Exe <path>)" }
+
+# Read-only check, only to refuse: nothing here is ever closed by name
+$stem = [IO.Path]::GetFileNameWithoutExtension($Exe)
+$already = @(Get-Process -Name $stem -ErrorAction SilentlyContinue)
+if ($already.Count -gt 0 -and -not $AllowRunning) {
+    throw ("$stem is already running (PID " + (($already | ForEach-Object { $_.Id }) -join ', ') +
+        "). This script never closes it for you: save your work and close it yourself, or pass -AllowRunning to measure anyway (warm, not cold, starts).")
 }
-"@
 
-function Wait-Ready([int]$procId, [int]$timeoutMs = 30000) {
+function Wait-Ready($probe, [int]$timeoutMs = 30000) {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     while ($sw.ElapsedMilliseconds -lt $timeoutMs) {
-        $h = [IntPtr]::Zero
-        for ($i = 0; $i -lt 64; $i++) {
-            $h = [NP]::FindWindowExW([IntPtr]::Zero, $h, "NpadMainWindow", [NullString]::Value)
-            if ($h -eq [IntPtr]::Zero) { break }
-            $q = 0; [void][NP]::GetWindowThreadProcessId($h, [ref]$q)
-            if ($q -eq $procId -and [NP]::IsWindowVisible($h)) {
-                $o = [IntPtr]::Zero
-                # SMTO_ABORTIFHUNG: only counts once the UI thread is pumping
-                if ([NP]::SendMessageTimeoutW($h, 0, [IntPtr]0, [IntPtr]0, 0x0002, 5000, [ref]$o) -ne [IntPtr]::Zero) {
-                    return $true
-                }
-            }
+        # Only this run's own process: no window of any other npad counts
+        foreach ($h in [NpadProbe.Win32]::TopsOf(@([int]$probe.Id))) {
+            if ([NpadProbe.Win32]::Cls($h) -ne 'NpadMainWindow') { continue }
+            # SMTO_ABORTIFHUNG: only counts once the UI thread is pumping
+            if ($null -ne (Send-ProbeMessage $h 0 0 0 5000)) { return $true }
         }
+        if ($probe.Process.HasExited) { return $false }
         Start-Sleep -Milliseconds 2
     }
     return $false
 }
 
+$realSettings = Get-RealNpadSettingsPath
+$realBefore = Get-ProbeFileHash $realSettings
+$ownProfile = -not $ProfileDir
+$probeProfile = New-ProbeProfile $ProfileDir
+
 "npad startup measurement"
-"  exe   : $Exe"
-"  runs  : $Runs (idle $DelaySeconds s between)"
-"  NOTE  : leave the machine otherwise idle for clean numbers."
+"  exe     : $Exe"
+"  runs    : $Runs (idle $DelaySeconds s between)"
+"  profile : $probeProfile (private; your settings are not used)"
+"  NOTE    : leave the machine otherwise idle for clean numbers."
 ""
 "{0,4}  {1,10}  {2,12}  {3,12}" -f "run", "total ms", "pre-create", "in-process"
 "{0,4}  {1,10}  {2,12}  {3,12}" -f "----", "--------", "----------", "----------"
 
 $rows = @()
+$allClosed = $true
 for ($r = 1; $r -le $Runs; $r++) {
-    Get-Process -Name npad -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds $DelaySeconds
 
     $t0 = Get-Date
-    $p = Start-Process $Exe -PassThru
-    $ok = Wait-Ready $p.Id
+    $probe = Start-ProbeProcess -FilePath $Exe -ProfileDir $probeProfile
+    $ok = Wait-Ready $probe
     $t1 = Get-Date
 
     $total = ($t1 - $t0).TotalMilliseconds
-    $p.Refresh()
     # Everything from the kernel creating the process to the window being ready
-    $inProc = ($t1 - $p.StartTime).TotalMilliseconds
+    $inProc = ($t1 - $probe.StartTime).TotalMilliseconds
     # The gap the Debug page can never show you
     $pre = $total - $inProc
     if (-not $ok) { $total = -1 }
@@ -93,8 +105,20 @@ for ($r = 1; $r -le $Runs; $r++) {
     $rows += [pscustomobject]@{ Run=$r; Total=$total; Pre=$pre; In=$inProc }
     "{0,4}  {1,10:N1}  {2,12:N1}  {3,12:N1}" -f $r, $total, $pre, $inProc
 
-    Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+    # A graceful close of this run's own window; a run that does not exit
+    # ends the measurement rather than stacking up npads (and is left alone)
+    if (-not (Close-ProbeGracefully $probe)) {
+        $allClosed = $false
+        "stopping after run ${r}: its npad did not exit"
+        break
+    }
 }
+
+$realAfter = Get-ProbeFileHash $realSettings
+if ($realBefore -ne $realAfter) {
+    Write-Warning "Your real settings.json ($realSettings) changed during the measurement - by a probe npad or by another one you have open."
+}
+if ($allClosed -and $ownProfile) { Remove-ProbeProfile $probeProfile }
 
 $good = $rows | Where-Object { $_.Total -ge 0 }
 if (-not $good) { "no successful runs"; return }

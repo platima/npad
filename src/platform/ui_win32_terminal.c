@@ -82,9 +82,15 @@ void ui_platform_invalidate_window(Window *window) {
     (void) window;
 }
 
-void ui_platform_set_text(Window *window, const char *text) {
+bool ui_platform_set_text(Window *window, const char *text) {
     (void) window;
     (void) text;
+    return false; // No text view: nothing was loaded
+}
+
+bool ui_platform_text_altered_by_load(const Window *window) {
+    (void) window;
+    return false;
 }
 
 char *ui_platform_get_text(Window *window) {
@@ -118,6 +124,10 @@ void ui_platform_set_cursor_position(Window *window, int position) {
 int ui_platform_get_cursor_position(Window *window) {
     (void) window;
     return 0;
+}
+
+void ui_platform_append_time_date_line(Window *window) {
+    (void) window;
 }
 
 void ui_platform_cut(Window *window) {
@@ -168,6 +178,14 @@ bool ui_platform_show_message_box(Window *parent, const char *title, const char 
     (void) is_question;
     printf("Message Box: %s - %s\n", title, message);
     return false;
+}
+
+// No way to ask yet: report the question as unanswered, which callers treat
+// as "not now" (crash-recovery snapshots stay for the next launch)
+UiAnswer ui_platform_ask_question(Window *parent, const char *title, const char *message) {
+    (void) parent;
+    printf("Question: %s - %s\n", title ? title : "npad", message ? message : "");
+    return UI_ANSWER_DISMISSED;
 }
 
 void ui_platform_show_about_dialog(Window *parent) {
@@ -246,6 +264,11 @@ void ui_platform_set_status_info(Window *window, const char *encoding_name, cons
     (void) eol_name;
 }
 
+void ui_platform_set_status_message(Window *window, const char *message) {
+    (void) window;
+    (void) message;
+}
+
 void ui_platform_set_auto_save_timer(Window *window, int seconds) {
     (void) window;
     (void) seconds;
@@ -264,8 +287,10 @@ void ui_platform_launch_recovery_instance(const char *slot_id, int cascade_index
 void ui_platform_notify_settings_changed(void) {
 }
 
-bool ui_platform_pid_is_running(long pid) {
+bool ui_platform_pid_is_running(long pid, long long *start_time) {
     (void) pid;
+    if (start_time)
+        *start_time = -1;
     return false;
 }
 
@@ -293,6 +318,13 @@ bool ui_platform_is_window_maximized(const Window *window) {
 // Stub: no other npad windows to cascade past on this platform yet
 int ui_platform_count_main_windows(void) {
     return 0;
+}
+
+// Stub: the terminal build cannot print
+int ui_platform_print_file(const char *path) {
+    (void) path;
+    fprintf(stderr, "npad: printing is not available in the terminal build\n");
+    return 1;
 }
 
 // Stub: the terminal build has no file type associations, so the elevated

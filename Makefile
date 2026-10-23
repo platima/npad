@@ -35,25 +35,33 @@ endif
 
 # Windows on Arm (arm64) is cross-compiled with llvm-mingw (clang + lld; MinGW
 # GCC has no arm64 Windows target), whose tools carry the target in their
-# name: put its bin/ on PATH (scripts/install-llvm-mingw.sh fetches the pinned
-# release CI uses) or point ARM64_MINGW_PREFIX at it. `make windows-arm64`
-# builds npad-arm64.exe with the same sources and flags as npad.exe, in its own
-# build directory so the two never share an object.
+# name. Point LLVM_MINGW at its install directory (scripts/install-llvm-mingw.sh
+# fetches the pinned release CI uses), or put its bin/ on PATH - APPENDED, not
+# prepended: llvm-mingw also ships x86_64-w64-mingw32-gcc/-dlltool/-windres, so
+# ahead of MinGW GCC it takes over `make windows` too (which then builds with
+# clang + lld, see WIN_LINKER below). `make windows-arm64` builds
+# npad-arm64.exe with the same sources and flags as npad.exe, in its own build
+# directory so the two never share an object.
+LLVM_MINGW ?=
+ifneq ($(LLVM_MINGW),)
+ARM64_MINGW_PREFIX ?= $(LLVM_MINGW)/bin/aarch64-w64-mingw32-
+else
 ARM64_MINGW_PREFIX ?= aarch64-w64-mingw32-
+endif
 WINDOWS_ARM64_TARGET = npad-arm64.exe
 # Per-architecture intermediates (delay-import libraries, the compiled .rc)
 WIN_BUILD_DIR ?= build
 
 # Source files
-CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/startup_prof.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c src/core/find_seed.c src/core/tab_stops.c
+CORE_SOURCES = src/core/editor.c src/core/file_ops.c src/core/settings.c src/core/settings_import.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/startup_prof.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c src/core/find_seed.c src/core/tab_stops.c src/core/text_scan.c src/core/ui_rules.c src/core/print_core.c src/core/time_format.c
 SHARED_SOURCES = src/ui_interface.c
 
 # Test sources
 TEST_FRAMEWORK_SOURCES = tests/test_framework.c
-TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c src/core/find_seed.c src/core/tab_stops.c  # Core sources without UI dependencies
+TEST_CORE_SOURCES = src/core/file_ops.c src/core/settings.c src/core/settings_import.c src/core/session.c src/core/thread_safety.c src/core/error.c src/core/list_ops.c src/core/update_check.c src/core/html_md.c src/core/undo.c src/core/find_seed.c src/core/tab_stops.c src/core/text_scan.c src/core/ui_rules.c src/core/print_core.c src/core/time_format.c  # Core sources without UI dependencies
 
 # Windows GUI specific
-WINDOWS_GUI_SOURCES = src/platform/ui_win32.c src/platform/print_win32.c src/platform/assoc_win32.c
+WINDOWS_GUI_SOURCES = src/platform/ui_win32.c src/platform/print_win32.c src/platform/assoc_win32.c src/platform/richedit_text.c src/platform/args_win32.c
 # Delay-loaded DLLs: none of these are needed to open a window, so binding them
 # statically made the loader page them in on every launch - which costs most on
 # a cold start, exactly when startup feels slow. winhttp/bcrypt serve only the
@@ -71,21 +79,30 @@ DELAY_DLLS = winhttp bcrypt comdlg32 msimg32
 # only place those entry points are declared) and each DLL is named once more.
 DELAY_LIBS = $(patsubst %,$(WIN_BUILD_DIR)/lib%_delay.a,$(DELAY_DLLS))
 WIN_RES = $(WIN_BUILD_DIR)/npad.res
-WIN_LINKER ?= bfd
+# Which of the two routes: bfd (MinGW GCC + GNU binutils, the shipped x64
+# build) or lld (llvm-mingw). Unless given, it follows the compiler MINGW_CC
+# actually resolves to, so `make windows` still builds when llvm-mingw's bin/
+# sits ahead on PATH and its x86_64-w64-mingw32-* tools (clang, lld,
+# llvm-dlltool) shadow the GNU ones - the bfd route's dlltool -y would fail
+# there. Recursively expanded: the compiler is only asked when a Windows
+# recipe needs the answer, never for `make test` or a Linux build.
 comma := ,
-ifeq ($(WIN_LINKER),lld)
-DELAY_DLLTOOL_FLAG = -l
-DELAY_LINK = $(DELAY_LIBS) $(patsubst %,-Wl$(comma)--delayload=%.dll,$(DELAY_DLLS))
-else
-DELAY_DLLTOOL_FLAG = -y
-DELAY_LINK = $(DELAY_LIBS) -ldelayimp
-endif
+WIN_LINKER ?= $(if $(findstring clang,$(shell $(MINGW_CC) --version 2>/dev/null | head -n 1)),lld,bfd)
+DELAY_DLLTOOL_FLAG = $(if $(filter lld,$(WIN_LINKER)),-l,-y)
+# On the lld route --dependent-load-flag=0x800 (LOAD_LIBRARY_SEARCH_SYSTEM32)
+# also keeps the loader's own search for imported DLLs out of the exe's folder.
+# GNU ld has no such option; there main() calls SetDefaultDllDirectories first
+# thing, which covers the delay-loaded and runtime-loaded DLLs (the static
+# imports are all KnownDLLs or the side-by-side comctl32).
+DELAY_LINK_LLD = $(patsubst %,-Wl$(comma)--delayload=%.dll,$(DELAY_DLLS)) -Wl$(comma)--dependent-load-flag=0x800
+DELAY_LINK = $(DELAY_LIBS) $(if $(filter lld,$(WIN_LINKER)),$(DELAY_LINK_LLD),-ldelayimp)
 WINDOWS_GUI_LIBS = -mwindows -lcomctl32 -lgdi32 -lkernel32 -lshell32 -luser32 -lole32 -luuid $(DELAY_LINK)
 WINDOWS_GUI_TARGET = npad.exe
 
 # Windows Terminal specific
-WINDOWS_TERMINAL_SOURCES = src/platform/ui_win32_terminal.c
-WINDOWS_TERMINAL_LIBS = -lkernel32
+WINDOWS_TERMINAL_SOURCES = src/platform/ui_win32_terminal.c src/platform/args_win32.c
+# ole32 + uuid: settings.c finds %APPDATA% with SHGetKnownFolderPath
+WINDOWS_TERMINAL_LIBS = -lkernel32 -lole32 -luuid
 WINDOWS_TERMINAL_TARGET = npad-terminal.exe
 
 # macOS specific (future)
@@ -96,7 +113,7 @@ MACOS_TARGET = npad-macos
 # Linux desktop: GTK 3, one binary for both X11 and Wayland (GDK picks the
 # display server at runtime). pkg-config is only consulted when this target
 # is actually built - these are recursively expanded.
-LINUX_GTK_SOURCES = src/platform/ui_gtk.c src/platform/ui_gtk_dialogs.c src/platform/ui_gtk_edit.c src/platform/ui_gtk_find.c src/platform/ui_gtk_lists.c src/platform/ui_gtk_prefs.c src/platform/ui_gtk_instance.c src/platform/ui_gtk_update.c src/platform/print_gtk.c
+LINUX_GTK_SOURCES = src/platform/ui_gtk.c src/platform/ui_gtk_dialogs.c src/platform/ui_gtk_edit.c src/platform/ui_gtk_find.c src/platform/ui_gtk_lists.c src/platform/ui_gtk_prefs.c src/platform/ui_gtk_instance.c src/platform/ui_gtk_session.c src/platform/ui_gtk_update.c src/platform/print_gtk.c
 LINUX_GTK_HEADERS = src/platform/ui_gtk.h src/platform/print_gtk.h
 LINUX_GTK_CFLAGS = $(shell pkg-config --cflags gtk+-3.0)
 LINUX_GTK_LIBS = $(shell pkg-config --libs gtk+-3.0) -lpthread
@@ -106,6 +123,8 @@ LINUX_GTK_TARGET = npad-linux
 LINUX_TERMINAL_SOURCES = src/platform/ui_ncurses.c
 LINUX_TERMINAL_LIBS = -lncurses -lpthread
 LINUX_TERMINAL_TARGET = npad-linux-terminal
+# The header `make linux` probes for before building the stub
+NCURSES_HEADER ?= ncurses.h
 
 # Version information - use header version or fallback to git
 # Not using awk here due to an issue found with awk 5.2.1 that I could not fix and was mangling strings
@@ -220,7 +239,16 @@ $(LINUX_GTK_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_GTK_SOURCES) $(LI
 	$(CC) $(CFLAGS) $(LINUX_GTK_CFLAGS) -o $@ $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_GTK_SOURCES) src/main.c $(LINUX_GTK_LIBS) $(LDFLAGS)
 	@echo "Linux build complete: $(LINUX_GTK_TARGET)"
 
-linux: linux-gtk linux-terminal
+# The desktop app, plus the ncurses stub only where ncurses' headers are
+# installed: the stub does nothing yet, so it is not worth a missing package
+# failing the command README gives. `make linux-terminal` still requires them.
+linux: linux-gtk
+	@if printf '#include <$(NCURSES_HEADER)>\n' | $(CC) $(CFLAGS) -E -x c - >/dev/null 2>&1; then \
+		$(MAKE) --no-print-directory linux-terminal; \
+	else \
+		echo "Skipping $(LINUX_TERMINAL_TARGET) (the unimplemented ncurses stub): $(NCURSES_HEADER) not found."; \
+		echo "  Install libncurses-dev (Debian/Ubuntu) or ncurses-devel (Fedora) and run: make linux-terminal"; \
+	fi
 
 windows-terminal: $(WINDOWS_TERMINAL_TARGET)
 
@@ -234,6 +262,7 @@ endif
 linux-terminal: $(LINUX_TERMINAL_TARGET)
 
 $(LINUX_TERMINAL_TARGET): $(CORE_SOURCES) $(SHARED_SOURCES) $(LINUX_TERMINAL_SOURCES) src/main.c
+	@printf '#include <$(NCURSES_HEADER)>\n' | $(CC) $(CFLAGS) -E -x c - >/dev/null 2>&1 || { echo "ncurses development files not found ($(NCURSES_HEADER)). Install with: sudo apt-get install libncurses-dev"; exit 1; }
 	$(CC) $(CFLAGS) -o $@ $^ $(LINUX_TERMINAL_LIBS) $(LDFLAGS)
 	@echo "Linux Terminal build complete: $(LINUX_TERMINAL_TARGET)"
 
@@ -297,12 +326,84 @@ format-check:
 	find src/ -name "*.c" -o -name "*.h" | xargs $(CLANG_FORMAT) --dry-run --Werror
 
 # Testing targets
-test: test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops
+#
+# Each suite is tests/test_<name>.c, linked with the core sources and the
+# framework, and builds three ways from the same rule set:
+#   make test           native binaries (tests/test_<name>), run in turn
+#   make test-windows   Windows executables (tests/test_<name>.exe); cross-
+#                       compiled anywhere, run only on Windows (MSYS2)
+#   make test-sanitize  the suite under AddressSanitizer + UBSan
+#   make test-fuzz      the seeded property/fuzz suite, longer, sanitized
+# Every suite runs in its own fresh temporary directory with the settings
+# location pointed inside it (tests/test_framework.c), so a run never writes
+# into the checkout or reads the user's real settings.
+TEST_SUITES = file_ops atomic_save error encoding session list_ops update_check settings html_md undo find_seed tab_stops settings_import richedit_text editor_load editor recovery editor_insert text_scan editor_reload ui_rules print_core time_format fuzz
+TEST_DEPS = $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_framework.h
+# NPAD_TEST_HOOKS: on Windows a test build keeps settings under
+# %NPAD_TEST_CONFIG_DIR% (which the framework sets) instead of %APPDATA%
+TEST_CFLAGS = $(CFLAGS) -DNPAD_TEST_HOOKS
+# Per-suite extra flags. undo.c is built with allocation failure injection, so
+# the test can prove a failed record never leaves a history that would corrupt
+# the text; fault injection makes each stage of a save fail on demand
+# (file_ops.h).
+TEST_FLAGS_undo = -DUNDO_FAULT_INJECTION
+TEST_FLAGS_atomic_save = -DFILE_OPS_FAULT_INJECTION
+# Per-suite extra sources, linked after the core ones. The editor suites run
+# the real editor.c against a UI layer of their own instead of a window:
+# test_editor and test_recovery against shared stubs (tests/stub_ui_*.c),
+# test_editor_load, test_editor_insert and test_editor_reload against stubs
+# in the test file.
+TEST_EXTRA_richedit_text = src/platform/richedit_text.c
+TEST_EXTRA_editor_load = src/core/editor.c src/core/startup_prof.c
+TEST_EXTRA_editor = src/core/editor.c tests/stub_ui_editor.c
+TEST_EXTRA_recovery = src/core/editor.c tests/stub_ui_recovery.c
+TEST_EXTRA_editor_insert = src/core/editor.c
+TEST_EXTRA_editor_reload = src/core/editor.c
+# ... which every build of that suite (native, .exe, sanitized) depends on
+# (the rules that add them follow the sanitizer section, where SAN_DIR is set)
+TEST_EXTRA_DEPS_richedit_text = $(TEST_EXTRA_richedit_text) src/platform/richedit_text.h
+TEST_EXTRA_DEPS_editor_load = $(TEST_EXTRA_editor_load)
+TEST_EXTRA_DEPS_editor = $(TEST_EXTRA_editor) tests/stub_ui_editor.h
+TEST_EXTRA_DEPS_recovery = $(TEST_EXTRA_recovery) tests/stub_ui_recovery.h
+TEST_EXTRA_DEPS_editor_insert = $(TEST_EXTRA_editor_insert)
+TEST_EXTRA_DEPS_editor_reload = $(TEST_EXTRA_editor_reload)
+
+test: test-file-ops test-atomic-save test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-settings-import test-richedit-text test-editor-load test-editor test-recovery test-editor-insert test-text-scan test-editor-reload test-ui-rules test-print-core test-time-format test-platform-stubs test-fuzz-quick
 	@echo "All tests completed"
+
+# Each stub backend must define every ui_platform_* function the shared code
+# calls. The Cocoa stub is never compiled here (no macOS runner), which is how
+# it once stopped linking unnoticed; the check reads the symbols the shared
+# code leaves undefined from one relocatable link, then looks for each
+# definition in the stub sources. The Cocoa stub is plain C apart from its
+# #import, so it is also linked for real, as C, against the same object.
+# Only the ui_*.c backends: the Windows terminal build also links helpers
+# (args_win32.c, the wide command line) that are not a UI backend.
+STUB_BACKENDS = $(MACOS_SOURCES) $(LINUX_TERMINAL_SOURCES) $(filter src/platform/ui_%,$(WINDOWS_TERMINAL_SOURCES))
+STUB_CHECK_DIR = build/stub-check
+test-platform-stubs: $(STUB_CHECK_DIR)/shared.o $(STUB_CHECK_DIR)/npad-macos-stub
+	@echo "Running platform stub coverage check..."
+	sh scripts/check-platform-stubs.sh $(STUB_CHECK_DIR)/shared.o $(STUB_BACKENDS)
+	@echo "Cocoa stub links against the shared code"
+
+$(STUB_CHECK_DIR)/shared.o: $(CORE_SOURCES) $(SHARED_SOURCES) src/main.c
+	@mkdir -p $(STUB_CHECK_DIR)
+	$(CC) $(CFLAGS) -nostdlib -r -o $@ $^
+
+$(STUB_CHECK_DIR)/ui_cocoa.c: $(MACOS_SOURCES)
+	@mkdir -p $(STUB_CHECK_DIR)
+	sed '/^#import/d' $< > $@
+
+$(STUB_CHECK_DIR)/npad-macos-stub: $(STUB_CHECK_DIR)/shared.o $(STUB_CHECK_DIR)/ui_cocoa.c
+	$(CC) $(CFLAGS) -Isrc/platform -o $@ $^ -lpthread
 
 test-file-ops: tests/test_file_ops
 	@echo "Running file operations tests..."
 	./tests/test_file_ops
+
+test-atomic-save: tests/test_atomic_save
+	@echo "Running atomic save tests..."
+	./tests/test_atomic_save
 
 test-error: tests/test_error
 	@echo "Running error system tests..."
@@ -344,57 +445,178 @@ test-tab-stops: tests/test_tab_stops
 	@echo "Running tab stop tests..."
 	./tests/test_tab_stops
 
-# Windows-only: the file type association module against a registry sandbox.
-# Cross-compiled here; run tests/test_assoc_win32.exe on Windows. Not part of
-# `make test`, which runs natively on Linux.
+test-settings-import: tests/test_settings_import
+	@echo "Running settings import tests..."
+	./tests/test_settings_import
+
+test-richedit-text: tests/test_richedit_text
+	@echo "Running RichEdit line break normalisation tests..."
+	./tests/test_richedit_text
+
+test-editor-load: tests/test_editor_load
+	@echo "Running editor load/save contract tests..."
+	./tests/test_editor_load
+
+# The editor core (open, save, Save As, auto-save, external changes, timers)
+# against a stub UI layer instead of a window
+test-editor: tests/test_editor
+	@echo "Running editor core tests..."
+	./tests/test_editor
+
+# Crash recovery and handoff at the editor level
+test-recovery: tests/test_recovery
+	@echo "Running crash recovery tests..."
+	./tests/test_recovery
+
+# Ctrl+drop: the prompts editor.c raises are answered and counted
+test-editor-insert: tests/test_editor_insert
+	@echo "Running Ctrl+drop insert tests..."
+	./tests/test_editor_insert
+
+test-text-scan: tests/test_text_scan
+	@echo "Running text scan tests..."
+	./tests/test_text_scan
+
+test-editor-reload: tests/test_editor_reload
+	@echo "Running editor reload tests..."
+	./tests/test_editor_reload
+
+test-ui-rules: tests/test_ui_rules
+	@echo "Running window and dialog rule tests..."
+	./tests/test_ui_rules
+
+test-print-core: tests/test_print_core
+	@echo "Running print pagination tests..."
+	./tests/test_print_core
+
+test-time-format: tests/test_time_format
+	@echo "Running time format tests..."
+	./tests/test_time_format
+
+# The release and CI scripts' own checks (the version gate, CHECKSUMS.txt,
+# installer file references), against throwaway fixtures. Shell only.
+.PHONY: test-release-scripts
+test: test-release-scripts
+
+test-release-scripts:
+	@echo "Running release script tests..."
+	sh tests/test_release_scripts.sh
+
+# The property/fuzz suite at its default (small) iteration count, so every
+# `make test` exercises it; `make test-fuzz` runs it longer under sanitizers
+test-fuzz-quick: tests/test_fuzz
+	@echo "Running property/fuzz tests (quick)..."
+	./tests/test_fuzz
+
+tests/test_%: tests/test_%.c $(TEST_DEPS)
+	$(CC) $(TEST_CFLAGS) $(TEST_FLAGS_$*) -o $@ $(TEST_CORE_SOURCES) $(TEST_EXTRA_$*) $(TEST_FRAMEWORK_SOURCES) $< -lpthread
+
+# --- Windows ---------------------------------------------------------------
+#
+# The same suites as Windows executables, plus the Windows-only tests below.
+# Every one links an asInvoker manifest: without one, UAC's installer
+# detection makes test_update_check.exe ("update" in the name) demand
+# elevation. test_assoc_win32.exe writes a scratch key under HKCU (removed
+# afterwards), so it runs only with NPAD_ALLOW_REGISTRY_TESTS=1, here and when
+# launched by hand.
+# test_atomic_save is POSIX only: its faults are injected through rlimits and
+# file modes that Windows does not have.
+WIN_TEST_SUITES = $(filter-out atomic_save,$(TEST_SUITES))
+WIN_TEST_EXES = $(patsubst %,tests/test_%.exe,$(WIN_TEST_SUITES))
+WIN_TEST_RES = $(WIN_BUILD_DIR)/test_manifest.res
+WIN_TEST_LIBS = -lshell32 -ladvapi32 -luser32 -lole32
+
+$(WIN_TEST_RES): tests/test_manifest.rc tests/test.manifest
+	@mkdir -p $(WIN_BUILD_DIR)
+	cd tests && $(MINGW_WINDRES) test_manifest.rc -O coff -o ../$(WIN_TEST_RES)
+
+tests/test_%.exe: tests/test_%.c $(TEST_DEPS) $(WIN_TEST_RES)
+	$(MINGW_CC) $(TEST_CFLAGS) $(TEST_FLAGS_$*) -o $@ $(TEST_CORE_SOURCES) $(TEST_EXTRA_$*) $(TEST_FRAMEWORK_SOURCES) $< $(WIN_TEST_RES) $(WIN_TEST_LIBS)
+
+tests/test_assoc_win32.exe: tests/test_assoc_win32.c src/platform/assoc_win32.c src/platform/assoc_win32.h $(TEST_FRAMEWORK_SOURCES) tests/test_framework.h $(WIN_TEST_RES)
+	$(MINGW_CC) $(TEST_CFLAGS) -o $@ tests/test_assoc_win32.c src/platform/assoc_win32.c $(TEST_FRAMEWORK_SOURCES) $(WIN_TEST_RES) -ladvapi32 -lshell32 -luser32
+
+# Windows-only: the RichEdit text boundary (src/platform/richedit_text.c)
+# against a hidden msftedit control in the test's own process. Cross-compiled
+# here; run tests/test_richedit_boundary.exe on Windows (make test-windows does,
+# CI too). Links no settings or session code: it writes no
+# configuration and no registry value, and messages only its own windows.
+test-richedit-win32: tests/test_richedit_boundary.exe
+
+tests/test_richedit_boundary.exe: tests/test_richedit_boundary.c src/platform/richedit_text.c src/platform/richedit_text.h src/core/file_ops.c src/core/error.c src/core/thread_safety.c $(TEST_FRAMEWORK_SOURCES) tests/test_framework.h $(WIN_TEST_RES)
+	$(MINGW_CC) $(TEST_CFLAGS) -o $@ $(filter %.c,$^) $(WIN_TEST_RES) -luser32 -lgdi32 -lshell32
+
+# Windows-only: UTF-8 argv from the wide command line, and settings under a
+# non-ASCII directory. Cross-compiled here; run tests/test_win32_unicode.exe
+# on Windows (a test VM: it writes only under %TEMP%). Not part of `make test`.
+test-win32-unicode: tests/test_win32_unicode.exe
+
+tests/test_win32_unicode.exe: tests/test_win32_unicode.c src/platform/args_win32.c $(TEST_DEPS) $(WIN_TEST_RES)
+	$(MINGW_CC) $(TEST_CFLAGS) -o $@ tests/test_win32_unicode.c src/platform/args_win32.c $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) $(WIN_TEST_RES) -lshell32 -lole32 -luuid
+
+test-windows-build: $(WIN_TEST_EXES) tests/test_assoc_win32.exe tests/test_richedit_boundary.exe tests/test_win32_unicode.exe
+
 test-assoc-win32: tests/test_assoc_win32.exe
 
-tests/test_assoc_win32.exe: tests/test_assoc_win32.c src/platform/assoc_win32.c $(TEST_FRAMEWORK_SOURCES)
-	$(MINGW_CC) $(CFLAGS) -o $@ $^ -ladvapi32 -lshell32 -luser32
+test-windows: test-windows-build
+ifeq ($(OS),Windows_NT)
+	@set -e; for t in $(WIN_TEST_EXES) tests/test_richedit_boundary.exe; do echo "Running $$t..."; ./$$t; done
+	@if [ "$$NPAD_ALLOW_REGISTRY_TESTS" = "1" ]; then \
+		echo "Running tests/test_assoc_win32.exe..."; ./tests/test_assoc_win32.exe; \
+	else \
+		echo "Skipped tests/test_assoc_win32.exe: set NPAD_ALLOW_REGISTRY_TESTS=1 to run it"; \
+	fi
+	@echo "All Windows tests completed"
+else
+	@echo "Windows test executables built in tests/. They run on Windows only:"
+	@echo "run make test-windows there (MSYS2), or launch tests/test_*.exe."
+endif
 
-tests/test_file_ops: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_file_ops.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+# --- Sanitizers and fuzzing --------------------------------------------------
+#
+# gcc's AddressSanitizer aborts at start-up ("DEADLYSIGNAL", or a shadow
+# memory mapping failure) on kernels that randomise mmap with more bits than it
+# expects - WSL2 and newer Ubuntu runner images among them. Running the test
+# with address-space randomisation off for that one process avoids it, so
+# SANITIZE_RUN uses `setarch -R` wherever personality(2) is permitted (some
+# containers forbid it; there the test runs as-is). Override SANITIZE_RUN= to
+# run without it.
+SANITIZE_FLAGS ?= -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g -O1
+SANITIZE_RUN ?= $(shell setarch $(UNAME_M) -R true >/dev/null 2>&1 && echo setarch $(UNAME_M) -R)
+SANITIZE_ENV = ASAN_OPTIONS=detect_leaks=1:abort_on_error=0:halt_on_error=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
+SAN_DIR = build/sanitize
+SAN_TEST_BINS = $(patsubst %,$(SAN_DIR)/test_%,$(TEST_SUITES))
+# make test-fuzz: iterations per property and the PRNG seed. Both fixed by
+# default so a CI failure reproduces exactly; vary FUZZ_SEED to explore.
+# Like every suite, it writes its scratch files in a fresh folder under
+# $(TMPDIR) (an absolute path; /tmp otherwise). Its saves fsync, so on a disk
+# where that is slow (WSL, CI runners) the default count takes over ten
+# minutes under ASan: `TMPDIR=/dev/shm make test-fuzz` keeps it on tmpfs.
+FUZZ_ITERS ?= 5000
+FUZZ_SEED ?= 20261021
 
-tests/test_error: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_error.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+$(SAN_DIR)/test_%: tests/test_%.c $(TEST_DEPS)
+	@mkdir -p $(SAN_DIR)
+	$(CC) $(TEST_CFLAGS) $(TEST_FLAGS_$*) $(SANITIZE_FLAGS) -o $@ $(TEST_CORE_SOURCES) $(TEST_EXTRA_$*) $(TEST_FRAMEWORK_SOURCES) $< -lpthread
 
-tests/test_encoding: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_encoding.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+test-sanitize: $(SAN_TEST_BINS)
+	@set -e; for t in $(SAN_TEST_BINS); do \
+		echo "Running $$t under ASan+UBSan..."; \
+		$(SANITIZE_ENV) $(SANITIZE_RUN) ./$$t; \
+	done
+	@echo "All sanitizer tests completed"
 
-tests/test_session: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_session.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+test-fuzz: $(SAN_DIR)/test_fuzz
+	@echo "Running property/fuzz tests: $(FUZZ_ITERS) iterations, seed $(FUZZ_SEED), ASan+UBSan..."
+	$(SANITIZE_ENV) NPAD_FUZZ_ITERS=$(FUZZ_ITERS) NPAD_FUZZ_SEED=$(FUZZ_SEED) $(SANITIZE_RUN) ./$(SAN_DIR)/test_fuzz
 
-tests/test_list_ops: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_list_ops.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $^ -lpthread
-
-tests/test_update_check: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_update_check.c
-	$(CC) $(CFLAGS) -o tests/test_update_check $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_update_check.c
-
-tests/test_settings: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_settings.c
-	$(CC) $(CFLAGS) -o tests/test_settings $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_settings.c
-
-tests/test_html_md: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_html_md.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $^ -lpthread
-
-# Built with allocation failure injection compiled into undo.c, so the test can
-# prove a failed record never leaves a history that would corrupt the text
-tests/test_undo: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_undo.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -DUNDO_FAULT_INJECTION -o $@ $^ -lpthread
-
-tests/test_find_seed: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_find_seed.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $^ -lpthread
-
-tests/test_tab_stops: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_tab_stops.c
-	@mkdir -p tests
-	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+# The suites with extra sources depend on them in every build
+tests/test_richedit_text tests/test_richedit_text.exe $(SAN_DIR)/test_richedit_text: $(TEST_EXTRA_DEPS_richedit_text)
+tests/test_editor_load tests/test_editor_load.exe $(SAN_DIR)/test_editor_load: $(TEST_EXTRA_DEPS_editor_load)
+tests/test_editor tests/test_editor.exe $(SAN_DIR)/test_editor: $(TEST_EXTRA_DEPS_editor)
+tests/test_recovery tests/test_recovery.exe $(SAN_DIR)/test_recovery: $(TEST_EXTRA_DEPS_recovery)
+tests/test_editor_insert tests/test_editor_insert.exe $(SAN_DIR)/test_editor_insert: $(TEST_EXTRA_DEPS_editor_insert)
+tests/test_editor_reload tests/test_editor_reload.exe $(SAN_DIR)/test_editor_reload: $(TEST_EXTRA_DEPS_editor_reload)
 
 # Cleanup
 clean:
@@ -404,8 +626,9 @@ clean:
 	rm -f src/platform/npad.res
 	rm -rf build
 	rm -rf dist/npad_* dist/npad-*.rpm dist/npad-*.pkg.tar.zst dist/npad-v*-portable-linux-*.tar.gz
-	rm -f tests/test_file_ops tests/test_error tests/test_encoding tests/test_session tests/test_list_ops tests/test_update_check tests/test_settings tests/test_html_md tests/test_undo tests/test_find_seed tests/test_tab_stops
-	rm -f tests/test_file_ops.exe tests/test_error.exe tests/test_encoding.exe tests/test_session.exe tests/test_list_ops.exe tests/test_update_check.exe tests/test_settings.exe tests/test_html_md.exe tests/test_undo.exe tests/test_find_seed.exe tests/test_tab_stops.exe
+	rm -f $(patsubst %,tests/test_%,$(TEST_SUITES))
+	rm -f $(patsubst %,tests/test_%.exe,$(TEST_SUITES)) tests/test_assoc_win32.exe tests/test_richedit_boundary.exe tests/test_win32_unicode.exe
+	rm -rf test_editor_home test_recovery_home
 
 # Installation (Linux). PREFIX defaults to /usr/local; DESTDIR stages the tree
 # for packaging. Only the GTK desktop app is installed: the ncurses variant is
@@ -499,11 +722,11 @@ help:
 	@echo "  windows-gui      - Build Windows GUI version"
 	@echo "  windows-arm64    - Build npad-arm64.exe (Windows on Arm; needs llvm-mingw)"
 	@echo "  windows-terminal - Build Windows Terminal version"
-	@echo "  linux            - Build all Linux variants (desktop + Terminal)"
+	@echo "  linux            - Build the Linux desktop app (+ the ncurses stub if ncurses is installed)"
 	@echo "  linux-gtk        - Build the Linux desktop app (GTK 3; X11 and Wayland)"
-	@echo "  linux-terminal   - Build for Linux Terminal (ncurses)"
+	@echo "  linux-terminal   - Build the Linux Terminal stub (ncurses; needs libncurses-dev)"
 	@echo "  terminal         - Build all Terminal variants (Windows + Linux)"
-	@echo "  macos            - Build for macOS"
+	@echo "  macos            - Build the macOS stub (Cocoa; needs macOS + Xcode; not functional yet)"
 	@echo "  debug            - Build with debug symbols"
 	@echo "  lint             - Run code linting"
 	@echo "  format           - Format code with clang-format"
@@ -513,6 +736,11 @@ help:
 	@echo "  test-error       - Run error system tests"
 	@echo "  test-encoding    - Run encoding/line-ending tests"
 	@echo "  test-undo        - Run undo history tests"
+	@echo "  test-editor      - Run editor core tests (open/save/auto-save, stub UI)"
+	@echo "  test-windows     - Build the suite as Windows .exe files (runs them on Windows)"
+	@echo "  test-sanitize    - Run the suite under AddressSanitizer + UBSan"
+	@echo "  test-fuzz        - Run the seeded property/fuzz tests (FUZZ_ITERS, FUZZ_SEED)"
+	@echo "  test-platform-stubs - Check the stub backends define every ui_platform_* function"
 	@echo "  clean            - Remove build artifacts"
 	@echo "  install          - Install to PREFIX (default /usr/local; honours DESTDIR)"
 	@echo "  uninstall        - Remove from PREFIX"
@@ -525,9 +753,11 @@ help:
 	@echo "Variables:"
 	@echo "  CC               - C compiler to use"
 	@echo "  MINGW_CC         - MinGW compiler for Windows builds"
+	@echo "  LLVM_MINGW       - llvm-mingw install dir for windows-arm64 (instead of PATH)"
+	@echo "  WIN_LINKER       - bfd or lld (default: lld when MINGW_CC is clang)"
 	@echo "  CPPCHECK         - cppcheck binary (CI uses 2.13; older is less strict)"
 	@echo "  CLANG_FORMAT     - clang-format binary (CI uses 18)"
 	@echo "  DEBUG=1          - Enable debug build"
 	@echo "  VERSION          - Version string (auto-detected from git)"
 
-.PHONY: all windows windows-gui windows-arm64 windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm pacman tarball lint format format-check test test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo help detect-platform
+.PHONY: all windows windows-gui windows-arm64 windows-terminal linux linux-gtk linux-terminal terminal macos debug debug-windows debug-linux debug-linux-gtk clean install uninstall deb rpm pacman tarball lint format format-check test test-file-ops test-atomic-save test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops test-settings-import test-richedit-text test-editor-load test-editor test-recovery test-editor-insert test-text-scan test-editor-reload test-ui-rules test-print-core test-time-format test-platform-stubs test-fuzz-quick test-windows test-windows-build test-assoc-win32 test-richedit-win32 test-win32-unicode test-sanitize test-fuzz help detect-platform

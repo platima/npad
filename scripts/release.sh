@@ -1,134 +1,89 @@
-#!/bin/bash
+#!/bin/sh
+# Check a commit is ready to be tagged as a release, then (only if asked) tag
+# it. The release itself is built, validated and published by
+# .github/workflows/release.yml when the tag is pushed; this runs the same
+# gate first, locally, so a mistake costs a minute instead of a release run.
+#
+# Usage: scripts/release.sh <tag> [--push]      e.g. scripts/release.sh v0.36.0
+#
+#   1. The version gate release.yml runs (scripts/check-release-version.sh):
+#      the tag is well formed; src/main.h, src/platform/npad.rc and the newest
+#      CHANGELOG.md entry (with its "### ✨ Highlights") name its version;
+#      a final release also has a dated entry and the AppStream metainfo's
+#      newest <release> is this version.
+#   2. The checkout is main, clean, level with origin/main, and the tag is new.
+#   3. The local checks CI runs: make lint, format-check, test, and the
+#      Windows x64 and Linux GTK builds, all with WERROR=1 (needs the MinGW
+#      cross compiler, GTK 3 headers, cppcheck 2.13 and clang-format 18:
+#      scripts/setup-runner.sh).
+#   4. Without --push: prints the dry-run and tag commands. With --push:
+#      creates the annotated tag and pushes it, which starts the release.
+#
+# Run the dry run before tagging (it builds, signs and validates every asset,
+# and publishes nothing):
+#   gh workflow run release.yml --ref main -f version=<tag>
+# The release then starts as a draft and is published only once every asset
+# is attached and validated. Its downloads (CLAUDE.md, "Release asset names"):
+#   Windows  npad-<tag>-setup-win-<x64|arm64>.exe, -msi-win-<arch>.msi,
+#            -portable-win-<arch>.exe
+#   Linux    npad_<version>_<amd64|arm64|riscv64>.deb,
+#            npad-<version>-1.<x86_64|aarch64|riscv64>.rpm,
+#            npad-<version>-1-<arch>.pkg.tar.zst,
+#            npad-<tag>-portable-linux-<x86_64|aarch64|riscv64>.tar.gz
+#   and a .sha256 for each, plus CHECKSUMS.txt listing them all.
+set -eu
 
-# npad release script
-# Usage: ./scripts/release.sh [version]
-# Example: ./scripts/release.sh v1.0.0
-
-set -e
-
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
-
-# Function to print colored output
-print_status() {
-    echo -e "${GREEN}[INFO]${NC} $1"
+info() { printf '[INFO] %s\n' "$*"; }
+die() {
+	printf '[ERROR] %s\n' "$*" >&2
+	exit 1
 }
 
-print_warning() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
+[ $# -ge 1 ] || die "usage: $0 <tag> [--push]   (e.g. $0 v0.36.0)"
+tag=$1
+push=false
+[ "${2:-}" = --push ] && push=true
+cd "$(dirname "$0")/.."
 
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
+info "Checking the version sources for $tag"
+sh scripts/check-release-version.sh "$tag" || die "the version gate failed (see above); release.yml would stop at the same place"
 
-# Check if version is provided
-if [ $# -eq 0 ]; then
-    print_error "No version provided"
-    echo "Usage: $0 <version>"
-    echo "Example: $0 v1.0.0"
-    exit 1
+branch=$(git rev-parse --abbrev-ref HEAD)
+[ "$branch" = main ] || die "releases are tagged on main (this is $branch); main takes releases through pull requests"
+git diff-index --quiet HEAD -- || die "the working tree has uncommitted changes"
+[ -z "$(git ls-files --others --exclude-standard)" ] || die "the working tree has untracked files"
+git fetch --quiet origin main
+[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || die "HEAD is not origin/main; pull (or push the merge) first"
+if git rev-parse -q --verify "refs/tags/$tag" >/dev/null || git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+	die "the tag $tag already exists"
 fi
 
-VERSION=$1
+info "Running the local checks (lint, format, unit tests, Windows x64 and Linux GTK builds)"
+make lint || die "make lint failed"
+make format-check || die "make format-check failed; run make format"
+make test WERROR=1 || die "make test failed"
+make windows WERROR=1 || die "the Windows build failed"
+make linux-gtk WERROR=1 || die "the Linux GTK build failed"
 
-# Validate semantic version format
-if ! [[ $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$ ]]; then
-    print_error "Invalid semantic version format: $VERSION"
-    echo "Expected format: v1.2.3, v1.2.3-alpha, v1.2.3+build"
-    exit 1
+if [ "$push" != true ]; then
+	info "Ready. Rehearse the release first (publishes nothing):"
+	echo "  gh workflow run release.yml --ref main -f version=$tag"
+	info "Then tag it, which starts the real release:"
+	echo "  $0 $tag --push"
+	echo "  (or: git tag -a $tag -m 'Release $tag' && git push origin $tag)"
+	exit 0
 fi
 
-print_status "Preparing release $VERSION"
-
-# Check if we're on main branch
-CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-if [ "$CURRENT_BRANCH" != "main" ]; then
-    print_warning "Not on main branch (currently on: $CURRENT_BRANCH)"
-    read -p "Continue anyway? [y/N] " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        print_error "Aborted"
-        exit 1
-    fi
+if [ -t 0 ]; then
+	printf 'Tag %s at %s and push it, starting the release? [y/N] ' "$tag" "$(git rev-parse --short HEAD)"
+	read -r answer
+	case $answer in
+	y | Y | yes) ;;
+	*) die "aborted; nothing was tagged" ;;
+	esac
 fi
-
-# Check if working directory is clean
-if ! git diff-index --quiet HEAD --; then
-    print_error "Working directory is not clean. Please commit or stash changes."
-    exit 1
-fi
-
-# Check if tag already exists
-if git rev-parse "$VERSION" >/dev/null 2>&1; then
-    print_error "Tag $VERSION already exists"
-    exit 1
-fi
-
-print_status "Running pre-release checks..."
-
-# Run linting
-print_status "Running code linting..."
-make lint || {
-    print_error "Linting failed"
-    exit 1
-}
-
-# Run formatting check
-print_status "Checking code formatting..."
-make format-check || {
-    print_error "Code formatting check failed. Run 'make format' to fix."
-    exit 1
-}
-
-# Build all targets to ensure they compile
-print_status "Testing builds..."
-
-print_status "Building Windows (x64 GUI + terminal)..."
-make clean && make windows || {
-    print_error "Windows build failed"
-    exit 1
-}
-
-print_status "Building Linux variants..."
-make clean && make linux || {
-    print_error "Linux build failed"
-    exit 1
-}
-
-print_status "Running unit tests..."
-make test || {
-    print_error "Unit tests failed"
-    exit 1
-}
-
-print_status "All builds successful!"
-
-# Update version in README if needed
-print_status "Checking version references..."
-
-# Clean up build artifacts
-make clean
-
-print_status "Creating and pushing tag..."
-
-# Create the tag
-git tag -a "$VERSION" -m "Release $VERSION"
-
-# Push the tag
-git push origin "$VERSION"
-
-print_status "Tag $VERSION created and pushed successfully!"
-print_status "GitHub Actions will now build and create the release automatically."
-print_status "Check the progress at: https://github.com/platima/npad/actions"
-
-echo
-print_status "Release $VERSION initiated successfully! 🎉"
-print_status "The automated build will create release artifacts for:"
-print_status "  - Windows installer (npad-setup-<v>.exe) and MSI"
-print_status "  - Windows portable GUI executable"
-print_status "  - SHA256 checksums for everything"
-print_status "(Linux/terminal variants are unimplemented stubs: compile-checked in CI, not released)"
+git tag -a "$tag" -m "Release $tag"
+git push origin "$tag"
+info "Pushed $tag. release.yml now builds it as a draft and publishes it once every asset is validated:"
+echo "  https://github.com/platima/npad/actions/workflows/release.yml"
+info "Tag the next release only after this run has finished (concurrent runs queue)."

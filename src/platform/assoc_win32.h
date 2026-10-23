@@ -14,7 +14,11 @@
  * extension with no backup, Microsoft's own guidance says it must not be
  * removed on uninstall, and it loses to any existing UserChoice anyway.
  * Unregistering DOES remove that value when it names one of npad's ProgIDs,
- * so the pane can still undo what the installer did.
+ * so the pane can still undo what the installer did; machine-wide it puts
+ * Windows' own ProgID (txtfile, inifile, xmlfile) back where Windows has one.
+ *
+ * Each ProgID also carries a Print verb (shell\print\command, "npad /p"), as
+ * notepad.exe's txtfile does.
  *
  * Everything is applied as CHANGES, never as a whole state: only the groups
  * the user actually toggled are touched. A property sheet sends Apply to every
@@ -73,12 +77,25 @@ int assoc_machine_cli(const wchar_t *changes);
 // token that is not an exact match is ignored. An empty list changes nothing.
 int assoc_machine_apply_changes(const wchar_t *changes);
 
-// A /MERGETASKS="..." argument for npad's own installer that selects exactly
-// the association tasks currently registered for the existing installation,
-// so an update does not quietly re-apply the task ticks from the original
-// install over changes made on this page. Returns false (and writes an empty
-// string) when there is no existing Inno installation to match.
+// A /MERGETASKS="..." argument for npad's own installer that only deselects:
+// it lists, negated (!assoc\<group>), each association group NOT registered
+// for the existing installation, so an update does not quietly re-apply the
+// task ticks from the original install over a group unticked on this page.
+// It never selects a task. An installer task does more than this page does
+// (it can take ownership of the file type), so registered groups are left to
+// setup's own record (LESSONS.md: "Never positively select an installer
+// task"). Returns false (and writes an empty string) when there is nothing to
+// pass: no Inno installation, both a per-user and an all-users one (setup
+// will ask which to upgrade), or every group registered.
 bool assoc_installer_merge_tasks(wchar_t *out, size_t cap);
+
+// The MSI's counterpart: the installer/npad.wxs Feature Ids (AssocText,
+// AssocMarkdown, ...) of the association groups NOT registered in the hive an
+// MSI of this scope writes (HKLM when per_machine, else HKCU). An in-app MSI
+// update leaves these features out, so it does not quietly bring back a group
+// the user unticked on this page (see update_msi_feature_args). Returns how
+// many were written to out (at most cap; ASSOC_GROUP_COUNT always suffices).
+size_t assoc_msi_unregistered_features(bool per_machine, const char **out, size_t cap);
 
 // Windows Settings > Default apps, deep-linked to npad where that is supported
 void assoc_open_default_apps(HWND owner);

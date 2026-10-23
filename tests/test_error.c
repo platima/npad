@@ -25,12 +25,20 @@ static void test_error_callback(const npad_error_info_t *error) {
 }
 
 TEST_CASE(error_init_cleanup) {
-    // Test initialization and cleanup
+    // Initialised: the last-error record is available and starts clear
     npad_error_init();
+    TEST_ASSERT_NOT_NULL(npad_error_get_last(), "last error is available once initialised");
+    TEST_ASSERT(!npad_error_has_error(), "and no error is pending");
+
+    // Cleaned up: nothing is reported until the next init
     npad_error_cleanup();
-    
-    // Should not crash
-    TEST_ASSERT(true, "Error system init/cleanup should not crash");
+    TEST_ASSERT_NULL(npad_error_get_last(), "no last error after cleanup");
+    TEST_ASSERT(!npad_error_has_error(), "no pending error after cleanup");
+
+    // And it can be initialised again
+    npad_error_init();
+    TEST_ASSERT_NOT_NULL(npad_error_get_last(), "re-initialisation works");
+    npad_error_cleanup();
 }
 
 TEST_CASE(error_level_to_string) {
@@ -120,6 +128,52 @@ TEST_CASE(error_macros) {
     npad_error_cleanup();
 }
 
+// FATAL used to abort() inside the default callback, so main()'s cleanup after
+// a fatal report never ran. Reaching the assertion is the test.
+TEST_CASE(fatal_report_returns_to_caller) {
+    npad_error_init();
+    npad_error_set_callback(NULL); // The default stderr logger
+    NPAD_ERROR_FATAL(NPAD_ERROR_UI, 0, "test", "Expected fatal report (test output)");
+    TEST_ASSERT_EQ(NPAD_ERROR_FATAL, npad_error_get_last()->level, "fatal recorded, not aborted");
+    npad_error_cleanup();
+}
+
+// Callers report a failure and then describe it from errno; logging (which
+// writes to a stream that may not exist) must not replace it
+TEST_CASE(report_preserves_errno) {
+    npad_error_init();
+    npad_error_set_callback(NULL);
+    errno = ENOENT;
+    NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, ENOENT, "test", "Expected error report (test output)");
+    TEST_ASSERT_EQ(ENOENT, errno, "errno unchanged by the default logger");
+
+    npad_error_set_callback(test_error_callback);
+    errno = EACCES;
+    NPAD_ERROR_ERROR(NPAD_ERROR_FILE_IO, EACCES, "test", "quiet");
+    TEST_ASSERT_EQ(EACCES, errno, "errno unchanged with a callback");
+    npad_error_cleanup();
+}
+
+// A GUI callback shows a message box, and code run from its message loop may
+// report too. The callback runs outside the lock, so that cannot deadlock (a
+// pthread mutex is not recursive; this test hung before).
+static int g_nested_reports = 0;
+static void reporting_callback(const npad_error_info_t *error) {
+    (void) error;
+    if (g_nested_reports++ == 0)
+        NPAD_ERROR_WARNING(NPAD_ERROR_UI, 0, "nested", "Reported from inside a callback");
+}
+
+TEST_CASE(callback_may_report_again) {
+    npad_error_init();
+    npad_error_set_callback(reporting_callback);
+    g_nested_reports = 0;
+    NPAD_ERROR_ERROR(NPAD_ERROR_UI, 0, "outer", "Outer report");
+    TEST_ASSERT_EQ(2, g_nested_reports, "outer and nested reports both delivered");
+    TEST_ASSERT_STR_EQ("nested", npad_error_get_last()->context, "the nested one is the last");
+    npad_error_cleanup();
+}
+
 int main(void) {
     // Initialize test framework
     TEST_INIT();
@@ -131,7 +185,10 @@ int main(void) {
     RUN_TEST(error_reporting_basic);
     RUN_TEST(error_state_management);
     RUN_TEST(error_macros);
-    
+    RUN_TEST(fatal_report_returns_to_caller);
+    RUN_TEST(report_preserves_errno);
+    RUN_TEST(callback_may_report_again);
+
     // Show test summary and exit
     TEST_SUMMARY();
     

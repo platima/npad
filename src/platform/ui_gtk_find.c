@@ -36,6 +36,7 @@
 #include "../core/find_seed.h"
 #include "../core/list_ops.h"
 #include "../core/settings.h"
+#include "../core/ui_rules.h"
 
 // Find/Replace term history: most-recent-first, de-duplicated, capped
 #define FIND_HISTORY_MAX 10
@@ -105,7 +106,7 @@ static void load_options(void) {
     g_whole_word = settings_get_bool("find_whole_word", false);
     g_search_down = settings_get_bool("find_search_down", true);
     // Off by default to match notepad.exe (see the Win32 build)
-    g_wrap_around = settings_get_bool("find_wrap_around", false);
+    g_wrap_around = settings_get_bool(FIND_WRAP_KEY, false);
     g_interpret_escapes = settings_get_bool("find_interpret_escapes", false);
     g_highlight_all = settings_get_bool("find_highlight_all", false);
     g_persisted_bits = option_bits();
@@ -194,7 +195,7 @@ static void persist_options(void) {
     settings_set_bool("find_match_case", g_match_case);
     settings_set_bool("find_whole_word", g_whole_word);
     settings_set_bool("find_search_down", g_search_down);
-    settings_set_bool("find_wrap_around", g_wrap_around);
+    settings_set_bool(FIND_WRAP_KEY, g_wrap_around);
     settings_set_bool("find_interpret_escapes", g_interpret_escapes);
     settings_set_bool("find_highlight_all", g_highlight_all);
     settings_save();
@@ -243,16 +244,10 @@ static bool history_push(const char *prefix, const char *value) {
         }
     }
 
-    if (changed) {
-        for (int i = 0; i < FIND_HISTORY_MAX; i++) {
-            char key[48];
-            snprintf(key, sizeof(key), "%s_%d", prefix, i);
-            if (i < count)
-                settings_set_string(key, entries[i]);
-            else
-                settings_remove_key(key);
-        }
-    }
+    // Written as one unit, so a save replaces the whole history rather than
+    // mixing it entry by entry with another window's
+    if (changed)
+        settings_set_list(prefix, entries, count, FIND_HISTORY_MAX);
     for (int i = 0; i < count; i++)
         free(entries[i]);
     return changed;
@@ -268,10 +263,12 @@ bool npad_gtk_history_push(const char *prefix, const char *value) {
 
 // Refill a history drop-down after history_push, keeping what is typed. It
 // is otherwise filled only when the dialog is built, so terms searched since
-// then were missing from the list until the dialog was recreated.
+// then were missing from the list until the dialog was recreated. The entry's
+// parent is a GtkBox inside the combo, not the combo (see LESSONS.md), so the
+// combo is found as an ancestor; the parent test always failed, silently.
 static void history_reload(GtkWidget *entry, const char *prefix) {
-    GtkWidget *combo = entry ? gtk_widget_get_parent(entry) : NULL;
-    if (!combo || !GTK_IS_COMBO_BOX_TEXT(combo))
+    GtkWidget *combo = entry ? gtk_widget_get_ancestor(entry, GTK_TYPE_COMBO_BOX_TEXT) : NULL;
+    if (!combo)
         return;
     char *text = g_strdup(gtk_entry_get_text(GTK_ENTRY(entry)));
     g_syncing = true; // Not the user typing: no highlight refresh
@@ -331,12 +328,13 @@ static bool word_boundaries_ok(const GtkTextIter *start, const GtkTextIter *end)
     return true;
 }
 
-static bool search_forward(const GtkTextIter *from, GtkTextIter *match_start,
-                           GtkTextIter *match_end) {
+// The first match at or after from that ends by limit (NULL: the buffer end)
+static bool search_forward_within(const GtkTextIter *from, const GtkTextIter *limit,
+                                  GtkTextIter *match_start, GtkTextIter *match_end) {
     GtkTextIter pos = *from;
     for (;;) {
         if (!gtk_text_iter_forward_search(&pos, g_search_eff, search_flags(), match_start,
-                                          match_end, NULL))
+                                          match_end, limit))
             return false;
         if (word_boundaries_ok(match_start, match_end))
             return true;
@@ -345,6 +343,11 @@ static bool search_forward(const GtkTextIter *from, GtkTextIter *match_start,
         if (!gtk_text_iter_forward_char(&pos))
             return false;
     }
+}
+
+static bool search_forward(const GtkTextIter *from, GtkTextIter *match_start,
+                           GtkTextIter *match_end) {
+    return search_forward_within(from, NULL, match_start, match_end);
 }
 
 // The last match ending at or before from
@@ -457,24 +460,19 @@ static bool find_next(Window *window, bool down) {
 // Replace
 // ---------------------------------------------------------------------------
 
-// Is the current selection exactly the current search text?
+// Is the current selection exactly a match of the current search? Asked of
+// the search Find Next uses, run over the selection, rather than by comparing
+// casefolded strings: GTK's case-insensitive search also matches through
+// Unicode normalisation (a decomposed "cafe" + U+0301 for a typed precomposed
+// one), so Find Next selected matches that a string compare then refused, and
+// Replace skipped them. Whole word is applied the same way as well.
 static bool selection_matches_search(Window *window) {
-    GtkTextIter start, end;
-    if (!gtk_text_buffer_get_selection_bounds(window->buffer, &start, &end))
+    GtkTextIter start, end, match_start, match_end;
+    if (!g_search_eff[0] || !gtk_text_buffer_get_selection_bounds(window->buffer, &start, &end))
         return false;
-    char *selected = gtk_text_buffer_get_text(window->buffer, &start, &end, TRUE);
-    bool matches;
-    if (g_match_case) {
-        matches = strcmp(selected, g_search_eff) == 0;
-    } else {
-        char *a = g_utf8_casefold(selected, -1);
-        char *b = g_utf8_casefold(g_search_eff, -1);
-        matches = strcmp(a, b) == 0;
-        g_free(a);
-        g_free(b);
-    }
-    g_free(selected);
-    return matches;
+    if (!search_forward_within(&start, &end, &match_start, &match_end))
+        return false;
+    return gtk_text_iter_equal(&match_start, &start) && gtk_text_iter_equal(&match_end, &end);
 }
 
 static void replace_current(Window *window) {
@@ -482,7 +480,9 @@ static void replace_current(Window *window) {
         return;
     if (selection_matches_search(window))
         npad_gtk_replace_selection(window, g_replace_eff);
-    find_next(window, g_search_down);
+    // Replace has no Direction group, so it always searches down (notepad.exe's
+    // does too); the direction chosen in Find is kept for Find
+    find_next(window, true);
 }
 
 static void replace_all(Window *window) {
@@ -494,7 +494,10 @@ static void replace_all(Window *window) {
     gint resume = 0; // Offset to search from; stays valid across edits
     gint last_end = -1;
 
-    // One user action: ui_gtk.c records everything inside as ONE undo group
+    // One undo step. The user action alone is not enough: ui_gtk.c flushes an
+    // action holding a single edit (one match, empty replacement) as a plain
+    // record, which would merge with the Backspaces before it.
+    undo_begin_group(window->undo);
     gtk_text_buffer_begin_user_action(window->buffer);
     for (;;) {
         GtkTextIter from, start, end;
@@ -510,6 +513,7 @@ static void replace_all(Window *window) {
         replaced++;
     }
     gtk_text_buffer_end_user_action(window->buffer);
+    undo_end_group(window->undo);
 
     char message[128];
     if (replaced > 0) {
@@ -618,8 +622,9 @@ static void on_find_next_clicked(GtkButton *button, gpointer data) {
     (void) button;
     (void) data;
     read_search_fields();
+    // Replace always searches down (see replace_current)
     if (g_owner)
-        find_next(g_owner, g_search_down);
+        find_next(g_owner, g_dialog_replace ? true : g_search_down);
 }
 
 static void on_replace_clicked(GtkButton *button, gpointer data) {
@@ -681,6 +686,12 @@ static gboolean on_dialog_key(GtkWidget *widget, const GdkEventKey *event, gpoin
 static void on_dialog_destroy(GtkWidget *widget, gpointer data) {
     (void) widget;
     (void) data;
+    // What is in the box when the dialog closes is the term F3 searches for
+    // afterwards, whether or not a button was pressed - the same rule as a
+    // seeded term, and the same on Win32. It used to depend on Highlight All,
+    // whose live refresh happened to read the box. The entries still exist:
+    // user "destroy" handlers run before the window destroys its children.
+    read_search_text();
     Window *owner = g_owner;
     if (g_highlight_timer) {
         g_source_remove(g_highlight_timer);
@@ -949,7 +960,14 @@ void npad_gtk_show_goto_dialog(Window *window) {
     GtkWidget *label = gtk_label_new_with_mnemonic("_Line number:");
     gtk_label_set_mnemonic_widget(GTK_LABEL(label), entry);
     gtk_label_set_xalign(GTK_LABEL(label), 0.0f);
-    gtk_entry_set_text(GTK_ENTRY(entry), "1");
+
+    // Like notepad.exe, open on the caret's line rather than 1
+    GtkTextIter caret;
+    gtk_text_buffer_get_iter_at_mark(window->buffer, &caret,
+                                     gtk_text_buffer_get_insert(window->buffer));
+    char current[24];
+    snprintf(current, sizeof(current), "%d", gtk_text_iter_get_line(&caret) + 1);
+    gtk_entry_set_text(GTK_ENTRY(entry), current);
     gtk_entry_set_input_purpose(GTK_ENTRY(entry), GTK_INPUT_PURPOSE_DIGITS);
     gtk_entry_set_activates_default(GTK_ENTRY(entry), TRUE);
     gtk_box_pack_start(GTK_BOX(content), label, FALSE, FALSE, 0);
@@ -958,32 +976,32 @@ void npad_gtk_show_goto_dialog(Window *window) {
     gtk_editable_select_region(GTK_EDITABLE(entry), 0, -1);
     gtk_widget_grab_focus(entry);
 
-    gint response = gtk_dialog_run(GTK_DIALOG(dialog));
-    char *text = g_strdup(gtk_entry_get_text(GTK_ENTRY(entry)));
-    gtk_widget_destroy(dialog);
-
-    // Digits only, like an ES_NUMBER edit; anything else (or zero) is ignored
-    g_strstrip(text);
-    bool valid = response == GTK_RESPONSE_OK && text[0];
-    for (const char *p = text; valid && *p; p++)
-        valid = *p >= '0' && *p <= '9';
-    guint64 line = valid ? g_ascii_strtoull(text, NULL, 10) : 0;
-    g_free(text);
-    if (line == 0)
-        return;
-
+    // A number that is not a line (0, past the end, or too large for an int)
+    // is reported and the dialog stays open to correct it, as Notepad does.
     // GtkTextBuffer lines are logical lines, even with word wrap on, so the
-    // number matches what Ln shows and what the file contains
-    if (line > (guint64) gtk_text_buffer_get_line_count(window->buffer)) {
+    // number matches what Ln shows and what the file contains.
+    int line = 0;
+    for (;;) {
+        if (gtk_dialog_run(GTK_DIALOG(dialog)) != GTK_RESPONSE_OK)
+            break;
+        GotoLineResult r =
+            ui_goto_line_parse(gtk_entry_get_text(GTK_ENTRY(entry)),
+                               gtk_text_buffer_get_line_count(window->buffer), &line);
+        if (r == GOTO_LINE_OK)
+            break;
+        line = 0;
         GtkWidget *box = gtk_message_dialog_new(
-            GTK_WINDOW(window->window), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
-            GTK_MESSAGE_INFO, GTK_BUTTONS_OK, "%s",
-            "The line number is beyond the total number of lines");
-        gtk_window_set_title(GTK_WINDOW(box), "npad");
+            GTK_WINDOW(dialog), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, GTK_MESSAGE_INFO,
+            GTK_BUTTONS_OK, "%s", "The line number is beyond the total number of lines");
+        gtk_window_set_title(GTK_WINDOW(box), "npad - Go To Line");
         gtk_dialog_run(GTK_DIALOG(box));
         gtk_widget_destroy(box);
-        return;
+        gtk_editable_select_region(GTK_EDITABLE(entry), 0, -1);
+        gtk_widget_grab_focus(entry);
     }
+    gtk_widget_destroy(dialog);
+    if (line <= 0)
+        return;
 
     GtkTextIter iter;
     gtk_text_buffer_get_iter_at_line(window->buffer, &iter, (gint) line - 1);

@@ -59,6 +59,7 @@ notes.txt
 
 # Test executables
 tests/test_file_ops
+tests/test_atomic_save
 tests/test_error
 tests/test_encoding
 tests/test_session
@@ -68,6 +69,32 @@ tests/test_html_md
 tests/test_undo
 tests/test_find_seed
 tests/test_tab_stops
+tests/test_recovery
+test_recovery_home/
+tests/test_richedit_text
+tests/test_editor_load
+test_editor_home/
+tests/test_editor
+tests/test_editor_insert
+tests/test_fuzz
+tests/test_text_scan
+tests/test_editor_reload
+tests/test_ui_rules
+tests/test_print_core
+tests/test_time_format
+
+# Test fixtures. Suites now run in a private temporary directory, so these
+# should never appear; older test binaries wrote them into the working
+# directory (usually the checkout root)
+/test_temp.txt
+/test_trunc*.bin
+/test_trunc*.txt
+/test_stamp*.txt
+/test_encoding_temp.txt
+/test_settings_roundtrip.json*
+/test_session_dir/
+/test_xdg_home/
+/test_xdg_conf/
 
 # Installer build outputs (fonts are fetched by installer/fetch-fonts.ps1)
 installer/fonts/

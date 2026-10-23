@@ -68,16 +68,16 @@
         <tr><td><kbd>Ctrl+O</kbd> <kbd>Ctrl+S</kbd> <kbd>Ctrl+Shift+S</kbd></td><td>Open / Save / Save As</td></tr>
         <tr><td><kbd>Ctrl+P</kbd> / <kbd>Ctrl+Shift+P</kbd></td><td>Print / Print Preview</td></tr>
         <tr><td><kbd>Ctrl+W</kbd> / <kbd>Ctrl+Shift+W</kbd></td><td>Close this window / Close all windows (each save-checked)</td></tr>
-        <tr><td><kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Y</kbd></td><td>Undo / Redo (100,000-step history)</td></tr>
+        <tr><td><kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Y</kbd></td><td>Undo / Redo (a 100,000-step history on Windows, 10,000 on Linux)</td></tr>
         <tr><td><kbd>Ctrl+F</kbd> <kbd>F3</kbd> <kbd>Shift+F3</kbd> <kbd>Ctrl+H</kbd></td><td>Find / Find Next / Find Previous / Replace</td></tr>
         <tr><td><kbd>Ctrl+G</kbd></td><td>Go To Line</td></tr>
         <tr><td><kbd>F5</kbd></td><td>Insert time and date</td></tr>
         <tr><td><kbd>Alt+Z</kbd></td><td>Toggle word wrap</td></tr>
         <tr><td><kbd>Ctrl+M</kbd></td><td>Toggle monospace for this window</td></tr>
-        <tr><td><kbd>Ctrl+E</kbd></td><td>Cycle line endings (CRLF, LF, CR)</td></tr>
         <tr><td><kbd>Ctrl+Plus</kbd> <kbd>Ctrl+Minus</kbd> <kbd>Ctrl+0</kbd></td><td>Zoom in / out / reset (Ctrl+Scroll also zooms)</td></tr>
         <tr><td><kbd>Ctrl+,</kbd></td><td>Preferences</td></tr>
-        <tr><td><kbd>Tab</kbd> / <kbd>Shift+Tab</kbd></td><td>Indent / unindent (Markdown tools on)</td></tr>
+        <tr><td><kbd>Tab</kbd></td><td>Types a tab, as in Notepad; or the spaces up to the next tab stop with <em>Insert spaces up to the next tab stop</em> on (Preferences &gt; Editor)</td></tr>
+        <tr><td><kbd>Tab</kbd> / <kbd>Shift+Tab</kbd></td><td>Indent / unindent the selected lines (Markdown tools on)</td></tr>
       </tbody>
     </table></div>
 
@@ -96,19 +96,21 @@
 
     <h2 id="cli">Command line</h2>
     <pre><code>npad [options] [filename]
-  -h, --help      Show help
-  -v, --version   Show version</code></pre>
-    <p>With npad on your PATH (the default in the installers), <code>npad notes.txt</code> works from any terminal. Typing <code>npad</code> in a File Explorer address bar opens an Open dialog in that folder.</p>
+  -h, --help        Show help
+  -v, --version     Show version
+  /p FILE           Print FILE to the default printer and exit (Windows; also /P)
+  -p, --print FILE  The same, on every platform</code></pre>
+    <p>With npad on your PATH (the default in the installers), <code>npad notes.txt</code> works from any terminal. If <code>notes.txt</code> does not exist yet but its folder does, npad offers to create it, as Notepad does. Typing <code>npad</code> in a File Explorer address bar starts npad with a new, empty document. Printing with <code>/p</code> uses no print dialog and opens no window, as Notepad&rsquo;s <code>/p</code> does; it is also what Explorer&rsquo;s Print command runs. On Windows npad is a windowed program, so <code>--help</code> and <code>--version</code> print nothing in a console window; Help &gt; About shows the version.</p>
 
     <h2 id="files">Where things live</h2>
     <div class="table-wrap"><table>
       <thead><tr><th>What</th><th>Windows</th><th>Linux</th></tr></thead>
       <tbody>
-        <tr><td>Settings</td><td><code>%APPDATA%\Platima\npad\settings.json</code></td><td><code>~/.config/npad/settings.json</code> (<code>$XDG_CONFIG_HOME/npad/</code> when set)</td></tr>
-        <tr><td>Crash-recovery snapshots</td><td><code>%APPDATA%\Platima\npad\recovery\</code></td><td><code>~/.config/npad/recovery/</code> (<code>$XDG_CONFIG_HOME/npad/</code> when set)</td></tr>
+        <tr><td>Settings</td><td><code>%APPDATA%\Platima\npad\settings.json</code></td><td><code>~/.config/npad/settings.json</code> (<code>$XDG_CONFIG_HOME/npad/settings.json</code> when <code>XDG_CONFIG_HOME</code> is set to an absolute path)</td></tr>
+        <tr><td>Crash-recovery snapshots</td><td><code>%APPDATA%\Platima\npad\recovery\</code></td><td><code>~/.config/npad/recovery/</code> (<code>$XDG_CONFIG_HOME/npad/recovery/</code> when <code>XDG_CONFIG_HOME</code> is set to an absolute path)</td></tr>
       </tbody>
     </table></div>
-    <p>Preferences (<kbd>Ctrl+,</kbd>) has tabs for General, Appearance, Defaults, Markdown, Backup, Updates and Associations. Backup exports and imports your settings.</p>
+    <p>Preferences (<kbd>Ctrl+,</kbd>) has tabs for General, Editor, Appearance, Defaults, Markdown, Backup, Updates and Associations. Backup exports and imports your settings.</p>
 
     <div class="note"><strong>A docs site is coming.</strong> The Markdown files on GitHub are the source of truth today; this page will grow into a full docs section at npad.dev/docs.</div>
   </div>

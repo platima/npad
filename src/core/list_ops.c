@@ -136,8 +136,11 @@ static int line_compare(const Line *a, const Line *b, bool case_sensitive) {
 
 // --- Sort ------------------------------------------------------------------
 
-// Stable insertion sort keyed on (compare, original index) so equal lines keep
-// their input order. Line counts here are modest (interactive selections).
+// Bottom-up merge sort of the line spans: O(n log n) whatever the input order
+// (Sort runs on the whole document when nothing is selected, so a 100k-line
+// log must not take minutes, and an insertion sort did on already-sorted text
+// sorted the other way). Stable: a merge takes from the left run on a tie, so
+// equal lines keep their input order in both directions.
 char *list_sort_lines(const char *text, bool descending, bool case_sensitive) {
     if (!text)
         return NULL;
@@ -148,28 +151,55 @@ char *list_sort_lines(const char *text, bool descending, bool case_sensitive) {
     if (!lines)
         return NULL;
 
-    for (size_t i = 1; i < count; i++) {
-        Line key = lines[i];
-        size_t j = i;
-        while (j > 0) {
-            int cmp = line_compare(&lines[j - 1], &key, case_sensitive);
-            if (descending)
-                cmp = -cmp;
-            if (cmp <= 0) // <= keeps equal elements stable
-                break;
-            lines[j] = lines[j - 1];
-            j--;
+    Line *tmp = count > 1 ? malloc(count * sizeof(Line)) : NULL;
+    if (count > 1 && !tmp) {
+        free(lines);
+        return NULL;
+    }
+    Line *src = lines, *dst = tmp;
+    size_t width = 1;
+    while (width < count) {
+        for (size_t lo = 0; lo < count; lo += 2 * width) {
+            size_t mid = lo + width < count ? lo + width : count;
+            size_t hi = mid + width < count ? mid + width : count;
+            size_t a = lo, b = mid, o = lo;
+            while (a < mid && b < hi) {
+                int cmp = descending ? line_compare(&src[b], &src[a], case_sensitive)
+                                     : line_compare(&src[a], &src[b], case_sensitive);
+                dst[o++] = (cmp <= 0) ? src[a++] : src[b++]; // <= keeps ties stable
+            }
+            while (a < mid)
+                dst[o++] = src[a++];
+            while (b < hi)
+                dst[o++] = src[b++];
         }
-        lines[j] = key;
+        Line *swap = src;
+        src = dst;
+        dst = swap;
+        width = (width > count / 2) ? count : width * 2; // never overflows
     }
 
-    char *out = join_lines(lines, count, trailing);
+    char *out = join_lines(src, count, trailing);
     free(lines);
+    free(tmp);
     return out;
 }
 
 // --- Unique ----------------------------------------------------------------
 
+// FNV-1a over the line's bytes (64-bit arithmetic, folded into size_t).
+static size_t line_hash(const Line *l) {
+    uint64_t h = 1469598103934665603ull;
+    for (size_t i = 0; i < l->len; i++) {
+        h ^= (unsigned char) l->start[i];
+        h *= 1099511628211ull;
+    }
+    return (size_t) (h ^ (h >> 32));
+}
+
+// Order-preserving dedupe through an open-addressing hash set of the lines
+// already kept: O(n) expected, where a scan of every kept line per input line
+// was quadratic.
 char *list_unique_lines(const char *text) {
     if (!text)
         return NULL;
@@ -180,19 +210,40 @@ char *list_unique_lines(const char *text) {
     if (!lines)
         return NULL;
 
+    size_t cap = 16;
+    while (cap < count * 2) {
+        if (cap > SIZE_MAX / 4 / sizeof(size_t)) {
+            free(lines);
+            return NULL;
+        }
+        cap *= 2;
+    }
+    size_t *slots = malloc(cap * sizeof(size_t)); // index into lines[], SIZE_MAX = empty
+    if (!slots) {
+        free(lines);
+        return NULL;
+    }
+    for (size_t i = 0; i < cap; i++)
+        slots[i] = SIZE_MAX;
+
     size_t kept = 0;
     for (size_t i = 0; i < count; i++) {
         bool dup = false;
-        for (size_t j = 0; j < kept; j++) {
-            if (lines[j].len == lines[i].len &&
-                memcmp(lines[j].start, lines[i].start, lines[i].len) == 0) {
+        size_t h = line_hash(&lines[i]) & (cap - 1);
+        while (slots[h] != SIZE_MAX) {
+            const Line *k = &lines[slots[h]];
+            if (k->len == lines[i].len && memcmp(k->start, lines[i].start, k->len) == 0) {
                 dup = true;
                 break;
             }
+            h = (h + 1) & (cap - 1);
         }
-        if (!dup)
-            lines[kept++] = lines[i];
+        if (!dup) {
+            lines[kept] = lines[i];
+            slots[h] = kept++;
+        }
     }
+    free(slots);
 
     char *out = join_lines(lines, kept, trailing);
     free(lines);
@@ -209,6 +260,21 @@ static int hex_val(char c) {
     if (c >= 'A' && c <= 'F')
         return c - 'A' + 10;
     return -1;
+}
+
+// The four hex digits of a \uXXXX escape starting at s[i] (the backslash), or
+// -1 when they are not all there.
+static long hex4_at(const char *s, size_t len, size_t i) {
+    if (i + 5 >= len || s[i + 1] != 'u')
+        return -1;
+    long v = 0;
+    for (size_t k = 2; k < 6; k++) {
+        int h = hex_val(s[i + k]);
+        if (h < 0)
+            return -1;
+        v = (v << 4) | h;
+    }
+    return v;
 }
 
 char *list_unescape(const char *s) {
@@ -245,27 +311,40 @@ char *list_unescape(const char *s) {
                 out[o++] = '\t';
                 i += 2;
                 break;
-            case '0':
-                out[o++] = '\0';
-                i += 2;
-                break;
+            // There is no \0: the result is a C string, so a NUL would end it
+            // and silently drop the rest of the field. "\0" takes the
+            // unknown-escape path below and yields a literal '0'.
             case '\\':
                 out[o++] = '\\';
                 i += 2;
                 break;
             case 'u': {
-                if (i + 5 < len) {
-                    int h0 = hex_val(s[i + 2]), h1 = hex_val(s[i + 3]);
-                    int h2 = hex_val(s[i + 4]), h3 = hex_val(s[i + 5]);
-                    if (h0 >= 0 && h1 >= 0 && h2 >= 0 && h3 >= 0) {
-                        uint32_t cp = (uint32_t) ((h0 << 12) | (h1 << 8) | (h2 << 4) | h3);
-                        o += lo_utf8_encode(cp, out + o);
-                        i += 6;
-                        break;
-                    }
+                long v = hex4_at(s, len, i);
+                if (v < 0) {
+                    out[o++] = e; // Malformed \u: emit the 'u' literally
+                    i += 2;
+                    break;
                 }
-                out[o++] = e; // Malformed \u: emit the 'u' literally
-                i += 2;
+                uint32_t cp = (uint32_t) v;
+                i += 6;
+                if (cp >= 0xD800 && cp <= 0xDBFF) {
+                    // A high surrogate pairs with a following \uDC00-\uDFFF
+                    // into one supplementary code point (\uD83D\uDE00 is one
+                    // emoji); encoding the halves separately gave CESU-8,
+                    // which no UTF-8 consumer accepts
+                    long lo = (i < len && s[i] == '\\') ? hex4_at(s, len, i) : -1;
+                    if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                        cp = 0x10000 + ((cp - 0xD800) << 10) + ((uint32_t) lo - 0xDC00);
+                        i += 6;
+                    } else {
+                        cp = 0xFFFD; // A lone high surrogate
+                    }
+                } else if ((cp >= 0xDC00 && cp <= 0xDFFF) || cp == 0) {
+                    // A lone low surrogate is not a character, and \u0000
+                    // would end the string like \0 did: both become U+FFFD
+                    cp = 0xFFFD;
+                }
+                o += lo_utf8_encode(cp, out + o);
                 break;
             }
             default:
@@ -439,11 +518,27 @@ static size_t marker_at(const char *s, size_t len, const char *custom) {
     return list_marker_length(s, len, custom, true);
 }
 
+// The leading run of spaces and tabs (nesting, or a custom prefix's own
+// lead-in such as "\t* ").
+static size_t lead_ws(const char *line, size_t len) {
+    size_t i = 0;
+    while (i < len && (line[i] == ' ' || line[i] == '\t'))
+        i++;
+    return i;
+}
+
+// Does the line start with the exact custom marker prefix (its lead-in
+// included)? A whitespace-only custom prefix is not a marker.
+static bool starts_with_custom(const char *line, size_t len, const char *custom) {
+    size_t pl = custom ? strlen(custom) : 0;
+    return pl > 0 && !prefix_is_whitespace(custom) && len >= pl && memcmp(line, custom, pl) == 0;
+}
+
 // Does the line already carry a bullet (optionally behind nesting spaces)?
 static bool line_has_bullet(const char *line, size_t len, const char *custom) {
-    size_t i = 0;
-    while (i < len && line[i] == ' ')
-        i++;
+    if (starts_with_custom(line, len, custom))
+        return true;
+    size_t i = lead_ws(line, len);
     return marker_at(line + i, len - i, custom) > 0;
 }
 
@@ -500,17 +595,28 @@ static size_t indent_line(const char *line, size_t len, char *out, ListIndentFor
 static size_t unindent_line(const char *line, size_t len, char *out, ListIndentFormat fmt,
                             const char *custom, int space_width) {
     if (is_marker_format(fmt, custom)) {
+        // The Custom format's own prefix comes off whole first, lead-in and
+        // all: Indent added exactly that, so a prefix such as "  - " or
+        // "\t* " must not be read as a deepened "- " / an unknown line
+        if (fmt == LIST_INDENT_CUSTOM && starts_with_custom(line, len, custom)) {
+            size_t pl = strlen(custom);
+            memcpy(out, line + pl, len - pl);
+            return len - pl;
+        }
         // Marker-aware: act on whatever bullet the line actually carries,
         // not just the configured format's marker
-        size_t ws = 0;
-        while (ws < len && line[ws] == ' ')
-            ws++;
+        size_t ws = lead_ws(line, len);
         size_t m = marker_at(line + ws, len - ws, custom);
         if (m > 0) {
-            if (ws >= 2) {
+            if (ws >= 2 && line[0] == ' ' && line[1] == ' ') {
                 // Deepened bullet: strip one nesting step (two spaces)
                 memcpy(out, line + 2, len - 2);
                 return len - 2;
+            }
+            if (line[0] == '\t') {
+                // Tab-nested bullet: one tab is one level
+                memcpy(out, line + 1, len - 1);
+                return len - 1;
             }
             // Base bullet: strip its lead-in space(s) and the marker
             size_t strip = ws + m;

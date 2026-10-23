@@ -18,23 +18,30 @@ A lightweight, cross-platform text editor inspired by the simplicity and speed o
 **Versioning**: This project follows [Semantic Versioning](https://semver.org/) (SemVer) for predictable and reliable version management.
 
 ## Table of Contents
-- [Philosophy](#philosophy)
-- [Features](#features)
-- [Why](#why)
-- [What npad is not](#what-npad-is-not)
-- [What will be considered](#what-features-will-be-considered)
-- [Configuration](#configuration)
-- [Platform Support](#platform-support)
-- [Sponsor This Project](#sponsor-this-project)
-- [Get npad](#get-npad)
-- [Use npad](#use-npad)
-- [Design Principles](#design-principles)
-- [Architecture](#architecture)
-- [Contributing](#contributing)
-- [Roadmap](#roadmap)
-- [Acknowledgements](#acknowledgements)
-- [License](#license)
-- [Author](#author)
+<!-- GitHub drops a heading's emoji from its anchor but keeps the space before
+     it, so "## Philosophy 💭" is #philosophy- (trailing hyphen). An emoji
+     written with a variation selector (U+FE0F) or a joiner leaves that
+     invisible character in the anchor too, so the headings use emoji that
+     are a single code point. Keep both rules when adding a heading here. -->
+- [Philosophy](#philosophy-)
+- [Features](#features-)
+- [Why](#why-)
+- [What npad is not](#what-npad-is-not-)
+- [What will be considered](#what-features-will-be-considered-)
+- [Configuration](#configuration-)
+- [Platform Support](#platform-support-)
+- [Sponsor This Project](#sponsor-this-project-)
+- [Get npad](#get-npad-)
+- [Use npad](#use-npad-)
+- [Design Principles](#design-principles-)
+- [Architecture](#architecture-)
+- [Contributing](#contributing-)
+- [Roadmap](#roadmap-)
+- [Documentation](#documentation-)
+- [Changelog](#changelog-)
+- [Acknowledgements](#acknowledgements-)
+- [License](#license-)
+- [Author](#author-)
 
 ## Philosophy 💭
 
@@ -47,15 +54,16 @@ npad aims to recreate the beloved simplicity of original Windows Notepad while a
 
 ## Features ✨
 
-Current features (Windows build):
+Current features (the Windows build; the Linux build has every one of them too, with the few platform differences listed in [DOCUMENTATION.md](DOCUMENTATION.md#linux) and [LINUX_PORT.md](LINUX_PORT.md)):
 
 - **⚡ Lightning fast** - Native API implementation with minimal overhead; a ~400 KB executable that imports only 8 system libraries, loading the rest (update check, file dialogs) on first use
 - **💨 Minimal resource usage** - ~3.4 MB of RAM per window and ~40 ms from process start to a usable window. Each window is its own process, and the cost stays linear: 30 windows measured 104 MB in total
-- **🎯 Classic interface** - Familiar Notepad-style UI and behavior
-- **🌍 Unicode throughout** - Detects and preserves UTF-8, UTF-8 BOM, UTF-16 LE/BE and ANSI encodings
-- **↩️ Line ending aware** - Detects and preserves Windows (CRLF), Unix (LF) and Mac (CR) line endings, shown in the status bar
+- **🎯 Classic interface** - Familiar Notepad-style UI and behavior, down to Notepad's own touches: a file whose first line is `.LOG` gets a time stamp each time it opens, and `npad notes.txt` offers to create a file that does not exist yet
+- **🌍 Unicode throughout** - Detects and preserves UTF-8, UTF-8 BOM, UTF-16 LE/BE (with or without a BOM) and ANSI encodings, and asks before a save could change bytes it could not read exactly
+- **↩️ Line ending aware** - Detects and keeps Windows (CRLF), Unix (LF) and Mac (CR) line endings, shown in the status bar (a file that mixes them is saved in the style most of its lines use)
 - **🔧 Quality-of-life enhancements:**
-  - Tabbed Preferences dialog (Edit menu, Ctrl+,) with an Apply button: General, Appearance, Defaults, Markdown, Backup, Updates and Associations pages (see [DOCUMENTATION.md](DOCUMENTATION.md) for every setting)
+  - Tabbed Preferences dialog (Edit menu, Ctrl+,) with an Apply button: General, Editor, Appearance, Defaults, Markdown, Backup, Updates and Associations pages (see [DOCUMENTATION.md](DOCUMENTATION.md) for every setting)
+  - Optional Tab inserts spaces (Preferences > Editor, off by default as in Notepad): Tab types the spaces up to the next tab stop, with a tab width of 1-16
   - Choose which file types npad is offered for from Preferences > Associations, per user or (elevated) for all users - never taking ownership of a type, with a shortcut to Windows' Default apps page
   - Optional auto-save (disabled by default - it overwrites your file, so it's opt-in; configurable)
   - Session resume / crash recovery (enabled by default - non-destructive, snapshots never touch your file); restores every window that was open, each in its own instance
@@ -66,8 +74,8 @@ Current features (Windows build):
   - Undo / Redo (Ctrl+Z / Ctrl+Y) with a deep undo history
   - Zoom (Ctrl+Plus / Ctrl+Minus / Ctrl+0, Ctrl+Scroll)
   - Word wrap toggle (Alt+Z), Go To Line (Ctrl+G), Time/Date (F5)
-  - Line ending conversion (Format menu, Ctrl+E to cycle, or click the status bar)
-  - Printing (Ctrl+P) and Page Setup, with notepad's header/footer codes (`&f` `&p` `&d` `&t`, `&l`/`&c`/`&r`) editable in Preferences; prints the document rather than the window, in the font that window is showing
+  - Line ending conversion (Format > Line Endings, or click the status bar)
+  - Printing (Ctrl+P) and Page Setup, with notepad's header/footer codes (`&f` `&p` `&d` `&t`, `&l`/`&c`/`&r`) editable in Preferences > Defaults; prints the document rather than the window, in the font that window is showing, with a progress window you can cancel. `npad /p notes.txt` prints straight to the default printer and exits, as `notepad /p` does (also Explorer's Print command)
   - Print Preview (Ctrl+Shift+P) with paging, two-page view and zoom - measured against the real printer, so the preview wraps exactly where the page does
   - Encoding picker in the Save dialog (or click the status bar); warns before an ANSI save would lose characters
   - Right-click context menu (Undo/Redo/Cut/Copy/Paste/Delete/Select All)
@@ -84,24 +92,24 @@ Current features (Windows build):
   - Drag-and-drop to open files; Ctrl+Drop inserts the file at the caret
   - Optional notice when a file you have open is changed by another program (off by default), offering reload, save-as, or keep editing
   - Export / Import settings (Preferences > Backup) for backup or moving between machines
-  - Atomic saves - a failed save can never destroy the existing file
+  - Atomic saves - a failed save can never destroy the existing file, and a save keeps the file's permissions, owner, links and attributes
   - JSON settings storage; remembers window position, size and maximized state
   - Confirmation prompt before opening very large files (threshold scales with the system's RAM by default)
   - Binary-file detection on open, offering Cancel / Open in npad / Open with the default app
   - **App icon that follows your light/dark setting**, with the classic icon and fixed light/dark still available (Preferences > Appearance)
   - Dark colour schemes theme the text area, title bar, scroll bars and drop-down menus (the menu bar and status bar stay light - Windows draws those, and offers no supported way to recolour them)
   - Optional word / character / line counts in the status bar (off by default; refreshed live while typing, with a debounced fallback so very large files stay smooth)
-  - Check for Updates (Help menu) with an opt-in Updates preferences tab: off by default, or notify silently (a Help-menu dot), prompt, or download-and-install-automatically; optional launch check, Skip this version, an **Install Now** button whenever an update is known, and a SHA-256-verified download that resolves its file from the release itself (so future changes to asset naming cannot strand it)
+  - Check for Updates (Help menu) with an opt-in Updates preferences tab: off by default, or notify silently (a Help-menu dot), prompt, or download-and-install-automatically; optional launch check, Skip this version, an **Install Now** button whenever an update is known, and a SHA-256-verified download that resolves its file from the release itself (so future changes to asset naming cannot strand it); a code-signed npad also requires the installer to carry the same publisher's signature. On Linux, Check for Updates tells you how to update the way you installed npad and never installs anything itself
 
-Planned (see the [Roadmap](#roadmap)):
+Planned (see the [Roadmap](#roadmap-)):
 
 - 🚧 macOS and terminal builds
 - 🚧 Optional tabbed interface
 - 🚧 Multi-language support
 - 🚧 Custom keyboard shortcuts
-- 🚧 Portable EXE, installer, MSI and winget distribution
+- 🚧 winget distribution
 
-_**Note: Windows support will be first, for the obvious reasons, as compile-yourself, a portable EXE, or as an EXE installer. Other platforms and installers will come with time or contributions**_
+_**Note: Windows came first, for the obvious reasons, and has an installer, an MSI and a portable EXE for x64 and arm64. Linux followed in v0.34.0, and now has packages, signed apt / dnf / pacman repositories and a portable tarball. macOS and the terminal builds will come with time or contributions.**_
 
 ## Why 🤔
 
@@ -130,7 +138,6 @@ The below 'features' are 99% locked-in as not going to happen. 100% for the firs
 
 These items may or may not be added, and are essentially subject to my whim, but suggestions may be raised as an 'Issue'
 
-- 🎨 Optional Solarized colouring for dark and light modes
 - 🔌 Optional plugin support
 - 📃 Optional native Markdown support
 - 🔍 Optional RegEx in find and replace
@@ -139,13 +146,13 @@ These items may or may not be added, and are essentially subject to my whim, but
 ## Configuration 🔧
 
 npad stores its settings in JSON format in standard system locations:
-- **Linux**: `~/.config/npad/settings.json` (or `$XDG_CONFIG_HOME/npad/settings.json` when set)
+- **Linux**: `~/.config/npad/settings.json` (or `$XDG_CONFIG_HOME/npad/settings.json` when `XDG_CONFIG_HOME` is set to an absolute path)
 - **Windows**: `%APPDATA%\Platima\npad\settings.json`
 - **macOS**: `~/Library/Application Support/npad/settings.json` (when implemented)
 
-Settings include window position, auto-save preferences, theme selection, and other user preferences. All settings are optional - npad works perfectly with default values.
+Settings include window position, auto-save preferences, theme selection, and other user preferences. All settings are optional - npad works perfectly with default values. Crash-recovery snapshots of unsaved work live in a `recovery` folder beside `settings.json`.
 
-## Platform Support 🖥️
+## Platform Support 💻
 
 | Platform | Status | Backend | Architectures |
 |----------|--------|---------|---------------|
@@ -179,15 +186,16 @@ Snapdragon laptops) - pick `-win-arm64` in place of `-win-x64` below for a
 native Arm build:
 
 - 🛠️ **`npad-v<version>-setup-win-x64.exe`** - Windows installer. Per-user by
-  default (no admin needed); system-wide when run elevated or chosen in the
-  dialog. Adds `npad` to PATH (so it runs from a terminal), lists npad in
-  Windows' "Open with" menu for any file, optional bundled fonts (Intel One
-  Mono, Roboto, OpenDyslexic), grouped file associations (Text / Markdown /
-  Data / Config / Logs), and a 'notepad' alias. Silent:
-  `/VERYSILENT [/ALLUSERS]`.
+  default (no admin needed); for all users, choose it in the dialog or pass
+  `/ALLUSERS` (running setup elevated is not enough on its own). Adds `npad`
+  to PATH (so it runs from a terminal), lists npad in Windows' "Open with"
+  menu for any file, optional bundled fonts (Intel One Mono, Roboto,
+  OpenDyslexic), grouped file associations (Text / Markdown / Data / Config /
+  Logs), and a 'notepad' alias. Silent: `/VERYSILENT [/ALLUSERS]`.
 - 📋 **`npad-v<version>-msi-win-x64.msi`** - For silent/enterprise deployment:
-  `msiexec /i npad-v<version>-msi-win-x64.msi /qn` (add `ALLUSERS=1` for
-  machine-wide; features selectable via `ADDLOCAL`).
+  `msiexec /i npad-v<version>-msi-win-x64.msi /qn /norestart` (add `ALLUSERS=1` for
+  machine-wide; `ADDLOCAL` picks the features and replaces the default set,
+  so list every one you want - see the reference below).
 - 📦 **`npad-v<version>-portable-win-x64.exe`** - Portable: download and run, no
   installation required.
 
@@ -199,7 +207,9 @@ installer reference (tasks, features, fonts, the Windows 11 notepad alias).
 > publisher's reputation over its first signed releases, so it may still warn.
 > Right-click the downloaded file → **Properties** → tick **Unblock** →
 > **Apply** (or choose "More info" → "Run anyway" on the SmartScreen
-> prompt). Verify the SHA256 against `CHECKSUMS.txt` first if unsure.
+> prompt). If unsure, check the file first: compare the hash from
+> `Get-FileHash <file>` (PowerShell) or `certutil -hashfile <file> SHA256`
+> with its line in the release's `CHECKSUMS.txt`.
 
 - 🐧 **`npad_<version>_amd64.deb`** - Linux (Debian 12/13, Ubuntu 22.04+, Mint):
   `sudo apt install ./npad_<version>_amd64.deb`. Installs the GTK 3 desktop app
@@ -220,6 +230,10 @@ installer reference (tasks, features, fonts, the Windows 11 notepad alias).
   Also `-aarch64` and `-riscv64`.
   From source instead: `make linux-gtk && sudo make install` (honours `PREFIX`
   and `DESTDIR`; `sudo make uninstall` removes it).
+
+To check a Linux download, run `sha256sum -c --ignore-missing CHECKSUMS.txt`
+in the folder you downloaded it to (with the release's `CHECKSUMS.txt`
+beside it); it checks only the files that are there.
 
 **Linux updates through your package manager.** Add the signed npad
 repository once and `apt upgrade` / `dnf upgrade` / `pacman -Syu` keep npad
@@ -245,9 +259,9 @@ sudo pacman -Sy npad
 ```
 
 Or run `curl -fsSL https://pkg.npad.dev/install.sh | sudo sh`, which detects
-which of the three you need. Read the script first if you prefer. The AUR
-package `npad-bin` (built from the release's portable tarball) is the other
-route on Arch.
+which of the three you need. Read the script first if you prefer. An AUR
+package, `npad-bin` (built from the release's portable tarball), is ready to
+publish and is coming as the other route on Arch; it is not on the AUR yet.
 
 **Planned:** 🎁 **Winget** - for `winget install npad`.
 
@@ -279,9 +293,13 @@ route on Arch.
    ```bash
    # Windows (cross-compile from Linux)
    make windows        # Windows x64 build
-   make windows-arm64  # Windows on Arm (npad-arm64.exe; needs llvm-mingw on PATH)
+   make windows-arm64 LLVM_MINGW=/opt/llvm-mingw
+                       # Windows on Arm (npad-arm64.exe), with llvm-mingw from
+                       # scripts/install-llvm-mingw.sh; or append its bin/ to
+                       # PATH (prepended, it replaces MinGW GCC for x64 too)
    
-   # Native Linux (./npad-linux - one binary for X11 and Wayland)
+   # Native Linux (./npad-linux - one binary for X11 and Wayland; also the
+   # ncurses terminal stub when libncurses-dev is installed)
    make linux
    
    # macOS (when implemented)
@@ -297,21 +315,25 @@ route on Arch.
    - Use Ctrl+Shift+P → "Tasks: Run Task" → "build windows"
    - Debug with F5 (requires `make debug`)
 
-5. **Code quality checks:**
+5. **Tests and code quality checks:**
    ```bash
-   make lint           # Run static analysis
-   make format-check   # Verify code formatting
+   make test           # Run the unit tests (each suite in its own temp folder)
+   make lint           # Run static analysis (CI uses cppcheck 2.13)
+   make format-check   # Verify code formatting (CI uses clang-format 18)
    make format         # Auto-format code
    ```
+   See [CONTRIBUTING.md](CONTRIBUTING.md#testing) for the Windows, sanitizer
+   and fuzz test targets.
 
 ## Use npad 🎯
 
 ### Running from Windows Run dialog
 After installation, simply press `Win+R` and type `npad` to launch.
 
-You can also type 'npad' in any File Explorer address bar, and npad will launch and show you an Open dialog in that location.
+You can also type `npad` in a File Explorer address bar to launch it; it
+opens with a new, empty document, as Notepad does.
 
-## Design Principles 🏗️
+## Design Principles 📐
 
 1. **🔧 Native over frameworks** - Direct platform APIs for maximum performance
 2. **⚡ Performance first** - Optimized for speed and minimal resource usage  
@@ -320,7 +342,7 @@ You can also type 'npad' in any File Explorer address bar, and npad will launch 
 5. **📦 Zero dependencies** - Self-contained executable with no external requirements
 6. **🚫 No bloat** - Resistance to feature creep and unnecessary additions
 
-## Architecture 🏛️
+## Architecture 🧱
 
 npad uses a clean abstraction layer that separates platform-specific UI code from core logic:
 
@@ -343,12 +365,12 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
 - ✨ Quality-of-life improvements that maintain simplicity
 
 **Development:**
-- 🔧 Self-hosted CI/CD with cross-compilation
-- 🧪 Automated testing and linting
-- 📦 Automated releases via GitHub Actions
+- 🔧 CI on GitHub Actions: Windows builds cross-compiled from Linux and built natively, Linux packages for three architectures
+- 🧪 Automated unit tests (also on Windows, and under sanitizers) and linting
+- 📦 Automated releases via GitHub Actions, published only once every file is attached and verified
 - 🎯 Code formatting and quality checks
 
-## Roadmap 🗺️
+## Roadmap 🧭
 
 - [x] **Setup**
   - [x] GitHub repository
@@ -376,7 +398,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
   - [x] Auto-save feature (disabled by default - it overwrites your file, so it is opt-in)
   - [x] Session resume / crash protection (enabled by default - non-destructive)
   - [x] Dark/light theme support (light by default like notepad; following the system is opt-in)
-  - [x] Deep Undo & Redo history (100,000 actions)
+  - [x] Deep Undo & Redo history (100,000 actions on Windows; 10,000 on Linux)
   - [x] Improvements to Find & Replace dialogs
     - [x] Recent list (configurable)
     - [x] Show match count
@@ -394,7 +416,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
     - [x] Status bar click
   - [x] Convert line endings between LF, CR LF, CR
     - [x] Detect and preserve line endings (shown in status bar)
-    - [x] Menu / Keyboard shortcut (Ctrl+E)
+    - [x] Menu (Format > Line Endings)
     - [x] Status bar click
   - [x] Ctrl+Drop to insert instead of open
   - [x] 'Recent' menu (optional)
@@ -455,16 +477,17 @@ history lives in `git log`.
 ## Acknowledgements 🙏
 
 - **Solarized** colour schemes by [Ethan Schoonover](https://ethanschoonover.com/solarized/).
-- Fonts planned for bundling with the installer, under open licences:
-  - [Intel One Mono](https://github.com/intel/intel-one-mono) (SIL Open Font License)
-  - [Roboto](https://github.com/googlefonts/roboto-3-classic) (Apache License 2.0)
-  - [OpenDyslexic](https://opendyslexic.org) (SIL Open Font License) - reading assistance
+- Fonts bundled with the Windows installer, each under the SIL Open Font
+  License 1.1 (its licence is installed with it):
+  - [Intel One Mono](https://github.com/intel/intel-one-mono)
+  - [Roboto](https://github.com/googlefonts/roboto-3-classic) (Roboto 3 Classic)
+  - [OpenDyslexic](https://opendyslexic.org) - reading assistance
 
 ## License 📄
 
 MIT License - See [LICENSE](LICENSE) file for details.
 
-## Author 👨‍💻
+## Author 👤
 
 **Platima** - [GitHub Profile](https://github.com/platima)
 

@@ -47,9 +47,14 @@ if command -v apt-get &> /dev/null; then
     echo "Installing GTK 3 development libraries..."
     sudo apt-get install -y pkg-config libgtk-3-dev
     
-    # Terminal development (ncurses)
+    # Terminal development (ncurses; libncurses5-dev is gone from current
+    # Debian and Ubuntu, libncurses-dev is the name everywhere)
     echo "Installing ncurses development..."
-    sudo apt-get install -y libncurses5-dev libncurses5
+    sudo apt-get install -y libncurses-dev
+
+    # Linux packaging: dpkg-deb (the .deb fallback without nfpm) and zstd
+    # (release validation reads the Arch package); nfpm itself is below
+    sudo apt-get install -y dpkg-dev zstd
 
 elif command -v dnf &> /dev/null; then
     echo "Using dnf (Fedora/RHEL)..."
@@ -68,38 +73,82 @@ else
     echo "- gcc, make, build-essential"
     echo "- mingw-w64 (for Windows cross-compilation)"
     echo "- pkg-config and GTK 3 development files, e.g. libgtk-3-dev (for the Linux desktop app)"
-    echo "- libncurses5-dev (for terminal UI)"
+    echo "- libncurses-dev (for terminal UI)"
 fi
 
 echo ""
 echo "==== Installing Code Quality Tools ===="
 
-# Function to find and install clang-format
+# The canonical tool versions: `make format-check` is canonical against
+# clang-format 18 and `make lint` against cppcheck 2.13, what CI runs (ci.yml
+# pins ubuntu-24.04 for them and checks the versions). Other versions format
+# and warn differently, so a local pass with them proves little.
+CANONICAL_CLANG_FORMAT=18
+CANONICAL_CPPCHECK=2.13
+
+# Install clang-format 18 if the distro has it; otherwise the nearest version,
+# with a warning and the way to get 18 anyway
 install_clang_format() {
-    local available_versions="16 15 14 13 12 11 10"
-    local installed=false
-    
-    for version in $available_versions; do
-        if command -v apt-cache &> /dev/null; then
+    local fallback_versions="19 17 20 16 15 14"
+    local installed=""
+
+    if command -v apt-cache &> /dev/null; then
+        for version in $CANONICAL_CLANG_FORMAT $fallback_versions; do
             if apt-cache show "clang-format-$version" &> /dev/null; then
                 echo "Installing clang-format-$version..."
                 sudo apt-get install -y "clang-format-$version"
-                # Create symlink if clang-format doesn't exist
-                if ! command -v clang-format &> /dev/null; then
-                    sudo ln -sf "/usr/bin/clang-format-$version" /usr/bin/clang-format
-                fi
-                installed=true
+                installed=$version
                 break
             fi
-        fi
-    done
-    
-    if [ "$installed" = false ]; then
-        echo "Trying to install generic clang-format package..."
-        if command -v apt-get &> /dev/null; then
+        done
+        if [ -z "$installed" ]; then
+            echo "Trying to install the generic clang-format package..."
             sudo apt-get install -y clang-format || echo "Warning: Could not install clang-format"
         fi
+    elif command -v dnf &> /dev/null; then
+        sudo dnf install -y clang-tools-extra || echo "Warning: Could not install clang-format"
+    elif command -v pacman &> /dev/null; then
+        sudo pacman -S --needed clang || echo "Warning: Could not install clang-format"
     fi
+
+    # A versioned binary is used through CLANG_FORMAT rather than by replacing
+    # /usr/bin/clang-format, which other projects on this machine may rely on
+    if [ -n "$installed" ] && ! command -v clang-format &> /dev/null; then
+        sudo ln -sf "/usr/bin/clang-format-$installed" /usr/bin/clang-format
+    fi
+    if [ "$installed" != "$CANONICAL_CLANG_FORMAT" ]; then
+        echo "Warning: clang-format $CANONICAL_CLANG_FORMAT is the canonical version and this distro does not package it."
+        echo "         Install it with: pip install --user clang-format==18.1.8"
+        echo "         then run: CLANG_FORMAT=~/.local/bin/clang-format make format-check"
+    elif [ "$(readlink -f "$(command -v clang-format)")" != "$(readlink -f /usr/bin/clang-format-$installed)" ]; then
+        echo "Note: 'clang-format' on PATH is not version $CANONICAL_CLANG_FORMAT; run: CLANG_FORMAT=clang-format-$installed make format-check"
+    fi
+}
+
+# nfpm (the .deb, .rpm and Arch packages) and llvm-mingw (the Windows on Arm
+# build), the same pinned, checksum-verified releases CI installs
+install_packaging_tools() {
+    case $(uname -m) in
+    x86_64 | amd64 | aarch64 | arm64)
+        if ! command -v nfpm &> /dev/null; then
+            echo "Installing nfpm (pinned, checksum-verified)..."
+            sudo sh scripts/install-nfpm.sh || echo "Warning: Could not install nfpm (make deb falls back to dpkg-deb)"
+        fi
+        ;;
+    esac
+    case $(uname -m) in
+    x86_64 | amd64)
+        if [ ! -x /opt/llvm-mingw/bin/aarch64-w64-mingw32-clang ]; then
+            echo "Installing llvm-mingw to /opt/llvm-mingw (pinned, checksum-verified)..."
+            sudo sh scripts/install-llvm-mingw.sh /opt/llvm-mingw || echo "Warning: Could not install llvm-mingw (make windows-arm64 unavailable)"
+        fi
+        echo "For make windows-arm64, put /opt/llvm-mingw/bin at the END of PATH (PATH=\"\$PATH:/opt/llvm-mingw/bin\"):"
+        echo "ahead of the MinGW GCC tools, its dlltool replaces GNU dlltool and make windows fails."
+        ;;
+    *)
+        echo "Note: llvm-mingw is pinned for x86_64 hosts only; make windows-arm64 is unavailable here"
+        ;;
+    esac
 }
 
 # Function to install cppcheck
@@ -119,6 +168,16 @@ install_cppcheck() {
 
 install_clang_format
 install_cppcheck
+if command -v cppcheck &> /dev/null; then
+    if ! cppcheck --version | grep -q "^Cppcheck $CANONICAL_CPPCHECK"; then
+        echo "Warning: $(cppcheck --version) is not cppcheck $CANONICAL_CPPCHECK, which CI runs."
+        echo "         Older versions are less strict and have passed changes CI then rejected:"
+        echo "         build $CANONICAL_CPPCHECK from source and run: CPPCHECK=/path/to/cppcheck make lint"
+    fi
+fi
+if [ -f scripts/install-nfpm.sh ]; then
+    install_packaging_tools
+fi
 
 echo ""
 echo "==== Installing Additional Development Tools ===="

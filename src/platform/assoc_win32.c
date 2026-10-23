@@ -20,10 +20,15 @@ typedef struct {
     const wchar_t *ext;      // ".txt"
     const wchar_t *progid;   // "npad.txt"
     const wchar_t *friendly; // "Text File"
+    // The ProgID Windows itself ships as this extension's machine-wide default
+    // ("txtfile" for .txt), or NULL. Handed back when npad's own claim on the
+    // extension is removed from HKLM - see type_unregister.
+    const wchar_t *stock;
 } AssocType;
 
 typedef struct {
-    const char *token; // What the elevated command line names it
+    const char *token;       // What the elevated command line names it
+    const char *msi_feature; // Its Feature Id in installer/npad.wxs
     const AssocType *types;
     int count;
 } AssocGroupDef;
@@ -32,35 +37,38 @@ typedef struct {
 // names, grouped the same five ways. A mismatch here would leave the pane and
 // the installer registering subtly different things for the same tick box.
 static const AssocType TYPES_TEXT[] = {
-    { L".txt", L"npad.txt", L"Text File" },
+    { L".txt", L"npad.txt", L"Text File", L"txtfile" },
 };
 static const AssocType TYPES_MARKDOWN[] = {
-    { L".md", L"npad.md", L"Markdown Document" },
-    { L".markdown", L"npad.markdown", L"Markdown Document" },
+    { L".md", L"npad.md", L"Markdown Document", NULL },
+    { L".markdown", L"npad.markdown", L"Markdown Document", NULL },
 };
 static const AssocType TYPES_DATA[] = {
-    { L".csv", L"npad.csv", L"CSV File" },    { L".tsv", L"npad.tsv", L"TSV File" },
-    { L".json", L"npad.json", L"JSON File" }, { L".xml", L"npad.xml", L"XML File" },
-    { L".yaml", L"npad.yaml", L"YAML File" }, { L".yml", L"npad.yml", L"YAML File" },
-    { L".toml", L"npad.toml", L"TOML File" },
+    { L".csv", L"npad.csv", L"CSV File", NULL },
+    { L".tsv", L"npad.tsv", L"TSV File", NULL },
+    { L".json", L"npad.json", L"JSON File", NULL },
+    { L".xml", L"npad.xml", L"XML File", L"xmlfile" },
+    { L".yaml", L"npad.yaml", L"YAML File", NULL },
+    { L".yml", L"npad.yml", L"YAML File", NULL },
+    { L".toml", L"npad.toml", L"TOML File", NULL },
 };
 static const AssocType TYPES_CONFIG[] = {
-    { L".ini", L"npad.ini", L"INI Configuration File" },
-    { L".cfg", L"npad.cfg", L"Config File" },
-    { L".conf", L"npad.conf", L"Config File" },
+    { L".ini", L"npad.ini", L"INI Configuration File", L"inifile" },
+    { L".cfg", L"npad.cfg", L"Config File", NULL },
+    { L".conf", L"npad.conf", L"Config File", NULL },
 };
 static const AssocType TYPES_LOG[] = {
-    { L".log", L"npad.log", L"Log File" },
+    { L".log", L"npad.log", L"Log File", L"txtfile" },
 };
 
 #define COUNT_OF(a) ((int) (sizeof(a) / sizeof((a)[0])))
 
 static const AssocGroupDef GROUPS[ASSOC_GROUP_COUNT] = {
-    { "text", TYPES_TEXT, COUNT_OF(TYPES_TEXT) },
-    { "markdown", TYPES_MARKDOWN, COUNT_OF(TYPES_MARKDOWN) },
-    { "data", TYPES_DATA, COUNT_OF(TYPES_DATA) },
-    { "config", TYPES_CONFIG, COUNT_OF(TYPES_CONFIG) },
-    { "log", TYPES_LOG, COUNT_OF(TYPES_LOG) },
+    { "text", "AssocText", TYPES_TEXT, COUNT_OF(TYPES_TEXT) },
+    { "markdown", "AssocMarkdown", TYPES_MARKDOWN, COUNT_OF(TYPES_MARKDOWN) },
+    { "data", "AssocData", TYPES_DATA, COUNT_OF(TYPES_DATA) },
+    { "config", "AssocConfig", TYPES_CONFIG, COUNT_OF(TYPES_CONFIG) },
+    { "log", "AssocLog", TYPES_LOG, COUNT_OF(TYPES_LOG) },
 };
 
 // ---------------------------------------------------------------------------
@@ -175,11 +183,11 @@ static bool reg_key_exists(HKEY root, const wchar_t *subkey) {
 // user removed read as registered again after a reinstall.
 static bool type_is_registered(HKEY root, const AssocType *t) {
     wchar_t sub[256];
-    _snwprintf(sub, 255, L"%s\\%s\\OpenWithProgids", CLASSES, t->ext);
+    _snwprintf(sub, 255, L"%ls\\%ls\\OpenWithProgids", CLASSES, t->ext);
     sub[255] = L'\0';
     if (!reg_value_exists(root, sub, t->progid))
         return false;
-    _snwprintf(sub, 255, L"%s\\%s\\shell\\open\\command", CLASSES, t->progid);
+    _snwprintf(sub, 255, L"%ls\\%ls\\shell\\open\\command", CLASSES, t->progid);
     sub[255] = L'\0';
     return reg_key_exists(root, sub);
 }
@@ -192,20 +200,28 @@ static bool type_register(HKEY root, const AssocType *t) {
     wchar_t sub[256], data[MAX_PATH + 16];
     bool ok = true;
 
-    _snwprintf(sub, 255, L"%s\\%s", CLASSES, t->progid);
+    _snwprintf(sub, 255, L"%ls\\%ls", CLASSES, t->progid);
     sub[255] = L'\0';
     ok &= reg_set_sz(root, sub, NULL, t->friendly);
 
-    _snwprintf(sub, 255, L"%s\\%s\\DefaultIcon", CLASSES, t->progid);
+    _snwprintf(sub, 255, L"%ls\\%ls\\DefaultIcon", CLASSES, t->progid);
     sub[255] = L'\0';
-    _snwprintf(data, MAX_PATH + 15, L"%s,0", exe);
+    _snwprintf(data, MAX_PATH + 15, L"%ls,0", exe);
     data[MAX_PATH + 15] = L'\0';
     ok &= reg_set_sz(root, sub, NULL, data);
 
-    _snwprintf(sub, 255, L"%s\\%s\\shell\\open\\command", CLASSES, t->progid);
+    _snwprintf(sub, 255, L"%ls\\%ls\\shell\\open\\command", CLASSES, t->progid);
     sub[255] = L'\0';
     // Always quoted: an unquoted %1 breaks on any path containing a space
-    _snwprintf(data, MAX_PATH + 15, L"\"%s\" \"%%1\"", exe);
+    _snwprintf(data, MAX_PATH + 15, L"\"%ls\" \"%%1\"", exe);
+    data[MAX_PATH + 15] = L'\0';
+    ok &= reg_set_sz(root, sub, NULL, data);
+
+    // Explorer's Print verb, as notepad.exe's own txtfile has it: npad /p
+    // prints the file, as notepad /p does
+    _snwprintf(sub, 255, L"%ls\\%ls\\shell\\print\\command", CLASSES, t->progid);
+    sub[255] = L'\0';
+    _snwprintf(data, MAX_PATH + 15, L"\"%ls\" /p \"%%1\"", exe);
     data[MAX_PATH + 15] = L'\0';
     ok &= reg_set_sz(root, sub, NULL, data);
 
@@ -213,7 +229,7 @@ static bool type_register(HKEY root, const AssocType *t) {
     // OpenWithProgids entry (conventionally an empty string value named after
     // the ProgID) lists npad in Open With. The extension's own default value
     // is deliberately left alone - see the header.
-    _snwprintf(sub, 255, L"%s\\%s\\OpenWithProgids", CLASSES, t->ext);
+    _snwprintf(sub, 255, L"%ls\\%ls\\OpenWithProgids", CLASSES, t->ext);
     sub[255] = L'\0';
     ok &= reg_set_sz(root, sub, t->progid, L"");
 
@@ -226,16 +242,33 @@ static bool type_register(HKEY root, const AssocType *t) {
 static void type_unregister(HKEY root, const AssocType *t) {
     wchar_t sub[256], current[256];
 
-    // If the extension's default value names OUR ProgID, remove it - that is
-    // the installer's ownership claim, and leaving it pointing at a ProgID we
-    // are about to delete would strand the file type with no handler at all.
-    // Any other app's ProgID there is left untouched.
-    _snwprintf(sub, 255, L"%s\\%s", CLASSES, t->ext);
+    // If the extension's default value names OUR ProgID, hand the type back -
+    // that is the installer's ownership claim, and leaving it pointing at a
+    // ProgID we are about to delete would strand the file type with no handler
+    // at all. Any other app's ProgID there is left untouched.
+    //
+    // Per-user, deleting the value is the whole restore: HKCU only overlays
+    // HKLM, so the machine's own default shows through again. Machine-wide
+    // there is nothing underneath, and installers before 0.36.0 overwrote
+    // Windows' own value (txtfile, inifile, xmlfile) without keeping it, so
+    // deleting ours would leave .txt with no type name, no icon and no New >
+    // Text Document. Put Windows' ProgID back when Windows still has it.
+    _snwprintf(sub, 255, L"%ls\\%ls", CLASSES, t->ext);
     sub[255] = L'\0';
-    if (reg_get_sz(root, sub, NULL, current, 256) && _wcsicmp(current, t->progid) == 0)
-        reg_delete_value(root, sub, NULL);
+    if (reg_get_sz(root, sub, NULL, current, 256) && _wcsicmp(current, t->progid) == 0) {
+        bool restored = false;
+        if (root == HKEY_LOCAL_MACHINE && t->stock) {
+            wchar_t stock_key[256];
+            _snwprintf(stock_key, 255, L"%ls\\%ls", CLASSES, t->stock);
+            stock_key[255] = L'\0';
+            if (reg_key_exists(root, stock_key))
+                restored = reg_set_sz(root, sub, NULL, t->stock);
+        }
+        if (!restored)
+            reg_delete_value(root, sub, NULL);
+    }
 
-    _snwprintf(sub, 255, L"%s\\%s\\OpenWithProgids", CLASSES, t->ext);
+    _snwprintf(sub, 255, L"%ls\\%ls\\OpenWithProgids", CLASSES, t->ext);
     sub[255] = L'\0';
     reg_delete_value(root, sub, t->progid);
 
@@ -260,26 +293,26 @@ static void write_common(HKEY root) {
         return;
     wchar_t sub[256], data[MAX_PATH + 16];
 
-    _snwprintf(sub, 255, L"%s\\Applications\\npad.exe", CLASSES);
+    _snwprintf(sub, 255, L"%ls\\Applications\\npad.exe", CLASSES);
     sub[255] = L'\0';
     reg_set_sz(root, sub, L"FriendlyAppName", L"npad");
 
-    _snwprintf(sub, 255, L"%s\\Applications\\npad.exe\\DefaultIcon", CLASSES);
+    _snwprintf(sub, 255, L"%ls\\Applications\\npad.exe\\DefaultIcon", CLASSES);
     sub[255] = L'\0';
-    _snwprintf(data, MAX_PATH + 15, L"%s,0", exe);
+    _snwprintf(data, MAX_PATH + 15, L"%ls,0", exe);
     data[MAX_PATH + 15] = L'\0';
     reg_set_sz(root, sub, NULL, data);
 
-    _snwprintf(sub, 255, L"%s\\Applications\\npad.exe\\shell\\open\\command", CLASSES);
+    _snwprintf(sub, 255, L"%ls\\Applications\\npad.exe\\shell\\open\\command", CLASSES);
     sub[255] = L'\0';
-    _snwprintf(data, MAX_PATH + 15, L"\"%s\" \"%%1\"", exe);
+    _snwprintf(data, MAX_PATH + 15, L"\"%ls\" \"%%1\"", exe);
     data[MAX_PATH + 15] = L'\0';
     reg_set_sz(root, sub, NULL, data);
 
     // A SUBKEY named after the executable - the a/b/c + MRUList value shape
     // belongs under Explorer\FileExts, not here
     HKEY key = NULL;
-    _snwprintf(sub, 255, L"%s\\*\\OpenWithList\\npad.exe", CLASSES);
+    _snwprintf(sub, 255, L"%ls\\*\\OpenWithList\\npad.exe", CLASSES);
     sub[255] = L'\0';
     if (RegCreateKeyExW(root, sub, 0, NULL, 0, KEY_SET_VALUE | sam_for(root), NULL, &key, NULL) ==
         ERROR_SUCCESS) {
@@ -288,7 +321,7 @@ static void write_common(HKEY root) {
 
     reg_set_sz(root, CAPS, L"ApplicationName", L"npad");
     reg_set_sz(root, CAPS, L"ApplicationDescription", L"Lightweight cross-platform text editor");
-    _snwprintf(data, MAX_PATH + 15, L"%s,0", exe);
+    _snwprintf(data, MAX_PATH + 15, L"%ls,0", exe);
     data[MAX_PATH + 15] = L'\0';
     reg_set_sz(root, CAPS, L"ApplicationIcon", data);
     // The pointer is relative, resolved against the hive it was written to
@@ -449,7 +482,7 @@ bool assoc_apply_machine(HWND owner, const bool *before, const bool *after, bool
     for (int g = 0; g < ASSOC_GROUP_COUNT; g++) {
         if (change[g] == 0)
             continue;
-        int wrote = _snwprintf(params + used, (size_t) (255 - used), L"%s%lc%hs", any ? L"," : L"",
+        int wrote = _snwprintf(params + used, (size_t) (255 - used), L"%ls%lc%hs", any ? L"," : L"",
                                change[g] > 0 ? L'+' : L'-', GROUPS[g].token);
         if (wrote < 0)
             return false;
@@ -554,11 +587,11 @@ bool assoc_installer_merge_tasks(wchar_t *out, size_t cap) {
     // registered - and only that.
     //
     // Never positively select a task: the installer's association tasks do
-    // more than this page does - they also set the extension's default value,
-    // taking ownership of the type. Selecting one because the page registered
-    // that group would, on the next update, overwrite whatever other app owned
-    // those extensions. Groups that are registered are left to setup's own
-    // record of what the installer chose.
+    // more than this page does - they also set the extension's default value
+    // when no other app holds it, taking ownership of the type. Selecting one
+    // because the page registered that group would claim, on the next update,
+    // file types the user only asked to have npad offered for. Groups that are
+    // registered are left to setup's own record of what the installer chose.
     bool in_user = reg_key_exists(HKEY_CURRENT_USER, INNO_UNINSTALL_KEY);
     bool in_machine = reg_key_exists(HKEY_LOCAL_MACHINE, INNO_UNINSTALL_KEY);
     if (in_user == in_machine) {
@@ -579,7 +612,7 @@ bool assoc_installer_merge_tasks(wchar_t *out, size_t cap) {
     for (int g = 0; g < ASSOC_GROUP_COUNT; g++) {
         if (state[g])
             continue;
-        w = _snwprintf(out + used, cap - 1 - used, L"%s!assoc\\%hs", any ? L"," : L"",
+        w = _snwprintf(out + used, cap - 1 - used, L"%ls!assoc\\%hs", any ? L"," : L"",
                        GROUPS[g].token);
         if (w < 0) {
             out[0] = L'\0';
@@ -599,6 +632,22 @@ bool assoc_installer_merge_tasks(wchar_t *out, size_t cap) {
     }
     out[cap - 1] = L'\0';
     return true;
+}
+
+size_t assoc_msi_unregistered_features(bool per_machine, const char **out, size_t cap) {
+    if (!out)
+        return 0;
+    // The hive the MSI's HKMU components were written to: HKCU for a per-user
+    // product, HKLM for an all-users one. That is also the hive the
+    // Associations page edits for that copy, so it says what the user chose.
+    bool state[ASSOC_GROUP_COUNT];
+    read_state(per_machine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, state);
+    size_t n = 0;
+    for (int g = 0; g < ASSOC_GROUP_COUNT && n < cap; g++) {
+        if (!state[g])
+            out[n++] = GROUPS[g].msi_feature;
+    }
+    return n;
 }
 
 // Whether npad has any file types recorded in this hive's Capabilities

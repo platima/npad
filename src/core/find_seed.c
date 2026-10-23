@@ -1,5 +1,5 @@
 /*
- * npad - Find seeding
+ * npad - Find seeding, Reset's find_ preference keys, Replace All's text
  *
  * Author: Platima
  * https://npad.dev
@@ -8,6 +8,7 @@
 #include "find_seed.h"
 #include "settings.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -86,5 +87,56 @@ char *find_seed_text(const char *selection, bool escape_backslashes) {
         *w++ = *r;
     }
     *w = '\0';
+    return out;
+}
+
+wchar_t *find_replace_ranges(const wchar_t *text, size_t len, const FindRange *ranges, size_t count,
+                             const wchar_t *replacement, size_t *out_len) {
+    if (out_len)
+        *out_len = 0;
+    if ((!text && len) || (!ranges && count) || !replacement)
+        return NULL;
+    size_t repl_len = wcslen(replacement);
+
+    // Validate, and total the units the matches remove
+    size_t removed = 0;
+    long prev_end = 0;
+    for (size_t i = 0; i < count; i++) {
+        long start = ranges[i].start;
+        long end = ranges[i].end;
+        if (start < prev_end || end < start || (unsigned long) end > len)
+            return NULL;
+        removed += (size_t) (end - start);
+        prev_end = end;
+    }
+
+    size_t kept = len - removed;
+    if (repl_len && count > (SIZE_MAX / sizeof(wchar_t) - 1 - kept) / repl_len)
+        return NULL; // The result could not be addressed
+    size_t total = kept + count * repl_len;
+
+    wchar_t *out = malloc((total + 1) * sizeof(wchar_t));
+    if (!out)
+        return NULL;
+    wchar_t *w = out;
+    size_t from = 0;
+    for (size_t i = 0; i <= count; i++) {
+        // The kept text before this match (or, last time round, the tail)
+        size_t upto = i < count ? (size_t) ranges[i].start : len;
+        if (upto > from) {
+            memcpy(w, text + from, (upto - from) * sizeof(wchar_t));
+            w += upto - from;
+        }
+        if (i == count)
+            break;
+        if (repl_len) {
+            memcpy(w, replacement, repl_len * sizeof(wchar_t));
+            w += repl_len;
+        }
+        from = (size_t) ranges[i].end;
+    }
+    *w = L'\0';
+    if (out_len)
+        *out_len = total;
     return out;
 }

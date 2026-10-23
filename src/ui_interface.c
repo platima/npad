@@ -37,7 +37,8 @@ extern bool ui_platform_is_window_maximized(const Window *window);
 extern void ui_platform_get_default_window_rect(int *x, int *y, int *width, int *height);
 
 // Platform text functions
-extern void ui_platform_set_text(Window *window, const char *text);
+extern bool ui_platform_set_text(Window *window, const char *text);
+extern bool ui_platform_text_altered_by_load(const Window *window);
 extern char *ui_platform_get_text(Window *window);
 extern void ui_platform_clear_text(Window *window);
 extern bool ui_platform_has_selection(Window *window);
@@ -45,6 +46,7 @@ extern char *ui_platform_get_selected_text(Window *window);
 extern void ui_platform_select_all(Window *window);
 extern void ui_platform_set_cursor_position(Window *window, int position);
 extern int ui_platform_get_cursor_position(Window *window);
+extern void ui_platform_append_time_date_line(Window *window);
 
 // Platform clipboard functions
 extern void ui_platform_cut(Window *window);
@@ -62,6 +64,7 @@ extern char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams
 extern char *ui_platform_show_save_dialog(Window *parent, FileDialogParams *params);
 extern bool ui_platform_show_message_box(Window *parent, const char *title, const char *message,
                                          bool is_question);
+extern UiAnswer ui_platform_ask_question(Window *parent, const char *title, const char *message);
 extern SavePromptResult ui_platform_show_save_prompt(Window *parent, const char *filename);
 extern void ui_platform_show_about_dialog(Window *parent);
 extern UiOpenChoice ui_platform_prompt_binary_open(Window *parent, const char *filename);
@@ -84,11 +87,12 @@ extern int ui_platform_get_line_count(Window *window);
 extern void ui_platform_get_cursor_line_column(Window *window, int *line, int *column);
 extern void ui_platform_set_status_info(Window *window, const char *encoding_name,
                                         const char *eol_name);
+extern void ui_platform_set_status_message(Window *window, const char *message);
 extern void ui_platform_set_auto_save_timer(Window *window, int seconds);
 extern void ui_platform_set_session_timer(Window *window, int seconds);
 extern void ui_platform_launch_recovery_instance(const char *slot_id, int cascade_index);
 extern void ui_platform_notify_settings_changed(void);
-extern bool ui_platform_pid_is_running(long pid);
+extern bool ui_platform_pid_is_running(long pid, long long *start_time);
 
 // Platform-specific helpers
 extern void *ui_platform_get_native_handle(Window *window);
@@ -160,12 +164,21 @@ int ui_count_main_windows(void) {
     return ui_platform_count_main_windows();
 }
 
+extern int ui_platform_print_file(const char *path);
+int ui_print_file(const char *path) {
+    return ui_platform_print_file(path);
+}
+
 void ui_get_default_window_rect(int *x, int *y, int *width, int *height) {
     ui_platform_get_default_window_rect(x, y, width, height);
 }
 
-void ui_set_text(Window *window, const char *text) {
-    ui_platform_set_text(window, text);
+bool ui_set_text(Window *window, const char *text) {
+    return ui_platform_set_text(window, text);
+}
+
+bool ui_text_altered_by_load(const Window *window) {
+    return ui_platform_text_altered_by_load(window);
 }
 
 char *ui_get_text(Window *window) {
@@ -194,6 +207,10 @@ void ui_set_cursor_position(Window *window, int position) {
 
 int ui_get_cursor_position(Window *window) {
     return ui_platform_get_cursor_position(window);
+}
+
+void ui_append_time_date_line(Window *window) {
+    ui_platform_append_time_date_line(window);
 }
 
 void ui_cut(Window *window) {
@@ -234,6 +251,10 @@ char *ui_show_save_dialog(Window *parent, FileDialogParams *params) {
 
 bool ui_show_message_box(Window *parent, const char *title, const char *message, bool is_question) {
     return ui_platform_show_message_box(parent, title, message, is_question);
+}
+
+UiAnswer ui_ask_question(Window *parent, const char *title, const char *message) {
+    return ui_platform_ask_question(parent, title, message);
 }
 
 SavePromptResult ui_show_save_prompt(Window *parent, const char *filename) {
@@ -308,6 +329,10 @@ void ui_set_status_info(Window *window, const char *encoding_name, const char *e
     ui_platform_set_status_info(window, encoding_name, eol_name);
 }
 
+void ui_set_status_message(Window *window, const char *message) {
+    ui_platform_set_status_message(window, message);
+}
+
 void ui_set_auto_save_timer(Window *window, int seconds) {
     ui_platform_set_auto_save_timer(window, seconds);
 }
@@ -324,8 +349,10 @@ void ui_notify_settings_changed(void) {
     ui_platform_notify_settings_changed();
 }
 
-bool ui_pid_is_running(long pid) {
-    return ui_platform_pid_is_running(pid);
+bool ui_pid_is_running(long pid, long long *start_time) {
+    if (start_time)
+        *start_time = -1;
+    return ui_platform_pid_is_running(pid, start_time);
 }
 
 void *ui_get_native_handle(Window *window) {

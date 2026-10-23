@@ -12,65 +12,193 @@
 #include <stdlib.h>
 #include <string.h>
 
-bool update_extract_tag(const char *json, char *out, size_t out_cap) {
-    if (!json || !out || out_cap == 0)
-        return false;
+// ---------------------------------------------------------------------------
+// A minimal JSON walker for the releases API responses. Not a validator: it
+// only needs to know where each value starts and ends, so that a key is read
+// at the level of the object it belongs to. Every step stops at the
+// terminating NUL, so a response that is cut short simply yields nothing.
+// ---------------------------------------------------------------------------
 
-    const char *key = strstr(json, "\"tag_name\"");
-    if (!key)
-        return false;
-    const char *p = key + strlen("\"tag_name\"");
-    while (*p == ' ' || *p == '\t')
+static const char *json_ws(const char *p) {
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
         p++;
-    if (*p != ':')
-        return false;
-    p++;
-    while (*p == ' ' || *p == '\t')
+    return p;
+}
+
+// p is on a string's opening quote: the position just past its closing quote,
+// or NULL when the string never ends
+static const char *json_skip_string(const char *p) {
+    if (*p != '"')
+        return NULL;
+    for (p++; *p; p++) {
+        if (*p == '\\') {
+            if (!p[1])
+                return NULL;
+            p++; // The escaped character, which may be a quote
+        } else if (*p == '"') {
+            return p + 1;
+        }
+    }
+    return NULL;
+}
+
+// Past one value of any type, or NULL when it is malformed or cut short
+static const char *json_skip_value(const char *p) {
+    p = json_ws(p);
+    if (*p == '"')
+        return json_skip_string(p);
+    if (*p == '{' || *p == '[') {
+        int depth = 0;
+        while (*p) {
+            if (*p == '"') {
+                p = json_skip_string(p);
+                if (!p)
+                    return NULL;
+                continue;
+            }
+            if (*p == '{' || *p == '[') {
+                depth++;
+            } else if (*p == '}' || *p == ']') {
+                if (--depth == 0)
+                    return p + 1;
+            }
+            p++;
+        }
+        return NULL;
+    }
+    // A number, true, false or null
+    const char *start = p;
+    while (*p && *p != ',' && *p != '}' && *p != ']' && *p != ' ' && *p != '\t' && *p != '\r' &&
+           *p != '\n')
         p++;
+    return p == start ? NULL : p;
+}
+
+// The value of key in the object starting at obj - that object's own member,
+// never one of a nested object - or NULL
+static const char *json_member(const char *obj, const char *key) {
+    if (!obj)
+        return NULL;
+    const char *p = json_ws(obj);
+    if (*p != '{')
+        return NULL;
+    size_t klen = strlen(key);
+    p = json_ws(p + 1);
+    while (*p == '"') {
+        const char *key_end = json_skip_string(p);
+        if (!key_end)
+            return NULL;
+        bool match = (size_t) (key_end - p) == klen + 2 && strncmp(p + 1, key, klen) == 0;
+        p = json_ws(key_end);
+        if (*p != ':')
+            return NULL;
+        p = json_ws(p + 1);
+        if (match)
+            return p;
+        p = json_skip_value(p);
+        if (!p)
+            return NULL;
+        p = json_ws(p);
+        if (*p != ',')
+            return NULL; // '}' (not found) or malformed
+        p = json_ws(p + 1);
+    }
+    return NULL;
+}
+
+// The first element of the array starting at p, or NULL when it is empty
+static const char *json_first(const char *p) {
+    if (!p)
+        return NULL;
+    p = json_ws(p);
+    if (*p != '[')
+        return NULL;
+    p = json_ws(p + 1);
+    return (*p == ']' || !*p) ? NULL : p;
+}
+
+// The element after elem, or NULL at the end of the array
+static const char *json_next(const char *elem) {
+    const char *p = json_skip_value(elem);
+    if (!p)
+        return NULL;
+    p = json_ws(p);
+    if (*p != ',')
+        return NULL;
+    p = json_ws(p + 1);
+    return *p ? p : NULL;
+}
+
+static int hex_value(char c) {
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    c = (char) tolower((unsigned char) c);
+    return (c >= 'a' && c <= 'f') ? c - 'a' + 10 : -1;
+}
+
+// Copy the string value at p into out, decoding its escapes. \u escapes are
+// accepted for ASCII only: nothing npad reads (asset names, URLs, tags) is
+// anything else, and refusing beats mangling. False when p is not a string or
+// it does not fit.
+static bool json_copy_string(const char *p, char *out, size_t cap) {
+    if (!p || *p != '"' || !out || cap == 0)
+        return false;
+    size_t n = 0;
+    for (p++; *p && *p != '"'; p++) {
+        char c = *p;
+        if (c == '\\') {
+            p++;
+            switch (*p) {
+                case '"':
+                case '\\':
+                case '/':
+                    c = *p;
+                    break;
+                case 'b':
+                    c = '\b';
+                    break;
+                case 'f':
+                    c = '\f';
+                    break;
+                case 'n':
+                    c = '\n';
+                    break;
+                case 'r':
+                    c = '\r';
+                    break;
+                case 't':
+                    c = '\t';
+                    break;
+                case 'u': {
+                    int v = 0;
+                    for (int i = 1; i <= 4; i++) {
+                        int h = hex_value(p[i]);
+                        if (h < 0)
+                            return false;
+                        v = v * 16 + h;
+                    }
+                    if (v == 0 || v >= 0x80)
+                        return false;
+                    c = (char) v;
+                    p += 4;
+                    break;
+                }
+                default:
+                    return false;
+            }
+        }
+        if (n + 1 >= cap)
+            return false;
+        out[n++] = c;
+    }
     if (*p != '"')
         return false;
-    p++;
-
-    size_t n = 0;
-    while (p[n] && p[n] != '"')
-        n++;
-    if (p[n] != '"' || n == 0 || n >= out_cap)
-        return false;
-    memcpy(out, p, n);
     out[n] = '\0';
     return true;
 }
 
-// Copy the string value of "key" starting at p (which must point at the
-// opening quote of the key) into out. Returns the position just past the
-// closing quote of the value, or NULL when the shape is not key:"value".
-static const char *read_string_value(const char *p, const char *key, char *out, size_t out_cap) {
-    size_t klen = strlen(key);
-    if (strncmp(p, key, klen) != 0)
-        return NULL;
-    p += klen;
-    while (*p == ' ' || *p == '\t')
-        p++;
-    if (*p != ':')
-        return NULL;
-    p++;
-    while (*p == ' ' || *p == '\t')
-        p++;
-    if (*p != '"')
-        return NULL;
-    p++;
-    size_t n = 0;
-    while (p[n] && p[n] != '"')
-        n++;
-    if (p[n] != '"')
-        return NULL;
-    if (out) {
-        if (n >= out_cap)
-            return NULL;
-        memcpy(out, p, n);
-        out[n] = '\0';
-    }
-    return p + n + 1;
+static bool json_is_true(const char *p) {
+    return p && strncmp(p, "true", 4) == 0;
 }
 
 static bool ends_with_ci(const char *s, const char *suffix) {
@@ -89,45 +217,48 @@ bool update_find_asset_url(const char *json, const char *name_suffix, char *out,
     if (!json || !name_suffix || !out || out_cap == 0)
         return false;
 
-    const char *assets = strstr(json, "\"assets\"");
-    if (!assets)
-        return false;
-
-    // Within each asset object GitHub emits "name" before
-    // "browser_download_url", so remember the most recent name and use it when
-    // the URL turns up. Any "name" belonging to a nested object would simply be
-    // overwritten by the asset's own before its URL is reached.
-    char name[256];
-    bool have_name = false;
-
-    for (const char *p = assets; *p;) {
-        if (*p != '"') {
-            p++;
+    // Each asset's own "name" and "browser_download_url", read from the asset
+    // object itself: GitHub's field order is not a contract, and the uploader
+    // object nested inside every asset may one day carry a "name" of its own
+    const char *assets = json_member(json, "assets");
+    for (const char *a = json_first(assets); a; a = json_next(a)) {
+        char name[256];
+        if (!json_copy_string(json_member(a, "name"), name, sizeof(name)) ||
+            !ends_with_ci(name, name_suffix))
             continue;
-        }
-        const char *next = read_string_value(p, "\"name\"", name, sizeof(name));
-        if (next) {
-            have_name = true;
-            p = next;
-            continue;
-        }
-        char url[512];
-        next = read_string_value(p, "\"browser_download_url\"", url, sizeof(url));
-        if (next) {
-            if (have_name && ends_with_ci(name, name_suffix)) {
-                size_t n = strlen(url);
-                if (n >= out_cap)
-                    return false;
-                memcpy(out, url, n + 1);
-                return true;
-            }
-            have_name = false; // Consumed; do not pair it with a later URL
-            p = next;
-            continue;
-        }
-        p++; // Some other key: step past this quote and keep scanning
+        if (json_copy_string(json_member(a, "browser_download_url"), out, out_cap))
+            return true;
     }
+    out[0] = '\0';
     return false;
+}
+
+bool update_pick_release_tag(const char *json, bool include_prereleases, char *out,
+                             size_t out_cap) {
+    if (!json || !out || out_cap == 0)
+        return false;
+    const char *p = json_ws(json);
+    bool single = (*p == '{');
+    char best[64] = "";
+    for (const char *r = single ? p : json_first(p); r; r = single ? NULL : json_next(r)) {
+        if (json_is_true(json_member(r, "draft")))
+            continue;
+        if (!include_prereleases && json_is_true(json_member(r, "prerelease")))
+            continue;
+        char tag[64];
+        if (!json_copy_string(json_member(r, "tag_name"), tag, sizeof(tag)))
+            continue;
+        const char *digits = (tag[0] == 'v' || tag[0] == 'V') ? tag + 1 : tag;
+        if (!isdigit((unsigned char) *digits))
+            continue; // Not a version tag
+        if (!best[0] || update_version_compare(tag, best) > 0)
+            memcpy(best, tag, sizeof(best));
+    }
+    size_t n = strlen(best);
+    if (n == 0 || n >= out_cap)
+        return false;
+    memcpy(out, best, n + 1);
+    return true;
 }
 
 // Parse up to three dot-separated numeric components; a leading 'v'/'V' and
@@ -225,6 +356,35 @@ int update_version_compare(const char *a, const char *b) {
     return natural_compare(sa, la, sb, lb);
 }
 
+bool update_is_prerelease(const char *version) {
+    size_t n = 0;
+    const char *suffix = prerelease_suffix(version, &n);
+    if (!suffix)
+        return false;
+    return !(n == 3 && tolower((unsigned char) suffix[0]) == 'd' &&
+             tolower((unsigned char) suffix[1]) == 'e' &&
+             tolower((unsigned char) suffix[2]) == 'v');
+}
+
+void update_http_status_message(int status, char *out, size_t cap) {
+    if (!out || cap == 0)
+        return;
+    if (status == 403 || status == 429) {
+        // GitHub's unauthenticated API allows 60 requests an hour per address
+        snprintf(out, cap,
+                 "GitHub is limiting update checks from this network for now (HTTP %d). Try "
+                 "again in an hour.",
+                 status);
+    } else if (status == 404) {
+        snprintf(out, cap, "The update server could not find npad's releases (HTTP 404).");
+    } else if (status >= 500 && status <= 599) {
+        snprintf(out, cap, "GitHub's servers are having trouble (HTTP %d). Try again later.",
+                 status);
+    } else {
+        snprintf(out, cap, "The update server answered with HTTP %d. Try again later.", status);
+    }
+}
+
 void update_current_version(const char *build_version, int major, int minor, int patch, char *out,
                             size_t cap) {
     if (!out || cap == 0)
@@ -274,27 +434,185 @@ const char *update_build_arch(void) {
 #endif
 }
 
-// The installer each architecture's updater downloads. Release validation
+// The installers each architecture's updater downloads. Release validation
 // (scripts/validate-release-assets.sh) reads every quoted string in this file
-// that starts with -setup-win- and fails the release unless an asset ends with
-// each one, so keep them spelled out here rather than assembled at run time,
-// and quote no other string of that shape in this file.
+// that starts with -setup-win- or -msi-win- and fails the release unless an
+// asset ends with each one, so keep them spelled out here rather than
+// assembled at run time, and quote no other string of that shape in this file.
 static const struct {
     const char *arch;
     const char *installer;
     const char *checksum;
+    const char *msi;
+    const char *msi_checksum;
 } k_installers[] = {
-    { "x64", "-setup-win-x64.exe", "-setup-win-x64.exe.sha256" },
-    { "arm64", "-setup-win-arm64.exe", "-setup-win-arm64.exe.sha256" },
+    { "x64", "-setup-win-x64.exe", "-setup-win-x64.exe.sha256", "-msi-win-x64.msi",
+      "-msi-win-x64.msi.sha256" },
+    { "arm64", "-setup-win-arm64.exe", "-setup-win-arm64.exe.sha256", "-msi-win-arm64.msi",
+      "-msi-win-arm64.msi.sha256" },
 };
 
-const char *update_installer_suffix(const char *arch, bool checksum) {
+const char *update_package_suffix(const char *arch, UpdatePackage package, bool checksum) {
     if (!arch)
         return NULL;
     for (size_t i = 0; i < sizeof(k_installers) / sizeof(k_installers[0]); i++) {
-        if (strcmp(arch, k_installers[i].arch) == 0)
-            return checksum ? k_installers[i].checksum : k_installers[i].installer;
+        if (strcmp(arch, k_installers[i].arch) != 0)
+            continue;
+        if (package == UPDATE_PACKAGE_MSI)
+            return checksum ? k_installers[i].msi_checksum : k_installers[i].msi;
+        return checksum ? k_installers[i].checksum : k_installers[i].installer;
     }
+    return NULL;
+}
+
+const char *update_installer_suffix(const char *arch, bool checksum) {
+    return update_package_suffix(arch, UPDATE_PACKAGE_SETUP, checksum);
+}
+
+UpdatePackage update_windows_package(bool setup_owns_this_copy, bool msi_owns_this_copy) {
+    // Both claiming the folder means two products already share it; the setup
+    // is what this updater has always run there, so keep to it
+    return (msi_owns_this_copy && !setup_owns_this_copy) ? UPDATE_PACKAGE_MSI
+                                                         : UPDATE_PACKAGE_SETUP;
+}
+
+// An MSI Feature table identifier: letters, digits, '_' and '.'. Anything else
+// would not be a feature npad's MSI has, and must not reach a command line.
+static bool msi_feature_name_ok(const char *s) {
+    if (!s || !s[0])
+        return false;
+    for (; *s; s++) {
+        if (!isalnum((unsigned char) *s) && *s != '_' && *s != '.')
+            return false;
+    }
+    return true;
+}
+
+static bool name_listed(const char *name, const char *const *list, size_t count) {
+    for (size_t i = 0; list && i < count; i++) {
+        if (list[i] && strcmp(list[i], name) == 0)
+            return true;
+    }
+    return false;
+}
+
+// Append ` <property>=a,b,...` for the valid entries of installed that are
+// (keep == false) or are not (keep == true) in drop. False when it does not fit
+// or names nothing.
+static bool append_feature_list(char *out, size_t cap, size_t *used, const char *property,
+                                const char *const *installed, size_t installed_count,
+                                const char *const *drop, size_t drop_count, bool keep) {
+    int w = snprintf(out + *used, cap - *used, " %s=", property);
+    if (w < 0 || (size_t) w >= cap - *used)
+        return false;
+    *used += (size_t) w;
+    bool any = false;
+    for (size_t i = 0; i < installed_count; i++) {
+        const char *name = installed[i];
+        if (!msi_feature_name_ok(name) || name_listed(name, drop, drop_count) == keep)
+            continue;
+        if (name_listed(name, installed, i))
+            continue; // Listed twice
+        w = snprintf(out + *used, cap - *used, "%s%s", any ? "," : "", name);
+        if (w < 0 || (size_t) w >= cap - *used)
+            return false;
+        *used += (size_t) w;
+        any = true;
+    }
+    return any;
+}
+
+bool update_msi_feature_args(const char *const *installed, size_t installed_count,
+                             const char *const *drop, size_t drop_count, char *out, size_t cap) {
+    if (!out || cap == 0)
+        return false;
+    out[0] = '\0';
+    if (!installed)
+        return false;
+
+    bool must_drop = false;
+    for (size_t i = 0; i < installed_count && !must_drop; i++)
+        must_drop =
+            msi_feature_name_ok(installed[i]) && name_listed(installed[i], drop, drop_count);
+    if (!must_drop)
+        return false; // Leave the selection to MigrateFeatureStates
+
+    size_t used = 0;
+    if (!append_feature_list(out, cap, &used, "ADDLOCAL", installed, installed_count, drop,
+                             drop_count, true) ||
+        !append_feature_list(out, cap, &used, "REMOVE", installed, installed_count, drop,
+                             drop_count, false)) {
+        out[0] = '\0';
+        return false;
+    }
+    return true;
+}
+
+static bool is_path_sep(char c) {
+    return c == '\\' || c == '/';
+}
+
+int update_msi_owner(const UpdateMsiProduct *products, size_t count, const char *exe_path,
+                     const char *machine_default_dir, const char *user_default_dir) {
+    if (!products || !exe_path)
+        return -1;
+    for (size_t i = 0; i < count; i++) {
+        const char *loc = products[i].install_location;
+        if (loc && loc[0] && update_dir_holds_exe(loc, exe_path))
+            return (int) i;
+    }
+    for (size_t i = 0; i < count; i++) {
+        const char *loc = products[i].install_location;
+        if (!loc || loc[0])
+            continue;
+        const char *def = products[i].per_machine ? machine_default_dir : user_default_dir;
+        if (def && update_dir_holds_exe(def, exe_path))
+            return (int) i;
+    }
+    return -1;
+}
+
+bool update_dir_holds_exe(const char *dir, const char *exe_path) {
+    if (!dir || !exe_path || !dir[0])
+        return false;
+    size_t dl = strlen(dir);
+    while (dl > 0 && is_path_sep(dir[dl - 1]))
+        dl--;
+    if (dl == 0)
+        return false;
+    // The exe's directory: everything before its last separator
+    const char *last = NULL;
+    for (const char *p = exe_path; *p; p++) {
+        if (is_path_sep(*p))
+            last = p;
+    }
+    if (!last || !last[1])
+        return false;
+    size_t el = (size_t) (last - exe_path);
+    if (el != dl)
+        return false;
+    for (size_t i = 0; i < dl; i++) {
+        char a = dir[i], b = exe_path[i];
+        if (is_path_sep(a) && is_path_sep(b))
+            continue;
+        if (tolower((unsigned char) a) != tolower((unsigned char) b))
+            return false;
+    }
+    return true;
+}
+
+const char *update_signature_problem(UpdateSignature this_build, UpdateSignature installer,
+                                     bool same_publisher) {
+    if (installer == UPDATE_SIG_BAD)
+        return "The downloaded installer's digital signature is not valid, so it was not run.";
+    if (this_build != UPDATE_SIG_VALID)
+        return NULL; // An unsigned build: the SHA-256 is the check it has always had
+    if (installer == UPDATE_SIG_NONE)
+        return "This copy of npad is digitally signed, but the downloaded installer is not, so "
+               "it was not run.";
+    if (!same_publisher)
+        return "The downloaded installer is signed by a different publisher than this copy of "
+               "npad, so it was not run.";
     return NULL;
 }
 

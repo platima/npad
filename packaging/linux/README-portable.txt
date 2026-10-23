@@ -4,8 +4,9 @@ npad for Linux - portable download
 Version @VERSION@, @ARCH@.
 
 npad is a lightweight Notepad-style text editor. This archive holds the same
-npad binary the .deb and .rpm packages install, with its launcher entry,
-icons and AppStream metadata. Nothing here needs installing as root.
+npad binary the .deb, .rpm and Arch (pacman) packages install, with its
+launcher entry, icons and AppStream metadata. Nothing here needs installing
+as root.
 
 Requirements
 ------------
@@ -47,11 +48,18 @@ To remove it again:
     rm -f ~/.local/share/metainfo/io.github.platima.npad.metainfo.xml
     rm -f ~/.local/share/icons/hicolor/*/apps/io.github.platima.npad*.png
 
-Your settings live in ~/.config/npad and are left alone either way.
+Your settings, and the crash-recovery snapshots of unsaved work (in its
+recovery folder), live in ~/.config/npad - or in $XDG_CONFIG_HOME/npad when
+XDG_CONFIG_HOME is set to an absolute path - and are left alone either way.
 
 Automatic updates
 -----------------
-This copy does not update itself. For updates with the rest of your system,
-use the signed apt and dnf repositories instead: https://pkg.npad.dev
+This copy does not update itself; Help > Check for Updates tells you when
+there is a new release. For updates with the rest of your system, use the
+signed npad repository for your distribution instead - apt (Debian, Ubuntu,
+Mint), dnf (Fedora) or pacman (Arch Linux, Arch Linux ARM, Arch RISC-V) -
+from https://pkg.npad.dev, or let one script set up the right one:
+
+    curl -fsSL https://pkg.npad.dev/install.sh | sudo sh
 
 More: https://npad.dev  -  https://github.com/platima/npad

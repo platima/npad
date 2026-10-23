@@ -27,16 +27,47 @@ static npad_error_callback_t g_error_callback = NULL;
 static bool g_error_initialized = false;
 static npad_mutex_t g_error_mutex;
 
-// Default error callback - prints to stderr
-static void default_error_callback(const npad_error_info_t *error) {
+#ifdef _WIN32
+// Whether stderr leads anywhere. A Windows GUI program (-mwindows) started
+// from Explorer or a shortcut has no standard handles at all; writing to the
+// stream then fails and sets errno to EBADF, which is how every "Could not
+// open file" message came to say "Bad file descriptor". (npad_error_report
+// also restores errno, which covers a closed stderr elsewhere.)
+static bool stderr_missing(void) {
+    HANDLE handle = GetStdHandle(STD_ERROR_HANDLE);
+    return _fileno(stderr) < 0 || handle == NULL || handle == INVALID_HANDLE_VALUE;
+}
+#endif
+
+// Default error callback - logs to stderr. Never ends the process, FATAL
+// included: the caller reports a fatal error and then unwinds through its own
+// cleanup (main.c's failure paths), which an abort() here made dead code.
+void npad_error_log_stderr(const npad_error_info_t *error) {
     if (!error)
         return;
+
+    // Logging must not change the error being reported: callers often read
+    // errno (or GetLastError) after logging, and a write to a missing stderr
+    // sets it to EBADF - which then turned every "Could not open file" in the
+    // Windows GUI into "Bad file descriptor"
+    int saved_errno = errno;
+#ifdef _WIN32
+    DWORD saved_last_error = GetLastError();
+    // A GUI (-mwindows) process started from Explorer has no stderr at all:
+    // there is nowhere to write
+    if (stderr_missing()) {
+        SetLastError(saved_last_error);
+        errno = saved_errno;
+        return;
+    }
+#endif
 
     // Get current timestamp
     time_t now = time(NULL);
     const struct tm *tm_info = localtime(&now);
-    char timestamp[32];
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", tm_info);
+    char timestamp[32] = "";
+    if (tm_info)
+        strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", tm_info);
 
     // Format error message
     const char *level_str = npad_error_level_to_string(error->level);
@@ -56,12 +87,10 @@ static void default_error_callback(const npad_error_info_t *error) {
     // Flush stderr to ensure immediate output
     fflush(stderr);
 
-    // For fatal errors, abort the program
-    if (error->level == NPAD_ERROR_FATAL) {
-        fprintf(stderr, "Fatal error encountered. Terminating program.\n");
-        fflush(stderr);
-        abort();
-    }
+#ifdef _WIN32
+    SetLastError(saved_last_error);
+#endif
+    errno = saved_errno;
 }
 
 void npad_error_init(void) {
@@ -70,11 +99,15 @@ void npad_error_init(void) {
 
     if (!npad_mutex_init(&g_error_mutex)) {
         // Can't use our error system here, use basic stderr
+#ifdef _WIN32
+        if (stderr_missing())
+            return;
+#endif
         fprintf(stderr, "Failed to initialize error system mutex\n");
         return;
     }
 
-    g_error_callback = default_error_callback;
+    g_error_callback = npad_error_log_stderr;
     g_error_initialized = true;
 }
 
@@ -91,15 +124,23 @@ void npad_error_set_callback(npad_error_callback_t callback) {
         return;
 
     npad_mutex_lock(&g_error_mutex);
-    g_error_callback = callback ? callback : default_error_callback;
+    g_error_callback = callback ? callback : npad_error_log_stderr;
     npad_mutex_unlock(&g_error_mutex);
 }
 
 void npad_error_report(npad_error_level_t level, npad_error_category_t category, int code,
                        const char *file, int line, const char *function, const char *context,
                        const char *format, ...) {
+    // Reporting must not disturb errno: callers report a failure and then
+    // read errno (or strerror of it) to describe it to the user
+    int saved_errno = errno;
+
     if (!g_error_initialized) {
         npad_error_init();
+    }
+    if (!g_error_initialized) {
+        errno = saved_errno;
+        return; // No mutex: nothing can be recorded safely
     }
 
     npad_mutex_lock(&g_error_mutex);
@@ -114,6 +155,8 @@ void npad_error_report(npad_error_level_t level, npad_error_category_t category,
     g_last_error.line = line;
 
     // Copy file name (basename only for cleaner output)
+    if (!file)
+        file = "unknown";
     const char *basename = strrchr(file, '/');
     if (!basename)
         basename = strrchr(file, '\\');
@@ -130,15 +173,21 @@ void npad_error_report(npad_error_level_t level, npad_error_category_t category,
     // Format error message
     va_list args;
     va_start(args, format);
-    vsnprintf(g_last_error.message, sizeof(g_last_error.message), format, args);
+    vsnprintf(g_last_error.message, sizeof(g_last_error.message), format ? format : "", args);
     va_end(args);
 
-    // Call error callback
-    if (g_error_callback) {
-        g_error_callback(&g_last_error);
-    }
-
+    // The callback runs on a copy, outside the lock. A GUI callback shows a
+    // message box, whose message loop can run code that reports an error of
+    // its own; under the lock that would deadlock on POSIX, where the mutex
+    // is not recursive (a Win32 critical section is).
+    npad_error_info_t report = g_last_error;
+    npad_error_callback_t callback = g_error_callback;
     npad_mutex_unlock(&g_error_mutex);
+
+    if (callback) {
+        callback(&report);
+    }
+    errno = saved_errno;
 }
 
 const npad_error_info_t *npad_error_get_last(void) {

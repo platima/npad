@@ -10,8 +10,10 @@
  * The one visible side effect is SHChangeNotify(SHCNE_ASSOCCHANGED), which
  * asks Explorer to refresh its association cache. It changes nothing.
  *
- * Build and run on Windows:  make test-assoc-win32  (cross-compiles), then
- * run tests\test_assoc_win32.exe. Not part of `make test`, which is native.
+ * Built by `make test-windows` (and `make test-assoc-win32`). It refuses to
+ * run unless NPAD_ALLOW_REGISTRY_TESTS=1 is set; `make test-windows` on
+ * Windows runs it only then. CI's test-windows job (windows-latest, MSYS2)
+ * sets it for this exe alone.
  *
  * Author: Platima
  * https://npad.dev
@@ -122,16 +124,23 @@ TEST_CASE(register_writes_the_installer_shape) {
     TEST_ASSERT(get_sz(HKEY_CURRENT_USER, CLASSES L"\\npad.txt\\DefaultIcon", NULL, v,
                        MAX_PATH + 32),
                 "DefaultIcon present");
-    _snwprintf(expect, MAX_PATH + 31, L"%s,0", g_exe);
+    _snwprintf(expect, MAX_PATH + 31, L"%ls,0", g_exe);
     expect[MAX_PATH + 31] = L'\0';
     TEST_ASSERT(wcscmp(v, expect) == 0, "DefaultIcon is <exe>,0");
 
     TEST_ASSERT(get_sz(HKEY_CURRENT_USER, CLASSES L"\\npad.txt\\shell\\open\\command", NULL, v,
                        MAX_PATH + 32),
                 "open command present");
-    _snwprintf(expect, MAX_PATH + 31, L"\"%s\" \"%%1\"", g_exe);
+    _snwprintf(expect, MAX_PATH + 31, L"\"%ls\" \"%%1\"", g_exe);
     expect[MAX_PATH + 31] = L'\0';
     TEST_ASSERT(wcscmp(v, expect) == 0, "open command quotes both the exe and %1");
+
+    TEST_ASSERT(get_sz(HKEY_CURRENT_USER, CLASSES L"\\npad.txt\\shell\\print\\command", NULL, v,
+                       MAX_PATH + 32),
+                "print command present (Explorer's Print verb)");
+    _snwprintf(expect, MAX_PATH + 31, L"\"%ls\" /p \"%%1\"", g_exe);
+    expect[MAX_PATH + 31] = L'\0';
+    TEST_ASSERT(wcscmp(v, expect) == 0, "print command is the quoted exe, /p, then the quoted %1");
 
     TEST_ASSERT(get_sz(HKEY_CURRENT_USER, CLASSES L"\\.txt\\OpenWithProgids", L"npad.txt", v,
                        MAX_PATH + 32),
@@ -168,6 +177,18 @@ TEST_CASE(never_claims_ownership_of_the_extension) {
                 ".md default value must NOT be written");
     TEST_ASSERT(!value_exists(HKEY_CURRENT_USER, CLASSES L"\\.log", NULL),
                 ".log default value must NOT be written");
+
+    // With every group registered, every ProgID carries Explorer's Print
+    // verb, not just npad.txt (one ProgID from each group)
+    static const wchar_t *const progids[] = { L"npad.txt", L"npad.md", L"npad.json", L"npad.ini",
+                                              L"npad.log" };
+    for (size_t i = 0; i < sizeof(progids) / sizeof(progids[0]); i++) {
+        wchar_t sub[128];
+        _snwprintf(sub, 127, L"%ls\\%ls\\shell\\print\\command", CLASSES, progids[i]);
+        sub[127] = L'\0';
+        TEST_ASSERT(key_exists(HKEY_CURRENT_USER, sub),
+                    "every registered ProgID carries the print verb, not just npad.txt");
+    }
 }
 
 TEST_CASE(read_state_reflects_the_registry) {
@@ -304,6 +325,60 @@ TEST_CASE(machine_changes_touch_only_named_groups) {
                 "only the two named groups were removed");
 }
 
+TEST_CASE(machine_unregister_hands_back_windows_progid) {
+    // Installers before 0.36.0 overwrote HKLM's .txt = txtfile with npad.txt.
+    // Deleting that claim outright left .txt with no type name, no icon and
+    // no New > Text Document; the machine-wide undo must restore Windows' own.
+    wipe(HKEY_LOCAL_MACHINE);
+    set_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\txtfile", NULL, L"Text Document");
+    set_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\xmlfile", NULL, L"XML Document");
+    // No inifile ProgID on this "machine": nothing to hand .ini back to
+    TEST_ASSERT_EQ(0, assoc_machine_apply_changes(L"+text,+data,+config,+log"),
+                   "machine registration should succeed");
+    set_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\.txt", NULL, L"npad.txt");
+    set_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\.log", NULL, L"npad.log");
+    set_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\.xml", NULL, L"npad.xml");
+    set_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\.ini", NULL, L"npad.ini");
+    set_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\.csv", NULL, L"Excel.CSV");
+    set_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\.json", NULL, L"npad.json");
+
+    TEST_ASSERT_EQ(0, assoc_machine_apply_changes(L"-text,-data,-config,-log"),
+                   "machine removal should succeed");
+
+    wchar_t v[256];
+    TEST_ASSERT(get_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\.txt", NULL, v, 256) &&
+                    wcscmp(v, L"txtfile") == 0,
+                ".txt goes back to Windows' txtfile");
+    TEST_ASSERT(get_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\.log", NULL, v, 256) &&
+                    wcscmp(v, L"txtfile") == 0,
+                ".log goes back to Windows' txtfile");
+    TEST_ASSERT(get_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\.xml", NULL, v, 256) &&
+                    wcscmp(v, L"xmlfile") == 0,
+                ".xml goes back to Windows' xmlfile");
+    TEST_ASSERT(!value_exists(HKEY_LOCAL_MACHINE, CLASSES L"\\.ini", NULL),
+                ".ini claim is removed, never pointed at a ProgID that does not exist");
+    TEST_ASSERT(!value_exists(HKEY_LOCAL_MACHINE, CLASSES L"\\.json", NULL),
+                "a type Windows has no ProgID for just loses npad's claim");
+    TEST_ASSERT(get_sz(HKEY_LOCAL_MACHINE, CLASSES L"\\.csv", NULL, v, 256) &&
+                    wcscmp(v, L"Excel.CSV") == 0,
+                "another app's claim is left exactly as it was");
+}
+
+TEST_CASE(user_unregister_lets_the_machine_default_show_through) {
+    // Per-user, HKCU only overlays HKLM: deleting npad's claim IS the restore,
+    // and copying a stock ProgID into the user's hive would pin it there
+    wipe(HKEY_CURRENT_USER);
+    set_sz(HKEY_CURRENT_USER, CLASSES L"\\txtfile", NULL, L"Text Document");
+    bool w[ASSOC_GROUP_COUNT], off[ASSOC_GROUP_COUNT];
+    set_groups(w, true, false, false, false, false);
+    TEST_ASSERT(apply_full(w), "registration should succeed");
+    set_sz(HKEY_CURRENT_USER, CLASSES L"\\.txt", NULL, L"npad.txt");
+    set_groups(off, false, false, false, false, false);
+    assoc_apply_user(w, off);
+    TEST_ASSERT(!value_exists(HKEY_CURRENT_USER, CLASSES L"\\.txt", NULL),
+                "per-user .txt claim is deleted, not replaced with txtfile");
+}
+
 TEST_CASE(empty_or_garbage_changes_do_nothing) {
     // A missing argument used to mean "unregister everything"
     wipe(HKEY_LOCAL_MACHINE);
@@ -406,6 +481,17 @@ TEST_CASE(an_orphaned_openwithprogids_entry_is_not_a_registration) {
 // --- Sandbox -----------------------------------------------------------------
 
 int main(void) {
+    // Opt-in only: the sandbox lives in the real HKCU, and SHChangeNotify
+    // reaches Explorer, so a stray double-click or a plain `make` must never
+    // run this. CI sets the variable; so can anyone who means to.
+    const char *allow = getenv("NPAD_ALLOW_REGISTRY_TESTS");
+    if (!allow || strcmp(allow, "1") != 0) {
+        printf("test_assoc_win32: not run. It writes a scratch key under "
+               "HKCU\\Software\\npad-assoc-selftest (deleted afterwards).\n"
+               "Set NPAD_ALLOW_REGISTRY_TESTS=1 to run it.\n");
+        return 77; // the conventional "skipped" exit status
+    }
+
     TEST_INIT();
 
     DWORD n = GetModuleFileNameW(NULL, g_exe, MAX_PATH);
@@ -440,6 +526,11 @@ int main(void) {
     if (RegOverridePredefKey(HKEY_CURRENT_USER, user) != ERROR_SUCCESS ||
         RegOverridePredefKey(HKEY_LOCAL_MACHINE, machine) != ERROR_SUCCESS) {
         printf("could not redirect the predefined keys\n");
+        RegOverridePredefKey(HKEY_CURRENT_USER, NULL);
+        RegOverridePredefKey(HKEY_LOCAL_MACHINE, NULL);
+        RegCloseKey(user);
+        RegCloseKey(machine);
+        RegDeleteTreeW(HKEY_CURRENT_USER, SANDBOX);
         return 1;
     }
 
@@ -453,6 +544,8 @@ int main(void) {
     RUN_TEST(no_change_writes_nothing);
     RUN_TEST(machine_changes_accept_only_exact_tokens);
     RUN_TEST(machine_changes_touch_only_named_groups);
+    RUN_TEST(machine_unregister_hands_back_windows_progid);
+    RUN_TEST(user_unregister_lets_the_machine_default_show_through);
     RUN_TEST(empty_or_garbage_changes_do_nothing);
 
     // Re-seed Program Files for the location check (the tests above wiped it)

@@ -4,11 +4,16 @@ name: Installers
 # EXE, the WiX MSI, and the portable exe (the same npad.exe the installers
 # carry), once for x64 and once for arm64 (Windows on Arm). Runs standalone
 # via workflow_dispatch for testing - a dry run that publishes nothing - or is
-# called from release.yml with a release tag to attach the artifacts.
+# called from release.yml, which attaches the artifacts to the release. This
+# workflow never writes to the repository or a release itself: the signing
+# job holds an OIDC token, so it gets read-only contents.
 #
 # x64's npad.exe is built natively with MSYS2's MinGW GCC. arm64's is
 # cross-compiled on Linux with a pinned llvm-mingw (MinGW GCC has no arm64
 # Windows target) in the job before, and packaged and signed here alongside.
+# Both are built with WERROR=1: what ships is the build CI checks for
+# warnings, and nothing is public until every check has passed (release.yml
+# publishes a draft only at the end).
 #
 # Code signing (Azure Artifact Signing, formerly Trusted Signing) switches on
 # when ALL six repository variables below are set, and is skipped entirely
@@ -23,9 +28,31 @@ name: Installers
 #   AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID
 #                                    the app registration granted
 #                                    "Artifact Signing Certificate Profile Signer"
+#
+# Pinned tools (bump deliberately, each with its check):
+#   actions             by commit SHA, the release tag in a comment
+#                       (.github/dependabot.yml proposes updates)
+#   WiX                 6.0.2 (the .wxs targets v6; v7 has breaking changes)
+#   Inno Setup          INNO_SETUP_VERSION, found through its uninstall
+#                       registration rather than a hard-coded "Inno Setup 6"
+#                       path, and asserted
+#   Artifact Signing    SIGNING_CLIENT_VERSION, verified against the SHA-512
+#   client              nuget.org publishes for it (SIGNING_CLIENT_SHA512,
+#                       the catalog's packageHash)
+#   MSYS2 GCC           pacman installs the repository's current build, so
+#                       the compiler is not pinned to one; its major version
+#                       is asserted (MSYS2_GCC_MAJOR, kept equal to ci.yml's)
+#                       and the unit tests run with it, so a new compiler
+#                       is a visible, tested change rather than a silent one
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version for the file names, as its tag would be spelled (e.g. v0.36.0-rc4); empty = src/main.h's"
+        type: string
+        required: false
+        default: ""
   push:
     # main only: work-in-progress branches (linux, feature branches) would
     # otherwise build installers on every push that touches installer/.
@@ -36,21 +63,22 @@ on:
       - ".github/workflows/installers.yml"
   workflow_call:
     inputs:
-      release_tag:
-        description: "Release tag to upload the installers to (empty = artifacts only)"
+      version:
+        description: "Version for the file names, as the tag is spelled (v0.36.0, v0.36.0-rc1); empty = src/main.h's"
         type: string
         required: false
         default: ""
 
 permissions:
-  contents: write
-  id-token: write   # OIDC token for azure/login; harmless when signing is off
+  contents: read
 
 jobs:
   build-arm64-exe:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install llvm-mingw (pinned, checksum-verified)
         run: |
@@ -61,12 +89,13 @@ jobs:
         # git must see the checkout so the Makefile derives the release
         # version string, as on the Windows side
         run: |
-          make windows-arm64
+          make windows-arm64 WERROR=1
           llvm-readobj --file-headers npad-arm64.exe | grep 'IMAGE_FILE_MACHINE_ARM64'
+          sh scripts/ci-check-imports.sh npad-arm64.exe
 
       # Named apart from ci.yml's arm64 artifact: release.yml runs both
       # workflows in one run, and artifact names must be unique within it
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npad-installer-input-arm64
           path: npad-arm64.exe
@@ -76,16 +105,35 @@ jobs:
     needs: build-arm64-exe
     runs-on: windows-latest
     # The app registration's federated credential is bound to this GitHub
-    # environment (subject repo:platima/npad:environment:release), which is
-    # matched on every ref - a Tag credential would have to name each tag
+    # environment (the repository emits ID-based subjects,
+    # repo:platima@<owner_id>/npad@<repo_id>:environment:release - see
+    # LESSONS.md), which is matched on every ref - a Tag credential would have
+    # to name each tag
     environment: release
+    permissions:
+      contents: read
+      id-token: write   # OIDC token for azure/login; harmless when signing is off
     env:
       SIGNING: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT != '' && vars.AZURE_TRUSTED_SIGNING_ACCOUNT != '' && vars.AZURE_TRUSTED_SIGNING_PROFILE != '' && vars.AZURE_CLIENT_ID != '' && vars.AZURE_TENANT_ID != '' && vars.AZURE_SUBSCRIPTION_ID != '' }}
+      NPAD_FILE_VERSION: ${{ inputs.version }}
+      MSYS2_GCC_MAJOR: "16"
+      INNO_SETUP_VERSION: "6.7.1"
+      SIGNING_CLIENT_VERSION: "1.0.146"
+      SIGNING_CLIENT_SHA512: "/G0hG/VDIS6psW23b5t1V/ORIgn0PVAOtGj9w+hkPmAuI4pempfwlW50E2GtHscnz9+5Qz3hbC4mcb7ej2Yn1A=="
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # A hand-run dispatch types this value; it names files and goes on
+      # command lines, so it must be a plain tag before anything uses it
+      - name: Check the version
+        shell: pwsh
+        run: |
+          if ($env:NPAD_FILE_VERSION -and $env:NPAD_FILE_VERSION -cnotmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$') {
+            throw "version must look like v0.36.0 or v0.36.0-rc4, not '$env:NPAD_FILE_VERSION'"
+          }
 
       - name: Set up MSYS2 (native MinGW build of npad.exe)
-        uses: msys2/setup-msys2@v2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         with:
           msystem: MINGW64
           update: false
@@ -96,24 +144,58 @@ jobs:
         # git must see the checkout so the Makefile derives the release
         # version string (a tagged build reports plain "vX.Y.Z")
         run: |
+          set -e
           git config --global --add safe.directory '*'
-          make windows
+          gcc --version | head -n 1
+          major=$(gcc -dumpversion | cut -d. -f1)
+          if [ "$major" != "$MSYS2_GCC_MAJOR" ]; then
+            echo "ERROR: MSYS2 now ships GCC $major (expected $MSYS2_GCC_MAJOR). Check the build and tests with it, then raise MSYS2_GCC_MAJOR here and in ci.yml."
+            exit 1
+          fi
+          make windows WERROR=1
           ls -la npad.exe
+          OBJDUMP=objdump sh scripts/ci-check-imports.sh npad.exe
+
+      # The unit tests, built by the compiler that built the exe that ships.
+      # On Windows make test-windows builds and runs every suite itself, and
+      # runs test_assoc_win32 (a registry sandbox; this runner is throwaway)
+      # through its own NPAD_ALLOW_REGISTRY_TESTS gate
+      - name: Unit tests with the shipping compiler
+        shell: msys2 {0}
+        run: NPAD_ALLOW_REGISTRY_TESTS=1 make test-windows WERROR=1
 
       - name: Install WiX
         shell: pwsh
         # Pinned: the .wxs is authored/tested against WiX v6 (v7 has breaking changes)
         run: dotnet tool install --global wix --version 6.0.2
 
-      - name: Install Inno Setup
+      - name: Install Inno Setup (pinned)
         shell: pwsh
-        run: choco install innosetup --no-progress -y
+        # upgrade --version installs exactly this version, whatever the
+        # runner image carries (windows-latest had 6.7.1 preinstalled)
+        run: |
+          choco upgrade innosetup --version $env:INNO_SETUP_VERSION --allow-downgrade --no-progress -y
+          if ($LASTEXITCODE -ne 0) { throw "choco could not install Inno Setup $env:INNO_SETUP_VERSION" }
 
       - name: Verify packaging tools
         shell: pwsh
+        # ISCC is found through Inno's own uninstall registration, so a
+        # major version with a new folder name ("Inno Setup 7") is found
+        # too, and its directory goes on PATH, where build-installers.ps1
+        # looks after its default locations
         run: |
-          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          $uninstall = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup *_is1'
+          $inno = @("HKLM:\$uninstall", "HKLM:\SOFTWARE\WOW6432Node\$($uninstall.Substring(9))", "HKCU:\$uninstall") |
+                  ForEach-Object { Get-ItemProperty $_ -ErrorAction SilentlyContinue } |
+                  Where-Object { $_.InstallLocation } | Select-Object -First 1
+          if (-not $inno) { throw "Inno Setup's uninstall registration was not found" }
+          $iscc = Join-Path $inno.InstallLocation "ISCC.exe"
           if (-not (Test-Path $iscc)) { throw "ISCC.exe not found at $iscc" }
+          "Inno Setup $($inno.DisplayVersion): $iscc"
+          if ($inno.DisplayVersion -ne $env:INNO_SETUP_VERSION) {
+            throw "Inno Setup is $($inno.DisplayVersion), expected $env:INNO_SETUP_VERSION"
+          }
+          $inno.InstallLocation.TrimEnd('\') >> $env:GITHUB_PATH
           wix --version
           if ($LASTEXITCODE -ne 0) { throw "wix not on PATH" }
 
@@ -125,7 +207,7 @@ jobs:
 
       - name: Sign in to Azure (OIDC, no stored secret)
         if: env.SIGNING == 'true'
-        uses: azure/login@v2
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -148,9 +230,16 @@ jobs:
           New-Item -ItemType Directory -Force $dir | Out-Null
 
           # The service was renamed from Trusted Signing to Artifact Signing in
-          # 2026; the package followed, the DLL inside it did not
+          # 2026; the package followed, the DLL inside it did not. Pinned to a
+          # version, and checked against the SHA-512 nuget.org records for it,
+          # since this code runs with a token that signs as the project.
           $zip = Join-Path $dir "client.zip"
-          Invoke-WebRequest "https://www.nuget.org/api/v2/package/Microsoft.ArtifactSigning.Client" -OutFile $zip
+          Invoke-WebRequest "https://www.nuget.org/api/v2/package/Microsoft.ArtifactSigning.Client/$env:SIGNING_CLIENT_VERSION" -OutFile $zip
+          $sha = [System.Security.Cryptography.SHA512]::Create()
+          $actual = [Convert]::ToBase64String($sha.ComputeHash([System.IO.File]::ReadAllBytes($zip)))
+          if ($actual -cne $env:SIGNING_CLIENT_SHA512) {
+            throw "Microsoft.ArtifactSigning.Client $env:SIGNING_CLIENT_VERSION has SHA-512 $actual, expected $env:SIGNING_CLIENT_SHA512"
+          }
           Expand-Archive $zip (Join-Path $dir "client") -Force
           $dlib = Get-ChildItem (Join-Path $dir "client") -Recurse -Filter Azure.CodeSigning.Dlib.dll |
                   Where-Object { $_.FullName -match '\\x64\\' } | Select-Object -First 1
@@ -179,27 +268,23 @@ jobs:
           "NPAD_SIGN_CMD=$cmd" >> $env:GITHUB_ENV
 
       - name: Fetch npad-arm64.exe
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: npad-installer-input-arm64
           path: build/arm64-input
 
       - name: Build installers (x64)
         shell: pwsh
-        env:
-          RELEASE_TAG: ${{ inputs.release_tag }}
         # Files carry the tag's spelling (v0.36.0-rc1 for a pre-release); the
         # version inside the installers stays the numeric one from src/main.h
         run: |
-          $extra = if ($env:RELEASE_TAG) { @("-FileVersion", ($env:RELEASE_TAG -replace '^v', '')) } else { @() }
+          $extra = if ($env:NPAD_FILE_VERSION) { @("-FileVersion", ($env:NPAD_FILE_VERSION -replace '^v', '')) } else { @() }
           pwsh -NoProfile -File installer/build-installers.ps1 -Arch x64 -SignCmd "$env:NPAD_SIGN_CMD" @extra
 
       - name: Build installers (arm64)
         shell: pwsh
-        env:
-          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          $extra = if ($env:RELEASE_TAG) { @("-FileVersion", ($env:RELEASE_TAG -replace '^v', '')) } else { @() }
+          $extra = if ($env:NPAD_FILE_VERSION) { @("-FileVersion", ($env:NPAD_FILE_VERSION -replace '^v', '')) } else { @() }
           pwsh -NoProfile -File installer/build-installers.ps1 -Arch arm64 -NpadExe build/arm64-input/npad-arm64.exe -SignCmd "$env:NPAD_SIGN_CMD" @extra
 
       - name: Check every deliverable is there
@@ -228,21 +313,13 @@ jobs:
           }
           if ($failed) { throw "A deliverable is not validly signed" }
 
+      # release.yml attaches these to the draft release; on their own they
+      # are the dry run's result
       - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npad-installers
           path: |
-            dist/*.exe
-            dist/*.msi
-            dist/*.sha256
-
-      - name: Upload to release
-        if: inputs.release_tag != ''
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ inputs.release_tag }}
-          files: |
             dist/*.exe
             dist/*.msi
             dist/*.sha256
