@@ -81,8 +81,12 @@ typedef struct {
 static SettingStore g_store;   // every setting
 static SettingStore g_removed; // keys this instance removed and has not saved yet
 static char *g_settings_file_path = NULL;
-// The directory came from $NPAD_TEST_CONFIG_DIR (NPAD_TEST_HOOKS builds only)
+#ifndef _WIN32
+// The directory came from $NPAD_TEST_CONFIG_DIR (NPAD_TEST_HOOKS builds only).
+// Only the POSIX legacy-settings migration reads it, so Windows has none
+// (clang's -Wunused-but-set-global fails the arm64 build otherwise).
 static bool g_settings_dir_is_test_override = false;
+#endif
 
 // Helper functions
 static char *get_settings_directory(void);
@@ -1431,12 +1435,13 @@ static char *settings_windows_appdata_dir(void) {
 // %APPDATA%. (Without the variable, Linux tests steer HOME/XDG_CONFIG_HOME.)
 static char *get_settings_directory(void) {
 #if defined(NPAD_TEST_HOOKS) && defined(_WIN32)
-    char *test_dir = settings_test_config_dir();
-    g_settings_dir_is_test_override = test_dir != NULL;
-    return test_dir; // NULL without the variable: never the real %APPDATA%
+    return settings_test_config_dir(); // NULL without the variable: never the real %APPDATA%
 #else
+#ifndef _WIN32
     g_settings_dir_is_test_override = false;
+#endif
 #ifdef NPAD_TEST_HOOKS
+    // Not Windows here: a Windows test build returned above
     char *test_dir = settings_test_config_dir();
     if (test_dir) {
         g_settings_dir_is_test_override = true;

@@ -141,8 +141,6 @@ TEST_CASE(register_writes_the_installer_shape) {
     _snwprintf(expect, MAX_PATH + 31, L"\"%ls\" /p \"%%1\"", g_exe);
     expect[MAX_PATH + 31] = L'\0';
     TEST_ASSERT(wcscmp(v, expect) == 0, "print command is the quoted exe, /p, then the quoted %1");
-    TEST_ASSERT(key_exists(HKEY_CURRENT_USER, CLASSES L"\\npad.log\\shell\\print\\command"),
-                "every ProgID carries the print verb, not just npad.txt");
 
     TEST_ASSERT(get_sz(HKEY_CURRENT_USER, CLASSES L"\\.txt\\OpenWithProgids", L"npad.txt", v,
                        MAX_PATH + 32),
@@ -179,6 +177,18 @@ TEST_CASE(never_claims_ownership_of_the_extension) {
                 ".md default value must NOT be written");
     TEST_ASSERT(!value_exists(HKEY_CURRENT_USER, CLASSES L"\\.log", NULL),
                 ".log default value must NOT be written");
+
+    // With every group registered, every ProgID carries Explorer's Print
+    // verb, not just npad.txt (one ProgID from each group)
+    static const wchar_t *const progids[] = { L"npad.txt", L"npad.md", L"npad.json", L"npad.ini",
+                                              L"npad.log" };
+    for (size_t i = 0; i < sizeof(progids) / sizeof(progids[0]); i++) {
+        wchar_t sub[128];
+        _snwprintf(sub, 127, L"%ls\\%ls\\shell\\print\\command", CLASSES, progids[i]);
+        sub[127] = L'\0';
+        TEST_ASSERT(key_exists(HKEY_CURRENT_USER, sub),
+                    "every registered ProgID carries the print verb, not just npad.txt");
+    }
 }
 
 TEST_CASE(read_state_reflects_the_registry) {
