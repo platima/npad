@@ -152,6 +152,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installers.yml) now names the files; the version inside them stays the
   numeric one MSI and Inno Setup require.
 
+### 🔧 Internal
+- **Two tools for looking at the UI without the desktop** (CONTRIBUTING.md).
+  `make dialog-preview` builds `dialog-preview.exe`, which saves npad's Win32
+  dialogs and Preferences pages as PNGs straight from the resources, with no
+  npad code, settings or focus change; CI builds it so it keeps working.
+  `scripts/broadway-run.sh` runs the Linux build in a browser tab under GTK's
+  Broadway backend with a throwaway profile, its own session bus and a time
+  limit, and refuses a display someone else is using.
+
 ## [0.35.0] - 2026-10-17
 
 ### ✨ Highlights

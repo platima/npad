@@ -81,7 +81,12 @@ jobs:
       run: |
         make clean
         make windows WERROR=1
-    
+
+    # Developer tool, not shipped: built so a resource or API change that
+    # breaks it shows up here rather than on someone's desk
+    - name: Build dialog-preview
+      run: make dialog-preview WERROR=1
+
     - name: Verify Windows builds exist and generate checksums
       run: |
         echo "Verifying Windows builds were created..."

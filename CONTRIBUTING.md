@@ -225,6 +225,46 @@ Use conventional commits for consistency:
 - [LINUX_PORT.md](LINUX_PORT.md) has the conventions, the testing recipe and
   the remaining parity checklist
 
+### Looking at the UI without the desktop
+
+Two developer tools show npad's windows without putting anything in front of
+you or touching your settings. Neither is shipped.
+
+**Win32 dialog layouts: `dialog-preview.exe`.** It builds dialogs straight
+from npad's compiled resources and saves each as a PNG, so you can check a
+change to `src/platform/npad.rc` without running npad. No npad code runs: no
+settings are read or written and `%APPDATA%` is never touched. The windows are
+made off-screen, hidden from the taskbar and unable to take focus, and the
+tool exits by itself.
+
+```bash
+make dialog-preview
+# Preferences pages, in npad's order (IDs from src/platform/resource.h)
+./dialog-preview.exe out 210 218 211 214 213 212 216 217 215
+# Standalone dialogs: Find, Replace, Go To, Convert Delimiters, Custom Indent
+./dialog-preview.exe --dialogs out 200 201 202 203 204
+```
+
+Pages are written as `out/page-<id>.png` and dialogs as
+`out/dialog-<id>.png`. `--bmp` writes BMP instead and `--caption TEXT` titles
+the property sheet. It runs on Windows (build it there with MinGW, or
+cross-build it like `make windows`). It shows the templates as they are:
+combo boxes are empty, the first radio button in each group is ticked,
+everything is in the light theme and title bars draw as inactive.
+
+**The Linux build in a browser tab: `scripts/broadway-run.sh`.** It runs
+`npad-linux` under GTK's Broadway backend with a throwaway profile and its
+own session bus, and everything exits by itself after the time you give:
+
+```bash
+make linux-gtk
+scripts/broadway-run.sh 45 900 1 -- somefile.txt
+# then open http://localhost:8125 (port 8080 + display)
+```
+
+See the Broadway notes in [LINUX_PORT.md](LINUX_PORT.md) for what Broadway can
+and cannot show.
+
 ### macOS (Cocoa)
 - **Future implementation** in `src/platform/ui_cocoa.m`
 - Use native Cocoa APIs

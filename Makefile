@@ -262,6 +262,21 @@ debug-linux-terminal:
 debug-linux-gtk:
 	$(MAKE) linux-gtk DEBUG=1
 
+# Developer tool: dialog-preview.exe captures the Win32 dialog templates
+# (Preferences pages, Find, Go To...) as images without running npad. It links
+# only npad's compiled resources, compiled here to their own .res so a
+# parallel `make windows` never shares the file. See CONTRIBUTING.md.
+DIALOG_PREVIEW_TARGET = dialog-preview.exe
+DIALOG_PREVIEW_RES = $(WIN_BUILD_DIR)/dialog-preview.res
+
+dialog-preview: $(DIALOG_PREVIEW_TARGET)
+
+$(DIALOG_PREVIEW_TARGET): tools/dialog-preview.c src/platform/npad.rc src/platform/resource.h src/platform/npad.manifest
+	@mkdir -p $(WIN_BUILD_DIR)
+	cd src/platform && $(MINGW_WINDRES) npad.rc -O coff -o ../../$(DIALOG_PREVIEW_RES)
+	$(MINGW_CC) $(CFLAGS) -municode -o $@ tools/dialog-preview.c $(DIALOG_PREVIEW_RES) -lcomctl32 -lgdi32 -luser32 -ldwmapi -lole32 -lwindowscodecs -luuid
+	@echo "Dialog preview tool built: $(DIALOG_PREVIEW_TARGET)"
+
 # Cross-compilation targets
 windows-cross:
 	$(MAKE) windows CC=x86_64-w64-mingw32-gcc
@@ -281,7 +296,7 @@ lint:
 		--suppress=unusedFunction \
 		--inline-suppr \
 		--error-exitcode=1 \
-		src/
+		src/ tools/
 
 # Formatting is canonical against clang-format 18 (what ubuntu-latest CI
 # runs). If your distro ships another major version, install a pinned one
@@ -290,11 +305,11 @@ CLANG_FORMAT ?= clang-format
 
 format:
 	@command -v $(CLANG_FORMAT) >/dev/null 2>&1 || { echo "$(CLANG_FORMAT) not found. Install with: sudo apt-get install clang-format"; exit 1; }
-	find src/ -name "*.c" -o -name "*.h" | xargs $(CLANG_FORMAT) -i
+	find src/ tools/ -name "*.c" -o -name "*.h" | xargs $(CLANG_FORMAT) -i
 
 format-check:
 	@command -v $(CLANG_FORMAT) >/dev/null 2>&1 || { echo "$(CLANG_FORMAT) not found. Install with: sudo apt-get install clang-format"; exit 1; }
-	find src/ -name "*.c" -o -name "*.h" | xargs $(CLANG_FORMAT) --dry-run --Werror
+	find src/ tools/ -name "*.c" -o -name "*.h" | xargs $(CLANG_FORMAT) --dry-run --Werror
 
 # Testing targets
 test: test-file-ops test-error test-encoding test-session test-list-ops test-update-check test-settings test-html-md test-undo test-find-seed test-tab-stops
@@ -399,7 +414,7 @@ tests/test_tab_stops: $(TEST_CORE_SOURCES) $(TEST_FRAMEWORK_SOURCES) tests/test_
 # Cleanup
 clean:
 	rm -f $(WINDOWS_GUI_TARGET) $(WINDOWS_TERMINAL_TARGET) $(MACOS_TARGET) $(LINUX_GTK_TARGET) $(LINUX_TERMINAL_TARGET)
-	rm -f npad-*.exe npad-*linux* npad-*win32*
+	rm -f npad-*.exe npad-*linux* npad-*win32* $(DIALOG_PREVIEW_TARGET)
 	find src tests -name '*.o' -delete 2>/dev/null || true
 	rm -f src/platform/npad.res
 	rm -rf build
@@ -505,6 +520,7 @@ help:
 	@echo "  terminal         - Build all Terminal variants (Windows + Linux)"
 	@echo "  macos            - Build for macOS"
 	@echo "  debug            - Build with debug symbols"
+	@echo "  dialog-preview   - Build dialog-preview.exe (captures Win32 dialogs as images)"
 	@echo "  lint             - Run code linting"
 	@echo "  format           - Format code with clang-format"
 	@echo "  format-check     - Check code formatting"

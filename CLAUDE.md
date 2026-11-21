@@ -26,6 +26,12 @@ npad is a lightweight, cross-platform text editor inspired by classic Windows No
   `CLANG_FORMAT=... make format-check` if your distro ships another major)
 - `make test` - Build and run the unit test suites (file ops, errors, encoding)
 
+**Looking at the UI without the desktop** (details in CONTRIBUTING.md):
+- `make dialog-preview` - `dialog-preview.exe <outdir> <ids...>` saves Win32
+  dialog templates as PNGs off-screen (no npad code, settings or focus change)
+- `scripts/broadway-run.sh [display] [seconds] [instances] [-- args]` - runs
+  `npad-linux` under Broadway with a throwaway profile; exits by itself
+
 **Installers (Windows-only build step):**
 - `pwsh installer/build-installers.ps1` - builds `dist/npad-v<v>-setup-win-x64.exe`
   (Inno Setup, interactive) and `dist/npad-v<v>-msi-win-x64.msi` (WiX, silent). Requires

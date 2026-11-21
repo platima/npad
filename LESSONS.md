@@ -146,6 +146,18 @@ when a return type changes, even when the build is clean.
 `Alt+E, P` pasted. Check the whole popup's set, including items appended to the
 *context* menu from elsewhere.
 
+**A modeless property sheet takes the foreground even when hidden and
+disabled.** `tools/dialog-preview.c` strips `WS_VISIBLE` and sets `WS_DISABLED`
+and `WS_EX_NOACTIVATE` in `PSCB_PRECREATE`, yet straight after `PropertySheetW`
+returned, `GetForegroundWindow()` was the invisible sheet, so the keyboard left
+the window the user was typing in. Standalone dialogs made with
+`CreateDialogIndirectParamW` from the same quieted templates did not. A
+process started from the active window inherits the right to take the
+foreground, so the sheet's activation goes through. -> Hold
+`LockSetForegroundWindow(LSFW_LOCK)` for the run and unlock at the end; to
+test, compare the foreground window's process ID with your own after each
+step.
+
 ## Win32: printing and preview
 
 **Windows 11's modern print dialog ignores the DEVMODE you pass to
