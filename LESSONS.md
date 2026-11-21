@@ -146,6 +146,18 @@ when a return type changes, even when the build is clean.
 `Alt+E, P` pasted. Check the whole popup's set, including items appended to the
 *context* menu from elsewhere.
 
+**A modeless property sheet takes the foreground even when hidden and
+disabled.** `tools/dialog-preview.c` strips `WS_VISIBLE` and sets `WS_DISABLED`
+and `WS_EX_NOACTIVATE` in `PSCB_PRECREATE`, yet straight after `PropertySheetW`
+returned, `GetForegroundWindow()` was the invisible sheet, so the keyboard left
+the window the user was typing in. Standalone dialogs made with
+`CreateDialogIndirectParamW` from the same quieted templates did not. A
+process started from the active window inherits the right to take the
+foreground, so the sheet's activation goes through. -> Hold
+`LockSetForegroundWindow(LSFW_LOCK)` for the run and unlock at the end; to
+test, compare the foreground window's process ID with your own after each
+step.
+
 ## Win32: printing and preview
 
 **Windows 11's modern print dialog ignores the DEVMODE you pass to
@@ -888,6 +900,18 @@ the branch's copy of the file.
 inline suppression that 2.13 needs becomes an *unmatched suppression* error on
 2.10 — the two can be mutually exclusive. → Prefer restructuring the code over
 suppressing. Build 2.13 locally and point `CPPCHECK` at it (see the Makefile).
+
+**`ubuntu-latest` moves, and the lint tools move with it.** In November 2026
+it became Ubuntu 26.04 with cppcheck 2.19, and a PR whose only C change was a
+new file in `tools/` failed lint with `staticFunction` on dozens of `src/`
+functions that are plainly used elsewhere, plus `variableScope` and
+`knownConditionTrueFalse` findings 2.13 never raised. 2.19 also logged "There
+was critical errors" (it cannot evaluate `PANGO_VERSION_CHECK` in
+`print_gtk.c`). Whether `src/` alone fails on 2.19 was not tested, but nothing
+in it had changed. -> The lint job is pinned to `ubuntu-24.04`, which
+ships the canonical cppcheck 2.13 and clang-format 18. Moving to a newer
+cppcheck is a deliberate change of its own, not something to absorb in a
+feature PR.
 
 **Do not put C string literals through shell heredocs.** `\0`, `\r` and `\x20`
 escapes get collapsed by an extra unescaping pass — this session wrote literal

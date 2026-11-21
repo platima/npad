@@ -141,17 +141,28 @@ Keep the mirror at least three directories below `/`: the existing
 shallow path (LESSONS.md).
 
 To look at the running app without opening windows on the Windows desktop,
-use GTK's **Broadway** backend, which renders the app as a web page:
+use GTK's **Broadway** backend, which renders the app as a web page.
+`scripts/broadway-run.sh` does it safely from the repo root:
 
 ```bash
-broadwayd :5 &
-GDK_BACKEND=broadway BROADWAY_DISPLAY=:5 ./npad-linux somefile.txt &
-# then open http://localhost:8085 in Claude's browser pane
+make linux-gtk
+scripts/broadway-run.sh 45 900 1 -- somefile.txt
+# display :45, 900 seconds, 1 window; open http://localhost:8125
 ```
 
+The arguments are the display number (the page is on port 8080 + display),
+how many seconds before everything exits by itself, and how many npad windows
+to start; anything after `--` goes to npad. Each run gets a fresh profile
+under `/tmp` (`HOME` and the XDG directories point there, so your own
+settings are never touched; `NPAD_SETTINGS=file.json` seeds it), its own
+`dbus-run-session`, and renamed copies of `broadwayd` and the binary. Nested
+`timeout`s end every process, so nothing needs killing; the profile and its
+logs stay behind for you to read. The script refuses a display whose port is
+already in use.
+
 Several sessions may share one WSL: Broadway display `:5` (page on port 8085)
-and `:7` (8087) have been taken by others - pick an unused number (`:23` is
-port 8103), keep your own PID files, and never `pkill broadwayd` / `pkill npad*`.
+and `:7` (8087) have been taken by others, so pick an unused number, and never
+`pkill broadwayd` / `pkill npad*` (it stops other people's sessions too).
 
 To print without a printer, set `NPAD_PRINT_EXPORT=/path/out.pdf` before
 launching: Ctrl+P then writes a PDF with no dialog. Inspect it with
@@ -173,8 +184,8 @@ term in the settings history (`find_hist_0`) or the document and drive the
 engine headless (a throwaway program that `#include`s `ui_gtk_find.c`
 against a real GtkTextBuffer works); combo-box popups do not paint; the
 screenshot trails the last action by a frame (wait, then shoot twice); and
-parallel sessions share broadwayd - use your own display number
-(`broadwayd :7` is port 8087) and a renamed copy of the binaries, because a
+parallel sessions share broadwayd - use your own display number and renamed
+copies of the binaries (`scripts/broadway-run.sh` does both), because a
 sibling's `pkill broadwayd` kills yours too.
 
 More from the Preferences round: the harness `key` action cannot deliver
