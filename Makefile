@@ -283,10 +283,12 @@ windows-cross:
 
 # Code quality
 #
-# Linting is canonical against cppcheck 2.13 (what ubuntu-latest CI runs).
-# Older versions are LESS strict and have twice passed changes that CI then
-# rejected, so if your distro ships an older one, build 2.13 and point
-# CPPCHECK at it rather than trusting a local pass.
+# Linting is canonical against cppcheck 2.13 (what CI's lint job runs, pinned
+# to ubuntu-24.04). Older versions are LESS strict and have twice passed
+# changes that CI then rejected, so if your distro ships an older one, build
+# 2.13 and point CPPCHECK at it rather than trusting a local pass. tools/ is
+# checked in its own run so the developer tools never change what the
+# whole-program checks conclude about src/.
 CPPCHECK ?= cppcheck
 
 lint:
@@ -296,10 +298,16 @@ lint:
 		--suppress=unusedFunction \
 		--inline-suppr \
 		--error-exitcode=1 \
-		src/ tools/
+		src/
+	$(CPPCHECK) --enable=all --std=c99 --platform=win32A \
+		--suppress=missingIncludeSystem \
+		--suppress=unusedFunction \
+		--inline-suppr \
+		--error-exitcode=1 \
+		tools/
 
-# Formatting is canonical against clang-format 18 (what ubuntu-latest CI
-# runs). If your distro ships another major version, install a pinned one
+# Formatting is canonical against clang-format 18 (what CI's ubuntu-24.04
+# lint job runs). If your distro ships another major version, install a pinned one
 # (e.g. pip install clang-format==18.1.8) and point CLANG_FORMAT at it.
 CLANG_FORMAT ?= clang-format
 

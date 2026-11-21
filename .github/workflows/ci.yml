@@ -28,7 +28,11 @@ env:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    # Pinned: lint is canonical against cppcheck 2.13 and clang-format 18,
+    # which is what Ubuntu 24.04 ships. ubuntu-latest moved to 26.04
+    # (cppcheck 2.19), which reports staticFunction across all of src/
+    # (LESSONS.md).
+    runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v7
 

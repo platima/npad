@@ -901,6 +901,18 @@ inline suppression that 2.13 needs becomes an *unmatched suppression* error on
 2.10 — the two can be mutually exclusive. → Prefer restructuring the code over
 suppressing. Build 2.13 locally and point `CPPCHECK` at it (see the Makefile).
 
+**`ubuntu-latest` moves, and the lint tools move with it.** In November 2026
+it became Ubuntu 26.04 with cppcheck 2.19, and a PR whose only C change was a
+new file in `tools/` failed lint with `staticFunction` on dozens of `src/`
+functions that are plainly used elsewhere, plus `variableScope` and
+`knownConditionTrueFalse` findings 2.13 never raised. 2.19 also logged "There
+was critical errors" (it cannot evaluate `PANGO_VERSION_CHECK` in
+`print_gtk.c`). Whether `src/` alone fails on 2.19 was not tested, but nothing
+in it had changed. -> The lint job is pinned to `ubuntu-24.04`, which
+ships the canonical cppcheck 2.13 and clang-format 18. Moving to a newer
+cppcheck is a deliberate change of its own, not something to absorb in a
+feature PR.
+
 **Do not put C string literals through shell heredocs.** `\0`, `\r` and `\x20`
 escapes get collapsed by an extra unescaping pass — this session wrote literal
 NUL bytes into a source file that way. → Use the file-editing tools.
