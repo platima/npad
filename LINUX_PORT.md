@@ -132,8 +132,8 @@ it into the WSL home and build there:
 
 ```bash
 rsync -a --delete --exclude '*.exe' --exclude dist/ --exclude build/ \
-  /mnt/d/Repos/npad/ ~/.cache/npad-wsl/tree/
-cd ~/.cache/npad-wsl/tree && make test linux-gtk
+  /mnt/d/Repos/npad/ ~/Claude/Scratchpad/npad/wsl-build/tree/
+cd ~/Claude/Scratchpad/npad/wsl-build/tree && make test linux-gtk
 ```
 
 Keep the mirror at least three directories below `/`: the existing
