@@ -127,16 +127,20 @@ D-Bus messaging is GLib's own GDBus.
 ## Testing from Windows (WSL)
 
 The maintainer's machine has WSL Debian with `libgtk-3-dev`, GCC and the
-MinGW cross-compiler. To build without polluting the Windows checkout, mirror
-it into the WSL home and build there:
+MinGW cross-compiler. To build without polluting the Windows checkout (and
+without building slowly over `/mnt/d`), keep a clone in the WSL home whose
+origin is the Windows clone, and build a committed branch there:
 
 ```bash
-rsync -a --delete --exclude '*.exe' --exclude dist/ --exclude build/ \
-  /mnt/d/Repos/npad/ ~/.cache/npad-wsl/tree/
-cd ~/.cache/npad-wsl/tree && make test linux-gtk
+git clone /mnt/d/Repos/npad ~/Repos/npad      # once
+cd ~/Repos/npad && git fetch origin && git checkout --detach origin/<branch>
+make test linux-gtk
 ```
 
-Keep the mirror at least three directories below `/`: the existing
+The detached checkout means no branch exists only in WSL: commit on Windows,
+then fetch and build.
+
+Keep the clone at least three directories below `/`: the existing
 `path_traversal_protection` test reads `../../../etc/passwd` and fails from a
 shallow path (LESSONS.md).
 
