@@ -1,0 +1,3 @@
+// npad - Windows unit-test resources
+// The asInvoker manifest every tests/*.exe links (see test.manifest for why)
+1 24 "test.manifest"

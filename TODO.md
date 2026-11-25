@@ -153,7 +153,12 @@ real desktop, X11 and Wayland sessions both:
 - [ ] The default `light` scheme inside a dark GTK theme (Mint-Y-Dark):
       white page in dark chrome - keep, or follow the theme by default?
 - [ ] Log out with unsaved changes; log back in and launch npad - the work
-      comes back
+      comes back. Since 0.36.0 npad also registers with the desktop's
+      session manager (GNOME, Cinnamon, MATE, Budgie, Xfce) and with
+      logind for shutdown, and parks the work on SIGTERM, SIGHUP and a lost
+      X display: check a logout, a reboot and closing the launching terminal
+      on each desktop (KDE Plasma is covered only by SIGTERM and, on X11, the
+      display-loss handler)
 - [ ] HiDPI / fractional scaling
 
 The remaining port work is the checklist in [LINUX_PORT.md](LINUX_PORT.md).
@@ -244,14 +249,15 @@ idle instance before the fix. That is now the documented baseline in README.md.
       correctly, and the recovery directory was emptied afterwards. No slot
       accumulation.
 
-      The seventh is not a miss: snapshots run on a 30-second timer
-      (`session_interval`), so an instance killed before its first tick has
-      nothing on disk. That is the designed exposure - **up to 30 seconds of
-      work, and a brand-new window is unprotected for its first 30 seconds.**
+      The seventh is not a miss: on v0.28.7 snapshots ran only on the
+      30-second timer (`session_interval`), so an instance killed before its
+      first tick had nothing on disk. v0.29.0 closed that new-window gap by
+      also snapshotting on the *first* edit (see its test list below), and
+      since 0.36.0 the timer writes only when the document has changed since
+      the last snapshot. What remains is the designed exposure: **up to one
+      interval (30 seconds by default) of work after the first edit.**
       Shortening the interval in Preferences > General trades disk writes for a
-      smaller window. Snapshotting on the *first* modification instead of
-      waiting for the timer would close the new-window gap specifically; not
-      done, since it adds a write on every first edit and nobody has asked.
+      smaller window.
 
 Not yet separately investigated, since the settings file explains what was
 observed: whether the cross-instance settings broadcast is O(instances^2) at
@@ -326,12 +332,15 @@ Windows 10. Not a defect to chase further.
       affect it (zoom is a view setting).
 - [ ] **Header/footer defaults** match notepad: file name top-left, `Page N`
       bottom-left.
-- [ ] Edit them on **Preferences > General** and confirm each code:
+- [ ] Edit them on **Preferences > Defaults** and confirm each code:
       `&f` `&p` `&d` `&t`, `&l`/`&c`/`&r` alignment, `&&` for a literal `&`.
 - [ ] **Clearing a field omits that line** and gives the text more of the page.
 - [ ] **Page Setup** margins take effect, survive a restart, and are still
       correct after switching Windows between metric and imperial units (they
-      are stored in thousandths of an inch precisely so this holds).
+      are stored in thousandths of an inch precisely so this holds). Since
+      0.36.0 a metric system shows them in millimetres, as Notepad does:
+      0.75 in reads 19.05, and OK on an untouched dialog must leave the stored
+      values exactly as they were.
 - [x] **Landscape** set in Page Setup applies to the printed output. CONFIRMED
       2026-09-18 - but the Print dialog showed "Portrait" while doing it,
       because it was never seeded with the Page Setup choices. Fixed in v0.32.6.
@@ -992,10 +1001,12 @@ reachable by anyone who opens a binary file to peek at it.
 Recommendation when this is picked up: **2 first** (it removes the data-loss
 risk on its own), then 1. Defer 3 unless binary editing becomes a real goal.
 
-### Convert Delimiters - FIXED/SHIPPED (
- in v0.27.1, memory + swap in v0.29.0)
+### Convert Delimiters - FIXED/SHIPPED (`\r\n` in v0.27.1, memory + swap in v0.29.0)
 
-` can never match
+**Shipped:** v0.27.1 accepts `\r\n` in From and treats it as `\n` (the first
+option below); v0.29.0 remembers the last From/To with recent values in both
+drop-downs, and adds the Swap button. The report is kept for the root-cause
+notes.
 
 Reported 2026-08-06. Three things, two of them confirmed by reading.
 
@@ -1010,50 +1021,31 @@ would also populate the dropdowns with recent values for free.
 **2. Wanted: a swap button** between From and To, so a conversion can be
 reversed without retyping. Cheap; the combo texts just trade places.
 
-**3. `
-
-` as the *source* can never match — root cause confirmed.**
-Reported as "a new file that said it was Windows CRLF, going from `
-
-` did
-not work, I had to go from just `
-`", suspected to be the pasted text. **It is
+**3. `\r\n` as the *source* can never match — root cause confirmed.**
+Reported as "a new file that said it was Windows CRLF, going from `\r\n` did
+not work, I had to go from just `\n`", suspected to be the pasted text. **It is
 not the pasted text.** It is deterministic:
 
 - `list_extract` (`ui_win32.c:5421`) fetches the range and then calls
   `normalize_to_lf(utf8)` (`:5439`), so the text the conversion actually matches
-  against contains **only bare `
-`**, whatever the file's line ending is.
+  against contains **only bare `\n`**, whatever the file's line ending is.
 - `list_replace` (`:5444`) mirrors it: normalise to LF, then emit CRLF uniformly
   into the control. So the internal round-trip is consistent.
 - The status bar correctly reports the *file* as Windows (CRLF), because that is
-  its on-disk attribute — but the buffer the tool sees is LF-only. So a `
-
-`
+  its on-disk attribute — but the buffer the tool sees is LF-only. So a `\r\n`
   source matches nothing, always, in every file.
 
-**The trap is self-inflicted:** the dialog's default *target* is `
-
-`
+**The trap is self-inflicted:** the dialog's default *target* is `\r\n`
 (`:5641`, commented "OS default line ending"), which works fine because
-`list_replace` normalises it. So npad itself teaches the user that `
-
-` is a
+`list_replace` normalises it. So npad itself teaches the user that `\r\n` is a
 valid token, and it then silently fails the moment they use it as a source.
 
-Options when fixing: accept `
-
-` in the source and treat it as `
-`
-(smallest, matches what the user meant); or drop `
-
-` from the presets and
+Options when fixing: accept `\r\n` in the source and treat it as `\n`
+(smallest, matches what the user meant); or drop `\r\n` from the presets and
 the default target so it is never suggested; or state the LF-only rule in the
 dialog's escape hint (`ID_DELIM_HINT`). The first is the least surprising.
 Whichever, the "from" and "to" presets should stop disagreeing about whether
-`
-
-` is meaningful.
+`\r\n` is meaningful.
 
 ### Detect that the open file changed on disk - SHIPPED in v0.30.0
 
@@ -1165,7 +1157,11 @@ menu bar redrawing twice per settings broadcast (`apply_list_tools_menu` and
 `apply_update_indicator` both call `DrawMenuBar`); and the white band on
 drag-resize in dark mode (`wc.hbrBackground = COLOR_WINDOW + 1`).
 
-### Theme-matched app icon + bundled file-type icons
+### Theme-matched app icon (SHIPPED in v0.28.0) + bundled file-type icons (open)
+
+**The app icon half shipped in v0.28.0** (Preferences > Appearance >
+Application icon; both variants are embedded in the exe). The per-type file
+icons below are still open.
 
 Noted 2026-07-31: the user is producing light and dark app icons so the icon
 can match the active theme, plus per-association file-type icons meant to ship
@@ -1212,11 +1208,16 @@ and the pane never writes an extension's default value. See
 DOCUMENTATION.md > Associations for the behaviour and LESSONS.md for why.
 
 
-### Tab inserts spaces
+### Tab inserts spaces - SHIPPED in v0.36.0
 
-Requested 2026-07-26. An option on the Markdown preferences page to make Tab
-insert a configurable number of spaces instead of a tab character. Parked until
-wanted.
+Requested 2026-07-26 as an option on the Markdown preferences page to make Tab
+insert a configurable number of spaces instead of a tab character. Shipped in
+0.36.0 on both platforms as *Insert spaces up to the next tab stop* (the
+*Tab key* group) on **Preferences > Editor** rather than Markdown, since it is
+a general editing option that works without the Markdown tools
+(`tab_inserts_spaces`, off by default as in Notepad; `tab_width` 1-16, default
+4). See
+DOCUMENTATION.md, *Tab inserts spaces*.
 
 ### Not doing (decided)
 

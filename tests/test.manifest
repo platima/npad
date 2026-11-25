@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Linked into every Windows unit-test executable (tests/test_manifest.rc).
+  Without a requestedExecutionLevel, UAC's installer detection treats an
+  executable whose name contains "update", "setup", "install" or "patch" as an
+  installer and demands elevation, so test_update_check.exe would not start
+  for a standard user. asInvoker runs every test with the caller's own rights.
+  Deliberately nothing else: no activeCodePage, so the ANSI code page paths
+  are tested exactly as npad.exe (whose manifest sets none) runs them.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity
+    version="1.0.0.0"
+    processorArchitecture="*"
+    name="npad.tests"
+    type="win32" />
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>

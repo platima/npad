@@ -13,11 +13,18 @@
  *
  * Grouping follows what a user thinks of as one action:
  *  - typed characters coalesce into one step per word (a run of non-space
- *    characters plus the spaces after it), like gedit and RichEdit
+ *    characters plus the spaces after it), like gedit. RichEdit (the Win32
+ *    build) differs: one undo there removes a whole typing run, Backspaces
+ *    included, so the two builds deliberately undo typing in different sizes
  *  - consecutive single-character deletions in one direction coalesce
- *  - anything multi-character (paste, drop) is a step of its own
+ *  - a multi-character edit (paste, drop) is a step of its own
+ *  - the history cannot tell a one-character edit from a keystroke: any
+ *    single edit may merge with the typing or deletion beside it. A caller
+ *    whose edit is an action of its own (a paste, a cut, a Replace) wraps it
+ *    in a group, or calls undo_break before and after it
  *  - undo_begin_group/undo_end_group make a compound edit (Replace All, a
- *    list transform, replacing a selection) a single step
+ *    list transform, replacing a selection) a single step; a group never
+ *    merges with what came before or after it
  *  - undo_break ends coalescing: call it when the caret moves by any means
  *    other than the edit itself, so typing in two places is two steps
  *
@@ -43,9 +50,22 @@ typedef struct {
     void (*remove)(void *ctx, long pos, long count);
 } UndoTarget;
 
-// max_steps bounds the history; the oldest steps are dropped beyond it.
+// max_steps bounds the history; the oldest steps are dropped beyond it. The
+// history is also bounded by the bytes of text it holds, UNDO_DEFAULT_MAX_BYTES
+// unless undo_set_max_bytes says otherwise.
 UndoStack *undo_create(size_t max_steps);
 void undo_destroy(UndoStack *stack);
+
+// Every step keeps a copy of the text it inserted or deleted, so a count of
+// steps alone does not bound memory: 10,000 Replace Alls on a large document
+// are 20,000 copies of it. Past this many bytes the oldest steps are dropped.
+// The newest step is always kept, however large, so the last edit can still
+// be undone. 0 removes the limit.
+#define UNDO_DEFAULT_MAX_BYTES ((size_t) 256 * 1024 * 1024)
+void undo_set_max_bytes(UndoStack *stack, size_t max_bytes);
+
+// Bytes of text the history holds now (undoable and redoable steps)
+size_t undo_total_bytes(const UndoStack *stack);
 
 // Forget all history (loading a new document)
 void undo_clear(UndoStack *stack);

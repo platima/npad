@@ -53,3 +53,38 @@ int tab_spaces_to_stop(size_t column, int width) {
 int tab_spaces_for_line_prefix(const char *line_prefix, size_t len, int width) {
     return tab_spaces_to_stop(tab_column_after(line_prefix, len, width), width);
 }
+
+long tab_edit_average_width(long letters_extent) {
+    if (letters_extent <= 0)
+        return 0;
+    return (letters_extent / 26 + 1) / 2;
+}
+
+// dpi x zoom as one scale numerator/denominator pair, with the defaults
+static void tab_scale(long dpi, long zoom_num, long zoom_den, long long *num, long long *den) {
+    if (dpi <= 0)
+        dpi = 96;
+    if (zoom_num <= 0 || zoom_den <= 0) {
+        zoom_num = 1;
+        zoom_den = 1;
+    }
+    *num = (long long) dpi * zoom_num;
+    *den = 1440LL * zoom_den; // twips per inch
+}
+
+long tab_font_pixel_height(long height_twips, long dpi, long zoom_num, long zoom_den) {
+    if (height_twips <= 0)
+        return 0;
+    long long num, den;
+    tab_scale(dpi, zoom_num, zoom_den, &num, &den);
+    return (long) (((long long) height_twips * num + den / 2) / den);
+}
+
+long tab_stop_twips_for_pixels(long stop_px, long dpi, long zoom_num, long zoom_den) {
+    if (stop_px <= 0)
+        return 0;
+    long long num, den;
+    tab_scale(dpi, zoom_num, zoom_den, &num, &den);
+    long long twips = (long long) stop_px * den / num;
+    return twips > 0 ? (long) twips : 1;
+}

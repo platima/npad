@@ -110,8 +110,22 @@ void ui_get_default_window_rect(int *x, int *y, int *width, int *height);
 // Number of npad main windows open on this desktop, across all instances
 int ui_count_main_windows(void);
 
+// npad /p FILE (Windows) or npad --print FILE: print the file to the default
+// printer with no print dialog, as notepad.exe /p does, and return the exit
+// code (0 printed, 2 cancelled, 1 failed). Called INSTEAD of ui_init - the
+// platform does only the set-up printing needs and opens no document window.
+int ui_print_file(const char *path);
+
 // Text editing
-void ui_set_text(Window *window, const char *text);
+// Replaces the document with text. Returns false if it could not be loaded at
+// all (too large for the control, or out of memory): the window then still
+// shows what it showed before, and the caller must treat the open as failed.
+bool ui_set_text(Window *window, const char *text);
+// True when the last ui_set_text loaded, but the control could not hold the
+// text exactly (Win32 RichEdit rewrites a few characters, such as U+2028 and
+// U+FFFD, and either platform replaces invalid UTF-8). The core must
+// then not save over the source file without telling the user.
+bool ui_text_altered_by_load(const Window *window);
 char *ui_get_text(Window *window);
 void ui_clear_text(Window *window);
 bool ui_has_selection(Window *window);
@@ -119,6 +133,11 @@ char *ui_get_selected_text(Window *window);
 void ui_select_all(Window *window);
 void ui_set_cursor_position(Window *window, int position);
 int ui_get_cursor_position(Window *window);
+// Notepad's .LOG stamp: move the caret to the end of the document and insert
+// a line break, the time and date exactly as Edit > Time/Date (F5) writes
+// them, and another line break, as one undoable edit that marks the document
+// modified, with the caret left after it and scrolled into view
+void ui_append_time_date_line(Window *window);
 
 // Clipboard operations
 void ui_cut(Window *window);
@@ -135,6 +154,14 @@ bool ui_can_redo(const Window *window);
 char *ui_show_open_dialog(Window *parent, const FileDialogParams *params);
 char *ui_show_save_dialog(Window *parent, FileDialogParams *params);
 bool ui_show_message_box(Window *parent, const char *title, const char *message, bool is_question);
+
+// Answer to a Yes/No question. DISMISSED is everything that is not an explicit
+// choice: Esc or the close box, the dialog ended by a quit or by its parent
+// going away, or a dialog that could not be shown at all. A caller about to do
+// something irreversible on No must treat DISMISSED as "not now", never as No.
+typedef enum { UI_ANSWER_DISMISSED = 0, UI_ANSWER_YES, UI_ANSWER_NO } UiAnswer;
+UiAnswer ui_ask_question(Window *parent, const char *title, const char *message);
+
 SavePromptResult ui_show_save_prompt(Window *parent, const char *filename);
 void ui_show_about_dialog(Window *parent);
 
@@ -171,6 +198,10 @@ void ui_set_text_modified(Window *window, bool modified);
 int ui_get_line_count(Window *window);
 void ui_get_cursor_line_column(Window *window, int *line, int *column);
 void ui_set_status_info(Window *window, const char *encoding_name, const char *eol_name);
+// A transient message in the status bar's message area (NULL or "" clears
+// it). For things worth knowing that do not deserve a modal box, such as an
+// auto-save that failed or was paused. Not shown while the bar is hidden.
+void ui_set_status_message(Window *window, const char *message);
 
 // Auto-save timer (seconds; 0 disables). Fires UI_EVENT_AUTO_SAVE.
 void ui_set_auto_save_timer(Window *window, int seconds);
@@ -190,8 +221,11 @@ void ui_launch_recovery_instance(const char *slot_id, int cascade_index);
 void ui_notify_settings_changed(void);
 
 // Whether the given pid is a still-running npad process. Used to skip the
-// live recovery snapshots of other running instances at startup.
-bool ui_pid_is_running(long pid);
+// live recovery snapshots of other running instances at startup. When
+// start_time is not NULL it receives when that process started, as Unix
+// seconds, or -1 when the platform cannot tell: a pid is recycled, so the
+// caller compares it with the time recorded in the slot id.
+bool ui_pid_is_running(long pid, long long *start_time);
 
 // Platform-specific helpers (implemented per platform)
 void *ui_get_native_handle(Window *window);

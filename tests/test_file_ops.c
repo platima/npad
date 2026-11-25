@@ -12,6 +12,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 // Test data
 #define TEST_FILE "test_temp.txt"
@@ -201,16 +204,12 @@ TEST_CASE(count_stats_whitespace_runs) {
     (void) c;
 }
 
-TEST_CASE(path_traversal_protection) {
-    // Test path traversal attempts
-    char *content1 = file_read_text("../../../etc/passwd");
-    char *content2 = file_read_text("..\\..\\windows\\system32\\config\\sam");
-    
-    // Should be blocked
-    TEST_ASSERT_NULL(content1, "Path traversal with forward slashes should be blocked");
-    TEST_ASSERT_NULL(content2, "Path traversal with backslashes should be blocked");
-}
-
+// There is deliberately no "path traversal is blocked" test. npad is a desktop
+// editor and opens any path the user can, ".." included (is_valid_path; see
+// open_relative_parent_path in test_encoding.c). The test that used to sit
+// here asserted the opposite and passed only when ../../../etc/passwd
+// happened not to exist from the working directory - it failed from a
+// checkout three levels below /, and asserted nothing about security.
 
 // --- Binary / embedded-NUL detection --------------------------------------
 //
@@ -347,6 +346,45 @@ TEST_CASE(absolute_path_resolution) {
     TEST_ASSERT_NULL(file_get_absolute_path(NULL), "NULL rejected");
 }
 
+// Save As onto the open file must be recognised however the path is spelled,
+// so it gets Save's protections (the lossy-decode question, the refusal to
+// overwrite a truncated original)
+TEST_CASE(same_file_is_recognised_by_identity) {
+    file_write_text("test_same_a.txt", "a\n");
+    file_write_text("test_same_b.txt", "a\n");
+    remove("test_same_gone.txt");
+
+    TEST_ASSERT(file_same("test_same_a.txt", "test_same_a.txt"), "a path is its own file");
+    char *abs = file_get_absolute_path("test_same_a.txt");
+    TEST_ASSERT_NOT_NULL(abs, "absolute path resolves");
+    TEST_ASSERT(file_same(abs, "test_same_a.txt"), "absolute and relative spellings match");
+    TEST_ASSERT(file_same("./test_same_a.txt", "test_same_a.txt"), "a ./ spelling matches");
+    free(abs);
+
+    TEST_ASSERT(!file_same("test_same_a.txt", "test_same_b.txt"),
+                "two files with the same contents are different files");
+    TEST_ASSERT(!file_same("test_same_a.txt", "test_same_gone.txt"),
+                "a missing file is never the same file");
+    TEST_ASSERT(!file_same("test_same_gone.txt", "test_same_gone.txt"),
+                "not even as itself: there is nothing to overwrite");
+    TEST_ASSERT(!file_same(NULL, "test_same_a.txt"), "NULL is rejected");
+    TEST_ASSERT(!file_same("test_same_a.txt", ""), "an empty path is rejected");
+
+    // An atomic save replaces the file (temp + rename); the path still names it
+    TEST_ASSERT(file_write_text("test_same_a.txt", "rewritten\n"), "rewrite succeeds");
+    TEST_ASSERT(file_same("test_same_a.txt", "./test_same_a.txt"), "still the same after a save");
+
+#ifndef _WIN32
+    remove("test_same_link.txt");
+    TEST_ASSERT(link("test_same_a.txt", "test_same_link.txt") == 0, "hard link created");
+    TEST_ASSERT(file_same("test_same_a.txt", "test_same_link.txt"), "a hard link is the same file");
+    remove("test_same_link.txt");
+#endif
+
+    remove("test_same_a.txt");
+    remove("test_same_b.txt");
+}
+
 int main(void) {
     // Initialize error system for testing
     npad_error_init();
@@ -374,7 +412,6 @@ int main(void) {
     RUN_TEST(count_stats_empty_and_null);
     RUN_TEST(count_stats_unicode_and_eols);
     RUN_TEST(count_stats_whitespace_runs);
-    RUN_TEST(path_traversal_protection);
     RUN_TEST(embedded_nul_is_flagged_as_truncated);
     RUN_TEST(ordinary_text_is_not_flagged);
     RUN_TEST(utf16_ascii_is_not_flagged);
@@ -383,7 +420,8 @@ int main(void) {
     RUN_TEST(stamp_reports_a_missing_file);
     RUN_TEST(stamp_equality_rejects_nulls);
     RUN_TEST(absolute_path_resolution);
-    
+    RUN_TEST(same_file_is_recognised_by_identity);
+
     // Cleanup error system
     npad_error_cleanup();
     

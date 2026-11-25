@@ -44,6 +44,8 @@ struct UndoStack {
     size_t current;  // steps[0..current) are undoable, the rest redoable
     size_t capacity; // Allocated slots in steps
     size_t max_steps;
+    size_t total_bytes; // Text held by every stored step
+    size_t max_bytes;   // 0: unlimited
     int group_depth;
     bool group_has_step; // The outermost open group already started its step
     bool group_failed;   // A record inside the open group failed: drop the rest
@@ -86,9 +88,11 @@ static bool is_space_byte(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
-static void step_free(UndoStep *step) {
-    for (size_t i = 0; i < step->count; i++)
+static void step_free(UndoStack *stack, UndoStep *step) {
+    for (size_t i = 0; i < step->count; i++) {
+        stack->total_bytes -= step->ops[i].len;
         free(step->ops[i].text);
+    }
     free(step->ops);
     step->ops = NULL;
     step->count = 0;
@@ -100,14 +104,25 @@ UndoStack *undo_create(size_t max_steps) {
     if (!stack)
         return NULL;
     stack->max_steps = max_steps ? max_steps : SIZE_MAX;
+    stack->max_bytes = UNDO_DEFAULT_MAX_BYTES;
     return stack;
+}
+
+void undo_set_max_bytes(UndoStack *stack, size_t max_bytes) {
+    if (stack)
+        stack->max_bytes = max_bytes;
+}
+
+size_t undo_total_bytes(const UndoStack *stack) {
+    return stack ? stack->total_bytes : 0;
 }
 
 void undo_clear(UndoStack *stack) {
     if (!stack)
         return;
     for (size_t i = 0; i < stack->count; i++)
-        step_free(&stack->steps[i]);
+        step_free(stack, &stack->steps[i]);
+    stack->total_bytes = 0;
     stack->count = 0;
     stack->current = 0;
     stack->group_has_step = false;
@@ -125,19 +140,30 @@ void undo_destroy(UndoStack *stack) {
 // Discard everything that could be redone: a new edit forks the history
 static void drop_redo(UndoStack *stack) {
     for (size_t i = stack->current; i < stack->count; i++)
-        step_free(&stack->steps[i]);
+        step_free(stack, &stack->steps[i]);
     stack->count = stack->current;
+}
+
+// Forget the oldest step
+static void drop_oldest(UndoStack *stack) {
+    step_free(stack, &stack->steps[0]);
+    memmove(&stack->steps[0], &stack->steps[1], (stack->count - 1) * sizeof(UndoStep));
+    stack->count--;
+    if (stack->current > 0)
+        stack->current--;
+}
+
+// Keep the history within its byte budget, oldest first, never dropping the
+// newest step (it may be the one still growing, or inside an open group)
+static void trim_to_byte_limit(UndoStack *stack) {
+    while (stack->max_bytes && stack->total_bytes > stack->max_bytes && stack->count > 1)
+        drop_oldest(stack);
 }
 
 // Append an empty step, dropping the oldest when the history is full
 static UndoStep *push_step(UndoStack *stack) {
-    if (stack->count >= stack->max_steps && stack->count > 0) {
-        step_free(&stack->steps[0]);
-        memmove(&stack->steps[0], &stack->steps[1], (stack->count - 1) * sizeof(UndoStep));
-        stack->count--;
-        if (stack->current > 0)
-            stack->current--;
-    }
+    if (stack->count >= stack->max_steps && stack->count > 0)
+        drop_oldest(stack);
     if (stack->count == stack->capacity) {
         size_t capacity = stack->capacity ? stack->capacity * 2 : 64;
         UndoStep *grown = UNDO_REALLOC(stack->steps, capacity * sizeof(UndoStep));
@@ -152,8 +178,8 @@ static UndoStep *push_step(UndoStack *stack) {
     return step;
 }
 
-static bool step_append(UndoStep *step, UndoOpKind kind, long pos, long count, const char *text,
-                        size_t len) {
+static bool step_append(UndoStack *stack, UndoStep *step, UndoOpKind kind, long pos, long count,
+                        const char *text, size_t len) {
     if (step->count == step->capacity) {
         size_t capacity = step->capacity ? step->capacity * 2 : 4;
         UndoOp *grown = UNDO_REALLOC(step->ops, capacity * sizeof(UndoOp));
@@ -174,11 +200,13 @@ static bool step_append(UndoStep *step, UndoOpKind kind, long pos, long count, c
     op->count = count;
     op->text = copy;
     op->len = len;
+    stack->total_bytes += len;
     return true;
 }
 
 // Grow op's text by len bytes, at the front or the back
-static bool op_extend(UndoOp *op, const char *text, size_t len, long count, bool at_front) {
+static bool op_extend(UndoStack *stack, UndoOp *op, const char *text, size_t len, long count,
+                      bool at_front) {
     char *grown = UNDO_MALLOC(op->len + len + 1);
     if (!grown)
         return false;
@@ -194,6 +222,7 @@ static bool op_extend(UndoOp *op, const char *text, size_t len, long count, bool
     op->text = grown;
     op->len += len;
     op->count += count;
+    stack->total_bytes += len;
     return true;
 }
 
@@ -214,7 +243,7 @@ static bool try_merge(UndoStack *stack, UndoOpKind kind, long pos, long count, c
         // One step per word: a non-space after a space starts the next one
         if (op->len > 0 && is_space_byte(op->text[op->len - 1]) && !is_space_byte(text[0]))
             return false;
-        return op_extend(op, text, len, count, false);
+        return op_extend(stack, op, text, len, count, false);
     }
 
     if (op->kind != UNDO_OP_DELETE)
@@ -223,14 +252,14 @@ static bool try_merge(UndoStack *stack, UndoOpKind kind, long pos, long count, c
         stack->merge == UNDO_MERGE_BACKSPACE || stack->merge == UNDO_MERGE_DELETE_EITHER;
     bool delete_ok = stack->merge == UNDO_MERGE_DELETE || stack->merge == UNDO_MERGE_DELETE_EITHER;
     if (backspace_ok && pos + count == op->pos) {
-        if (!op_extend(op, text, len, count, true))
+        if (!op_extend(stack, op, text, len, count, true))
             return false;
         op->pos = pos;
         stack->merge = UNDO_MERGE_BACKSPACE;
         return true;
     }
     if (delete_ok && pos == op->pos) {
-        if (!op_extend(op, text, len, count, false))
+        if (!op_extend(stack, op, text, len, count, false))
             return false;
         stack->merge = UNDO_MERGE_DELETE;
         return true;
@@ -266,7 +295,7 @@ static void record(UndoStack *stack, UndoOpKind kind, long pos, const char *text
             }
             stack->group_has_step = true;
         }
-        if (!step_append(&stack->steps[stack->current - 1], kind, pos, count, text, len))
+        if (!step_append(stack, &stack->steps[stack->current - 1], kind, pos, count, text, len))
             record_failed(stack);
         stack->merge = UNDO_MERGE_NONE;
         return;
@@ -278,7 +307,7 @@ static void record(UndoStack *stack, UndoOpKind kind, long pos, const char *text
         return;
 
     UndoStep *step = push_step(stack);
-    if (!step || !step_append(step, kind, pos, count, text, len)) {
+    if (!step || !step_append(stack, step, kind, pos, count, text, len)) {
         record_failed(stack); // Also frees the empty step a failed append left
         return;
     }
@@ -290,10 +319,14 @@ static void record(UndoStack *stack, UndoOpKind kind, long pos, const char *text
 
 void undo_record_insert(UndoStack *stack, long pos, const char *text, size_t len) {
     record(stack, UNDO_OP_INSERT, pos, text, len);
+    if (stack)
+        trim_to_byte_limit(stack);
 }
 
 void undo_record_delete(UndoStack *stack, long pos, const char *text, size_t len) {
     record(stack, UNDO_OP_DELETE, pos, text, len);
+    if (stack)
+        trim_to_byte_limit(stack);
 }
 
 void undo_break(UndoStack *stack) {

@@ -1,8 +1,8 @@
 /*
  * npad - GTK3 UI (Linux, X11 and Wayland)
- * Private header shared by the ui_gtk*.c files. Nothing outside
- * src/platform/ui_gtk*.c includes this; the rest of npad talks to the
- * platform through ui_interface.h only.
+ * Private header shared by the ui_gtk*.c files (and print_gtk.c, for the
+ * shared time stamp). Nothing outside the GTK layer includes this; the rest
+ * of npad talks to the platform through ui_interface.h only.
  *
  * File layout:
  *   ui_gtk.c          - init and main loop, the main window, menus and
@@ -18,6 +18,10 @@
  *   ui_gtk_update.c   - Check for Updates (notifies and advises; never installs)
  *   ui_gtk_instance.c - cross-instance messaging over D-Bus: settings sync,
  *                       view sync, Close All, instance counting
+ *   ui_gtk_session.c  - the session ending under npad: logout through the
+ *                       desktop's session manager, shutdown through logind,
+ *                       SIGTERM / SIGHUP / SIGINT and losing the X display
+ *                       all park unsaved work (the WM_ENDSESSION counterpart)
  *
  * Text model: the GtkTextBuffer always holds '\n' line breaks. ui_set_text
  * normalises whatever the file had, ui_get_text hands back '\n', and the core
@@ -99,7 +103,6 @@ typedef enum {
     NPAD_CMD_FORMAT_EOL_CRLF,
     NPAD_CMD_FORMAT_EOL_LF,
     NPAD_CMD_FORMAT_EOL_CR,
-    NPAD_CMD_FORMAT_EOL_CYCLE,
     NPAD_CMD_FORMAT_FONT,
     NPAD_CMD_VIEW_ZOOM_IN,
     NPAD_CMD_VIEW_ZOOM_OUT,
@@ -158,13 +161,22 @@ struct Window {
 
     // Document state
     bool is_modified;
-    bool loading; // Text is being replaced programmatically: not an edit
+    bool loading;      // Text is being replaced programmatically: not an edit
+    bool text_altered; // The last load repaired invalid UTF-8 (ui_text_altered_by_load)
 
     // Undo: GtkTextBuffer (GTK3) keeps no history of its own
     UndoStack *undo;
     int user_action_depth;
     GArray *pending;      // NpadPendingEdit, flushed at the end of a user action
     long expected_cursor; // Where the last edit left the caret; -1 = unknown
+
+    // What the clipboard offers, kept current from its owner-change signal so
+    // greying Paste when a menu opens never waits on another program
+    // (ui_gtk_edit.c). Only trusted while clipboard_known is set.
+    bool clipboard_known;
+    bool clipboard_has_text;
+    bool clipboard_has_html;
+    bool edit_menu_open; // The Edit menu is showing: a late answer updates Paste
 
     // Geometry. Wayland gives clients neither their position nor a way to
     // set it, so the last requested position is remembered and reported back
@@ -174,6 +186,12 @@ struct Window {
     int requested_x;
     int requested_y;
     bool maximized;
+    // X11: where the window last sat while not maximized, so a maximized
+    // window saves its restored position rather than the monitor corner.
+    // Configures that measure the whole monitor never overwrite it (see
+    // on_configure_event).
+    bool normal_pos_known;
+    int normal_x, normal_y;
 
     // Status bar contents
     char status_encoding[32];
@@ -207,17 +225,32 @@ void npad_gtk_reload_and_apply_settings(Window *window);
 // Another instance changed its zoom / font type and view sync is on
 void npad_gtk_apply_synced_view_state(Window *window, int zoom, bool monospace);
 
-// Replace the selection with text as one undoable edit (Time/Date, and the
-// ported Replace / list tools later)
+// Replace the selection with text as one undo step of its own, never merged
+// with the typing beside it (Time/Date, Replace, rich paste)
 void npad_gtk_replace_selection(Window *window, const char *text);
 
-// Paste the clipboard's plain text at the caret (Ctrl+V with the Markdown tools
-// off, and the fallback for every rich paste)
+// Paste the clipboard's plain text at the caret as one undo step (Ctrl+V with
+// the Markdown tools off, Shift+Insert, and the fallback for every rich
+// paste). Asynchronous: the text lands when the clipboard owner answers.
 void npad_gtk_paste_plain(Window *window);
 
 // Launch another npad process with extra arguments (NULL-terminated array,
-// may be NULL)
+// may be NULL). A failure is reported in a message box.
 void npad_gtk_spawn_self(const char *const *extra_args);
+
+// The path of this program, with the " (deleted)" a package upgrade under a
+// running npad leaves on /proc/self/exe removed; NULL if unknown. g_free().
+char *npad_gtk_self_exe_path(void);
+
+// A string that may hold file-name bytes (a path, a title built from one) as
+// valid UTF-8 for a GTK widget: GLib's display form, with anything that is not
+// in the file-name encoding replaced. g_free().
+char *npad_gtk_display_text(const char *text);
+
+// Notepad's short time (no seconds) and short date (four-digit year) for now,
+// in the locale's formats, as UTF-8: F5 and the print header's &t / &d.
+// Either pointer may be NULL; g_free() what you get.
+void npad_gtk_short_time_date(char **time_text, char **date_text);
 
 // The settings key (and fallback face) of the font the editor is showing:
 // monospace_font, proportional_font or opendyslexic_font
@@ -231,6 +264,8 @@ void npad_gtk_zoom_by(Window *window, int delta);
 // Text as the buffer wants it: '\n' line breaks and valid UTF-8 (invalid
 // sequences repaired, not dropped). g_malloc'd; NULL only for NULL input.
 char *npad_gtk_normalize_text(const char *text);
+// Whether text is short enough for a GtkTextBuffer (whose lengths are gint)
+bool npad_gtk_text_fits(const char *text);
 
 // --- ui_gtk_dialogs.c --------------------------------------------------------
 
@@ -250,6 +285,14 @@ bool npad_gtk_edit_command_enabled(Window *window, NpadCommand command);
 // open it (with the save prompt), or with insert set put its text at that
 // point as one undo step
 void npad_gtk_edit_drop_file(Window *window, const char *path, bool insert, int x, int y);
+
+// Whether the clipboard holds text / text/html, from the cache the clipboard's
+// owner-change signal keeps. Falls back to asking (a nested main loop) only on
+// a display that cannot report owner changes.
+bool npad_gtk_clipboard_has_text(Window *window);
+bool npad_gtk_clipboard_has_html(Window *window);
+// npad itself just put text on the clipboard (Copy, Cut)
+void npad_gtk_clipboard_note_own_text(Window *window);
 
 // --- ui_gtk_find.c -----------------------------------------------------------
 
@@ -319,6 +362,15 @@ char *npad_gtk_theme_diagnostics(void);
 // The icon name for windows and the About dialog (ui_gtk.c)
 const char *npad_gtk_app_icon_name(void);
 
+// --- ui_gtk_session.c --------------------------------------------------------
+
+// Catch the session ending under npad (see the file layout above). Call once,
+// after gtk_init; everything it registers is asynchronous and optional.
+void npad_gtk_session_init(void);
+// A logout or shutdown is under way: closing the window must park the work,
+// not prompt (a dialog nobody will answer would stall the logout)
+bool npad_gtk_session_ending(void);
+
 // --- ui_gtk_update.c ---------------------------------------------------------
 
 // Check for Updates: look up the latest release in a worker and report it.
@@ -358,6 +410,8 @@ int npad_gtk_instance_count_others(void);
 
 // Whether pid is a running npad instance (bus first, /proc as fallback)
 bool npad_gtk_instance_pid_is_npad(long pid);
+// When pid started, as Unix seconds (from /proc), or -1 when that is unknown
+long long npad_gtk_process_start_time(long pid);
 
 // The desktop's colour preference from the xdg-desktop-portal Settings
 // interface (org.freedesktop.appearance color-scheme): 0 = none / no portal,

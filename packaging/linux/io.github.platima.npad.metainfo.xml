@@ -33,7 +33,12 @@
     <control>pointing</control>
     <control>keyboard</control>
   </supports>
+  <!-- Newest first. A final release's tag must match the first entry
+       (scripts/check-release-version.sh fails the release otherwise); when
+       tagging, set its date to the one on that version's CHANGELOG.md
+       heading. -->
   <releases>
+    <release version="0.36.0" date="2026-10-22"/>
     <release version="0.35.0" date="2026-10-17"/>
     <release version="0.34.0" date="2026-10-17"/>
   </releases>

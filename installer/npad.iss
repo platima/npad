@@ -1,9 +1,14 @@
 ; npad interactive installer (Inno Setup 6)
 ; Build: ISCC /DAppVersion=x.y.z npad.iss   (see build-installers.ps1)
 ;
-; Defaults to a per-user install; the dialog (or /ALLUSERS, or launching
-; elevated) switches to a system-wide install. Fonts are optional components;
-; file associations and the notepad alias takeover are tasks.
+; Defaults to a per-user install; the dialog (or /ALLUSERS) switches to a
+; system-wide install. Launching setup elevated does NOT: with
+; PrivilegesRequired=lowest that is still a per-user install, into the
+; elevated account's profile. Fonts are optional components; file
+; associations, PATH and the notepad alias takeover are tasks; re-running
+; setup with the PATH or notepad alias task unticked removes that entry.
+; Setup refuses to install while an npad MSI is installed (InstalledNpadMsi),
+; as the MSI refuses while this setup's install is there.
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -63,11 +68,19 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ChangesAssociations=yes
 ; The 'addtopath' task edits PATH via [Code]; broadcast the change at the end
 ChangesEnvironment=yes
-; Close a running npad so its exe can be replaced (npad's own save prompt still
-; runs), but do NOT let the Restart Manager silently bring it back: the [Run]
-; entry offers a relaunch instead, and only when there was something to relaunch.
+; Close a running npad so its exe can be replaced (npad shows no save prompt:
+; it parks unsaved documents for the next start, and refuses only when it
+; cannot park them), but do NOT let the Restart Manager bring it back. Setup
+; relaunches it itself, and only when there was something to relaunch: a
+; [Run] checkbox interactively, CurStepChanged(ssPostInstall) automatically
+; for a per-user silent install. DeinitializeSetup covers a cancelled or
+; failed setup.
 CloseApplications=yes
 RestartApplications=no
+; Any Windows 10 or later. Per-user fonts need 1803 (10.0.17134), but only a
+; non-admin install uses them: there the font files are skipped on older
+; builds (FontsInstallable) instead of refusing the whole install, so an
+; all-users install still works on Windows Server 2016 / Windows 10 1607
 MinVersion=10.0
 LicenseFile=..\LICENSE
 #ifdef Sign
@@ -115,7 +128,9 @@ Name: "notepadalias"; Description: "Open 'notepad' with npad (Win+R and app laun
 ; getting it re-ticked on every upgrade, silently reapplying non-Notepad fonts.
 ; A task name with no history falls back to its declared Flags, so the rename
 ; is what actually makes "unchecked" stick. Silent installs opt in with
-; /MERGETASKS="fontdefaults2".
+; /MERGETASKS="fontdefaults2". Per-user installs only: an all-users setup
+; runs as the elevating account, whose settings.json is not the user's (see
+; FontDefaultsOfferable).
 Name: "fontdefaults2"; Description: "Set the bundled fonts as npad's default editor fonts (updates settings.json)"; Check: FontDefaultsOfferable; Flags: unchecked
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
@@ -125,29 +140,36 @@ Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\DOCUMENTATION.md"; DestDir: "{app}"; Flags: ignoreversion
 
-; --- Fonts, system-wide install (admin): FontInstall registers + notifies ---
-Source: "fonts\IntelOneMono\IntelOneMono-Regular.ttf"; DestDir: "{autofonts}"; FontInstall: "Intel One Mono"; Components: fonts\intelonemono; Check: IsAdminInstallMode; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\IntelOneMono\IntelOneMono-Bold.ttf"; DestDir: "{autofonts}"; FontInstall: "Intel One Mono Bold"; Components: fonts\intelonemono; Check: IsAdminInstallMode; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\IntelOneMono\IntelOneMono-Italic.ttf"; DestDir: "{autofonts}"; FontInstall: "Intel One Mono Italic"; Components: fonts\intelonemono; Check: IsAdminInstallMode; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\IntelOneMono\IntelOneMono-BoldItalic.ttf"; DestDir: "{autofonts}"; FontInstall: "Intel One Mono Bold Italic"; Components: fonts\intelonemono; Check: IsAdminInstallMode; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\Roboto\Roboto-Regular.ttf"; DestDir: "{autofonts}"; FontInstall: "Roboto"; Components: fonts\roboto; Check: IsAdminInstallMode; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\Roboto\Roboto-Bold.ttf"; DestDir: "{autofonts}"; FontInstall: "Roboto Bold"; Components: fonts\roboto; Check: IsAdminInstallMode; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\Roboto\Roboto-Italic.ttf"; DestDir: "{autofonts}"; FontInstall: "Roboto Italic"; Components: fonts\roboto; Check: IsAdminInstallMode; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\Roboto\Roboto-BoldItalic.ttf"; DestDir: "{autofonts}"; FontInstall: "Roboto Bold Italic"; Components: fonts\roboto; Check: IsAdminInstallMode; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\OpenDyslexic\OpenDyslexic-Regular.otf"; DestDir: "{autofonts}"; FontInstall: "OpenDyslexic"; Components: fonts\opendyslexic; Check: IsAdminInstallMode; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\OpenDyslexic\OpenDyslexic-Bold.otf"; DestDir: "{autofonts}"; FontInstall: "OpenDyslexic Bold"; Components: fonts\opendyslexic; Check: IsAdminInstallMode; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\OpenDyslexic\OpenDyslexic-Italic.otf"; DestDir: "{autofonts}"; FontInstall: "OpenDyslexic Italic"; Components: fonts\opendyslexic; Check: IsAdminInstallMode; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\OpenDyslexic\OpenDyslexic-BoldItalic.otf"; DestDir: "{autofonts}"; FontInstall: "OpenDyslexic Bold Italic"; Components: fonts\opendyslexic; Check: IsAdminInstallMode; Flags: onlyifdoesntexist uninsneveruninstall
-
-; --- Fonts, per-user install: Win10 1809+ user fonts dir + HKCU registration ---
-Source: "fonts\IntelOneMono\*.ttf"; DestDir: "{localappdata}\Microsoft\Windows\Fonts"; Components: fonts\intelonemono; Check: not IsAdminInstallMode; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\Roboto\*.ttf"; DestDir: "{localappdata}\Microsoft\Windows\Fonts"; Components: fonts\roboto; Check: not IsAdminInstallMode; Flags: onlyifdoesntexist uninsneveruninstall
-Source: "fonts\OpenDyslexic\*.otf"; DestDir: "{localappdata}\Microsoft\Windows\Fonts"; Components: fonts\opendyslexic; Check: not IsAdminInstallMode; Flags: onlyifdoesntexist uninsneveruninstall
+; --- Fonts: {autofonts} + FontInstall in both install modes ---------------
+; All users: C:\Windows\Fonts and HKLM. Per user: the user's own font store
+; (%LOCALAPPDATA%\Microsoft\Windows\Fonts, HKCU), which only Windows 10 1803+
+; has: on an older build a per-user install skips the fonts (FontsInstallable)
+; and still installs npad. Either way FontInstall registers the font AND loads
+; it (AddFontResource + WM_FONTCHANGE), so npad and the fontdefaults2 preset
+; can use it straight away. Before 0.36.0 a per-user install only copied the
+; files and wrote the registry values below, and the fonts appeared after the
+; next sign-out.
+; OpenDyslexic is OpenType (CFF): without fontisnttruetype Inno would append
+; " (TrueType)" to the name, so the name carries Windows' own "(OpenType)"
+; suffix instead. That is also the value name the per-user backstop rows (and
+; every pre-0.36.0 per-user install) write, so each face is registered once.
+Source: "fonts\IntelOneMono\IntelOneMono-Regular.ttf"; DestDir: "{autofonts}"; FontInstall: "Intel One Mono"; Components: fonts\intelonemono; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "fonts\IntelOneMono\IntelOneMono-Bold.ttf"; DestDir: "{autofonts}"; FontInstall: "Intel One Mono Bold"; Components: fonts\intelonemono; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "fonts\IntelOneMono\IntelOneMono-Italic.ttf"; DestDir: "{autofonts}"; FontInstall: "Intel One Mono Italic"; Components: fonts\intelonemono; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "fonts\IntelOneMono\IntelOneMono-BoldItalic.ttf"; DestDir: "{autofonts}"; FontInstall: "Intel One Mono Bold Italic"; Components: fonts\intelonemono; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "fonts\Roboto\Roboto-Regular.ttf"; DestDir: "{autofonts}"; FontInstall: "Roboto"; Components: fonts\roboto; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "fonts\Roboto\Roboto-Bold.ttf"; DestDir: "{autofonts}"; FontInstall: "Roboto Bold"; Components: fonts\roboto; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "fonts\Roboto\Roboto-Italic.ttf"; DestDir: "{autofonts}"; FontInstall: "Roboto Italic"; Components: fonts\roboto; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "fonts\Roboto\Roboto-BoldItalic.ttf"; DestDir: "{autofonts}"; FontInstall: "Roboto Bold Italic"; Components: fonts\roboto; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "fonts\OpenDyslexic\OpenDyslexic-Regular.otf"; DestDir: "{autofonts}"; FontInstall: "OpenDyslexic (OpenType)"; Components: fonts\opendyslexic; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall fontisnttruetype
+Source: "fonts\OpenDyslexic\OpenDyslexic-Bold.otf"; DestDir: "{autofonts}"; FontInstall: "OpenDyslexic Bold (OpenType)"; Components: fonts\opendyslexic; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall fontisnttruetype
+Source: "fonts\OpenDyslexic\OpenDyslexic-Italic.otf"; DestDir: "{autofonts}"; FontInstall: "OpenDyslexic Italic (OpenType)"; Components: fonts\opendyslexic; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall fontisnttruetype
+Source: "fonts\OpenDyslexic\OpenDyslexic-BoldItalic.otf"; DestDir: "{autofonts}"; FontInstall: "OpenDyslexic Bold Italic (OpenType)"; Components: fonts\opendyslexic; Check: FontsInstallable; Flags: onlyifdoesntexist uninsneveruninstall fontisnttruetype
 
 ; Font licenses always accompany the fonts
-Source: "fonts\IntelOneMono\OFL.txt"; DestDir: "{app}\licenses\IntelOneMono"; Components: fonts\intelonemono; Flags: ignoreversion
-Source: "fonts\Roboto\OFL.txt"; DestDir: "{app}\licenses\Roboto"; Components: fonts\roboto; Flags: ignoreversion
-Source: "fonts\OpenDyslexic\OFL.txt"; DestDir: "{app}\licenses\OpenDyslexic"; Components: fonts\opendyslexic; Flags: ignoreversion
+Source: "fonts\IntelOneMono\OFL.txt"; DestDir: "{app}\licenses\IntelOneMono"; Components: fonts\intelonemono; Check: FontsInstallable; Flags: ignoreversion
+Source: "fonts\Roboto\OFL.txt"; DestDir: "{app}\licenses\Roboto"; Components: fonts\roboto; Check: FontsInstallable; Flags: ignoreversion
+Source: "fonts\OpenDyslexic\OFL.txt"; DestDir: "{app}\licenses\OpenDyslexic"; Components: fonts\opendyslexic; Check: FontsInstallable; Flags: ignoreversion
 
 [Registry]
 ; Win+R "npad"
@@ -184,13 +206,18 @@ Root: HKA; Subkey: "Software\Classes\*\OpenWithList\{#AppExe}"; ValueType: none;
 
 ; Per-extension ProgIDs + associations, grouped into tasks (Text / Markdown /
 ; Data / Config / Logs). One ProgID per extension keeps Explorer's type names
-; specific; the group task decides which set is written.
+; specific; the group task decides which set is written. Each ProgID has the
+; open verb and a print verb ("npad /p", as notepad's txtfile has). The
+; extension's own default value is written only when no other ProgID holds it
+; (ExtDefaultClaimable) and carries no uninstall flag: [Code] hands it back
+; on uninstall (SnapshotExtDefaults / RestoreExtDefaults).
 ; --- Text (assoc\text) ---
 ; .txt
 Root: HKA; Subkey: "Software\Classes\npad.txt"; ValueType: string; ValueData: "Text File"; Tasks: assoc\text; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\npad.txt\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\text
 Root: HKA; Subkey: "Software\Classes\npad.txt\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\text
-Root: HKA; Subkey: "Software\Classes\.txt"; ValueType: string; ValueData: "npad.txt"; Tasks: assoc\text; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\npad.txt\shell\print\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" /p ""%1"""; Tasks: assoc\text
+Root: HKA; Subkey: "Software\Classes\.txt"; ValueType: string; ValueData: "npad.txt"; Tasks: assoc\text; Check: ExtDefaultClaimable('.txt')
 Root: HKA; Subkey: "Software\Classes\.txt\OpenWithProgids"; ValueType: string; ValueName: "npad.txt"; ValueData: ""; Tasks: assoc\text; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".txt"; ValueData: "npad.txt"; Tasks: assoc\text; Flags: uninsdeletevalue
 ; --- Markdown & documents (assoc\markdown) ---
@@ -198,14 +225,16 @@ Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueT
 Root: HKA; Subkey: "Software\Classes\npad.md"; ValueType: string; ValueData: "Markdown Document"; Tasks: assoc\markdown; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\npad.md\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\markdown
 Root: HKA; Subkey: "Software\Classes\npad.md\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\markdown
-Root: HKA; Subkey: "Software\Classes\.md"; ValueType: string; ValueData: "npad.md"; Tasks: assoc\markdown; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\npad.md\shell\print\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" /p ""%1"""; Tasks: assoc\markdown
+Root: HKA; Subkey: "Software\Classes\.md"; ValueType: string; ValueData: "npad.md"; Tasks: assoc\markdown; Check: ExtDefaultClaimable('.md')
 Root: HKA; Subkey: "Software\Classes\.md\OpenWithProgids"; ValueType: string; ValueName: "npad.md"; ValueData: ""; Tasks: assoc\markdown; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".md"; ValueData: "npad.md"; Tasks: assoc\markdown; Flags: uninsdeletevalue
 ; .markdown
 Root: HKA; Subkey: "Software\Classes\npad.markdown"; ValueType: string; ValueData: "Markdown Document"; Tasks: assoc\markdown; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\npad.markdown\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\markdown
 Root: HKA; Subkey: "Software\Classes\npad.markdown\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\markdown
-Root: HKA; Subkey: "Software\Classes\.markdown"; ValueType: string; ValueData: "npad.markdown"; Tasks: assoc\markdown; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\npad.markdown\shell\print\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" /p ""%1"""; Tasks: assoc\markdown
+Root: HKA; Subkey: "Software\Classes\.markdown"; ValueType: string; ValueData: "npad.markdown"; Tasks: assoc\markdown; Check: ExtDefaultClaimable('.markdown')
 Root: HKA; Subkey: "Software\Classes\.markdown\OpenWithProgids"; ValueType: string; ValueName: "npad.markdown"; ValueData: ""; Tasks: assoc\markdown; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".markdown"; ValueData: "npad.markdown"; Tasks: assoc\markdown; Flags: uninsdeletevalue
 ; --- Data (assoc\data) ---
@@ -213,49 +242,56 @@ Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueT
 Root: HKA; Subkey: "Software\Classes\npad.csv"; ValueType: string; ValueData: "CSV File"; Tasks: assoc\data; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\npad.csv\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\data
 Root: HKA; Subkey: "Software\Classes\npad.csv\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\data
-Root: HKA; Subkey: "Software\Classes\.csv"; ValueType: string; ValueData: "npad.csv"; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\npad.csv\shell\print\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" /p ""%1"""; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\.csv"; ValueType: string; ValueData: "npad.csv"; Tasks: assoc\data; Check: ExtDefaultClaimable('.csv')
 Root: HKA; Subkey: "Software\Classes\.csv\OpenWithProgids"; ValueType: string; ValueName: "npad.csv"; ValueData: ""; Tasks: assoc\data; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".csv"; ValueData: "npad.csv"; Tasks: assoc\data; Flags: uninsdeletevalue
 ; .tsv
 Root: HKA; Subkey: "Software\Classes\npad.tsv"; ValueType: string; ValueData: "TSV File"; Tasks: assoc\data; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\npad.tsv\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\data
 Root: HKA; Subkey: "Software\Classes\npad.tsv\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\data
-Root: HKA; Subkey: "Software\Classes\.tsv"; ValueType: string; ValueData: "npad.tsv"; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\npad.tsv\shell\print\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" /p ""%1"""; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\.tsv"; ValueType: string; ValueData: "npad.tsv"; Tasks: assoc\data; Check: ExtDefaultClaimable('.tsv')
 Root: HKA; Subkey: "Software\Classes\.tsv\OpenWithProgids"; ValueType: string; ValueName: "npad.tsv"; ValueData: ""; Tasks: assoc\data; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".tsv"; ValueData: "npad.tsv"; Tasks: assoc\data; Flags: uninsdeletevalue
 ; .json
 Root: HKA; Subkey: "Software\Classes\npad.json"; ValueType: string; ValueData: "JSON File"; Tasks: assoc\data; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\npad.json\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\data
 Root: HKA; Subkey: "Software\Classes\npad.json\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\data
-Root: HKA; Subkey: "Software\Classes\.json"; ValueType: string; ValueData: "npad.json"; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\npad.json\shell\print\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" /p ""%1"""; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\.json"; ValueType: string; ValueData: "npad.json"; Tasks: assoc\data; Check: ExtDefaultClaimable('.json')
 Root: HKA; Subkey: "Software\Classes\.json\OpenWithProgids"; ValueType: string; ValueName: "npad.json"; ValueData: ""; Tasks: assoc\data; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".json"; ValueData: "npad.json"; Tasks: assoc\data; Flags: uninsdeletevalue
 ; .xml
 Root: HKA; Subkey: "Software\Classes\npad.xml"; ValueType: string; ValueData: "XML File"; Tasks: assoc\data; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\npad.xml\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\data
 Root: HKA; Subkey: "Software\Classes\npad.xml\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\data
-Root: HKA; Subkey: "Software\Classes\.xml"; ValueType: string; ValueData: "npad.xml"; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\npad.xml\shell\print\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" /p ""%1"""; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\.xml"; ValueType: string; ValueData: "npad.xml"; Tasks: assoc\data; Check: ExtDefaultClaimable('.xml')
 Root: HKA; Subkey: "Software\Classes\.xml\OpenWithProgids"; ValueType: string; ValueName: "npad.xml"; ValueData: ""; Tasks: assoc\data; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".xml"; ValueData: "npad.xml"; Tasks: assoc\data; Flags: uninsdeletevalue
 ; .yaml
 Root: HKA; Subkey: "Software\Classes\npad.yaml"; ValueType: string; ValueData: "YAML File"; Tasks: assoc\data; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\npad.yaml\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\data
 Root: HKA; Subkey: "Software\Classes\npad.yaml\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\data
-Root: HKA; Subkey: "Software\Classes\.yaml"; ValueType: string; ValueData: "npad.yaml"; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\npad.yaml\shell\print\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" /p ""%1"""; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\.yaml"; ValueType: string; ValueData: "npad.yaml"; Tasks: assoc\data; Check: ExtDefaultClaimable('.yaml')
 Root: HKA; Subkey: "Software\Classes\.yaml\OpenWithProgids"; ValueType: string; ValueName: "npad.yaml"; ValueData: ""; Tasks: assoc\data; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".yaml"; ValueData: "npad.yaml"; Tasks: assoc\data; Flags: uninsdeletevalue
 ; .yml
 Root: HKA; Subkey: "Software\Classes\npad.yml"; ValueType: string; ValueData: "YAML File"; Tasks: assoc\data; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\npad.yml\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\data
 Root: HKA; Subkey: "Software\Classes\npad.yml\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\data
-Root: HKA; Subkey: "Software\Classes\.yml"; ValueType: string; ValueData: "npad.yml"; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\npad.yml\shell\print\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" /p ""%1"""; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\.yml"; ValueType: string; ValueData: "npad.yml"; Tasks: assoc\data; Check: ExtDefaultClaimable('.yml')
 Root: HKA; Subkey: "Software\Classes\.yml\OpenWithProgids"; ValueType: string; ValueName: "npad.yml"; ValueData: ""; Tasks: assoc\data; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".yml"; ValueData: "npad.yml"; Tasks: assoc\data; Flags: uninsdeletevalue
 ; .toml
 Root: HKA; Subkey: "Software\Classes\npad.toml"; ValueType: string; ValueData: "TOML File"; Tasks: assoc\data; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\npad.toml\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\data
 Root: HKA; Subkey: "Software\Classes\npad.toml\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\data
-Root: HKA; Subkey: "Software\Classes\.toml"; ValueType: string; ValueData: "npad.toml"; Tasks: assoc\data; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\npad.toml\shell\print\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" /p ""%1"""; Tasks: assoc\data
+Root: HKA; Subkey: "Software\Classes\.toml"; ValueType: string; ValueData: "npad.toml"; Tasks: assoc\data; Check: ExtDefaultClaimable('.toml')
 Root: HKA; Subkey: "Software\Classes\.toml\OpenWithProgids"; ValueType: string; ValueName: "npad.toml"; ValueData: ""; Tasks: assoc\data; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".toml"; ValueData: "npad.toml"; Tasks: assoc\data; Flags: uninsdeletevalue
 ; --- Config (assoc\config) ---
@@ -263,21 +299,24 @@ Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueT
 Root: HKA; Subkey: "Software\Classes\npad.ini"; ValueType: string; ValueData: "INI Configuration File"; Tasks: assoc\config; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\npad.ini\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\config
 Root: HKA; Subkey: "Software\Classes\npad.ini\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\config
-Root: HKA; Subkey: "Software\Classes\.ini"; ValueType: string; ValueData: "npad.ini"; Tasks: assoc\config; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\npad.ini\shell\print\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" /p ""%1"""; Tasks: assoc\config
+Root: HKA; Subkey: "Software\Classes\.ini"; ValueType: string; ValueData: "npad.ini"; Tasks: assoc\config; Check: ExtDefaultClaimable('.ini')
 Root: HKA; Subkey: "Software\Classes\.ini\OpenWithProgids"; ValueType: string; ValueName: "npad.ini"; ValueData: ""; Tasks: assoc\config; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".ini"; ValueData: "npad.ini"; Tasks: assoc\config; Flags: uninsdeletevalue
 ; .cfg
 Root: HKA; Subkey: "Software\Classes\npad.cfg"; ValueType: string; ValueData: "Config File"; Tasks: assoc\config; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\npad.cfg\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\config
 Root: HKA; Subkey: "Software\Classes\npad.cfg\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\config
-Root: HKA; Subkey: "Software\Classes\.cfg"; ValueType: string; ValueData: "npad.cfg"; Tasks: assoc\config; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\npad.cfg\shell\print\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" /p ""%1"""; Tasks: assoc\config
+Root: HKA; Subkey: "Software\Classes\.cfg"; ValueType: string; ValueData: "npad.cfg"; Tasks: assoc\config; Check: ExtDefaultClaimable('.cfg')
 Root: HKA; Subkey: "Software\Classes\.cfg\OpenWithProgids"; ValueType: string; ValueName: "npad.cfg"; ValueData: ""; Tasks: assoc\config; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".cfg"; ValueData: "npad.cfg"; Tasks: assoc\config; Flags: uninsdeletevalue
 ; .conf
 Root: HKA; Subkey: "Software\Classes\npad.conf"; ValueType: string; ValueData: "Config File"; Tasks: assoc\config; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\npad.conf\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\config
 Root: HKA; Subkey: "Software\Classes\npad.conf\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\config
-Root: HKA; Subkey: "Software\Classes\.conf"; ValueType: string; ValueData: "npad.conf"; Tasks: assoc\config; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\npad.conf\shell\print\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" /p ""%1"""; Tasks: assoc\config
+Root: HKA; Subkey: "Software\Classes\.conf"; ValueType: string; ValueData: "npad.conf"; Tasks: assoc\config; Check: ExtDefaultClaimable('.conf')
 Root: HKA; Subkey: "Software\Classes\.conf\OpenWithProgids"; ValueType: string; ValueName: "npad.conf"; ValueData: ""; Tasks: assoc\config; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".conf"; ValueData: "npad.conf"; Tasks: assoc\config; Flags: uninsdeletevalue
 ; --- Logs (assoc\log) ---
@@ -285,7 +324,8 @@ Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueT
 Root: HKA; Subkey: "Software\Classes\npad.log"; ValueType: string; ValueData: "Log File"; Tasks: assoc\log; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\npad.log\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc\log
 Root: HKA; Subkey: "Software\Classes\npad.log\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc\log
-Root: HKA; Subkey: "Software\Classes\.log"; ValueType: string; ValueData: "npad.log"; Tasks: assoc\log; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\npad.log\shell\print\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" /p ""%1"""; Tasks: assoc\log
+Root: HKA; Subkey: "Software\Classes\.log"; ValueType: string; ValueData: "npad.log"; Tasks: assoc\log; Check: ExtDefaultClaimable('.log')
 Root: HKA; Subkey: "Software\Classes\.log\OpenWithProgids"; ValueType: string; ValueName: "npad.log"; ValueData: ""; Tasks: assoc\log; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Platima\npad\Capabilities\FileAssociations"; ValueType: string; ValueName: ".log"; ValueData: "npad.log"; Tasks: assoc\log; Flags: uninsdeletevalue
 ; Preferences > Associations can register groups the installer never did, so
@@ -310,8 +350,9 @@ Root: HKA; Subkey: "Software\Classes\npad.conf"; ValueType: none; Flags: dontcre
 Root: HKA; Subkey: "Software\Classes\npad.log"; ValueType: none; Flags: dontcreatekey uninsdeletekey
 ; On an all-users install HKA is HKLM, but Preferences > Associations writes
 ; the per-user hive by default. Clean the uninstalling account's per-user
-; registrations as well. Other accounts' per-user entries are out of an
-; uninstaller's reach; DOCUMENTATION.md says so.
+; registrations as well (and, in [Code], RemoveUserDefaultAppsEntry: the
+; HKCU RegisteredApplications value). Other accounts' per-user entries are
+; out of an uninstaller's reach; DOCUMENTATION.md says so.
 Root: HKCU; Subkey: "Software\Classes\npad.txt"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\npad.md"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\npad.markdown"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
@@ -330,19 +371,23 @@ Root: HKCU; Subkey: "Software\Classes\Applications\npad.exe"; ValueType: none; C
 Root: HKCU; Subkey: "Software\Classes\*\OpenWithList\npad.exe"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
 Root: HKCU; Subkey: "Software\Platima\npad\Capabilities"; ValueType: none; Check: IsAdminInstallMode; Flags: dontcreatekey uninsdeletekey
 
-; Per-user font registration (admin mode uses FontInstall above instead)
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Intel One Mono (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\IntelOneMono-Regular.ttf"; Check: not IsAdminInstallMode; Components: fonts\intelonemono
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Intel One Mono Bold (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\IntelOneMono-Bold.ttf"; Check: not IsAdminInstallMode; Components: fonts\intelonemono
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Intel One Mono Italic (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\IntelOneMono-Italic.ttf"; Check: not IsAdminInstallMode; Components: fonts\intelonemono
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Intel One Mono Bold Italic (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\IntelOneMono-BoldItalic.ttf"; Check: not IsAdminInstallMode; Components: fonts\intelonemono
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Roboto (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\Roboto-Regular.ttf"; Check: not IsAdminInstallMode; Components: fonts\roboto
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Roboto Bold (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\Roboto-Bold.ttf"; Check: not IsAdminInstallMode; Components: fonts\roboto
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Roboto Italic (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\Roboto-Italic.ttf"; Check: not IsAdminInstallMode; Components: fonts\roboto
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Roboto Bold Italic (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\Roboto-BoldItalic.ttf"; Check: not IsAdminInstallMode; Components: fonts\roboto
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "OpenDyslexic (OpenType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\OpenDyslexic-Regular.otf"; Check: not IsAdminInstallMode; Components: fonts\opendyslexic
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "OpenDyslexic Bold (OpenType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\OpenDyslexic-Bold.otf"; Check: not IsAdminInstallMode; Components: fonts\opendyslexic
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "OpenDyslexic Italic (OpenType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\OpenDyslexic-Italic.otf"; Check: not IsAdminInstallMode; Components: fonts\opendyslexic
-Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "OpenDyslexic Bold Italic (OpenType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\OpenDyslexic-BoldItalic.otf"; Check: not IsAdminInstallMode; Components: fonts\opendyslexic
+; Per-user font registration. FontInstall above writes these same value names
+; (OpenDyslexic included, see fontisnttruetype there); they stay as a
+; backstop for a font file that is already present, which onlyifdoesntexist
+; skips together with its FontInstall. Not before Windows 10 1803, which has
+; no per-user font store to register into.
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Intel One Mono (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\IntelOneMono-Regular.ttf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\intelonemono
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Intel One Mono Bold (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\IntelOneMono-Bold.ttf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\intelonemono
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Intel One Mono Italic (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\IntelOneMono-Italic.ttf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\intelonemono
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Intel One Mono Bold Italic (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\IntelOneMono-BoldItalic.ttf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\intelonemono
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Roboto (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\Roboto-Regular.ttf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\roboto
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Roboto Bold (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\Roboto-Bold.ttf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\roboto
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Roboto Italic (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\Roboto-Italic.ttf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\roboto
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "Roboto Bold Italic (TrueType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\Roboto-BoldItalic.ttf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\roboto
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "OpenDyslexic (OpenType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\OpenDyslexic-Regular.otf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\opendyslexic
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "OpenDyslexic Bold (OpenType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\OpenDyslexic-Bold.otf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\opendyslexic
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "OpenDyslexic Italic (OpenType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\OpenDyslexic-Italic.otf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\opendyslexic
+Root: HKCU; Subkey: "Software\Microsoft\Windows NT\CurrentVersion\Fonts"; ValueType: string; ValueName: "OpenDyslexic Bold Italic (OpenType)"; ValueData: "{localappdata}\Microsoft\Windows\Fonts\OpenDyslexic-BoldItalic.otf"; Check: (not IsAdminInstallMode) and PerUserFontsSupported; Components: fonts\opendyslexic
 
 [Icons]
 Name: "{autoprograms}\npad"; Filename: "{app}\{#AppExe}"
@@ -354,6 +399,11 @@ Name: "{autodesktop}\npad"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 ; not silently relaunch it behind this checkbox, so exactly one instance starts
 ; and only if the user leaves the box ticked.
 Filename: "{app}\{#AppExe}"; Description: "Relaunch npad"; Flags: postinstall nowait skipifsilent; Check: NpadWasRunning
+; A silent install has no Finished page, so the entry above never runs. That
+; relaunch is not a [Run] entry: Inno runs non-postinstall entries BEFORE
+; CurStepChanged(ssPostInstall), so npad would start before ApplyFontDefaults
+; writes settings.json - and save its old settings over the preset on exit.
+; See RelaunchSilently and CurStepChanged.
 ; Windows will not let installers set the default handler programmatically
 Filename: "ms-settings:defaultapps"; Description: "Open Default Apps settings (make npad the default editor)"; Flags: postinstall shellexec skipifsilent unchecked
 ; The Windows 11 Store Notepad alias must be disabled by hand:
@@ -363,6 +413,41 @@ Filename: "ms-settings:defaultapps"; Description: "Open Default Apps settings (m
 Filename: "ms-settings:advanced-apps"; Description: "Open Settings to disable the Windows 11 Notepad alias (App execution aliases)"; Flags: postinstall shellexec skipifsilent; Check: ShouldOfferAliasSettings
 
 [Code]
+var
+  // See InitializeSetup
+  GNpadWasRunning: Boolean;
+  // Set at ssDone: the install finished. DeinitializeSetup relaunches npad
+  // only when it did not (cancelled, aborted, failed).
+  GInstallDone: Boolean;
+  // Where a npad to relaunch can be found if setup stops early: the previous
+  // installation's folder (known once the wizard exists), then the target
+  // folder (known once installation starts)
+  GPrevAppDir: String;
+  GAppDir: String;
+  // Each extension's default value as uninstall found it - see
+  // SnapshotExtDefaults
+  GExtBefore: array of String;
+  // InitializeSetup refused to install beside an npad MSI (RefuseBesideMsi
+  // has already done what DeinitializeSetup would)
+  GRefused: Boolean;
+
+const
+  // installer/npad.wxs's UpgradeCode, shared by every npad MSI (x64, arm64,
+  // every version) - what src/platform/ui_win32.c enumerates too
+  NpadMsiUpgradeCode = '{6C9F1E28-4B57-4A0D-BE73-8A51F2D90C44}';
+  // This setup's own uninstall key ([Setup] AppId plus Inno's "_is1")
+  NpadSetupUninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{B7E5A2C4-9D31-4F8E-A6C0-3D2E71540A9B}_is1';
+  // The value Preferences > Associations writes under
+  // Software\RegisteredApplications (src/platform/assoc_win32.c's CAPS)
+  NpadCapabilitiesKey = 'Software\Platima\npad\Capabilities';
+
+// Windows Installer: the ProductCode of each product sharing an UpgradeCode,
+// installed for this user (per-user) or for the machine (all-users). msi.dll
+// is loaded on first use; it is part of every supported Windows.
+function MsiEnumRelatedProducts(lpUpgradeCode: String; dwReserved: Cardinal;
+  iProductIndex: Cardinal; lpProductBuf: String): Cardinal;
+  external 'MsiEnumRelatedProductsW@msi.dll stdcall delayload';
+
 // The Components and Tasks check lists draw their check boxes at a raw,
 // unscaled Offset of 2 and 4 pixels while the glyph itself scales with DPI.
 // At 150% (ScaleX(100) = 167 with the default WizardSizePercent) the top-level
@@ -376,6 +461,78 @@ begin
   WizardForm.ComponentsList.Offset := ScaleX(8);
   WizardForm.TasksList.Offset := ScaleX(8);
   WizardForm.RunList.Offset := ScaleX(8);
+  GPrevAppDir := WizardForm.PrevAppDir;
+end;
+
+// --- One installer per machine --------------------------------------------
+// npad's MSI is a separate product with its own Installed apps entry, but it
+// installs to the same folder and writes the same App Paths, alias, PATH and
+// file-type keys as this setup. Installing both listed npad twice, and
+// uninstalling either removed the program and the entries the other still
+// pointed at. So setup refuses while an npad MSI is installed, per-user (for
+// this account) or all-users, and the MSI refuses while this setup's install
+// is there (its LaunchCondition). The MSI is found the way Windows Installer
+// registers it: by its UpgradeCode.
+function InstalledNpadMsi(): String;
+var
+  Buf: String;
+begin
+  Result := '';
+  // 38 characters and the terminating NUL
+  Buf := StringOfChar(' ', 39);
+  try
+    if MsiEnumRelatedProducts(NpadMsiUpgradeCode, 0, 0, Buf) = 0 then
+      Result := Copy(Buf, 1, 38);
+  except
+    Log('Could not ask Windows Installer about an npad MSI: ' + GetExceptionMessage);
+  end;
+end;
+
+// Setup is about to exit without installing. An in-app update (/RELAUNCH=1)
+// closed npad before starting setup, parking its unsaved documents; start
+// the copy this setup installed earlier, when there is one, which restores
+// them (DeinitializeSetup's job, but it knows no folder this early). As the
+// original user, and never for a silent all-users run.
+procedure RelaunchAfterRefusal();
+var
+  Dir, Exe: String;
+  ResultCode: Integer;
+begin
+  if (not GNpadWasRunning) or (FindWindowByClassName('NpadMainWindow') <> 0) then
+    exit;
+  if WizardSilent and IsAdminInstallMode then
+    exit;
+  if not RegQueryStringValue(HKEY_CURRENT_USER, NpadSetupUninstallKey, 'InstallLocation', Dir) then
+    if not RegQueryStringValue(HKEY_LOCAL_MACHINE, NpadSetupUninstallKey, 'InstallLocation', Dir) then
+      exit;
+  Exe := AddBackslash(Dir) + '{#AppExe}';
+  if FileExists(Exe) then
+    ExecAsOriginalUser(Exe, '', '', SW_SHOWNORMAL, ewNoWait, ResultCode);
+end;
+
+// Interactive: a message box. Silent (/SILENT, /VERYSILENT): only the log
+// line, so an unattended deployment can never wait on a box nobody sees;
+// returning False from InitializeSetup ends setup with exit code 1 either way.
+procedure RefuseBesideMsi(const Product: String);
+var
+  Msg: String;
+begin
+  Log('npad is already installed by its Windows Installer package (MSI product ' + Product +
+      '). Refusing to install a second copy beside it: uninstall the MSI first ' +
+      '(msiexec /x ' + Product + '), then run setup again. Exit code 1.');
+  if not WizardSilent then
+  begin
+    Msg := 'npad is already installed on this PC by its Windows Installer package (MSI).' + #13#10#13#10 +
+           'Setup will not install npad a second time: the two installations would share one ' +
+           'folder and the same registrations, and uninstalling either would break the other.' + #13#10#13#10 +
+           'Uninstall npad first (Settings > Apps > Installed apps, or msiexec /x ' + Product +
+           '), then run this setup again.';
+    if GNpadWasRunning and (FindWindowByClassName('NpadMainWindow') = 0) then
+      Msg := Msg + #13#10#13#10 + 'Unsaved npad documents are kept and reopen the next time npad starts.';
+    MsgBox(Msg, mbCriticalError, MB_OK);
+  end;
+  RelaunchAfterRefusal();
+  GRefused := True;
 end;
 
 // --- Was npad already running when setup started? -------------------------
@@ -388,19 +545,71 @@ end;
 //   * a window exists  -> the user launched setup while npad was open
 //   * /RELAUNCH=1      -> npad launched setup ITSELF for an in-app update and
 //                         then closed, so by now there is no window to find
-var
-  GNpadWasRunning: Boolean;
-
 function InitializeSetup(): Boolean;
+var
+  Msi: String;
 begin
   GNpadWasRunning := (FindWindowByClassName('NpadMainWindow') <> 0) or
                      (ExpandConstant('{param:RELAUNCH|0}') = '1');
+  GInstallDone := False;
+  GRefused := False;
   Result := True;
+  Msi := InstalledNpadMsi();
+  if Msi <> '' then
+  begin
+    RefuseBesideMsi(Msi);
+    Result := False;
+  end;
 end;
 
 function NpadWasRunning(): Boolean;
 begin
   Result := GNpadWasRunning;
+end;
+
+function NpadWindowOpen(): Boolean;
+begin
+  Result := FindWindowByClassName('NpadMainWindow') <> 0;
+end;
+
+// The silent-install relaunch: a silent install has no Finished page, so bring
+// npad back without asking, which restores the windows it parked when setup
+// closed it. Done at the very end of CurStepChanged(ssPostInstall), after
+// settings.json, PATH and the notepad alias are final. Never in administrative
+// install mode: that process is an administrator, or SYSTEM under Intune and
+// SCCM, and a npad started from it would run as that account, on its profile.
+function RelaunchSilently(): Boolean;
+begin
+  Result := WizardSilent and (not IsAdminInstallMode) and GNpadWasRunning and
+            (not NpadWindowOpen());
+end;
+
+// Setup closes npad (Install Now closes it before the wizard even appears,
+// the Preparing page otherwise) but the only relaunch is on the Finished
+// page. A cancelled wizard, an abort, or /SUPPRESSMSGBOXES answering a
+// locked-file prompt with Abort would leave the user with no npad and their
+// parked windows waiting for some later launch. Start whichever npad.exe is
+// there - the old one if nothing was replaced - which restores those windows.
+// As the original (unelevated) user, and never for a silent all-users run.
+procedure DeinitializeSetup();
+var
+  Exe: String;
+  ResultCode: Integer;
+begin
+  if GInstallDone or GRefused or (not GNpadWasRunning) then
+    exit;
+  if WizardSilent and IsAdminInstallMode then
+    exit;
+  // Setup never got as far as closing it (cancelled on an early page)
+  if NpadWindowOpen() then
+    exit;
+  Exe := '';
+  if GAppDir <> '' then
+    Exe := AddBackslash(GAppDir) + '{#AppExe}';
+  if ((Exe = '') or (not FileExists(Exe))) and (GPrevAppDir <> '') then
+    Exe := AddBackslash(GPrevAppDir) + '{#AppExe}';
+  if (Exe <> '') and FileExists(Exe) then
+    ExecAsOriginalUser(Exe, '', '', SW_SHOWNORMAL, ewNoWait, ResultCode);
 end;
 
 // The App-execution-aliases Settings page is only useful when the Windows
@@ -411,6 +620,141 @@ function ShouldOfferAliasSettings(): Boolean;
 begin
   Result := WizardIsTaskSelected('notepadalias') and
             FileExists(ExpandConstant('{localappdata}\Microsoft\WindowsApps\notepad.exe'));
+end;
+
+// The hive this installation writes: HKA, as [Code] has to spell it
+function ScopeRoot(): Integer;
+begin
+  if IsAdminInstallMode then
+    Result := HKEY_LOCAL_MACHINE
+  else
+    Result := HKEY_CURRENT_USER;
+end;
+
+// --- 'notepadalias' task, turned off --------------------------------------
+// UsePreviousTasks offers the alias ticked again on every re-run, and the
+// [Registry] entry only ever writes. Unticking it must take it away, or the
+// only remedies are uninstalling or editing the registry. Only an alias that
+// points at npad.exe is ours to remove.
+procedure RemoveNotepadAlias();
+var
+  Key, Target: String;
+begin
+  Key := 'Software\Microsoft\Windows\CurrentVersion\App Paths\notepad.exe';
+  if not RegQueryStringValue(ScopeRoot(), Key, '', Target) then
+    exit;
+  if CompareText(ExtractFileName(RemoveQuotes(Target)), '{#AppExe}') = 0 then
+    RegDeleteKeyIncludingSubkeys(ScopeRoot(), Key);
+end;
+
+// --- Extension default values (the assoc\* tasks) -------------------------
+// Setting Software\Classes\.txt's default value is what makes npad the type's
+// handler where Windows still lets a registration decide. Machine-wide that
+// value is Windows' own (txtfile, inifile, xmlfile) or another app's
+// (Excel.CSV), and the uninstall log could only delete it, never put it back:
+// an all-users uninstall used to leave .txt with no type name, no icon and no
+// New > Text Document. So setup claims an extension only when nothing else
+// holds it, and uninstall hands back exactly what it found (below). npad is
+// offered for the type either way, through OpenWithProgids and Capabilities.
+function ExtDefaultClaimable(const Ext: String): Boolean;
+var
+  Current: String;
+begin
+  if not RegQueryStringValue(ScopeRoot(), 'Software\Classes\' + Ext, '', Current) then
+    Current := '';
+  Result := (Current = '') or (CompareText(Current, 'npad' + Ext) = 0);
+end;
+
+const
+  AssocExtCount = 14;
+
+function AssocExt(I: Integer): String;
+begin
+  case I of
+    0: Result := '.txt';
+    1: Result := '.md';
+    2: Result := '.markdown';
+    3: Result := '.csv';
+    4: Result := '.tsv';
+    5: Result := '.json';
+    6: Result := '.xml';
+    7: Result := '.yaml';
+    8: Result := '.yml';
+    9: Result := '.toml';
+    10: Result := '.ini';
+    11: Result := '.cfg';
+    12: Result := '.conf';
+    13: Result := '.log';
+  else
+    Result := '';
+  end;
+end;
+
+// The ProgID Windows ships as the machine-wide default, matching
+// src/platform/assoc_win32.c's table
+function StockProgId(const Ext: String): String;
+begin
+  if (Ext = '.txt') or (Ext = '.log') then
+    Result := 'txtfile'
+  else if Ext = '.ini' then
+    Result := 'inifile'
+  else if Ext = '.xml' then
+    Result := 'xmlfile'
+  else
+    Result := '';
+end;
+
+// Before the uninstall log runs. Logs written by installers before 0.36.0
+// still carry an unconditional uninsdeletevalue for every extension, and an
+// upgrade keeps those records, so the log may delete a value npad does not
+// own; RestoreExtDefaults puts it back afterwards.
+procedure SnapshotExtDefaults();
+var
+  I: Integer;
+  V: String;
+begin
+  SetArrayLength(GExtBefore, AssocExtCount);
+  for I := 0 to AssocExtCount - 1 do
+  begin
+    if not RegQueryStringValue(ScopeRoot(), 'Software\Classes\' + AssocExt(I), '', V) then
+      V := '';
+    GExtBefore[I] := V;
+  end;
+end;
+
+// After the uninstall log has run
+procedure RestoreExtDefaults();
+var
+  I: Integer;
+  Ext, Key, Ours, Cur, Stock: String;
+begin
+  for I := 0 to GetArrayLength(GExtBefore) - 1 do
+  begin
+    Ext := AssocExt(I);
+    Key := 'Software\Classes\' + Ext;
+    Ours := 'npad' + Ext;
+    if not RegQueryStringValue(ScopeRoot(), Key, '', Cur) then
+      Cur := '';
+    if CompareText(GExtBefore[I], Ours) = 0 then
+    begin
+      // npad's own claim: give the type back. Per-user, deleting it is the
+      // restore (HKCU only overlays HKLM). Machine-wide, an older installer
+      // may have overwritten Windows' own ProgID, so put that back when
+      // Windows still has it.
+      if (Cur = '') or (CompareText(Cur, Ours) = 0) then
+      begin
+        Stock := StockProgId(Ext);
+        if IsAdminInstallMode and (Stock <> '') and
+           RegKeyExists(HKEY_LOCAL_MACHINE, 'Software\Classes\' + Stock) then
+          RegWriteStringValue(HKEY_LOCAL_MACHINE, Key, '', Stock)
+        else if Cur <> '' then
+          RegDeleteValue(ScopeRoot(), Key, '');
+      end;
+    end
+    else if (GExtBefore[I] <> '') and (Cur = '') then
+      // Another app's claim, deleted by an older npad's uninstall record
+      RegWriteStringValue(ScopeRoot(), Key, '', GExtBefore[I]);
+  end;
 end;
 
 // --- PATH entry ('addtopath' task) ---------------------------------------
@@ -473,6 +817,25 @@ end;
 // A font family counts as available when its component is being installed
 // OR it is already present on the system (user or machine font store).
 
+// Windows 10 1803 (build 17134) introduced the per-user font store that a
+// non-admin install's {autofonts} and FontInstall use
+function PerUserFontsSupported(): Boolean;
+var
+  Version: TWindowsVersion;
+begin
+  GetWindowsVersionEx(Version);
+  Result := (Version.Major > 10) or
+            ((Version.Major = 10) and (Version.Build >= 17134));
+end;
+
+// The font [Files] entries' Check: always for all users (C:\Windows\Fonts),
+// per user only where the per-user font store exists. Gating the fonts alone
+// keeps MinVersion at 10.0 for the rest of the install.
+function FontsInstallable(): Boolean;
+begin
+  Result := IsAdminInstallMode or PerUserFontsSupported();
+end;
+
 function FontFilePresent(const FileName: String): Boolean;
 begin
   Result := FileExists(ExpandConstant('{localappdata}\Microsoft\Windows\Fonts\') + FileName) or
@@ -481,19 +844,24 @@ end;
 
 function MonoFontAvailable(): Boolean;
 begin
-  Result := WizardIsComponentSelected('fonts\intelonemono') or
+  Result := (WizardIsComponentSelected('fonts\intelonemono') and FontsInstallable()) or
             FontFilePresent('IntelOneMono-Regular.ttf');
 end;
 
 function PropFontAvailable(): Boolean;
 begin
-  Result := WizardIsComponentSelected('fonts\roboto') or
+  Result := (WizardIsComponentSelected('fonts\roboto') and FontsInstallable()) or
             FontFilePresent('Roboto-Regular.ttf');
 end;
 
+// Per-user installs only. An all-users install relaunches setup elevated, and
+// under over-the-shoulder UAC that process is the ADMINISTRATOR: {userappdata}
+// would be their settings.json, so the user who ticked the box would still see
+// Consolas while the admin's npad changed font. The fonts themselves are still
+// installed for everyone and can be picked in Preferences.
 function FontDefaultsOfferable(): Boolean;
 begin
-  Result := MonoFontAvailable() or PropFontAvailable();
+  Result := (not IsAdminInstallMode) and (MonoFontAvailable() or PropFontAvailable());
 end;
 
 // Set "Key": "Value" in the flat JSON string npad uses for settings.json:
@@ -542,7 +910,7 @@ var
 begin
   if not WizardIsTaskSelected('fontdefaults2') then
     Exit;
-  if not (MonoFontAvailable() or PropFontAvailable()) then
+  if not FontDefaultsOfferable() then
     Exit;
   SettingsDir := ExpandConstant('{userappdata}\Platima\npad');
   SettingsFile := SettingsDir + '\settings.json';
@@ -560,17 +928,61 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
 begin
-  if CurStep = ssPostInstall then
+  if CurStep = ssInstall then
+    GAppDir := ExpandConstant('{app}')
+  else if CurStep = ssPostInstall then
   begin
     ApplyFontDefaults();
+    // Both tasks' state is the state wanted: re-running setup with one
+    // unticked removes what an earlier run added
     if WizardIsTaskSelected('addtopath') then
-      EnvAddPath(ExpandConstant('{app}'));
-  end;
+      EnvAddPath(ExpandConstant('{app}'))
+    else
+      EnvRemovePath(ExpandConstant('{app}'));
+    if not WizardIsTaskSelected('notepadalias') then
+      RemoveNotepadAlias();
+    // Last, so the relaunched npad reads the final settings.json
+    if RelaunchSilently() then
+      ExecAsOriginalUser(ExpandConstant('{app}\{#AppExe}'), '', '', SW_SHOWNORMAL,
+                         ewNoWait, ResultCode);
+  end
+  else if CurStep = ssDone then
+    GInstallDone := True;
+end;
+
+// An all-users uninstall also cleans the uninstalling account's per-user
+// registrations (the HKCU [Registry] rows above). Preferences > Associations
+// lists npad in Default apps per user too, as the value "npad" under
+// HKCU\Software\RegisteredApplications naming the per-user Capabilities key
+// those rows delete; without this the value stayed behind, naming a key that
+// no longer exists. Removed only when it is npad's own entry. Done in [Code]
+// rather than as a dontcreatekey row because a row with no value type is not
+// certain to log a value deletion. A per-user uninstall's own [Registry] row
+// (HKA, uninsdeletevalue) already removes it.
+procedure RemoveUserDefaultAppsEntry();
+var
+  Value: String;
+begin
+  if not IsAdminInstallMode then
+    exit;
+  if RegQueryStringValue(HKEY_CURRENT_USER, 'Software\RegisteredApplications', 'npad', Value) and
+     (CompareText(Value, NpadCapabilitiesKey) = 0) then
+    RegDeleteValue(HKEY_CURRENT_USER, 'Software\RegisteredApplications', 'npad');
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
+  begin
     EnvRemovePath(ExpandConstant('{app}'));
+    SnapshotExtDefaults();
+  end
+  else if CurUninstallStep = usPostUninstall then
+  begin
+    RestoreExtDefaults();
+    RemoveUserDefaultAppsEntry();
+  end;
 end;

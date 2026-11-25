@@ -13,13 +13,19 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <commdlg.h>
+#include <cderr.h>
 #include <prsht.h>
 #include <richedit.h>
 #include <shellapi.h>
 #include <winhttp.h>
 #include <bcrypt.h>
+// Authenticode types for the update check; the functions themselves are
+// resolved at run time from System32 (see authenticode_check)
+#include <wincrypt.h>
+#include <wintrust.h>
 #include <objbase.h>
 #include <shlobj.h>
+#include <tom.h>
 
 #include "../ui_interface.h"
 #include "../main.h"
@@ -29,14 +35,20 @@
 #include "../core/find_seed.h"
 #include "../core/html_md.h"
 #include "../core/list_ops.h"
+#include "../core/print_core.h"
 #include "../core/session.h"
 #include "../core/settings.h"
+#include "../core/settings_import.h"
 #include "../core/startup_prof.h"
 #include "../core/tab_stops.h"
+#include "../core/text_scan.h"
+#include "../core/ui_rules.h"
 #include "assoc_win32.h"
 #include "print_win32.h"
+#include "richedit_text.h"
 #include "../core/update_check.h"
 #include "resource.h"
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,6 +62,9 @@
 #endif
 #ifndef MSFTEDIT_CLASS
 #define MSFTEDIT_CLASS L"RICHEDIT50W"
+#endif
+#ifndef ERROR_ELEVATION_REQUIRED
+#define ERROR_ELEVATION_REQUIRED 740L // winerror.h; absent from some MinGW headers
 #endif
 
 // Window class name
@@ -212,7 +227,6 @@ static double qpc_ms(void) {
 #define ID_FORMAT_EOL_CRLF 2211 // 2211..2213, order matches the LineEnding enum
 #define ID_FORMAT_EOL_LF 2212
 #define ID_FORMAT_EOL_CR 2213
-#define ID_FORMAT_EOL_CYCLE 2214
 #define ID_ENCODING_BASE 2221 // 2221..2225, order matches the TextEncoding enum
 #define ID_VIEW_STATUS_BAR 2301
 #define ID_VIEW_DARK_MODE 2302
@@ -247,6 +261,7 @@ struct Window {
     HMENU recent_menu;
     HACCEL haccel;
     bool is_modified;
+    bool text_altered; // The last load could not be held exactly (see richedit_text.h)
     bool setting_text_programmatically; // Suppress EN_CHANGE during programmatic changes
     bool word_wrap_enabled;
     bool status_bar_visible;
@@ -264,6 +279,20 @@ struct Window {
     bool applied_dark;
     bool font_applied;
     CHARFORMAT2W applied_font;
+    // The edit control's Text Object Model document, fetched once (see
+    // tom_document) and released when the control is destroyed
+    ITextDocument *tom;
+    bool tom_unavailable;
+    // Default tab stop for the applied font, in points, as measured at
+    // tab_dpi and zoom tab_zoom_num/tab_zoom_den (see apply_tab_stops); 0
+    // until measured, and reset to 0 when the font changes
+    float tab_stop_points;
+    UINT tab_dpi;
+    LONG tab_zoom_num, tab_zoom_den;
+    bool tab_check_pending; // NPAD_WM_REAPPLY_TABS posted and not yet handled
+    // File > Recent Files exactly as the menu last showed it, so a click opens
+    // the entry the user saw even if the stored list changed since
+    char *recent_paths[MAX_RECENT_MENU_FILES];
     // Last text sent per status part; skip identical sends. Sized to hold the
     // longest part-0 counts line in full - a short cache would compare equal on
     // a shared prefix and silently skip the update.
@@ -277,6 +306,10 @@ struct Window {
     bool line_cut_pending;      // Last Ctrl+X was a whole-line cut (paste-above mode)
     DWORD line_cut_clip_seq;    // Clipboard sequence number right after that cut
     bool update_item_available; // Help update item currently shows "Update Available"
+    // Maximize asked for before the window was first shown: the first show
+    // then uses SW_SHOWMAXIMIZED, so the window never appears (and paints) at
+    // its restored size first (see ui_platform_show_window)
+    bool show_maximized;
 };
 
 // Global variables
@@ -308,6 +341,17 @@ static UINT g_close_handoff_msg = 0;
 // otherwise put up an invisible modal dialog and stall setup until it times
 // out. That is the whole reason this latch exists.
 static bool g_session_ending = false;
+
+// Set while this window's own save-checked close (UI_EVENT_QUIT) is running.
+// Its save prompt is modal and pumps messages, so a second close request -
+// another instance's Close All, a second click on the close box, File > Exit
+// from the taskbar - would otherwise run a second, nested prompt on top of
+// the first. See request_quit.
+static bool g_quit_prompt_open = false;
+
+// WM_QUERYENDSESSION refused to let Windows end the session (the document
+// could not be parked) and registered a reason that Windows shows for it
+static bool g_shutdown_blocked = false;
 
 // Registered message carrying live view state (font type + zoom) between
 // instances when "Sync view across all instances" is enabled.
@@ -391,13 +435,20 @@ static HWND preview_active_window(void);
 static HACCEL preview_active_accelerators(void);
 static void preview_close_active(void);
 static void preview_retheme_active(void);
+static void preview_recolour_active(void);
+static void print_flush_deferred(void);
+static void print_theme_window(HWND hwnd);
 static void apply_font(Window *window);
 static void apply_font_default(Window *window);
 static void refresh_font_binding(Window *window);
+static void apply_tab_stops(Window *window);
+static void tom_release(Window *window);
+static void replace_sel_one_step(HWND edit, const wchar_t *text);
 static void apply_word_wrap(Window *window);
 static void update_menu_states(Window *window);
 static void rebuild_recent_menu(Window *window);
-static void show_font_dialog(Window *window, const char *font_key, const char *default_face);
+static void show_font_dialog(Window *window, HWND owner, const char *font_key,
+                             const char *default_face);
 static void show_goto_dialog(Window *window);
 static void show_preferences_dialog(const Window *window, int start_page, bool show_debug);
 static void reload_and_apply_settings(Window *window);
@@ -537,24 +588,20 @@ static bool read_system_light_theme(void) {
     return read_personalize_light(L"SystemUsesLightTheme");
 }
 
-// Whether apps should use dark mode according to the OS setting
+// Whether apps should use dark mode according to the OS setting (the app
+// surface's setting, AppsUseLightTheme; missing means light)
 static bool read_system_dark_mode(void) {
-    bool dark = false;
-    HKEY hkey;
-    DWORD value = 1;
-    DWORD size = sizeof(value);
-    if (RegOpenKeyExW(HKEY_CURRENT_USER,
-                      L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", 0,
-                      KEY_READ, &hkey) == ERROR_SUCCESS) {
-        DWORD type = REG_DWORD;
-        if (RegQueryValueExW(hkey, L"AppsUseLightTheme", NULL, &type, (LPBYTE) &value, &size) ==
-                ERROR_SUCCESS &&
-            type == REG_DWORD && size == sizeof(DWORD)) {
-            dark = (value == 0);
-        }
-        RegCloseKey(hkey);
-    }
-    return dark;
+    return !read_personalize_light(L"AppsUseLightTheme");
+}
+
+// Whether a High Contrast theme is on. Notepad then draws in the theme's own
+// window colours, which is what a High Contrast user relies on.
+static bool high_contrast_on(void) {
+    HIGHCONTRASTW hc;
+    ZeroMemory(&hc, sizeof(hc));
+    hc.cbSize = sizeof(hc);
+    return SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(hc), &hc, 0) &&
+           (hc.dwFlags & HCF_HIGHCONTRASTON) != 0;
 }
 
 // Resolve the "theme" setting to editor colors and whether the scheme is
@@ -570,7 +617,18 @@ static bool theme_colors(COLORREF *bg, COLORREF *fg) {
     char *theme = settings_get_string("theme", "light");
     const char *t = theme ? theme : "light";
 
-    if (strcmp(t, "dark") == 0) {
+    // Light (the default, and what Notepad is) and System follow a High
+    // Contrast theme's window colours instead of fixed white on black, as
+    // notepad.exe does. The other schemes are a deliberate choice, so they
+    // keep their own colours. Not dark: the High Contrast theme draws its
+    // own frame, and forcing dark scroll bars or a dark caption over it
+    // would fight it.
+    bool follow_high_contrast =
+        (strcmp(t, "light") == 0 || strcmp(t, "system") == 0) && high_contrast_on();
+
+    if (follow_high_contrast) {
+        dark = false; // back / text keep the system colours read above
+    } else if (strcmp(t, "dark") == 0) {
         dark = true;
         back = RGB(30, 30, 30);
         text = RGB(220, 220, 220);
@@ -624,8 +682,11 @@ static COLORREF g_frame_color = CLR_INVALID;
 // 1809+). Both are resolved dynamically: uxtheme is not otherwise imported, and
 // a missing export must degrade to today's light bars rather than fail to load.
 //
-// AllowDark rather than ForceDark: it permits dark theming per control instead
-// of imposing it process-wide on every common control npad owns.
+// The mode is ForceDark or ForceLight, derived from npad's own scheme (see
+// apply_preferred_app_mode), never AllowDark: AllowDark follows the Windows
+// AppsUseLightTheme setting instead, which is wrong in both directions for an
+// app with its own colour scheme. SetWindowTheme("DarkMode_Explorer") then
+// themes the edit control's bars only once that mode allows dark.
 typedef enum {
     PAM_DEFAULT = 0,
     PAM_ALLOWDARK = 1,  // Dark applied only if WINDOWS is dark - not what npad wants
@@ -917,13 +978,13 @@ static bool handle_markdown_tab(HWND hwnd) {
     return false; // Plain Tab types a tab, classic Notepad behavior
 }
 
-// "Tab inserts spaces" (Preferences > General; a general editing preference,
+// "Tab inserts spaces" (Preferences > Editor; a general editing preference,
 // not a Markdown one): a plain Tab types the spaces that reach the next tab
 // stop instead of a tab character. The column is counted in characters from
 // the start of the line by core/tab_stops, from the line's text converted to
 // UTF-8, so a surrogate pair is one column (the status bar's Col counts UTF-16
 // units). A selection is replaced, as a tab character would replace it. One
-// Tab is one EM_REPLACESEL, which RichEdit records as one undo step. Shift+Tab
+// Tab is one undo step (replace_sel_one_step). Shift+Tab
 // and Ctrl/Alt chords are left alone. Runs after handle_markdown_tab, so the
 // list tools' Tab-over-a-selection indent still wins when they are on.
 static bool handle_tab_spaces(HWND hwnd) {
@@ -949,7 +1010,7 @@ static bool handle_tab_spaces(HWND hwnd) {
         spaces[i] = L' ';
     spaces[count] = L'\0';
     g_swallow_tab_char = true; // The WM_CHAR TranslateMessage queued is not wanted
-    SendMessageW(hwnd, EM_REPLACESEL, TRUE, (LPARAM) spaces);
+    replace_sel_one_step(hwnd, spaces);
     SendMessageW(hwnd, EM_SCROLLCARET, 0, 0);
     return true;
 }
@@ -1047,10 +1108,10 @@ static bool handle_markdown_return(HWND hwnd) {
     bool handled = true;
     if (end - start == prefix_len) {
         // Empty bullet: end the list - drop the marker, keep the newline
-        // (single EM_REPLACESEL, one undo unit)
+        // (one replacement, one undo unit)
         CHARRANGE r = { start, caret };
         SendMessageW(hwnd, EM_EXSETSEL, 0, (LPARAM) &r);
-        SendMessageW(hwnd, EM_REPLACESEL, TRUE, (LPARAM) L"\r");
+        replace_sel_one_step(hwnd, L"\r");
     } else {
         // Splitting right before an existing bullet must not mint another
         // marker ("- item |- second" would become "- - second"): the text
@@ -1085,7 +1146,7 @@ static bool handle_markdown_return(HWND hwnd) {
             ins[0] = L'\r';
             memcpy(ins + 1, buf, (size_t) prefix_len * sizeof(wchar_t));
             ins[1 + prefix_len] = L'\0';
-            SendMessageW(hwnd, EM_REPLACESEL, TRUE, (LPARAM) ins);
+            replace_sel_one_step(hwnd, ins);
         }
     }
     free(wbody);
@@ -1111,6 +1172,11 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, L
     if (msg == WM_MOUSEACTIVATE) {
         SetFocus(hwnd);
         return MA_ACTIVATE;
+    }
+
+    // Let go of the TOM document while the control it belongs to still exists
+    if (msg == WM_DESTROY && g_main_window && g_main_window->edit_hwnd == hwnd) {
+        tom_release(g_main_window);
     }
 
 #if NPAD_SCROLL_TELEMETRY
@@ -1140,6 +1206,14 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, L
     // keys never reach the control. A consumed key still has its WM_CHAR
     // already queued by TranslateMessage, so that gets eaten too.
     if (msg == WM_KEYDOWN) {
+        // A bare Insert toggles RichEdit's overtype mode, which notepad.exe's
+        // edit control does not have: a stray press would start overwriting
+        // text with nothing on screen saying so. Shift+Insert (paste) and
+        // Ctrl+Insert (copy) still reach the control.
+        if (wparam == VK_INSERT && GetKeyState(VK_SHIFT) >= 0 && GetKeyState(VK_CONTROL) >= 0 &&
+            GetKeyState(VK_MENU) >= 0) {
+            return 0;
+        }
         if (wparam == VK_TAB && (handle_markdown_tab(hwnd) || handle_tab_spaces(hwnd))) {
             g_swallow_tab_keyup = true;
             return 0;
@@ -1242,6 +1316,7 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, L
                 // Ctrl+wheel is RichEdit's native zoom: treat it as a
                 // user-initiated view-state change (sync / auto-defaults)
                 if (GET_KEYSTATE_WPARAM(wparam) & MK_CONTROL) {
+                    apply_tab_stops(g_main_window); // Re-measured at the new zoom
                     on_view_state_changed(g_main_window);
                 }
             }
@@ -1263,36 +1338,8 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, L
 // Platform lifecycle
 // ---------------------------------------------------------------------------
 
-bool ui_platform_init(void) {
-    g_hinstance = GetModuleHandleW(NULL);
-
-    INITCOMMONCONTROLSEX icex;
-    icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
-    // Win95 classes cover the status bar and property sheets; the standard and
-    // link classes are what TaskDialogIndirect builds on, and the save prompt
-    // now rides that path
-    icex.dwICC = ICC_WIN95_CLASSES | ICC_STANDARD_CLASSES | ICC_LINK_CLASS;
-    if (!InitCommonControlsEx(&icex)) {
-        NPAD_ERROR_ERROR(NPAD_ERROR_SYSTEM, GetLastError(), "UI initialization",
-                         "Failed to initialize common controls");
-        return false;
-    }
-
-    // Prefer RichEdit 4.1 (msftedit.dll); fall back to RichEdit 2.0
-    g_richedit_lib = LoadLibraryW(L"msftedit.dll");
-    if (g_richedit_lib) {
-        g_richedit_class = MSFTEDIT_CLASS;
-    } else {
-        g_richedit_lib = LoadLibraryW(L"riched20.dll");
-        if (g_richedit_lib) {
-            g_richedit_class = L"RichEdit20W";
-        } else {
-            NPAD_ERROR_ERROR(NPAD_ERROR_SYSTEM, GetLastError(), "UI initialization",
-                             "Failed to load a Rich Edit library");
-            return false;
-        }
-    }
-
+// Per-monitor DPI entry points, which Windows 10 1607 added
+static void load_dpi_functions(void) {
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     if (user32) {
         union {
@@ -1309,7 +1356,41 @@ bool ui_platform_init(void) {
         metrics_fn.proc = GetProcAddress(user32, "GetSystemMetricsForDpi");
         g_GetSystemMetricsForDpi = metrics_fn.func;
     }
+}
 
+bool ui_platform_init(void) {
+    g_hinstance = GetModuleHandleW(NULL);
+
+    INITCOMMONCONTROLSEX icex;
+    icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
+    // Win95 classes cover the status bar and property sheets; the standard and
+    // link classes are what TaskDialogIndirect builds on, and the save prompt
+    // now rides that path
+    icex.dwICC = ICC_WIN95_CLASSES | ICC_STANDARD_CLASSES | ICC_LINK_CLASS;
+    if (!InitCommonControlsEx(&icex)) {
+        NPAD_ERROR_ERROR(NPAD_ERROR_SYSTEM, GetLastError(), "UI initialization",
+                         "Failed to initialize common controls");
+        return false;
+    }
+
+    // Prefer RichEdit 4.1 (msftedit.dll); fall back to RichEdit 2.0. System32
+    // only: neither is a KnownDLL, so a bare LoadLibraryW looks in the exe's
+    // folder first, and a planted copy there would run on every launch
+    g_richedit_lib = LoadLibraryExW(L"msftedit.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (g_richedit_lib) {
+        g_richedit_class = MSFTEDIT_CLASS;
+    } else {
+        g_richedit_lib = LoadLibraryExW(L"riched20.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        if (g_richedit_lib) {
+            g_richedit_class = L"RichEdit20W";
+        } else {
+            NPAD_ERROR_ERROR(NPAD_ERROR_SYSTEM, GetLastError(), "UI initialization",
+                             "Failed to load a Rich Edit library");
+            return false;
+        }
+    }
+
+    load_dpi_functions();
     init_dark_mode_support();
 
     if (!register_window_class()) {
@@ -1327,6 +1408,11 @@ bool ui_platform_init(void) {
     // already-initialised apartment (RPC_E_CHANGED_MODE / S_FALSE).
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 
+    // A close or prompt held back while printing is replayed when it ends,
+    // and the print progress window is themed like the rest of npad
+    print_set_idle_hook(print_flush_deferred);
+    print_set_window_hook(print_theme_window);
+
     // Theme default is Light; "system" follows the OS, "dark"/solarized override
     g_dark_mode = resolve_theme_dark_mode();
 
@@ -1337,8 +1423,8 @@ bool ui_platform_init(void) {
     // Off by default to match notepad.exe, whose "Wrap around" box ships
     // unchecked. It changes what a search FINDS rather than adding to it - a
     // term Notepad reports as missing would silently be found here - so by the
-    // project's own rule it is opt-in. Preferences > General turns it back on.
-    g_wrap_around = settings_get_bool("find_wrap_around", false);
+    // project's own rule it is opt-in. Preferences > Editor turns it back on.
+    g_wrap_around = settings_get_bool(FIND_WRAP_KEY, false);
     g_interpret_escapes = settings_get_bool("find_interpret_escapes", false);
     g_highlight_all = settings_get_bool("find_highlight_all", false);
 
@@ -1443,6 +1529,64 @@ void ui_platform_quit(void) {
 // Window management
 // ---------------------------------------------------------------------------
 
+// An elevated npad (Run as administrator, to edit the hosts file say) must
+// still hear the other instances. UIPI silently drops a message posted from a
+// lower integrity level unless the window lets it through, so without this
+// the update's handoff never reached that window: the updater waited out its
+// timeout and setup's Restart Manager could not close it either. Only npad's
+// own registered messages are allowed; none carries a pointer, and each asks
+// no more of the window than its own user could from the menu.
+// ChangeWindowMessageFilterEx is Windows 7+, so it is looked up, not linked.
+//
+// Only an npad running ABOVE medium integrity opens the filter. Medium to
+// medium needs no exception, and opening it on every window would also let a
+// low-integrity process (a sandboxed browser renderer, say) close every npad
+// or start Close All.
+static bool runs_above_medium_integrity(void) {
+    HANDLE token = NULL;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        return false;
+    union {
+        TOKEN_MANDATORY_LABEL label;
+        BYTE bytes[sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE];
+    } info;
+    DWORD size = 0;
+    bool above = false;
+    if (GetTokenInformation(token, TokenIntegrityLevel, &info, sizeof(info), &size) &&
+        info.label.Label.Sid && IsValidSid(info.label.Label.Sid)) {
+        PUCHAR count = GetSidSubAuthorityCount(info.label.Label.Sid);
+        if (count && *count > 0) {
+            DWORD rid = *GetSidSubAuthority(info.label.Label.Sid, (DWORD) (*count - 1));
+            above = rid > SECURITY_MANDATORY_MEDIUM_RID;
+        }
+    }
+    CloseHandle(token);
+    return above;
+}
+
+static void allow_npad_messages(HWND hwnd) {
+    static int elevated = -1; // Unknown until the first window asks
+    if (elevated < 0)
+        elevated = runs_above_medium_integrity() ? 1 : 0;
+    if (!elevated)
+        return;
+    typedef BOOL(WINAPI * ChangeFilterExFunc)(HWND, UINT, DWORD, void *);
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    union {
+        FARPROC proc;
+        ChangeFilterExFunc func;
+    } fn;
+    fn.proc = user32 ? GetProcAddress(user32, "ChangeWindowMessageFilterEx") : NULL;
+    if (!fn.proc)
+        return;
+    const UINT msgs[] = { g_settings_changed_msg, g_view_sync_msg, g_close_all_msg,
+                          g_close_handoff_msg };
+    for (size_t i = 0; i < sizeof(msgs) / sizeof(msgs[0]); i++) {
+        if (msgs[i])
+            fn.func(hwnd, msgs[i], MSGFLT_ALLOW, NULL);
+    }
+}
+
 Window *ui_platform_create_main_window(void) {
     Window *window = malloc(sizeof(Window));
     if (!window)
@@ -1479,6 +1623,7 @@ Window *ui_platform_create_main_window(void) {
         return NULL;
     }
 
+    allow_npad_messages(window->hwnd);
     apply_window_icon(window);
 
     // ES_DISABLENOSCROLL greys the scroll bars out instead of hiding them when
@@ -1504,9 +1649,7 @@ Window *ui_platform_create_main_window(void) {
     }
 
     // Plain text mode, effectively unlimited length, deep undo, small margins
-    SendMessageW(window->edit_hwnd, EM_SETTEXTMODE, TM_PLAINTEXT, 0);
-    SendMessageW(window->edit_hwnd, EM_EXLIMITTEXT, 0, 0x7FFFFFFE);
-    SendMessageW(window->edit_hwnd, EM_SETUNDOLIMIT, 100000, 0);
+    richedit_configure_plain_text(window->edit_hwnd);
     apply_edit_margins(window);
     SendMessageW(window->edit_hwnd, EM_SETEVENTMASK, 0, ENM_CHANGE | ENM_SELCHANGE);
     SetWindowSubclass(window->edit_hwnd, edit_subclass_proc, 1, 0);
@@ -1561,6 +1704,7 @@ void ui_platform_destroy_window(Window *window) {
         window->haccel = NULL;
     }
 
+    tom_release(window); // Before the control goes (a no-op if it already has)
     if (window->hwnd) {
         DestroyWindow(window->hwnd);
         window->hwnd = NULL;
@@ -1570,12 +1714,28 @@ void ui_platform_destroy_window(Window *window) {
         g_main_window = NULL;
     }
 
+    for (int i = 0; i < MAX_RECENT_MENU_FILES; i++)
+        free(window->recent_paths[i]);
     free(window);
 }
 
 void ui_platform_show_window(Window *window) {
     if (window && window->hwnd) {
-        ShowWindow(window->hwnd, SW_SHOW);
+        // A saved maximized state is applied by the first show itself.
+        // Showing at the restored size and maximizing afterwards painted the
+        // window twice and visibly jumped on every launch.
+        if (window->show_maximized) {
+            window->show_maximized = false;
+            ShowWindow(window->hwnd, SW_SHOWMAXIMIZED);
+            // Should whoever launched npad override the first show (a shortcut
+            // set to "Normal window"), still maximize as before; one set to
+            // "Minimized" is respected
+            if (!IsZoomed(window->hwnd) && !IsIconic(window->hwnd)) {
+                ShowWindow(window->hwnd, SW_MAXIMIZE);
+            }
+        } else {
+            ShowWindow(window->hwnd, SW_SHOW);
+        }
         UpdateWindow(window->hwnd);
         // Deferred startup work (crash-recovery scan) runs shortly after the
         // window is up. WM_TIMER is lowest-priority, so the first paint always
@@ -1607,6 +1767,36 @@ void ui_platform_set_window_title(Window *window, const char *title) {
 
 // Size/position getters use the *restored* geometry (WINDOWPLACEMENT) so a
 // maximized window persists its normal size, not the maximized rect.
+//
+// rcNormalPosition is in WORKSPACE coordinates, not screen coordinates: they
+// are relative to the work area, so with a taskbar at the top or left of the
+// monitor they are offset by the taskbar's size. The setters below (and the
+// first-run default, and the cascade) work in screen coordinates, so saving
+// the raw value made the window creep by one taskbar per session until its
+// title bar was off the top of the screen. Convert on the way out, the same
+// way Windows converts on the way in: by the offset of the work area of the
+// monitor the rectangle is on.
+static bool get_normal_rect_screen(HWND hwnd, RECT *out) {
+    WINDOWPLACEMENT wp;
+    ZeroMemory(&wp, sizeof(wp));
+    wp.length = sizeof(wp);
+    if (!GetWindowPlacement(hwnd, &wp))
+        return false;
+    RECT r = wp.rcNormalPosition;
+    // Tool windows are the exception that already uses screen coordinates
+    if (!(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW)) {
+        HMONITOR mon = MonitorFromRect(&r, MONITOR_DEFAULTTOPRIMARY);
+        MONITORINFO mi;
+        ZeroMemory(&mi, sizeof(mi));
+        mi.cbSize = sizeof(mi);
+        if (mon && GetMonitorInfoW(mon, &mi)) {
+            OffsetRect(&r, mi.rcWork.left - mi.rcMonitor.left, mi.rcWork.top - mi.rcMonitor.top);
+        }
+    }
+    *out = r;
+    return true;
+}
+
 void ui_platform_get_window_size(Window *window, int *width, int *height) {
     if (window && window->hwnd && width && height) {
         WINDOWPLACEMENT wp;
@@ -1629,11 +1819,10 @@ void ui_platform_set_window_size(Window *window, int width, int height) {
 
 void ui_platform_get_window_position(Window *window, int *x, int *y) {
     if (window && window->hwnd && x && y) {
-        WINDOWPLACEMENT wp;
-        wp.length = sizeof(wp);
-        if (GetWindowPlacement(window->hwnd, &wp)) {
-            *x = wp.rcNormalPosition.left;
-            *y = wp.rcNormalPosition.top;
+        RECT r;
+        if (get_normal_rect_screen(window->hwnd, &r)) {
+            *x = r.left;
+            *y = r.top;
         } else {
             *x = 0;
             *y = 0;
@@ -1643,18 +1832,58 @@ void ui_platform_get_window_position(Window *window, int *x, int *y) {
 
 void ui_platform_set_window_position(Window *window, int x, int y) {
     if (window && window->hwnd) {
-        SetWindowPos(window->hwnd, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+        SetWindowPos(window->hwnd, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 
         // If the restored position is not on any monitor (e.g. a display was
         // disconnected since last run), fall back to the default position
         if (MonitorFromWindow(window->hwnd, MONITOR_DEFAULTTONULL) == NULL) {
-            SetWindowPos(window->hwnd, NULL, 100, 100, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+            SetWindowPos(window->hwnd, NULL, 100, 100, 0, 0,
+                         SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+
+        // Still on a monitor is not the same as usable: a window whose title
+        // bar sits above the work area (under a top taskbar, or off the top
+        // of the screen - which the old workspace-coordinate save could
+        // produce) overlaps the monitor but cannot be dragged. Bring the
+        // caption back onto the nearest work area; a window that can already
+        // be grabbed is left exactly where it was.
+        //
+        // The monitor is chosen from the caption strip, not the whole window
+        // (MonitorFromWindow picks the largest overlap): on a mixed layout the
+        // caption can sit on one monitor while most of the body hangs over a
+        // neighbour whose work area starts lower, and fitting against that
+        // neighbour would push a perfectly grabbable window down. A caption
+        // under a top taskbar or off-screen still maps to the nearest monitor.
+        RECT wr;
+        if (GetWindowRect(window->hwnd, &wr)) {
+            int dpi = (int) get_window_dpi(window->hwnd);
+            int caption = MulDiv(32, dpi, 96);
+            RECT cap = { wr.left, wr.top, wr.right, wr.top + caption };
+            HMONITOR mon = MonitorFromRect(&cap, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO mi;
+            ZeroMemory(&mi, sizeof(mi));
+            mi.cbSize = sizeof(mi);
+            if (!mon || !GetMonitorInfoW(mon, &mi))
+                return;
+            UiRect work = { mi.rcWork.left, mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom };
+            int nx = wr.left, ny = wr.top;
+            if (ui_fit_title_bar(&nx, &ny, wr.right - wr.left, caption, MulDiv(120, dpi, 96),
+                                 &work)) {
+                SetWindowPos(window->hwnd, NULL, nx, ny, 0, 0,
+                             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            }
         }
     }
 }
 
 void ui_platform_set_window_maximized(Window *window, bool maximized) {
     if (window && window->hwnd) {
+        // Before the first show, only remember it: ui_platform_show_window
+        // shows the window maximized in one step
+        if (!IsWindowVisible(window->hwnd)) {
+            window->show_maximized = maximized;
+            return;
+        }
         ShowWindow(window->hwnd, maximized ? SW_MAXIMIZE : SW_RESTORE);
     }
 }
@@ -1665,6 +1894,8 @@ bool ui_platform_is_window_maximized(const Window *window) {
     return IsZoomed(window->hwnd) != 0;
 }
 
+static void default_rect_in_work_area(const RECT *area, int *x, int *y, int *width, int *height);
+
 void ui_platform_get_default_window_rect(int *x, int *y, int *width, int *height) {
     RECT work;
     if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0)) {
@@ -1674,7 +1905,25 @@ void ui_platform_get_default_window_rect(int *x, int *y, int *width, int *height
         work.right = GetSystemMetrics(SM_CXSCREEN);
         work.bottom = GetSystemMetrics(SM_CYSCREEN);
     }
+    default_rect_in_work_area(&work, x, y, width, height);
+}
 
+// The same default size, centred on the work area of the monitor hwnd is on
+// (the primary monitor's when that cannot be found). For a window that
+// belongs with another, such as Print Preview with its document.
+static void default_rect_on_monitor_of(HWND hwnd, int *x, int *y, int *width, int *height) {
+    HMONITOR monitor = hwnd ? MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) : NULL;
+    MONITORINFO mi;
+    ZeroMemory(&mi, sizeof(mi));
+    mi.cbSize = sizeof(mi);
+    if (monitor && GetMonitorInfoW(monitor, &mi))
+        default_rect_in_work_area(&mi.rcWork, x, y, width, height);
+    else
+        ui_platform_get_default_window_rect(x, y, width, height);
+}
+
+static void default_rect_in_work_area(const RECT *area, int *x, int *y, int *width, int *height) {
+    RECT work = *area;
     int work_w = work.right - work.left;
     int work_h = work.bottom - work.top;
 
@@ -1695,26 +1944,134 @@ void ui_platform_get_default_window_rect(int *x, int *y, int *width, int *height
 }
 
 // ---------------------------------------------------------------------------
+// Text Object Model, chunked reads, one-step replacements
+// ---------------------------------------------------------------------------
+//
+// RichEdit's TOM interface does three things no window message does: it
+// suspends undo recording around a programmatic re-set (refresh_font_binding),
+// reports which end of a selection is active, and answers "which paragraph,
+// starting where" without the text being copied out (Ln/Col with Word Wrap
+// on). It also sets the default tab stop. Fetched once per window, released
+// when the control is destroyed; every caller has a fallback for when it is
+// unavailable.
+
+// IID_ITextDocument, defined here because not every MinGW libuuid exports it
+static const GUID npad_iid_text_document = {
+    0x8CC497C0, 0xA1DF, 0x11CE, { 0x80, 0x98, 0x00, 0xAA, 0x00, 0x47, 0xBE, 0x5D }
+};
+
+static ITextDocument *tom_document(Window *window) {
+    if (!window || !window->edit_hwnd)
+        return NULL;
+    if (window->tom || window->tom_unavailable)
+        return window->tom;
+    IUnknown *ole = NULL;
+    SendMessageW(window->edit_hwnd, EM_GETOLEINTERFACE, 0, (LPARAM) &ole);
+    // EM_GETOLEINTERFACE wrote through the pointer (and AddRef'd what it gave)
+    // cppcheck-suppress knownConditionTrueFalse
+    if (ole) {
+        ITextDocument *doc = NULL;
+        if (SUCCEEDED(ole->lpVtbl->QueryInterface(ole, &npad_iid_text_document, (void **) &doc)) &&
+            doc) {
+            window->tom = doc;
+        }
+        ole->lpVtbl->Release(ole);
+    }
+    if (!window->tom)
+        window->tom_unavailable = true; // Do not ask again on every caret move
+    return window->tom;
+}
+
+static void tom_release(Window *window) {
+    if (window && window->tom) {
+        window->tom->lpVtbl->Release(window->tom);
+        window->tom = NULL;
+    }
+}
+
+// Stop RichEdit recording undo while npad changes the document's internals
+// (not its text). True when suspended; pair with tom_resume_undo.
+static bool tom_suspend_undo(ITextDocument *doc) {
+    return doc && SUCCEEDED(doc->lpVtbl->Undo(doc, tomSuspend, NULL));
+}
+
+static void tom_resume_undo(ITextDocument *doc) {
+    if (doc)
+        doc->lpVtbl->Undo(doc, tomResume, NULL);
+}
+
+// Units read per EM_GETTEXTRANGE when the text has to be scanned: a fixed
+// buffer instead of a copy of everything up to the position asked about
+#define TEXT_SCAN_CHUNK 32768
+
+// Feed the control's text [0, end) to the given scans (either may be NULL), a
+// chunk at a time. Stops early once an astral-only scan has its answer.
+static void scan_text(HWND e, LONG end, LineScan *lines, AstralScan *astral) {
+    if (end <= 0 || (!lines && !astral))
+        return;
+    wchar_t *buf = malloc(((size_t) TEXT_SCAN_CHUNK + 1) * sizeof(wchar_t));
+    if (!buf)
+        return;
+    LONG from = 0;
+    while (from < end) {
+        LONG to = (end - from > TEXT_SCAN_CHUNK) ? from + TEXT_SCAN_CHUNK : end;
+        TEXTRANGEW tr;
+        tr.chrg.cpMin = from;
+        tr.chrg.cpMax = to;
+        tr.lpstrText = buf;
+        LRESULT got = SendMessageW(e, EM_GETTEXTRANGE, 0, (LPARAM) &tr);
+        if (got <= 0)
+            break;
+        // wchar_t is a 16-bit unsigned code unit on Windows
+        const uint16_t *units = (const uint16_t *) buf;
+        if (lines)
+            line_scan_feed(lines, units, (size_t) got);
+        if (astral) {
+            astral_scan_feed(astral, units, (size_t) got);
+            if (astral->found && !lines)
+                break;
+        }
+        from += (LONG) got;
+    }
+    free(buf);
+}
+
+// Replace the selection as exactly one undo step. EM_REPLACESEL with TRUE is
+// undoable, but RichEdit merges a short replacement with the typing around it,
+// so the one-space Tab or the newline that ends a Markdown list would undo
+// together with the next word typed. Closing the typing group on both sides
+// keeps the programmatic edit its own step, as DOCUMENTATION.md promises.
+static void replace_sel_one_step(HWND edit, const wchar_t *text) {
+    SendMessageW(edit, EM_STOPGROUPTYPING, 0, 0);
+    SendMessageW(edit, EM_REPLACESEL, TRUE, (LPARAM) text);
+    SendMessageW(edit, EM_STOPGROUPTYPING, 0, 0);
+}
+
+// ---------------------------------------------------------------------------
 // Text access
 // ---------------------------------------------------------------------------
 
-void ui_platform_set_text(Window *window, const char *text) {
+// Returns false, with the control untouched, if the text could not be
+// converted (too large, or out of memory): the caller must then treat the
+// open as failed. A load RichEdit could not hold exactly still returns true
+// and sets text_altered (ui_platform_text_altered_by_load).
+bool ui_platform_set_text(Window *window, const char *text) {
     if (!window || !window->edit_hwnd || !text)
-        return;
+        return false;
 
-    wchar_t *wide = utf8_to_wide(text);
+    // Line breaks normalised to the control's own CR first: CR CR LF would
+    // otherwise be deleted as a soft-break marker (see richedit_text.h)
+    size_t len = 0;
+    bool replaced = false;
+    wchar_t *wide = richedit_text_from_utf8(text, &len, &replaced);
     if (!wide)
-        return;
+        return false;
 
     // Refresh the default character format first so the incoming text adopts
     // the configured font/colour, then insert via EM_SETTEXTEX: unlike a
     // SetWindowTextW + SCF_ALL restamp, this leaves RichEdit's font binding
     // free to give emoji/CJK characters a fallback face with real glyphs.
     apply_font_default(window);
-
-    SETTEXTEX st;
-    st.flags = ST_DEFAULT;
-    st.codepage = 1200; // UTF-16
 
     // EM_SETTEXTEX resets the zoom ratio; this window's zoom is view state
     // that must survive loading a file
@@ -1723,9 +2080,10 @@ void ui_platform_set_text(Window *window, const char *text) {
     SendMessageW(window->edit_hwnd, EM_GETZOOM, (WPARAM) &zoom_num, (LPARAM) &zoom_den);
 
     window->setting_text_programmatically = true;
-    SendMessageW(window->edit_hwnd, EM_SETTEXTEX, (WPARAM) &st, (LPARAM) wide);
+    bool exact = richedit_load_text(window->edit_hwnd, wide, len);
     window->setting_text_programmatically = false;
     free(wide);
+    window->text_altered = replaced || !exact;
 
     // EM_GETZOOM wrote through the pointers; 0/0 means default (100%)
     // cppcheck-suppress knownConditionTrueFalse
@@ -1739,37 +2097,24 @@ void ui_platform_set_text(Window *window, const char *text) {
     SendMessageW(window->edit_hwnd, EM_SETSEL, 0, 0);
     window->is_modified = false;
     update_status_bar(window);
+    return true;
+}
+
+bool ui_platform_text_altered_by_load(const Window *window) {
+    return window && window->text_altered;
 }
 
 char *ui_platform_get_text(Window *window) {
     if (!window || !window->edit_hwnd)
         return NULL;
 
-    GETTEXTLENGTHEX gtl;
-    gtl.flags = GTL_USECRLF | GTL_NUMCHARS | GTL_PRECISE;
-    gtl.codepage = 1200; // UTF-16
-    LRESULT length = SendMessageW(window->edit_hwnd, EM_GETTEXTLENGTHEX, (WPARAM) &gtl, 0);
-    if (length < 0) {
-        return NULL;
-    }
-
-    wchar_t *wide = malloc(((size_t) length + 1) * sizeof(wchar_t));
-    if (!wide) {
+    // NULL rather than a partial copy: a save of a fragment would replace the
+    // whole file with it
+    char *utf8 = richedit_get_text_utf8(window->edit_hwnd);
+    if (!utf8) {
         NPAD_ERROR_ERROR(NPAD_ERROR_MEMORY, 0, "Text retrieval",
-                         "Failed to allocate memory for text buffer");
-        return NULL;
+                         "Could not read the document text from the edit control");
     }
-
-    GETTEXTEX gt;
-    memset(&gt, 0, sizeof(gt));
-    gt.cb = (DWORD) (((size_t) length + 1) * sizeof(wchar_t));
-    gt.flags = GT_USECRLF;
-    gt.codepage = 1200;
-    SendMessageW(window->edit_hwnd, EM_GETTEXTEX, (WPARAM) &gt, (LPARAM) wide);
-    wide[length] = L'\0';
-
-    char *utf8 = wide_to_utf8(wide);
-    free(wide);
     return utf8;
 }
 
@@ -1848,10 +2193,18 @@ static wchar_t *read_clipboard_text(HWND owner) {
     if (h) {
         const wchar_t *src = GlobalLock(h);
         if (src) {
-            size_t len = wcslen(src);
+            // The block is another process's data: bound the scan by its
+            // allocated size, since nothing guarantees a terminator inside
+            // it, and always terminate the copy
+            size_t cap = GlobalSize(h) / sizeof(wchar_t);
+            size_t len = 0;
+            while (len < cap && src[len] != L'\0')
+                len++;
             copy = malloc((len + 1) * sizeof(wchar_t));
-            if (copy)
-                memcpy(copy, src, (len + 1) * sizeof(wchar_t));
+            if (copy) {
+                memcpy(copy, src, len * sizeof(wchar_t));
+                copy[len] = L'\0';
+            }
             GlobalUnlock(h);
         }
     }
@@ -1983,7 +2336,7 @@ static void paste_insert_converted(const Window *window, const char *utf8) {
     free(crlf);
     if (!wide)
         return;
-    SendMessageW(e, EM_REPLACESEL, TRUE, (LPARAM) wide);
+    replace_sel_one_step(e, wide);
     SendMessageW(e, EM_SCROLLCARET, 0, 0);
     free(wide);
 }
@@ -2020,6 +2373,8 @@ static void do_paste(Window *window, int mode) {
                     ins[n++] = L'\n';
                 }
                 ins[n] = L'\0';
+                // A CR CR LF in the clipboard text would be deleted on insert
+                richedit_normalize_breaks(ins, n);
 
                 CHARRANGE sel = { 0, 0 };
                 SendMessageW(e, EM_EXGETSEL, 0, (LPARAM) &sel);
@@ -2030,7 +2385,7 @@ static void do_paste(Window *window, int mode) {
 
                 CHARRANGE at = { line_start, line_start };
                 SendMessageW(e, EM_EXSETSEL, 0, (LPARAM) &at);
-                SendMessageW(e, EM_REPLACESEL, TRUE, (LPARAM) ins);
+                replace_sel_one_step(e, ins);
                 // Measure the inserted length from the control: RichEdit
                 // stores each break as one cp, not the two chars we sent
                 CHARRANGE after = { 0, 0 };
@@ -2047,7 +2402,10 @@ static void do_paste(Window *window, int mode) {
     }
     window->line_cut_pending = false;
 
-    // Rich paste: convert the clipboard's HTML fragment when present
+    // Rich paste: convert the clipboard's HTML fragment when present. Lists
+    // mode converts only a fragment that holds a list: for anything else
+    // html_to_markdown returns "" and the plain text the source offered (code
+    // with its indentation, tab-separated cells) is pasted instead
     if (mode != 0) {
         char *html = read_clipboard_html(window->hwnd);
         if (html) {
@@ -2155,15 +2513,39 @@ static wchar_t *build_filter(const char *filter) {
     return result;
 }
 
+// Room for any path Windows can name (the \\?\ limit), for the classic dialogs.
+// A MAX_PATH buffer made a longer pick fail with FNERR_BUFFERTOOSMALL, which
+// GetOpenFileNameW reports exactly like Cancel: nothing happened, no word why.
+#define NPAD_DIALOG_PATH_CCH 32768
+
+// Tell the user a classic file dialog failed, rather than treating it as Cancel
+// (CommDlgExtendedError is 0 for a real Cancel)
+static void report_file_dialog_error(HWND owner) {
+    DWORD err = CommDlgExtendedError();
+    if (err == 0)
+        return;
+    wchar_t message[160];
+    if (err == FNERR_BUFFERTOOSMALL) {
+        wcscpy(message, L"The selected file's path is too long for npad to use.");
+    } else {
+        _snwprintf(message, 159, L"The file dialog could not be shown (error 0x%04lX).",
+                   (unsigned long) err);
+        message[159] = L'\0';
+    }
+    MessageBoxW(owner, message, L"npad", MB_OK | MB_ICONWARNING);
+}
+
 static char *show_file_dialog(Window *parent, const FileDialogParams *params, bool save) {
     OPENFILENAMEW ofn;
-    wchar_t filename[MAX_PATH] = L"";
+    wchar_t *filename = calloc(NPAD_DIALOG_PATH_CCH, sizeof(wchar_t));
+    if (!filename)
+        return NULL;
 
     if (save && params && params->default_filename && params->default_filename[0]) {
         wchar_t *wide = utf8_to_wide(params->default_filename);
         if (wide) {
-            wcsncpy(filename, wide, MAX_PATH - 1);
-            filename[MAX_PATH - 1] = L'\0';
+            wcsncpy(filename, wide, NPAD_DIALOG_PATH_CCH - 1);
+            filename[NPAD_DIALOG_PATH_CCH - 1] = L'\0';
             free(wide);
         }
     }
@@ -2176,7 +2558,7 @@ static char *show_file_dialog(Window *parent, const FileDialogParams *params, bo
     ofn.hwndOwner = parent ? parent->hwnd : NULL;
     ofn.hInstance = g_hinstance;
     ofn.lpstrFile = filename;
-    ofn.nMaxFile = MAX_PATH;
+    ofn.nMaxFile = NPAD_DIALOG_PATH_CCH;
     ofn.lpstrFilter = filter;
     ofn.nFilterIndex = 1;
     ofn.lpstrTitle = title;
@@ -2188,11 +2570,137 @@ static char *show_file_dialog(Window *parent, const FileDialogParams *params, bo
     }
 
     BOOL ok = save ? GetSaveFileNameW(&ofn) : GetOpenFileNameW(&ofn);
+    if (!ok)
+        report_file_dialog_error(ofn.hwndOwner);
 
     free(filter);
     free(title);
 
-    return ok ? wide_to_utf8(filename) : NULL;
+    char *result = ok ? wide_to_utf8(filename) : NULL;
+    free(filename);
+    return result;
+}
+
+// Split a '|'-separated filter ("Text Documents (*.txt)|*.txt|All Files
+// (*.*)|*.*") into the shell dialogs' name/spec pairs. *storage owns the text
+// the pairs point into; free both. Returns the pair count (0 on failure).
+static UINT build_filter_specs(const char *filter, COMDLG_FILTERSPEC **specs_out,
+                               wchar_t **storage_out) {
+    *specs_out = NULL;
+    *storage_out = NULL;
+    const char *source =
+        (filter && filter[0]) ? filter : "Text Documents (*.txt)|*.txt|All Files (*.*)|*.*";
+    wchar_t *text = utf8_to_wide(source);
+    if (!text)
+        return 0;
+
+    UINT bars = 0;
+    for (const wchar_t *p = text; *p; p++) {
+        if (*p == L'|')
+            bars++;
+    }
+    UINT pairs = (bars + 1) / 2;
+    COMDLG_FILTERSPEC *specs = pairs ? calloc(pairs, sizeof(COMDLG_FILTERSPEC)) : NULL;
+    if (!specs) {
+        free(text);
+        return 0;
+    }
+
+    UINT count = 0;
+    wchar_t *cursor = text;
+    while (count < pairs && *cursor) {
+        wchar_t *name = cursor;
+        wchar_t *bar = wcschr(name, L'|');
+        if (!bar)
+            break; // A name with no pattern: ignore it
+        *bar = L'\0';
+        wchar_t *spec = bar + 1;
+        wchar_t *next = wcschr(spec, L'|');
+        if (next)
+            *next = L'\0';
+        specs[count].pszName = name;
+        specs[count].pszSpec = spec;
+        count++;
+        if (!next)
+            break;
+        cursor = next + 1;
+    }
+    if (count == 0) {
+        free(specs);
+        free(text);
+        return 0;
+    }
+    *specs_out = specs;
+    *storage_out = text;
+    return count;
+}
+
+// Open using the shell's IFileOpenDialog, as Save As already does. It hands
+// back the chosen path as an allocated string of any length, where the classic
+// GetOpenFileNameW needs a buffer sized in advance (and once failed every pick
+// longer than MAX_PATH as if the user had cancelled). Falls back to the classic
+// dialog if COM fails.
+static char *show_open_dialog_com(Window *parent, const FileDialogParams *params) {
+    IFileOpenDialog *dialog = NULL;
+    HRESULT hr = CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER,
+                                  &IID_IFileOpenDialog, (void **) &dialog);
+    if (FAILED(hr) || !dialog) {
+        return show_file_dialog(parent, params, false);
+    }
+
+    HWND owner = parent ? parent->hwnd : NULL;
+    wchar_t *wtitle = (params && params->title) ? utf8_to_wide(params->title) : NULL;
+    if (wtitle) {
+        dialog->lpVtbl->SetTitle(dialog, wtitle);
+    }
+
+    COMDLG_FILTERSPEC *specs = NULL;
+    wchar_t *spec_text = NULL;
+    UINT spec_count = build_filter_specs(params ? params->filter : NULL, &specs, &spec_text);
+    if (spec_count > 0) {
+        dialog->lpVtbl->SetFileTypes(dialog, spec_count, specs);
+        dialog->lpVtbl->SetFileTypeIndex(dialog, 1);
+    }
+    dialog->lpVtbl->SetDefaultExtension(dialog, L"txt");
+
+    // The classic dialog's OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST, plus a real
+    // file-system path (a library or shell item has none to open)
+    FILEOPENDIALOGOPTIONS options = 0;
+    if (SUCCEEDED(dialog->lpVtbl->GetOptions(dialog, &options))) {
+        dialog->lpVtbl->SetOptions(dialog, options | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST |
+                                               FOS_FILEMUSTEXIST);
+    }
+
+    char *result = NULL;
+    hr = dialog->lpVtbl->Show(dialog, owner);
+    if (SUCCEEDED(hr)) {
+        IShellItem *item = NULL;
+        if (SUCCEEDED(dialog->lpVtbl->GetResult(dialog, &item)) && item) {
+            wchar_t *wresult = NULL;
+            if (SUCCEEDED(item->lpVtbl->GetDisplayName(item, SIGDN_FILESYSPATH, &wresult)) &&
+                wresult) {
+                result = wide_to_utf8(wresult);
+                CoTaskMemFree(wresult);
+            }
+            item->lpVtbl->Release(item);
+        }
+        if (!result) {
+            MessageBoxW(owner, L"npad could not get the path of the selected file.", L"npad",
+                        MB_OK | MB_ICONWARNING);
+        }
+    } else if (hr != HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+        wchar_t message[128];
+        _snwprintf(message, 127, L"The Open dialog could not be shown (error 0x%08lX).",
+                   (unsigned long) hr);
+        message[127] = L'\0';
+        MessageBoxW(owner, message, L"npad", MB_OK | MB_ICONWARNING);
+    }
+
+    dialog->lpVtbl->Release(dialog);
+    free(specs);
+    free(spec_text);
+    free(wtitle);
+    return result;
 }
 
 // Modern Save As using the shell's IFileSaveDialog. Unlike the legacy
@@ -2287,6 +2795,13 @@ static char *show_save_dialog_com(Window *parent, FileDialogParams *params) {
             }
             item->lpVtbl->Release(item);
         }
+    } else if (hr != HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+        // A failure is not a Cancel: say so, or the save silently did nothing
+        wchar_t message[128];
+        _snwprintf(message, 127, L"The Save As dialog could not be shown (error 0x%08lX).",
+                   (unsigned long) hr);
+        message[127] = L'\0';
+        MessageBoxW(parent ? parent->hwnd : NULL, message, L"npad", MB_OK | MB_ICONWARNING);
     }
 
     if (custom) {
@@ -2299,25 +2814,50 @@ static char *show_save_dialog_com(Window *parent, FileDialogParams *params) {
 
 char *ui_platform_show_open_dialog(Window *parent, const FileDialogParams *params) {
     // The open dialog never writes back through params
-    return show_file_dialog(parent, (FileDialogParams *) params, false);
+    return show_open_dialog_com(parent, params);
 }
 
 char *ui_platform_show_save_dialog(Window *parent, FileDialogParams *params) {
     return show_save_dialog_com(parent, params);
 }
 
-bool ui_platform_show_message_box(Window *parent, const char *title, const char *message,
-                                  bool is_question) {
+UiAnswer ui_platform_ask_question(Window *parent, const char *title, const char *message) {
     HWND hwnd = parent ? parent->hwnd : NULL;
-    UINT type = is_question ? (MB_YESNO | MB_ICONQUESTION) : (MB_OK | MB_ICONINFORMATION);
-
     wchar_t *wtitle = utf8_to_wide(title ? title : "npad");
     wchar_t *wmessage = utf8_to_wide(message ? message : "");
-    int result = MessageBoxW(hwnd, wmessage ? wmessage : L"", wtitle ? wtitle : L"npad", type);
+    int result = MessageBoxW(hwnd, wmessage ? wmessage : L"", wtitle ? wtitle : L"npad",
+                             MB_YESNO | MB_ICONQUESTION);
     free(wtitle);
     free(wmessage);
 
-    return is_question ? (result == IDYES) : true;
+    // A WM_QUIT reaching the box's modal loop (a session end, an update's
+    // handoff, Close All) ends it without anyone answering; the loop puts the
+    // WM_QUIT back for the main loop. Whatever MessageBoxW returned then, it
+    // was not the user's choice. PM_NOREMOVE leaves it queued for the main
+    // loop to act on.
+    MSG pending;
+    if (PeekMessageW(&pending, NULL, WM_QUIT, WM_QUIT, PM_NOREMOVE))
+        return UI_ANSWER_DISMISSED;
+    if (result == IDYES)
+        return UI_ANSWER_YES;
+    if (result == IDNO)
+        return UI_ANSWER_NO;
+    return UI_ANSWER_DISMISSED; // 0 = the box failed, or its owner went away
+}
+
+bool ui_platform_show_message_box(Window *parent, const char *title, const char *message,
+                                  bool is_question) {
+    if (is_question)
+        return ui_platform_ask_question(parent, title, message) == UI_ANSWER_YES;
+
+    HWND hwnd = parent ? parent->hwnd : NULL;
+    wchar_t *wtitle = utf8_to_wide(title ? title : "npad");
+    wchar_t *wmessage = utf8_to_wide(message ? message : "");
+    MessageBoxW(hwnd, wmessage ? wmessage : L"", wtitle ? wtitle : L"npad",
+                MB_OK | MB_ICONINFORMATION);
+    free(wtitle);
+    free(wmessage);
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -2403,26 +2943,79 @@ static int show_task_dialog_ex(HWND owner, const TaskDialogSpec *spec, bool *ver
         return IDCANCEL;
     }
 
-    // Fallback for a machine without comctl32 v6. A message box cannot show
-    // more than two named choices, so the first two custom buttons become
-    // Yes / No with their labels spelled out in the body - which is exactly
-    // what the hand-written fallbacks this helper replaced already did.
+    // Fallback for a machine without comctl32 v6 (latent: npad's manifest
+    // asks for v6, so TaskDialogIndirect is always there in practice). A
+    // message box cannot show more than two named choices, so the first two
+    // custom buttons become Yes / No with their labels spelled out in the
+    // body, and Cancel is added whenever a choice would otherwise be lost.
+    //
+    // The spec's default must stay the Enter default here too. Without this
+    // mapping Yes was always the default - which for the external-change
+    // prompt is Reload, the one choice that discards the user's edits.
+    int default_index = -1; // Index of the default custom button, -1 for Cancel
+    for (int i = 0; i < spec->button_count; i++) {
+        if (spec->buttons[i].nButtonID == spec->default_button) {
+            default_index = i;
+            break;
+        }
+    }
+    int shown = spec->button_count >= 2 ? 2 : 1;
+    // A default beyond the two shown buttons is reachable only as Cancel, and
+    // a third choice is otherwise simply dropped: offer Cancel for both
+    bool default_on_cancel = default_index < 0 || default_index >= shown;
+    bool with_cancel = spec->cancel_button || default_on_cancel || spec->button_count > shown;
+
     wchar_t body[900];
-    int n = _snwprintf(body, 899, L"%s%s%s", spec->instruction ? spec->instruction : L"",
+    int n = _snwprintf(body, 899, L"%ls%ls%ls", spec->instruction ? spec->instruction : L"",
                        spec->content ? L"\n\n" : L"", spec->content ? spec->content : L"");
     if (n < 0)
         n = 0;
-    for (int i = 0; i < spec->button_count && i < 2; i++) {
-        int m = _snwprintf(body + n, (size_t) (899 - n), L"\n\n%s: %s", i == 0 ? L"Yes" : L"No",
-                           spec->buttons[i].pszButtonText);
+    for (int i = 0; i <= shown; i++) {
+        const wchar_t *label = NULL;
+        const wchar_t *key = NULL;
+        if (i < shown) {
+            label = spec->buttons[i].pszButtonText;
+            key = shown == 1 ? L"OK" : (i == 0 ? L"Yes" : L"No");
+        } else if (with_cancel && !spec->cancel_button && default_index >= shown) {
+            label = spec->buttons[default_index].pszButtonText; // Cancel stands for it
+            key = L"Cancel";
+        }
+        if (!label || n >= 899)
+            continue;
+        // Mnemonic ampersands and the command-link second line read badly in
+        // a message box: drop the former and put the latter after a dash
+        wchar_t clean[200];
+        int c = 0;
+        for (const wchar_t *p = label; *p && c < 196; p++) {
+            if (*p == L'&')
+                continue;
+            if (*p == L'\n') {
+                clean[c++] = L' ';
+                clean[c++] = L'-';
+                clean[c++] = L' ';
+                continue;
+            }
+            clean[c++] = *p;
+        }
+        clean[c] = L'\0';
+        int m = _snwprintf(body + n, (size_t) (899 - n), L"\n\n%ls: %ls", key, clean);
         if (m < 0)
             break;
         n += m;
     }
     body[899] = L'\0';
 
-    UINT type = (spec->button_count >= 2) ? (spec->cancel_button ? MB_YESNOCANCEL : MB_YESNO)
-                                          : (spec->cancel_button ? MB_OKCANCEL : MB_OK);
+    UINT type;
+    if (shown >= 2)
+        type = with_cancel ? MB_YESNOCANCEL : MB_YESNO;
+    else
+        type = with_cancel ? MB_OKCANCEL : MB_OK;
+    if (default_on_cancel && with_cancel)
+        type |= (shown >= 2) ? MB_DEFBUTTON3 : MB_DEFBUTTON2;
+    else if (default_index == 1)
+        type |= MB_DEFBUTTON2;
+    else
+        type |= MB_DEFBUTTON1;
     if (spec->icon == TD_WARNING_ICON)
         type |= MB_ICONWARNING;
     else if (spec->icon == TD_INFORMATION_ICON)
@@ -2435,6 +3028,9 @@ static int show_task_dialog_ex(HWND owner, const TaskDialogSpec *spec, bool *ver
         return spec->buttons[0].nButtonID;
     if (res == IDNO && spec->button_count >= 2)
         return spec->buttons[1].nButtonID;
+    // Cancel (and Esc) chose the default when Cancel was standing in for it
+    if (res == IDCANCEL && !spec->cancel_button && default_index >= shown)
+        return spec->buttons[default_index].nButtonID;
     return IDCANCEL;
 }
 
@@ -2500,6 +3096,11 @@ size_t ui_platform_system_memory_mb(void) {
 
 SavePromptResult ui_platform_show_save_prompt(Window *parent, const char *filename) {
     HWND hwnd = parent ? parent->hwnd : NULL;
+    // Never over an open Print Preview: closing it later would re-enable the
+    // document under this prompt. WM_CLOSE has already done this on the usual
+    // path; this covers any other route here.
+    if (!print_is_busy())
+        preview_close_active();
 
     char message[512];
     snprintf(message, sizeof(message), "Do you want to save changes to %.400s?",
@@ -2626,11 +3227,15 @@ static void set_status_message(Window *window, const char *message) {
 // Posted from WM_ACTIVATE so the external-change dialog runs after the
 // activation completes rather than inside it
 #define NPAD_WM_CHECK_EXTERNAL (WM_APP + 4)
+// Posted from EN_CHANGE after a programmatic text replacement (a load, a
+// reload, a font rebind) so apply_tab_stops runs once that call has finished.
+// Numbered clear of the block above so new neighbours there cannot collide.
+#define NPAD_WM_REAPPLY_TABS (WM_APP + 32)
 
 typedef struct {
     bool ok;
     char tag[32];
-    char error[160];
+    char error[200];
 } UpdateCheckResult;
 
 typedef struct {
@@ -2641,19 +3246,32 @@ typedef struct {
 typedef struct {
     bool ok;
     wchar_t path[MAX_PATH];
+    // The verified installer, held open with read sharing only (no write, no
+    // delete, so no rename) from the moment it is hashed until the installer
+    // process has it. What runs is therefore exactly what was verified; it
+    // used to be closed after hashing and reopened by name at launch.
+    HANDLE file;
+    UpdatePackage package;   // Setup exe, or the MSI for an MSI-installed copy
+    bool per_machine;        // That MSI was installed for all users (ALLUSERS=1)
+    wchar_t msi_product[39]; // That MSI's ProductCode (NPAD_MSI_GUID_CHARS)
     char tag[32];
-    char error[160];
+    char error[200];
 } UpdateDownloadResult;
 
 // One update operation (check or download) at a time
 static volatile LONG g_update_busy = 0;
+
+// The busy operation is a check (rather than a download): a second request for
+// a check joins it instead of being refused. UI thread only.
+static bool g_update_check_running = false;
 
 // Preferences > Updates, while it is open, so a check or download that is in
 // flight can be shown there: Install Now and Check Now grey out and a marquee
 // runs beside the current version. Without that a slow download looked like
 // nothing had happened, and Install Now got clicked three or four times.
 static HWND g_updates_page = NULL;
-static bool g_updates_install_enabled = true; // Install Now's state before busy greyed it
+
+static void prefs_updates_sync_skip(HWND page); // With the Updates page
 
 static void updates_page_sync_busy(void) {
     if (!g_updates_page)
@@ -2664,23 +3282,62 @@ static void updates_page_sync_busy(void) {
         SendMessageW(bar, PBM_SETMARQUEE, busy ? TRUE : FALSE, 30);
         ShowWindow(bar, busy ? SW_SHOW : SW_HIDE);
     }
-    HWND install = GetDlgItem(g_updates_page, ID_PREF_UPD_INSTALL);
     HWND check = GetDlgItem(g_updates_page, ID_PREF_UPD_CHECK);
     if (busy) {
-        if (install && IsWindowEnabled(install))
-            g_updates_install_enabled = true;
-        else if (install)
-            g_updates_install_enabled = false;
-        EnableWindow(install, FALSE);
+        EnableWindow(GetDlgItem(g_updates_page, ID_PREF_UPD_INSTALL), FALSE);
         EnableWindow(check, FALSE);
     } else {
-        EnableWindow(install, g_updates_install_enabled ? TRUE : FALSE);
+        // Recomputed, not restored: the check that just finished may have
+        // found a release, or the one the page was offering may be gone
+        prefs_updates_sync_skip(g_updates_page);
         EnableWindow(check, TRUE);
     }
 }
 
+// The page's "latest version" and "last checked" lines, from settings
+static void prefs_updates_show_status(HWND page) {
+    char *latest = settings_get_string("update_latest_version", "");
+    wchar_t *wlatest = utf8_to_wide((latest && latest[0]) ? latest : "unknown");
+    if (wlatest) {
+        SetDlgItemTextW(page, ID_PREF_UPD_LATEST, wlatest);
+        free(wlatest);
+    }
+    free(latest);
+
+    char *last = settings_get_string("update_last_checked", "");
+    wchar_t *wlast = utf8_to_wide((last && last[0]) ? last : "never");
+    if (wlast) {
+        SetDlgItemTextW(page, ID_PREF_UPD_LASTCHECK, wlast);
+        free(wlast);
+    }
+    free(last);
+}
+
+// Bring an open Updates page up to date after a check, a skip or a download.
+// Check Now used to leave it showing the previous result until reopened.
+static void updates_page_refresh(void) {
+    if (!g_updates_page)
+        return;
+    prefs_updates_show_status(g_updates_page);
+    updates_page_sync_busy();
+}
+
+// The window an update dialog belongs to. A check or install started from
+// Preferences reports while the sheet is up and the document window is
+// disabled under it; a box owned by the document then sat behind the sheet
+// (or beside it) and the sheet stayed live. When the document window is
+// disabled, its last active popup is that modal sheet.
+static HWND update_dialog_owner(const Window *window) {
+    HWND hwnd = window ? window->hwnd : NULL;
+    if (!hwnd || IsWindowEnabled(hwnd))
+        return hwnd;
+    HWND popup = GetLastActivePopup(hwnd);
+    return (popup && IsWindowVisible(popup) && IsWindowEnabled(popup)) ? popup : hwnd;
+}
+
 // True while the in-flight check was user-initiated (Help menu / Check Now):
-// drives loud-vs-silent surfacing of the result. Set before spawning a check.
+// drives loud-vs-silent surfacing of the result. Set before spawning a check,
+// or by a manual request that joins the launch check already running.
 static bool g_update_check_manual = false;
 
 // Refreshes the Help-menu update indicator for a window (defined with the
@@ -2706,12 +3363,16 @@ static void stamp_update_checked(void) {
 
 // Bounded HTTPS GET on the calling (worker) thread. Returns a malloc'd,
 // NUL-terminated buffer and its length; NULL on any failure. Posts percent
-// progress to progress_hwnd when given and the size is known.
+// progress to progress_hwnd when given and the size is known. *out_status
+// (optional) is the HTTP status when the server answered, 0 when it was never
+// reached - so a rate limit is not reported as "could not reach github.com".
 static char *http_get_alloc(const wchar_t *host, const wchar_t *path, size_t max_bytes,
-                            size_t *out_len, HWND progress_hwnd) {
+                            size_t *out_len, HWND progress_hwnd, int *out_status) {
     char *data = NULL;
     size_t len = 0, cap = 0;
     bool ok = false;
+    if (out_status)
+        *out_status = 0;
 
     HINTERNET ses = WinHttpOpen(L"npad-updater", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                 WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
@@ -2735,6 +3396,8 @@ static char *http_get_alloc(const wchar_t *host, const wchar_t *path, size_t max
     DWORD status = 0, sz = sizeof(status);
     WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                         WINHTTP_HEADER_NAME_BY_INDEX, &status, &sz, WINHTTP_NO_HEADER_INDEX);
+    if (out_status)
+        *out_status = (int) status;
     if (status != 200)
         goto done;
 
@@ -2790,26 +3453,41 @@ done:
     return data;
 }
 
-// SHA-256 of a file as lowercase hex via Windows CNG
-static bool sha256_file_hex(const wchar_t *path, char out[65]) {
+// SHA-256 as lowercase hex via Windows CNG, of a memory buffer (data) or, when
+// data is NULL, of everything readable from file's start
+static bool sha256_hex(const void *data, size_t len, HANDLE file, char out[65]) {
     bool ok = false;
     BCRYPT_ALG_HANDLE alg = NULL;
     BCRYPT_HASH_HANDLE hash = NULL;
-    FILE *f = NULL;
     unsigned char digest[32];
 
     if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, NULL, 0) != 0)
         return false;
     if (BCryptCreateHash(alg, &hash, NULL, 0, NULL, 0, 0) != 0)
         goto done;
-    f = _wfopen(path, L"rb");
-    if (!f)
-        goto done;
-    unsigned char buf[65536];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
-        if (BCryptHashData(hash, buf, (ULONG) n, 0) != 0)
+    if (data) {
+        const unsigned char *p = (const unsigned char *) data;
+        while (len > 0) {
+            ULONG n = len > 0x40000000 ? 0x40000000 : (ULONG) len;
+            if (BCryptHashData(hash, (PUCHAR) p, n, 0) != 0)
+                goto done;
+            p += n;
+            len -= n;
+        }
+    } else {
+        LARGE_INTEGER zero = { 0 };
+        if (!SetFilePointerEx(file, zero, NULL, FILE_BEGIN))
             goto done;
+        unsigned char buf[65536];
+        for (;;) {
+            DWORD got = 0;
+            if (!ReadFile(file, buf, sizeof(buf), &got, NULL))
+                goto done;
+            if (got == 0)
+                break;
+            if (BCryptHashData(hash, buf, got, 0) != 0)
+                goto done;
+        }
     }
     if (BCryptFinishHash(hash, digest, sizeof(digest), 0) != 0)
         goto done;
@@ -2818,8 +3496,6 @@ static bool sha256_file_hex(const wchar_t *path, char out[65]) {
     ok = true;
 
 done:
-    if (f)
-        fclose(f);
     if (hash)
         BCryptDestroyHash(hash);
     if (alg)
@@ -2827,40 +3503,418 @@ done:
     return ok;
 }
 
+// A DLL from System32 only, never from the application directory or the
+// current directory: the update path runs a downloaded installer, so a planted
+// wintrust.dll beside npad must not be the one asked whether it is genuine.
+static HMODULE load_system_dll(const wchar_t *name) {
+    wchar_t path[MAX_PATH];
+    UINT n = GetSystemDirectoryW(path, MAX_PATH);
+    if (n == 0 || n + wcslen(name) + 2 > MAX_PATH)
+        return NULL;
+    _snwprintf(path + n, MAX_PATH - n - 1, L"\\%ls", name);
+    path[MAX_PATH - 1] = L'\0';
+    return LoadLibraryW(path);
+}
+
+// Authenticode, resolved from wintrust.dll and crypt32.dll at first use: like
+// winhttp and bcrypt (delay-loaded), nothing on a plain launch touches them.
+typedef LONG(WINAPI *WinVerifyTrustFunc)(HWND, GUID *, LPVOID);
+typedef CRYPT_PROVIDER_DATA *(WINAPI *ProvDataFromStateFunc)(HANDLE);
+typedef CRYPT_PROVIDER_SGNR *(WINAPI *ProvSignerFromChainFunc)(CRYPT_PROVIDER_DATA *, DWORD, BOOL,
+                                                               DWORD);
+typedef CRYPT_PROVIDER_CERT *(WINAPI *ProvCertFromChainFunc)(CRYPT_PROVIDER_SGNR *, DWORD);
+typedef DWORD(WINAPI *CertGetNameStringFunc)(PCCERT_CONTEXT, DWORD, DWORD, void *, LPWSTR, DWORD);
+
+// The signer's subject Common Name and Organization, "CN|O": the identity
+// Artifact Signing certifies. Its certificates are short-lived and renewed
+// constantly, so the certificate itself (thumbprint, serial) is never stable
+// between two releases - the validated name is.
+static void signer_identity(PCCERT_CONTEXT cert, wchar_t *out, size_t cap) {
+    out[0] = L'\0';
+    HMODULE crypt32 = load_system_dll(L"crypt32.dll");
+    union {
+        FARPROC proc;
+        CertGetNameStringFunc func;
+    } name_fn;
+    name_fn.proc = crypt32 ? GetProcAddress(crypt32, "CertGetNameStringW") : NULL;
+    if (!name_fn.proc || !cert)
+        return;
+    wchar_t cn[128] = L"", org[128] = L"";
+    name_fn.func(cert, CERT_NAME_ATTR_TYPE, 0, (void *) szOID_COMMON_NAME, cn, 128);
+    name_fn.func(cert, CERT_NAME_ATTR_TYPE, 0, (void *) szOID_ORGANIZATION_NAME, org, 128);
+    if (cn[0])
+        _snwprintf(out, cap - 1, L"%ls|%ls", cn, org);
+    out[cap - 1] = L'\0';
+}
+
+// The Authenticode state of a file - read through file when given, which is
+// what makes the check apply to the very bytes that will run - and, when it is
+// validly signed, the signer's identity. Revocation is not checked: it needs
+// the network and stalls offline, and the release's own SHA-256 has already
+// been checked by then. Chain building may still fetch over the network (an
+// intermediate by AIA, or a root Windows installs on demand from Windows
+// Update): this runs just after a download from github.com, so the network is
+// there, and restricting it to the cache made a correctly signed installer
+// fail with CERT_E_UNTRUSTEDROOT/CERT_E_CHAINING - reported as "not valid" -
+// on any machine that had not yet cached the signing root.
+static UpdateSignature authenticode_check(const wchar_t *path, HANDLE file, wchar_t *publisher,
+                                          size_t publisher_cap) {
+    if (publisher && publisher_cap)
+        publisher[0] = L'\0';
+    HMODULE wintrust = load_system_dll(L"wintrust.dll");
+    if (!wintrust)
+        return UPDATE_SIG_NONE; // Cannot ask: the SHA-256 stands alone, as before
+    union {
+        FARPROC proc;
+        WinVerifyTrustFunc func;
+    } verify;
+    union {
+        FARPROC proc;
+        ProvDataFromStateFunc func;
+    } prov_data;
+    union {
+        FARPROC proc;
+        ProvSignerFromChainFunc func;
+    } prov_signer;
+    union {
+        FARPROC proc;
+        ProvCertFromChainFunc func;
+    } prov_cert;
+    verify.proc = GetProcAddress(wintrust, "WinVerifyTrust");
+    prov_data.proc = GetProcAddress(wintrust, "WTHelperProvDataFromStateData");
+    prov_signer.proc = GetProcAddress(wintrust, "WTHelperGetProvSignerFromChain");
+    prov_cert.proc = GetProcAddress(wintrust, "WTHelperGetProvCertFromChain");
+    if (!verify.proc)
+        return UPDATE_SIG_NONE;
+
+    WINTRUST_FILE_INFO info;
+    ZeroMemory(&info, sizeof(info));
+    info.cbStruct = sizeof(info);
+    info.pcwszFilePath = path;
+    info.hFile = file;
+
+    WINTRUST_DATA data;
+    ZeroMemory(&data, sizeof(data));
+    data.cbStruct = sizeof(data);
+    data.dwUIChoice = WTD_UI_NONE;
+    data.fdwRevocationChecks = WTD_REVOKE_NONE;
+    data.dwUnionChoice = WTD_CHOICE_FILE;
+    data.pFile = &info;
+    data.dwStateAction = WTD_STATEACTION_VERIFY;
+    data.dwProvFlags = WTD_REVOCATION_CHECK_NONE;
+
+    // WINTRUST_ACTION_GENERIC_VERIFY_V2 (softpub.h), spelled out so no
+    // import library is needed for the GUID
+    GUID action = {
+        0x00aac56b, 0xcd44, 0x11d0, { 0x8c, 0xc2, 0x00, 0xc0, 0x4f, 0xc2, 0x95, 0xee }
+    };
+    LONG status = verify.func((HWND) INVALID_HANDLE_VALUE, &action, &data);
+
+    UpdateSignature result;
+    if (status == ERROR_SUCCESS) {
+        result = UPDATE_SIG_VALID;
+        if (publisher && publisher_cap && prov_data.proc && prov_signer.proc && prov_cert.proc) {
+            CRYPT_PROVIDER_DATA *pd = prov_data.func(data.hWVTStateData);
+            CRYPT_PROVIDER_SGNR *signer = pd ? prov_signer.func(pd, 0, FALSE, 0) : NULL;
+            const CRYPT_PROVIDER_CERT *cert = signer ? prov_cert.func(signer, 0) : NULL;
+            if (cert)
+                signer_identity(cert->pCert, publisher, publisher_cap);
+        }
+    } else if (status == TRUST_E_NOSIGNATURE || status == TRUST_E_SUBJECT_FORM_UNKNOWN ||
+               status == TRUST_E_PROVIDER_UNKNOWN) {
+        result = UPDATE_SIG_NONE;
+    } else {
+        result = UPDATE_SIG_BAD; // Tampered, untrusted root, explicitly distrusted...
+    }
+
+    data.dwStateAction = WTD_STATEACTION_CLOSE;
+    verify.func((HWND) INVALID_HANDLE_VALUE, &action, &data);
+    return result;
+}
+
+// This copy's own signature and signer, worked out once
+static UpdateSignature this_build_signature(wchar_t *publisher, size_t cap) {
+    static bool known = false;
+    static UpdateSignature sig = UPDATE_SIG_NONE;
+    static wchar_t who[300];
+    if (!known) {
+        wchar_t exe[MAX_PATH];
+        DWORD n = GetModuleFileNameW(NULL, exe, MAX_PATH);
+        if (n > 0 && n < MAX_PATH)
+            sig = authenticode_check(exe, NULL, who, 300);
+        known = true;
+    }
+    _snwprintf(publisher, cap - 1, L"%ls", who);
+    publisher[cap - 1] = L'\0';
+    return sig;
+}
+
+// --- Which installer updates this copy ---------------------------------------
+
+// installer/npad.wxs's UpgradeCode (shared by the x64 and arm64 MSIs)
+#define NPAD_MSI_UPGRADE_CODE L"{6C9F1E28-4B57-4A0D-BE73-8A51F2D90C44}"
+// Inno's uninstall key: installer/npad.iss's AppId (see assoc_win32.c)
+#define NPAD_INNO_UNINSTALL_KEY                                                                    \
+    L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\"                                   \
+    L"{B7E5A2C4-9D31-4F8E-A6C0-3D2E71540A9B}_is1"
+
+// Whether the Inno setup installed THIS copy: its recorded InstallLocation, in
+// either hive, is the directory npad.exe is running from
+static bool setup_owns_this_copy(const char *exe_utf8) {
+    HKEY roots[] = { HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE };
+    for (size_t i = 0; i < sizeof(roots) / sizeof(roots[0]); i++) {
+        HKEY key;
+        if (RegOpenKeyExW(roots[i], NPAD_INNO_UNINSTALL_KEY, 0, KEY_READ, &key) != ERROR_SUCCESS)
+            continue;
+        wchar_t location[MAX_PATH + 1];
+        DWORD type = 0, size = sizeof(location) - sizeof(wchar_t);
+        LONG rc = RegQueryValueExW(key, L"InstallLocation", NULL, &type, (BYTE *) location, &size);
+        RegCloseKey(key);
+        if (rc != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ))
+            continue;
+        location[size / sizeof(wchar_t)] = L'\0';
+        char *loc = wide_to_utf8(location);
+        bool owns = loc && update_dir_holds_exe(loc, exe_utf8);
+        free(loc);
+        if (owns)
+            return true;
+    }
+    return false;
+}
+
+// msi.dll, resolved at first use like wintrust: a plain launch never loads it
+typedef UINT(WINAPI *MsiEnumRelatedProductsFunc)(LPCWSTR, DWORD, DWORD, LPWSTR);
+typedef UINT(WINAPI *MsiGetProductInfoFunc)(LPCWSTR, LPCWSTR, LPWSTR, DWORD *);
+typedef UINT(WINAPI *MsiEnumFeaturesFunc)(LPCWSTR, DWORD, LPWSTR, LPWSTR);
+typedef int(WINAPI *MsiQueryFeatureStateFunc)(LPCWSTR, LPCWSTR);
+#define NPAD_MSI_GUID_CHARS 39    // "{XXXXXXXX-...}" and its NUL
+#define NPAD_MSI_FEATURE_CHARS 39 // msi.h's MAX_FEATURE_CHARS (38) and its NUL
+#define NPAD_INSTALLSTATE_LOCAL 3 // msi.h's INSTALLSTATE_LOCAL
+
+static FARPROC msi_proc(const char *name) {
+    HMODULE msi = load_system_dll(L"msi.dll");
+    return msi ? GetProcAddress(msi, name) : NULL;
+}
+
+// Whether an npad MSI installed THIS copy, mirroring setup_owns_this_copy: the
+// product whose recorded InstallLocation (installer/npad.wxs sets
+// ARPINSTALLLOCATION) is the directory npad.exe runs from. Every related
+// product is looked at, so a per-user and an all-users install side by side
+// are told apart, and *per_machine is the matching product's own scope.
+//
+// A product with no InstallLocation came from an MSI built before the
+// property was recorded. It is trusted only on positive evidence: this exe is
+// in the folder that MSI installs to by default for its scope
+// (update_msi_owner). It used to be trusted whenever no product claimed this
+// folder outright, so on a PC with such an MSI a portable copy elsewhere still
+// updated through it - upgrading the OTHER install (with a UAC prompt for an
+// all-users one) while this copy stayed old and kept offering the update.
+//
+// The default folder: every npad MSI installs to ProgramFiles64Folder\npad,
+// which Windows Installer resolves to FOLDERID_ProgramFiles for an all-users
+// install and to FOLDERID_UserProgramFiles (%LOCALAPPDATA%\Programs) for a
+// per-user one. NULL when the folder is not known.
+static char *msi_default_folder(bool per_machine) {
+    PWSTR base = NULL;
+    REFKNOWNFOLDERID folder = per_machine ? &FOLDERID_ProgramFiles : &FOLDERID_UserProgramFiles;
+    HRESULT hr = SHGetKnownFolderPath(folder, 0, NULL, &base);
+    char *result = NULL;
+    if (SUCCEEDED(hr) && base && base[0]) {
+        wchar_t dir[MAX_PATH + 8];
+        _snwprintf(dir, MAX_PATH + 7, L"%ls\\npad", base);
+        dir[MAX_PATH + 7] = L'\0';
+        result = wide_to_utf8(dir);
+    }
+    CoTaskMemFree(base);
+    return result;
+}
+
+#define NPAD_MSI_MAX_PRODUCTS 64
+
+static bool msi_owns_this_copy(const char *exe_utf8, bool *per_machine,
+                               wchar_t product_out[NPAD_MSI_GUID_CHARS]) {
+    *per_machine = false;
+    product_out[0] = L'\0';
+    union {
+        FARPROC proc;
+        MsiEnumRelatedProductsFunc func;
+    } enum_fn;
+    union {
+        FARPROC proc;
+        MsiGetProductInfoFunc func;
+    } info_fn;
+    enum_fn.proc = msi_proc("MsiEnumRelatedProductsW");
+    info_fn.proc = msi_proc("MsiGetProductInfoW");
+    if (!enum_fn.proc || !info_fn.proc || !exe_utf8)
+        return false;
+
+    wchar_t codes[NPAD_MSI_MAX_PRODUCTS][NPAD_MSI_GUID_CHARS];
+    UpdateMsiProduct products[NPAD_MSI_MAX_PRODUCTS];
+    char *locations[NPAD_MSI_MAX_PRODUCTS];
+    size_t count = 0;
+    bool any_legacy = false;
+    for (DWORD i = 0; i < NPAD_MSI_MAX_PRODUCTS; i++) {
+        wchar_t *product = codes[count];
+        if (enum_fn.func(NPAD_MSI_UPGRADE_CODE, 0, i, product) != ERROR_SUCCESS)
+            break; // ERROR_NO_MORE_ITEMS, or the enumeration failed
+        wchar_t location[MAX_PATH + 1] = L"";
+        DWORD n = MAX_PATH + 1;
+        if (info_fn.func(product, L"InstallLocation", location, &n) != ERROR_SUCCESS)
+            continue; // Too long to be this copy's folder, or not readable
+        locations[count] = wide_to_utf8(location);
+        if (!locations[count])
+            continue;
+        wchar_t assignment[8] = L"";
+        n = 8;
+        products[count].install_location = locations[count];
+        products[count].per_machine =
+            info_fn.func(product, L"AssignmentType", assignment, &n) == ERROR_SUCCESS &&
+            assignment[0] == L'1';
+        if (!locations[count][0])
+            any_legacy = true;
+        count++;
+    }
+
+    // The known folders only matter for a legacy product
+    char *machine_default = any_legacy ? msi_default_folder(true) : NULL;
+    char *user_default = any_legacy ? msi_default_folder(false) : NULL;
+    int owner = update_msi_owner(products, count, exe_utf8, machine_default, user_default);
+    free(machine_default);
+    free(user_default);
+    if (owner >= 0) {
+        wcscpy(product_out, codes[owner]);
+        *per_machine = products[owner].per_machine;
+    }
+    for (size_t i = 0; i < count; i++)
+        free(locations[i]);
+    return owner >= 0;
+}
+
+// Which package to download for this copy (update_windows_package)
+static UpdatePackage detect_update_package(bool *per_machine,
+                                           wchar_t msi_product[NPAD_MSI_GUID_CHARS]) {
+    *per_machine = false;
+    msi_product[0] = L'\0';
+    wchar_t exe[MAX_PATH];
+    DWORD n = GetModuleFileNameW(NULL, exe, MAX_PATH);
+    char *exe_utf8 = (n > 0 && n < MAX_PATH) ? wide_to_utf8(exe) : NULL;
+    bool setup = exe_utf8 && setup_owns_this_copy(exe_utf8);
+    bool msi = exe_utf8 && msi_owns_this_copy(exe_utf8, per_machine, msi_product);
+    free(exe_utf8);
+    UpdatePackage package = update_windows_package(setup, msi);
+    if (package != UPDATE_PACKAGE_MSI) {
+        *per_machine = false;
+        msi_product[0] = L'\0';
+    }
+    return package;
+}
+
+// The features an installed MSI product has installed locally, as ASCII names
+// in names[0..cap). Returns how many.
+static size_t msi_local_features(const wchar_t *product, char names[][NPAD_MSI_FEATURE_CHARS],
+                                 size_t cap) {
+    union {
+        FARPROC proc;
+        MsiEnumFeaturesFunc func;
+    } enum_fn;
+    union {
+        FARPROC proc;
+        MsiQueryFeatureStateFunc func;
+    } state_fn;
+    enum_fn.proc = msi_proc("MsiEnumFeaturesW");
+    state_fn.proc = msi_proc("MsiQueryFeatureStateW");
+    if (!enum_fn.proc || !state_fn.proc || !product || !product[0])
+        return 0;
+    size_t count = 0;
+    for (DWORD i = 0; count < cap; i++) {
+        wchar_t feature[NPAD_MSI_FEATURE_CHARS], parent[NPAD_MSI_FEATURE_CHARS];
+        if (enum_fn.func(product, i, feature, parent) != ERROR_SUCCESS)
+            break; // ERROR_NO_MORE_ITEMS, or the enumeration failed
+        if (state_fn.func(product, feature) != NPAD_INSTALLSTATE_LOCAL)
+            continue;
+        // Feature Ids are ASCII identifiers; anything else is skipped here
+        // (update_msi_feature_args would refuse it anyway)
+        bool ascii = true;
+        size_t j = 0;
+        for (; j < NPAD_MSI_FEATURE_CHARS - 1 && feature[j]; j++) {
+            if (feature[j] > 0x7e) {
+                ascii = false;
+                break;
+            }
+            names[count][j] = (char) feature[j];
+        }
+        if (!ascii)
+            continue;
+        names[count][j] = '\0';
+        count++;
+    }
+    return count;
+}
+
 static DWORD WINAPI update_check_thread(LPVOID param) {
     HWND hwnd = (HWND) param;
     UpdateCheckResult *r = calloc(1, sizeof(*r));
     if (!r) {
-        InterlockedExchange(&g_update_busy, 0);
+        // Still report back: the UI thread holds the busy state for this check
+        PostMessageW(hwnd, NPAD_WM_UPDATE_CHECKED, 0, 0);
         return 0;
     }
+    // /releases/latest never names a pre-release, so a release candidate
+    // reads the newest few releases instead and is offered the next candidate
+    // as well as the final release
+    char cur[32];
+    current_version_string(cur, sizeof(cur));
+    bool prerelease = update_is_prerelease(cur);
+    const wchar_t *path = prerelease ? L"/repos/platima/npad/releases?per_page=10"
+                                     : L"/repos/platima/npad/releases/latest";
     size_t len = 0;
-    char *json = http_get_alloc(L"api.github.com", L"/repos/platima/npad/releases/latest",
-                                1024 * 1024, &len, NULL);
+    int status = 0;
+    char *json = http_get_alloc(L"api.github.com", path,
+                                (size_t) (prerelease ? 4 : 1) * 1024 * 1024, &len, NULL, &status);
     if (!json) {
-        snprintf(r->error, sizeof(r->error), "Could not reach github.com to check for updates.");
-    } else if (!update_extract_tag(json, r->tag, sizeof(r->tag))) {
+        if (status != 0 && status != 200)
+            update_http_status_message(status, r->error, sizeof(r->error));
+        else
+            snprintf(r->error, sizeof(r->error),
+                     "Could not reach github.com to check for updates.");
+    } else if (!update_pick_release_tag(json, prerelease, r->tag, sizeof(r->tag))) {
         snprintf(r->error, sizeof(r->error), "Unexpected response from the update server.");
     } else {
         r->ok = true;
     }
     free(json);
-    PostMessageW(hwnd, NPAD_WM_UPDATE_CHECKED, 0, (LPARAM) r);
+    if (!PostMessageW(hwnd, NPAD_WM_UPDATE_CHECKED, 0, (LPARAM) r))
+        free(r); // The window is gone
     return 0;
 }
 
 // Start a check if none is running. manual=true surfaces the result loudly
 // (Help menu / Check Now button); manual=false is the silent launch/auto path.
-// Returns false when a check is already in flight or the thread failed.
+// A manual request while the launch check is still on its way joins it: that
+// check's result is then reported as if just asked for, where it used to do
+// nothing at all and the launch check finished silently.
+// Returns false when a download is in flight or the thread failed.
 static bool start_update_check(Window *window, bool manual) {
     if (!window)
         return false;
-    if (InterlockedCompareExchange(&g_update_busy, 1, 0) != 0)
+    if (g_update_check_running) {
+        if (manual) {
+            g_update_check_manual = true;
+            set_status_message(window, "Checking for updates...");
+        }
+        return true;
+    }
+    if (InterlockedCompareExchange(&g_update_busy, 1, 0) != 0) {
+        if (manual)
+            set_status_message(window, "An update is being downloaded or installed");
         return false;
+    }
     g_update_check_manual = manual;
+    g_update_check_running = true;
     set_status_message(window, "Checking for updates...");
     HANDLE thread = CreateThread(NULL, 0, update_check_thread, window->hwnd, 0, NULL);
     if (!thread) {
+        g_update_check_running = false;
         InterlockedExchange(&g_update_busy, 0);
         set_status_message(window, "Update check failed to start");
         return false;
@@ -2892,12 +3946,124 @@ static const wchar_t *path_basename(const wchar_t *path) {
     return slash ? slash + 1 : path;
 }
 
+// Downloaded installers are named npad-update-<random>-<asset name> in %TEMP%
+#define NPAD_UPDATE_TEMP_PREFIX L"npad-update-"
+
+// Remove this updater's own leftovers older than a week. A declined download
+// is kept for the user to run by hand (npad says where), and every download
+// now has a name of its own, so without this they would pile up. A file still
+// held open (another instance's download in progress) simply fails to delete.
+static void remove_stale_update_files(const wchar_t *temp_dir) {
+    wchar_t pattern[MAX_PATH];
+    _snwprintf(pattern, MAX_PATH - 1, L"%ls" NPAD_UPDATE_TEMP_PREFIX L"*", temp_dir);
+    pattern[MAX_PATH - 1] = L'\0';
+    WIN32_FIND_DATAW fd;
+    HANDLE find = FindFirstFileW(pattern, &fd);
+    if (find == INVALID_HANDLE_VALUE)
+        return;
+    FILETIME now_ft;
+    GetSystemTimeAsFileTime(&now_ft);
+    ULONGLONG now = ((ULONGLONG) now_ft.dwHighDateTime << 32) | now_ft.dwLowDateTime;
+    const ULONGLONG week = 7ULL * 24 * 60 * 60 * 10000000ULL; // 100 ns units
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            continue;
+        ULONGLONG t = ((ULONGLONG) fd.ftLastWriteTime.dwHighDateTime << 32) |
+                      fd.ftLastWriteTime.dwLowDateTime;
+        if (now > t && now - t > week) {
+            wchar_t path[MAX_PATH];
+            _snwprintf(path, MAX_PATH - 1, L"%ls%ls", temp_dir, fd.cFileName);
+            path[MAX_PATH - 1] = L'\0';
+            DeleteFileW(path);
+        }
+    } while (FindNextFileW(find, &fd));
+    FindClose(find);
+}
+
+// Write the already-verified bytes to a NEW file of their own, then hold that
+// file open for reading with no write or delete sharing, and verify it again
+// through that handle: the SHA-256 and, when this copy is signed, the
+// publisher's signature. On success r->path and r->file are what will be
+// launched, and nobody can change the file until r->file is closed.
+//
+// The name is unique per download (CREATE_NEW, never an existing file or
+// link): two instances downloading at once used to write the same file.
+static bool save_verified_installer(UpdateDownloadResult *r, const char *data, size_t len,
+                                    const char *expected, const wchar_t *asset_name) {
+    wchar_t temp_dir[MAX_PATH];
+    DWORD td = GetTempPathW(MAX_PATH, temp_dir);
+    if (td == 0 || td >= MAX_PATH) {
+        snprintf(r->error, sizeof(r->error), "Could not resolve the temporary directory.");
+        return false;
+    }
+    remove_stale_update_files(temp_dir);
+
+    HANDLE out = INVALID_HANDLE_VALUE;
+    for (int attempt = 0; attempt < 16 && out == INVALID_HANDLE_VALUE; attempt++) {
+        LARGE_INTEGER qpc;
+        QueryPerformanceCounter(&qpc);
+        unsigned long tag =
+            (unsigned long) (qpc.QuadPart ^ ((LONGLONG) GetCurrentProcessId() << 20) ^
+                             ((LONGLONG) attempt << 8));
+        _snwprintf(r->path, MAX_PATH - 1, L"%ls" NPAD_UPDATE_TEMP_PREFIX L"%08lx-%ls", temp_dir,
+                   tag & 0xffffffffUL, asset_name);
+        r->path[MAX_PATH - 1] = L'\0';
+        out = CreateFileW(r->path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (out == INVALID_HANDLE_VALUE && GetLastError() != ERROR_FILE_EXISTS)
+            break;
+    }
+    if (out == INVALID_HANDLE_VALUE) {
+        r->path[0] = L'\0';
+        snprintf(r->error, sizeof(r->error), "Could not save the downloaded installer.");
+        return false;
+    }
+    bool written = true;
+    for (size_t done = 0; written && done < len;) {
+        DWORD chunk = (len - done) > 0x10000000 ? 0x10000000 : (DWORD) (len - done);
+        DWORD wrote = 0;
+        written = WriteFile(out, data + done, chunk, &wrote, NULL) && wrote == chunk;
+        done += wrote;
+    }
+    CloseHandle(out);
+
+    // Reopen read-only, sharing only reads: no writer, no delete, no rename
+    // from here until the installer is running
+    r->file = written ? CreateFileW(r->path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                                    FILE_ATTRIBUTE_NORMAL, NULL)
+                      : INVALID_HANDLE_VALUE;
+    const char *problem = NULL;
+    char actual[65];
+    if (r->file == INVALID_HANDLE_VALUE) {
+        problem = "Could not save the downloaded installer.";
+    } else if (!sha256_hex(NULL, 0, r->file, actual) || strcmp(actual, expected) != 0) {
+        problem = "The downloaded installer changed on disk before it could run, so it was "
+                  "deleted.";
+    } else {
+        wchar_t ours[300], theirs[300];
+        UpdateSignature build = this_build_signature(ours, 300);
+        UpdateSignature installer = authenticode_check(r->path, r->file, theirs, 300);
+        problem = update_signature_problem(build, installer, ours[0] && wcscmp(ours, theirs) == 0);
+    }
+    if (problem) {
+        if (r->file != INVALID_HANDLE_VALUE)
+            CloseHandle(r->file);
+        r->file = NULL;
+        DeleteFileW(r->path); // Never leave an unverified installer around
+        r->path[0] = L'\0';
+        snprintf(r->error, sizeof(r->error), "%s", problem);
+        return false;
+    }
+    return true;
+}
+
 static DWORD WINAPI update_download_thread(LPVOID param) {
     UpdateDownloadJob *job = (UpdateDownloadJob *) param;
     UpdateDownloadResult *r = calloc(1, sizeof(*r));
     if (!r) {
+        // Still report back: the UI thread holds the busy state and the
+        // install claim for this download
+        PostMessageW(job->hwnd, NPAD_WM_UPDATE_DOWNLOADED, 0, 0);
         free(job);
-        InterlockedExchange(&g_update_busy, 0);
         return 0;
     }
     snprintf(r->tag, sizeof(r->tag), "%s", job->tag);
@@ -2913,17 +4079,23 @@ static DWORD WINAPI update_download_thread(LPVOID param) {
     size_t exe_len = 0, sum_len = 0;
     char *exe = NULL, *sum = NULL;
 
+    // The package that updates this copy in place: the MSI when Windows
+    // Installer put it here, the setup otherwise. Running the setup over an
+    // MSI install added a second product that shares (and deletes) its files.
+    r->package = detect_update_package(&r->per_machine, r->msi_product);
+
     // The installer for the architecture this npad was built for: an arm64
     // build must never be handed the x64 installer, and a build of any other
     // architecture has no installer to offer at all
-    const char *exe_sfx = update_installer_suffix(update_build_arch(), false);
-    const char *sum_sfx = update_installer_suffix(update_build_arch(), true);
+    const char *exe_sfx = update_package_suffix(update_build_arch(), r->package, false);
+    const char *sum_sfx = update_package_suffix(update_build_arch(), r->package, true);
     if (!exe_sfx || !sum_sfx) {
         snprintf(r->error, sizeof(r->error),
                  "npad %s has no installer for this build's processor architecture.", job->tag);
         HWND hwnd = job->hwnd;
         free(job);
-        PostMessageW(hwnd, NPAD_WM_UPDATE_DOWNLOADED, 0, (LPARAM) r);
+        if (!PostMessageW(hwnd, NPAD_WM_UPDATE_DOWNLOADED, 0, (LPARAM) r))
+            free(r);
         return 0;
     }
 
@@ -2933,9 +4105,10 @@ static DWORD WINAPI update_download_thread(LPVOID param) {
     // before. Fall back to the historic name when the release cannot be read.
     bool have_exe = false, have_sum = false;
     wchar_t api_path[128];
-    _snwprintf(api_path, 127, L"/repos/platima/npad/releases/tags/%s", wtag);
+    _snwprintf(api_path, 127, L"/repos/platima/npad/releases/tags/%ls", wtag);
     api_path[127] = L'\0';
-    char *rel = http_get_alloc(L"api.github.com", api_path, (size_t) 1024 * 1024, NULL, NULL);
+    char *rel =
+        http_get_alloc(L"api.github.com", api_path, (size_t) 4 * 1024 * 1024, NULL, NULL, NULL);
     if (rel) {
         char url[512];
         if (update_find_asset_url(rel, exe_sfx, url, sizeof(url)))
@@ -2945,63 +4118,67 @@ static DWORD WINAPI update_download_thread(LPVOID param) {
         free(rel);
     }
     if (!have_exe) {
-        _snwprintf(exe_path, 511, L"/platima/npad/releases/download/%s/npad-%s%hs", wtag, wtag,
+        _snwprintf(exe_path, 511, L"/platima/npad/releases/download/%ls/npad-%ls%hs", wtag, wtag,
                    exe_sfx);
         exe_path[511] = L'\0';
     }
     if (!have_sum) {
-        _snwprintf(sum_path, 511, L"/platima/npad/releases/download/%s/npad-%s%hs", wtag, wtag,
+        _snwprintf(sum_path, 511, L"/platima/npad/releases/download/%ls/npad-%ls%hs", wtag, wtag,
                    sum_sfx);
         sum_path[511] = L'\0';
     }
 
     // The installer (progress reported) and its published digest
-    exe = http_get_alloc(L"github.com", exe_path, (size_t) 200 * 1024 * 1024, &exe_len, job->hwnd);
+    int exe_status = 0, sum_status = 0;
+    exe = http_get_alloc(L"github.com", exe_path, (size_t) 200 * 1024 * 1024, &exe_len, job->hwnd,
+                         &exe_status);
     if (exe) {
-        sum = http_get_alloc(L"github.com", sum_path, 4096, &sum_len, NULL);
+        sum = http_get_alloc(L"github.com", sum_path, 4096, &sum_len, NULL, &sum_status);
     }
 
     char expected[65], actual[65];
     if (!exe || exe_len == 0) {
-        snprintf(r->error, sizeof(r->error), "Could not download the installer for npad %s.",
-                 job->tag);
+        if (exe_status == 404)
+            snprintf(r->error, sizeof(r->error),
+                     "The release npad %s has no installer for this kind of install (HTTP 404).",
+                     job->tag);
+        else if (exe_status != 0 && exe_status != 200)
+            update_http_status_message(exe_status, r->error, sizeof(r->error));
+        else if (exe_status == 200)
+            snprintf(r->error, sizeof(r->error),
+                     "The download of the installer for npad %s was interrupted.", job->tag);
+        else
+            snprintf(r->error, sizeof(r->error), "Could not download the installer for npad %s.",
+                     job->tag);
     } else if (!sum || !update_parse_sha256(sum, expected)) {
         snprintf(r->error, sizeof(r->error),
                  "Could not download the checksum to verify the installer.");
+    } else if (!sha256_hex(exe, exe_len, NULL, actual) || strcmp(actual, expected) != 0) {
+        // Checked in memory first: a corrupt or tampered download never
+        // reaches the disk at all
+        snprintf(r->error, sizeof(r->error),
+                 "The downloaded installer failed SHA-256 verification, so it was not saved.");
     } else {
-        wchar_t temp_dir[MAX_PATH];
-        if (GetTempPathW(MAX_PATH, temp_dir) == 0) {
-            snprintf(r->error, sizeof(r->error), "Could not resolve the temporary directory.");
-        } else {
-            // Save under whatever the release actually calls it
-            _snwprintf(r->path, MAX_PATH - 1, L"%s%s", temp_dir, path_basename(exe_path));
-            r->path[MAX_PATH - 1] = L'\0';
-            FILE *f = _wfopen(r->path, L"wb");
-            bool written = f && fwrite(exe, 1, exe_len, f) == exe_len;
-            if (f)
-                fclose(f);
-            if (!written) {
-                snprintf(r->error, sizeof(r->error), "Could not save the downloaded installer.");
-            } else if (!sha256_file_hex(r->path, actual) || strcmp(actual, expected) != 0) {
-                DeleteFileW(r->path); // Corrupt or tampered: never leave it around
-                snprintf(r->error, sizeof(r->error),
-                         "The downloaded installer failed SHA-256 verification and was "
-                         "deleted.");
-            } else {
-                r->ok = true;
-            }
-        }
+        // Saved under whatever the release actually calls it
+        wchar_t asset[160];
+        _snwprintf(asset, 159, L"%ls", path_basename(exe_path));
+        asset[159] = L'\0';
+        r->ok = save_verified_installer(r, exe, exe_len, expected, asset);
     }
 
     free(exe);
     free(sum);
     HWND hwnd = job->hwnd;
     free(job);
-    PostMessageW(hwnd, NPAD_WM_UPDATE_DOWNLOADED, 0, (LPARAM) r);
+    if (!PostMessageW(hwnd, NPAD_WM_UPDATE_DOWNLOADED, 0, (LPARAM) r)) {
+        // The window is gone: nobody will run it
+        if (r->file)
+            CloseHandle(r->file);
+        free(r);
+    }
     return 0;
 }
 
-// UI-thread handler for the check result: report, or offer the update
 // Spawn the verified-download worker for tag. Returns true when the thread
 // started (the busy flag then stays set until the download result arrives).
 static bool spawn_update_download(Window *window, const char *tag) {
@@ -3019,11 +4196,89 @@ static bool spawn_update_download(Window *window, const char *tag) {
     return true;
 }
 
+// One download-and-install at a time across every npad instance. Each window
+// is its own process with its own launch check, so in "auto" mode two windows
+// opened together each downloaded the installer and each asked to install it.
+// A named mutex is held by the instance whose download (and Install now
+// question) is under way; it is taken and released on the UI thread, and
+// Windows releases it if that instance exits.
+static HANDLE g_install_mutex = NULL;
+static bool g_install_mutex_held = false;
+
+static bool claim_update_install(void) {
+    if (g_install_mutex_held)
+        return true;
+    if (!g_install_mutex)
+        g_install_mutex = CreateMutexW(NULL, FALSE, L"Local\\npad-update-install");
+    if (!g_install_mutex)
+        return true; // Cannot coordinate: carry on alone, as before
+    DWORD wait = WaitForSingleObject(g_install_mutex, 0);
+    if (wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED) {
+        g_install_mutex_held = true;
+        return true;
+    }
+    return false;
+}
+
+static void release_update_install(void) {
+    if (g_install_mutex_held) {
+        ReleaseMutex(g_install_mutex);
+        g_install_mutex_held = false;
+    }
+}
+
+// "Not now" for a version, remembered until the user signs out: a global atom
+// lives as long as the window station, outside any one npad process. Without
+// it every new window's launch check asked again (prompt mode), or downloaded
+// the installer again and asked again (auto mode). A check the user starts by
+// hand ignores this; it is only the automatic paths that stay quiet.
+static void declined_atom_name(const char *tag, wchar_t *out, size_t cap) {
+    _snwprintf(out, cap - 1, L"npad.update.declined.%hs", tag);
+    out[cap - 1] = L'\0';
+}
+
+static bool update_declined_this_session(const char *tag) {
+    wchar_t name[96];
+    declined_atom_name(tag, name, 96);
+    return GlobalFindAtomW(name) != 0;
+}
+
+static void remember_update_declined(const char *tag) {
+    wchar_t name[96];
+    declined_atom_name(tag, name, 96);
+    if (GlobalFindAtomW(name) == 0)
+        GlobalAddAtomW(name);
+}
+
+// Start downloading tag, with g_update_busy already set by the caller. On any
+// failure the busy flag (and the install claim) is released again. Returns
+// true while a download runs.
+static bool begin_update_download(Window *window, const char *tag) {
+    if (!claim_update_install()) {
+        set_status_message(window, "Another npad window is already installing an update");
+        InterlockedExchange(&g_update_busy, 0);
+        updates_page_sync_busy();
+        return false;
+    }
+    char status[96];
+    snprintf(status, sizeof(status), "Downloading npad %s...", tag);
+    set_status_message(window, status);
+    if (!spawn_update_download(window, tag)) {
+        release_update_install();
+        set_status_message(window, "Update download failed to start");
+        InterlockedExchange(&g_update_busy, 0);
+        updates_page_sync_busy();
+        return false;
+    }
+    updates_page_sync_busy();
+    return true;
+}
+
 // Present the "newer version available" TaskDialog (with a Skip option) and
 // act on the choice. Called for a manual check that found a newer release, or
 // an automatic check in "prompt" mode.
 static void prompt_update_available(Window *window, const char *tag, const char *cur) {
-    HWND hwnd = window ? window->hwnd : NULL;
+    HWND hwnd = update_dialog_owner(window);
     char msg[200];
     snprintf(msg, sizeof(msg), "npad %s is available (you have %s).", tag, cur);
     wchar_t *wmsg = utf8_to_wide(msg);
@@ -3049,45 +4304,46 @@ static void prompt_update_available(Window *window, const char *tag, const char 
     int choice = (pressed == IDCANCEL) ? 0 : pressed;
 
     if (choice == 101) {
-        char status[96];
-        snprintf(status, sizeof(status), "Downloading npad %s...", tag);
-        set_status_message(window, status);
-        if (!spawn_update_download(window, tag)) {
-            set_status_message(window, "Update download failed to start");
-            InterlockedExchange(&g_update_busy, 0);
-            updates_page_sync_busy();
-        }
-        return; // Busy flag stays set for the download (or was cleared above)
+        begin_update_download(window, tag);
+        return; // Busy flag stays set for the download (or was cleared there)
     }
     if (choice == 102) {
-        ShellExecuteW(hwnd, L"open", L"https://github.com/platima/npad/releases/latest", NULL, NULL,
-                      SW_SHOWNORMAL);
+        // This release's own notes: /releases/latest is never a pre-release
+        wchar_t url[160];
+        _snwprintf(url, 159, L"https://github.com/platima/npad/releases/tag/%hs", tag);
+        url[159] = L'\0';
+        ShellExecuteW(hwnd, L"open", url, NULL, NULL, SW_SHOWNORMAL);
     } else if (choice == 103) {
         settings_set_string("update_skipped_version", tag);
         settings_save();
         ui_platform_notify_settings_changed();
+    } else {
+        remember_update_declined(tag); // Not now: no automatic asking until sign-out
     }
     InterlockedExchange(&g_update_busy, 0);
-    updates_page_sync_busy();
+    updates_page_refresh();
     apply_update_indicator(window);
 }
 
 static void handle_update_checked(Window *window, UpdateCheckResult *r) {
-    HWND hwnd = window ? window->hwnd : NULL;
+    HWND hwnd = update_dialog_owner(window);
     bool manual = g_update_check_manual;
+    g_update_check_running = false; // A new request now starts a new check
+    g_update_check_manual = false;
     char cur[32];
     current_version_string(cur, sizeof(cur));
 
-    if (!r->ok) {
+    if (!r || !r->ok) {
         // Silent for automatic/launch checks; loud only when the user asked
         if (manual) {
-            wchar_t *w = utf8_to_wide(r->error);
-            MessageBoxW(hwnd, w ? w : L"Update check failed.", L"npad", MB_OK | MB_ICONWARNING);
+            wchar_t *w = utf8_to_wide(r ? r->error : "");
+            MessageBoxW(hwnd, (w && w[0]) ? w : L"Update check failed.", L"npad",
+                        MB_OK | MB_ICONWARNING);
             free(w);
         }
         set_status_message(window, "Update check failed");
         InterlockedExchange(&g_update_busy, 0);
-        updates_page_sync_busy();
+        updates_page_refresh();
         free(r);
         return;
     }
@@ -3106,17 +4362,16 @@ static void handle_update_checked(Window *window, UpdateCheckResult *r) {
     free(skipped);
 
     // A manual check re-surfaces even a skipped version (the user asked); an
-    // automatic check obeys the mode and the skip
-    bool show_prompt = manual ? newer : (surface_auto && strcmp(mode, "prompt") == 0);
-    bool do_download = !manual && surface_auto && strcmp(mode, "auto") == 0;
+    // automatic check obeys the mode and the skip - and stays quiet about a
+    // version the user already said "not now" to since signing in
+    bool quiet = !manual && update_declined_this_session(r->tag);
+    bool show_prompt = manual ? newer : (surface_auto && !quiet && strcmp(mode, "prompt") == 0);
+    bool do_download = !manual && surface_auto && !quiet && strcmp(mode, "auto") == 0;
     free(mode);
+    updates_page_refresh(); // The new "latest" and "last checked"
 
     if (do_download) {
-        char status[96];
-        snprintf(status, sizeof(status), "Downloading npad %s...", r->tag);
-        set_status_message(window, status);
-        if (!spawn_update_download(window, r->tag))
-            InterlockedExchange(&g_update_busy, 0);
+        begin_update_download(window, r->tag); // Clears the busy flag if it cannot start
         updates_page_sync_busy();
         apply_update_indicator(window);
         free(r);
@@ -3143,6 +4398,8 @@ static void handle_update_checked(Window *window, UpdateCheckResult *r) {
         set_status_message(window, "npad is up to date");
     } else if (surface_auto) {
         set_status_message(window, "An update is available (see the Help menu)");
+    } else {
+        set_status_message(window, NULL); // Clear "Checking for updates..."
     }
     InterlockedExchange(&g_update_busy, 0);
     updates_page_sync_busy();
@@ -3156,6 +4413,7 @@ static void handle_update_checked(Window *window, UpdateCheckResult *r) {
 // EnumWindows' callback being invisible to it.
 typedef struct {
     int count;
+    wchar_t titles[3][96]; // The first few windows' titles, to name stragglers
 } NpadWindowTally;
 
 static BOOL CALLBACK count_foreign_enum_proc(HWND hwnd, LPARAM lparam) {
@@ -3165,6 +4423,12 @@ static BOOL CALLBACK count_foreign_enum_proc(HWND hwnd, LPARAM lparam) {
         DWORD pid = 0;
         GetWindowThreadProcessId(hwnd, &pid);
         if (pid != GetCurrentProcessId()) {
+            if (tally->count < 3) {
+                // Reads the stored caption; sends nothing to that window
+                if (InternalGetWindowText(hwnd, tally->titles[tally->count], 96) <= 0)
+                    _snwprintf(tally->titles[tally->count], 95, L"npad");
+                tally->titles[tally->count][95] = L'\0';
+            }
             tally->count++;
         }
     }
@@ -3181,14 +4445,14 @@ static int count_other_npad_windows(void) {
 // Without this the installer races them: setup would reach the file-copy step
 // while npad.exe was still locked, and fall back to its "unable to close all
 // applications" page - the very thing the handoff broadcast exists to avoid.
-// Pumps messages so this window stays responsive while waiting.
-static void wait_for_other_npads(DWORD timeout_ms) {
+// Pumps messages so this window stays responsive while waiting. Returns how
+// many other npad windows are still open.
+static int wait_for_other_npads(DWORD timeout_ms) {
     DWORD start = GetTickCount();
     for (;;) {
-        if (count_other_npad_windows() == 0)
-            return;
-        if (GetTickCount() - start >= timeout_ms)
-            return; // Straggler (a modal dialog, most likely); let setup handle it
+        int left = count_other_npad_windows();
+        if (left == 0 || GetTickCount() - start >= timeout_ms)
+            return left;
         MSG msg;
         while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
@@ -3198,7 +4462,59 @@ static void wait_for_other_npads(DWORD timeout_ms) {
     }
 }
 
-// UI-thread handler for the verified download: confirm, launch, quit
+// Ask every other npad window to park its work and close, and wait for them.
+// One that stays open - waiting on a dialog, unable to park, or running as
+// administrator in a version from before the handoff message was let through
+// UIPI - is named, so the user can close it rather than meet setup's "could
+// not close" page with no idea which window it means.
+static void close_other_npads_for_install(HWND owner) {
+    if (!g_close_handoff_msg)
+        return;
+    for (;;) {
+        broadcast_to_npad_windows(g_close_handoff_msg, 0);
+        if (wait_for_other_npads(4000) == 0)
+            return;
+        NpadWindowTally tally = { 0 };
+        EnumWindows(count_foreign_enum_proc, (LPARAM) &tally);
+        if (tally.count == 0)
+            return;
+
+        wchar_t content[700];
+        int n = _snwprintf(content, 699, L"Still open:");
+        for (int i = 0; i < tally.count && i < 3 && n > 0; i++) {
+            int m = _snwprintf(content + n, (size_t) (699 - n), L"\n    %ls", tally.titles[i]);
+            n = m < 0 ? -1 : n + m;
+        }
+        if (n > 0 && tally.count > 3) {
+            int m =
+                _snwprintf(content + n, (size_t) (699 - n), L"\n    and %d more", tally.count - 3);
+            n = m < 0 ? -1 : n + m;
+        }
+        if (n > 0)
+            _snwprintf(content + n, (size_t) (699 - n),
+                       L"\n\nA window may be waiting for an answer in a dialog, or be running as "
+                       L"administrator, which this npad cannot close. Close it yourself, then "
+                       L"try again.");
+        content[699] = L'\0';
+
+        static const TASKDIALOG_BUTTON buttons[] = {
+            { 101, L"&Try again\nAfter closing the window yourself" },
+            { 102, L"&Install anyway\nSetup asks the window to close, or tells you it cannot" },
+        };
+        TaskDialogSpec spec;
+        ZeroMemory(&spec, sizeof(spec));
+        spec.instruction = L"Another npad window did not close";
+        spec.content = content;
+        spec.icon = TD_WARNING_ICON;
+        spec.buttons = buttons;
+        spec.button_count = 2;
+        spec.default_button = 101;
+        spec.command_links = true;
+        if (show_task_dialog(owner, &spec) != 101)
+            return;
+    }
+}
+
 // Something else changed the file npad has open. Offer the three things a user
 // can sensibly want, and make the safe one the default: Reload discards their
 // unsaved edits, so it must never be what Enter or Esc does.
@@ -3252,7 +4568,10 @@ static void prompt_external_change(Window *window) {
 
     switch (choice) {
         case 101:
-            editor_reload_from_disk();
+            // Declined or failed (the core has said why): treat it as Keep
+            // editing, or the same prompt returns on the next activation
+            if (!editor_reload_from_disk())
+                editor_accept_external_change();
             break;
         case 102:
             ui_post_event(UI_EVENT_FILE_SAVE_AS, window, NULL);
@@ -3268,71 +4587,251 @@ static void prompt_external_change(Window *window) {
     in_prompt = false;
 }
 
+// Every user-facing close of this window (the close box, File > Exit, Close
+// All from another instance, the update's fallback) comes through here.
+//
+// During a session end the close is a handoff: no prompt (see
+// g_session_ending). Otherwise the editor runs its save prompt - and while
+// that prompt is up, a second request is dropped rather than run: the prompt
+// is modal and pumps messages, so a posted Close All or a second click used to
+// stack a second save prompt on top of the first, which then answered for a
+// document whose first prompt was still waiting.
+static void request_quit(Window *window) {
+    if (g_session_ending) {
+        ui_post_event(UI_EVENT_QUIT_HANDOFF, window, NULL);
+        return;
+    }
+    if (g_quit_prompt_open)
+        return; // The prompt already on screen answers this request too
+    g_quit_prompt_open = true;
+    ui_post_event(UI_EVENT_QUIT, window, NULL);
+    g_quit_prompt_open = false;
+}
+
+// The program and arguments that install r: the setup itself, or msiexec with
+// the MSI (in the same scope as the copy it upgrades, or Windows Installer
+// would add a second product beside it rather than upgrade the first)
+static bool installer_command(const UpdateDownloadResult *r, wchar_t *app, size_t app_cap,
+                              wchar_t *args, size_t args_cap) {
+    if (r->package == UPDATE_PACKAGE_MSI) {
+        UINT n = GetSystemDirectoryW(app, (UINT) app_cap);
+        if (n == 0 || n + 14 > app_cap)
+            return false;
+        _snwprintf(app + n, app_cap - n - 1, L"\\msiexec.exe");
+        app[app_cap - 1] = L'\0';
+        // /passive: a progress bar and no questions, but still a UAC prompt
+        // when an all-users install needs one; /norestart: never reboot
+        _snwprintf(args, args_cap - 1, L"/i \"%ls\" /passive /norestart%ls", r->path,
+                   r->per_machine ? L" ALLUSERS=1" : L"");
+        args[args_cap - 1] = L'\0';
+        // The major upgrade carries every feature over, the Assoc* ones
+        // included, and reinstalling those rewrites the very keys the
+        // Associations page deletes: an update would quietly bring back the
+        // groups the user unticked there. Leave those features out, as the
+        // setup's /MERGETASKS below does for its tasks.
+        char names[32][NPAD_MSI_FEATURE_CHARS];
+        const char *installed[32];
+        size_t count = msi_local_features(r->msi_product, names, 32);
+        for (size_t i = 0; i < count; i++)
+            installed[i] = names[i];
+        const char *drop[ASSOC_GROUP_COUNT];
+        size_t drop_count =
+            assoc_msi_unregistered_features(r->per_machine, drop, ASSOC_GROUP_COUNT);
+        char features[600];
+        if (update_msi_feature_args(installed, count, drop, drop_count, features,
+                                    sizeof(features))) {
+            size_t used = wcslen(args);
+            _snwprintf(args + used, args_cap - used - 1, L"%hs", features);
+            args[args_cap - 1] = L'\0';
+        }
+        return true;
+    }
+    _snwprintf(app, app_cap - 1, L"%ls", r->path);
+    app[app_cap - 1] = L'\0';
+    // Tell setup we were running so it offers to relaunch afterwards. It
+    // cannot detect that itself: npad closes before setup reaches the point
+    // where it looks, so there is no window left for it to find. Inno ignores
+    // parameters it does not recognise, so older installers are safe.
+    //
+    // The association tasks come from the registry as it is NOW, not from
+    // Inno's memory of the original install: its UsePreviousTasks would
+    // otherwise quietly re-register every type the user has since unticked on
+    // Preferences > Associations.
+    _snwprintf(args, args_cap - 1, L"/RELAUNCH=1");
+    args[args_cap - 1] = L'\0';
+    wchar_t merge[200];
+    if (assoc_installer_merge_tasks(merge, 200)) {
+        size_t used = wcslen(args);
+        _snwprintf(args + used, args_cap - used - 1, L" %ls", merge);
+        args[args_cap - 1] = L'\0';
+    }
+    return true;
+}
+
+static void report_installer_not_started(HWND owner, const UpdateDownloadResult *r, DWORD err) {
+    wchar_t reason[256] = L"";
+    if (FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, err, 0,
+                       reason, 256, NULL) == 0)
+        _snwprintf(reason, 255, L"error %lu", (unsigned long) err);
+    reason[255] = L'\0';
+    size_t len = wcslen(reason);
+    while (len > 0 &&
+           (reason[len - 1] == L'\n' || reason[len - 1] == L'\r' || reason[len - 1] == L' '))
+        reason[--len] = L'\0';
+    wchar_t msg[MAX_PATH + 512];
+    _snwprintf(msg, MAX_PATH + 511,
+               L"Windows did not start the installer: %ls\n\nNo npad window was closed. The "
+               L"verified installer is saved at:\n%ls",
+               reason, r->path);
+    msg[MAX_PATH + 511] = L'\0';
+    MessageBoxW(owner, msg, L"npad", MB_OK | MB_ICONWARNING);
+}
+
+// Run the verified installer, then hand every npad window over to it.
+//
+// The installer process is created BEFORE anything closes, suspended: if
+// Windows will not start it (antivirus quarantine, Smart App Control, a
+// policy), nothing has closed and the user is told why. It used to broadcast
+// the handoff first and never check the launch, so every window vanished and
+// nothing came back.
+//
+// The handle that has kept the verified file unchangeable since it was hashed
+// is held through the user's Yes/No, the process creation and a bounded wait
+// for the installer to start, then closed. That does NOT cover what the
+// installer reads later by name: msiexec may reopen the package, and Inno's
+// SetupLdr hands its own path to setup.tmp, which reopens the setup exe for
+// its payload after npad has let go and exited (a running image can still be
+// renamed and replaced). A process running as the same user could swap the
+// file in that window - a same-account residual, since such a process can
+// already run code as the user without npad's help.
+//
+// Returns false, with nothing closed, when the installer could not start.
+static bool install_update(Window *window, UpdateDownloadResult *r, HWND owner) {
+    // Latch BEFORE anything pumps messages: the wait below does, so this
+    // window can be asked to close during it (the user clicking X, or another
+    // instance's Close All). Without the latch already set that close would run
+    // a save prompt, and a "Don't Save" there would be quietly undone by the
+    // handoff snapshot afterwards - resurrecting text the user had just
+    // discarded.
+    g_session_ending = true;
+
+    wchar_t app[MAX_PATH], args[MAX_PATH + 900];
+    if (!installer_command(r, app, MAX_PATH, args, MAX_PATH + 900)) {
+        g_session_ending = false;
+        report_installer_not_started(owner, r, ERROR_PATH_NOT_FOUND);
+        return false;
+    }
+    wchar_t cmdline[2 * MAX_PATH + 920];
+    _snwprintf(cmdline, 2 * MAX_PATH + 919, L"\"%ls\" %ls", app, args);
+    cmdline[2 * MAX_PATH + 919] = L'\0';
+
+    STARTUPINFOW si;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&pi, sizeof(pi));
+    bool created = CreateProcessW(app, cmdline, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, NULL,
+                                  &si, &pi) != FALSE;
+    DWORD err = created ? 0 : GetLastError();
+    // An installer that demands elevation up front can only be started through
+    // ShellExecute (which raises UAC), and not suspended: that one starts after
+    // the others close, and is still checked. Neither of npad's installers asks
+    // for it today (setup elevates itself only when needed, msiexec likewise).
+    if (!created && err != ERROR_ELEVATION_REQUIRED) {
+        g_session_ending = false;
+        report_installer_not_started(owner, r, err);
+        return false;
+    }
+
+    // Close the OTHER instances first and wait for them. Setup cannot replace
+    // a locked npad.exe, and until this existed only the window that started
+    // the update actually closed.
+    close_other_npads_for_install(owner);
+
+    if (created) {
+        ResumeThread(pi.hThread);
+        // Keep the file unchangeable while the installer starts: msiexec
+        // reads the package before its first window, and setup begins on its
+        // own payload. Bounded; neither waits on npad, and what either reads
+        // by name after this is the same-account residual described above.
+        WaitForInputIdle(pi.hProcess, r->package == UPDATE_PACKAGE_MSI ? 10000 : 3000);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    } else {
+        SHELLEXECUTEINFOW sei;
+        ZeroMemory(&sei, sizeof(sei));
+        sei.cbSize = sizeof(sei);
+        sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+        sei.hwnd = owner;
+        sei.lpVerb = L"open";
+        sei.lpFile = app;
+        sei.lpParameters = args;
+        sei.nShow = SW_SHOWNORMAL;
+        if (!ShellExecuteExW(&sei)) {
+            // The others have closed by now, with their work parked; this
+            // window stays, and their documents return at the next launch
+            g_session_ending = false;
+            report_installer_not_started(owner, r, GetLastError());
+            return false;
+        }
+        if (sei.hProcess) {
+            WaitForInputIdle(sei.hProcess, 10000);
+            CloseHandle(sei.hProcess);
+        }
+    }
+    if (r->file) {
+        CloseHandle(r->file);
+        r->file = NULL;
+    }
+
+    // This instance parks its own work and goes last. If it cannot be parked
+    // (a full or read-only profile volume) fall back to asking: the dialog
+    // promised the document would come back, and exiting silently would
+    // destroy it instead.
+    if (!ui_post_event(UI_EVENT_QUIT_HANDOFF, window, NULL)) {
+        g_session_ending = false;
+        request_quit(window);
+    }
+    return true;
+}
+
 static void handle_update_downloaded(Window *window, UpdateDownloadResult *r) {
-    HWND hwnd = window ? window->hwnd : NULL;
-    if (!r->ok) {
-        wchar_t *w = utf8_to_wide(r->error);
-        MessageBoxW(hwnd, w ? w : L"Update download failed.", L"npad", MB_OK | MB_ICONWARNING);
+    HWND owner = update_dialog_owner(window);
+    if (!r || !r->ok) {
+        wchar_t *w = utf8_to_wide(r ? r->error : "");
+        MessageBoxW(owner, (w && w[0]) ? w : L"Update download failed.", L"npad",
+                    MB_OK | MB_ICONWARNING);
         free(w);
         set_status_message(window, "Update download failed");
     } else {
         set_status_message(window, "Update downloaded and verified");
-        wchar_t msg[MAX_PATH + 200];
-        _snwprintf(msg, MAX_PATH + 199,
-                   L"npad %hs was downloaded and its SHA-256 checksum verified.\n\n"
-                   L"Install now? Every npad window will close and reopen once the update "
-                   L"finishes. Unsaved documents are kept and restored as they are - you "
-                   L"won't be asked to save them.",
-                   r->tag);
-        msg[MAX_PATH + 199] = L'\0';
-        if (MessageBoxW(hwnd, msg, L"npad", MB_YESNO | MB_ICONQUESTION) == IDYES) {
-            // Latch BEFORE the broadcast: the wait below pumps messages, so
-            // this window can be asked to close during it (the user clicking X,
-            // or another instance's Close All). Without the latch already set
-            // that close would run a save prompt, and a "Don't Save" there
-            // would be quietly undone by the handoff snapshot afterwards -
-            // resurrecting text the user had just discarded.
-            g_session_ending = true;
-
-            // Close the OTHER instances first and wait for them. Setup cannot
-            // replace a locked npad.exe, and until this existed only the window
-            // that started the update actually closed.
-            if (g_close_handoff_msg) {
-                broadcast_to_npad_windows(g_close_handoff_msg, 0);
-                wait_for_other_npads(4000);
-            }
-            // Tell setup we were running so it offers to relaunch afterwards.
-            // It cannot detect that itself: npad closes below, before setup
-            // starts, so there is no window left for it to find. Inno ignores
-            // parameters it does not recognise, so older installers are safe.
-            //
-            // The association tasks come from the registry as it is NOW, not
-            // from Inno's memory of the original install: its UsePreviousTasks
-            // would otherwise quietly re-register every type the user has
-            // since unticked on Preferences > Associations.
-            wchar_t setup_args[256] = L"/RELAUNCH=1";
-            wchar_t merge[200];
-            if (assoc_installer_merge_tasks(merge, 200)) {
-                size_t used = wcslen(setup_args);
-                _snwprintf(setup_args + used, 255 - used, L" %s", merge);
-                setup_args[255] = L'\0';
-            }
-            ShellExecuteW(hwnd, L"open", r->path, setup_args, NULL, SW_SHOWNORMAL);
-            // This instance parks its own work and goes last. If it cannot be
-            // parked (a full or read-only profile volume) fall back to asking:
-            // the dialog above promised the document would come back, and
-            // exiting silently would destroy it instead.
-            if (!ui_post_event(UI_EVENT_QUIT_HANDOFF, window, NULL)) {
-                g_session_ending = false;
-                ui_post_event(UI_EVENT_QUIT, window, NULL);
-            }
+        // Says what actually happens: a handoff parks only unsaved documents
+        // (editor_snapshot_handoff), so a window with nothing unsaved is not
+        // reopened - the dialog used to promise every window would be
+        bool msi = r->package == UPDATE_PACKAGE_MSI;
+        wchar_t msg[700];
+        _snwprintf(msg, 699,
+                   L"npad %hs was downloaded and verified.\n\n"
+                   L"Install now? npad will close all of its windows and run the %ls. Unsaved "
+                   L"documents are kept, without asking you to save them, and reopen as they "
+                   L"are %ls. Windows with nothing unsaved are not reopened.",
+                   r->tag, msi ? L"Windows Installer package" : L"installer",
+                   msi ? L"the next time you start npad"
+                       : L"when npad starts again (setup offers to start it when it finishes)");
+        msg[699] = L'\0';
+        if (MessageBoxW(owner, msg, L"npad", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+            install_update(window, r, owner);
         } else {
+            remember_update_declined(r->tag);
             wchar_t note[MAX_PATH + 96];
-            _snwprintf(note, MAX_PATH + 95, L"The verified installer was saved to:\n%s", r->path);
+            _snwprintf(note, MAX_PATH + 95, L"The verified installer was saved to:\n%ls", r->path);
             note[MAX_PATH + 95] = L'\0';
-            MessageBoxW(hwnd, note, L"npad", MB_OK | MB_ICONINFORMATION);
+            MessageBoxW(owner, note, L"npad", MB_OK | MB_ICONINFORMATION);
         }
     }
+    if (r && r->file)
+        CloseHandle(r->file);
+    release_update_install();
     InterlockedExchange(&g_update_busy, 0);
     updates_page_sync_busy();
     apply_update_indicator(window); // The update is still available if declined
@@ -3651,15 +5150,9 @@ static void history_push(const char *prefix, const wchar_t *value) {
         }
     }
 
-    for (int i = 0; i < FIND_HISTORY_MAX; i++) {
-        char key[48];
-        snprintf(key, sizeof(key), "%s_%d", prefix, i);
-        if (i < count) {
-            settings_set_string(key, entries[i]);
-        } else {
-            settings_remove_key(key);
-        }
-    }
+    // Written as one unit, so a save replaces the whole history rather than
+    // mixing it entry by entry with another window's
+    settings_set_list(prefix, entries, count, FIND_HISTORY_MAX);
 
     for (int i = 0; i < count; i++) {
         free(entries[i]);
@@ -3700,6 +5193,20 @@ static void unescape_search_buffer(wchar_t *buf, size_t cap) {
     *w = L'\0';
 }
 
+// Rebuild the effective search/replace strings from the raw ones. History and
+// the dialog keep the RAW typed text; the search machinery uses the effective
+// copies (escape-interpreted when enabled, which is inert while the Markdown
+// tools are off). Find Next uses them with the dialog closed too, so a
+// broadcast that changes escape interpretation recomputes them as well.
+static void recompute_search_effective(void) {
+    wcscpy(g_search_eff, g_search_text);
+    wcscpy(g_replace_eff, g_replace_text);
+    if (g_interpret_escapes && settings_get_bool("list_tools_enabled", false)) {
+        unescape_search_buffer(g_search_eff, sizeof(g_search_eff) / sizeof(g_search_eff[0]));
+        unescape_search_buffer(g_replace_eff, sizeof(g_replace_eff) / sizeof(g_replace_eff[0]));
+    }
+}
+
 // Read the search/replace text and option checkboxes into the globals (no
 // history push, no settings write): shared by the action buttons and the
 // live highlight-all refresh
@@ -3722,14 +5229,38 @@ static void read_search_text(HWND dialog, bool has_replace) {
     if (GetDlgItem(dialog, IDC_RADIO_UP)) {
         g_search_down = IsDlgButtonChecked(dialog, IDC_RADIO_UP) != BST_CHECKED;
     }
+    recompute_search_effective();
+}
 
-    // History and the dialog keep the RAW typed text; the search machinery
-    // uses the effective copies (escape-interpreted when enabled)
-    wcscpy(g_search_eff, g_search_text);
-    wcscpy(g_replace_eff, g_replace_text);
-    if (g_interpret_escapes) {
-        unescape_search_buffer(g_search_eff, sizeof(g_search_eff) / sizeof(g_search_eff[0]));
-        unescape_search_buffer(g_replace_eff, sizeof(g_replace_eff) / sizeof(g_replace_eff[0]));
+// Write the find options to settings.json straight away when they differ from
+// what is stored, and tell the other instances - the shared-settings model, and
+// what GTK's persist_options does. They used to be set in memory only, so the
+// next broadcast's reload (settings_clear_all) dropped them, and the open
+// dialog, re-synced from the file by reload_and_apply_settings, would then
+// show the stale value. Idempotent: unchanged options write nothing.
+static void persist_find_options(void) {
+    struct {
+        const char *key;
+        bool value;
+        bool fallback;
+    } opts[] = {
+        { "find_match_case", g_match_case, false },
+        { "find_whole_word", g_whole_word, false },
+        { FIND_WRAP_KEY, g_wrap_around, false },
+        { "find_search_down", g_search_down, true },
+        { "find_interpret_escapes", g_interpret_escapes, false },
+        { "find_highlight_all", g_highlight_all, false },
+    };
+    bool changed = false;
+    for (size_t i = 0; i < sizeof(opts) / sizeof(opts[0]); i++) {
+        if (settings_get_bool(opts[i].key, opts[i].fallback) != opts[i].value) {
+            settings_set_bool(opts[i].key, opts[i].value);
+            changed = true;
+        }
+    }
+    if (changed) {
+        settings_save();
+        ui_platform_notify_settings_changed();
     }
 }
 
@@ -3737,13 +5268,7 @@ static void read_search_text(HWND dialog, bool has_replace) {
 // them across sessions, and refresh the highlight-all overlay
 static void read_search_fields(HWND dialog, bool has_replace) {
     read_search_text(dialog, has_replace);
-
-    settings_set_bool("find_match_case", g_match_case);
-    settings_set_bool("find_whole_word", g_whole_word);
-    settings_set_bool("find_wrap_around", g_wrap_around);
-    settings_set_bool("find_search_down", g_search_down);
-    settings_set_bool("find_interpret_escapes", g_interpret_escapes);
-    settings_set_bool("find_highlight_all", g_highlight_all);
+    persist_find_options();
 
     history_push("find_hist", g_search_text);
     history_reload(GetDlgItem(dialog, ID_FIND_TEXT), "find_hist", g_search_text);
@@ -3756,66 +5281,110 @@ static void read_search_fields(HWND dialog, bool has_replace) {
     refresh_highlights(window, g_highlight_all);
 }
 
-// Is the current selection exactly the current search text?
+// Is the current selection exactly a match of the current search? Asked of
+// the same search Find Next uses, run from the selection's start, rather than
+// by comparing strings: _wcsicmp folds only ASCII in the C locale, so a
+// selected "CAF<U+00C9>" that Find Next had just found for "caf<U+00E9>" was
+// refused, and Replace looped on it for ever when it was the only match. The
+// search also agrees with Find Next about line breaks (RichEdit's internal CR)
+// and Whole word.
 static bool selection_matches_search(Window *window) {
-    char *selected = ui_platform_get_selected_text(window);
-    if (!selected)
+    if (!window || !window->edit_hwnd || g_search_eff[0] == L'\0')
         return false;
-
-    wchar_t *wide = utf8_to_wide(selected);
-    free(selected);
-    if (!wide)
+    CHARRANGE sel = { 0, 0 };
+    SendMessageW(window->edit_hwnd, EM_EXGETSEL, 0, (LPARAM) &sel);
+    if (sel.cpMax <= sel.cpMin)
         return false;
-
-    bool matches;
-    if (g_match_case) {
-        matches = wcscmp(wide, g_search_eff) == 0;
-    } else {
-        matches = _wcsicmp(wide, g_search_eff) == 0;
-    }
-    free(wide);
-    return matches;
+    CHARRANGE found;
+    if (!find_in_range(window, sel.cpMin, -1, true, &found))
+        return false;
+    return found.cpMin == sel.cpMin && found.cpMax == sel.cpMax;
 }
 
 static void replace_current(Window *window) {
     if (selection_matches_search(window)) {
         SendMessageW(window->edit_hwnd, EM_REPLACESEL, TRUE, (LPARAM) g_replace_eff);
     }
-    find_next(window, g_search_down);
+    find_next(window, true); // Replace always searches down (see ID_FIND_NEXT)
 }
 
 static void replace_all(Window *window) {
     if (!window || !window->edit_hwnd || g_search_eff[0] == L'\0')
         return;
 
-    WPARAM flags = FR_DOWN;
-    if (g_match_case)
-        flags |= FR_MATCHCASE;
-    if (g_whole_word)
-        flags |= FR_WHOLEWORD;
+    HWND e = window->edit_hwnd;
 
-    int replaced = 0;
-    LONG start = 0;
-
+    // Every match first, in the text as it is (non-overlapping, top down)...
+    FindRange *matches = NULL;
+    size_t count = 0, capacity = 0;
+    bool failed = false;
+    LONG from = 0;
     for (;;) {
-        FINDTEXTEXW ft;
-        memset(&ft, 0, sizeof(ft));
-        ft.lpstrText = g_search_eff;
-        ft.chrg.cpMin = start;
-        ft.chrg.cpMax = -1;
-
-        LRESULT pos = SendMessageW(window->edit_hwnd, EM_FINDTEXTEXW, flags, (LPARAM) &ft);
-        if (pos == -1)
+        CHARRANGE found;
+        if (!find_in_range(window, from, -1, true, &found))
             break;
-
-        SendMessageW(window->edit_hwnd, EM_EXSETSEL, 0, (LPARAM) &ft.chrgText);
-        SendMessageW(window->edit_hwnd, EM_REPLACESEL, TRUE, (LPARAM) g_replace_eff);
-        start = ft.chrgText.cpMin + (LONG) wcslen(g_replace_eff);
-        replaced++;
+        if (count == capacity) {
+            size_t grown_cap = capacity ? capacity * 2 : 64;
+            FindRange *grown = realloc(matches, grown_cap * sizeof(FindRange));
+            if (!grown) {
+                failed = true;
+                break;
+            }
+            matches = grown;
+            capacity = grown_cap;
+        }
+        matches[count].start = found.cpMin;
+        matches[count].end = found.cpMax;
+        count++;
+        from = found.cpMax > found.cpMin ? found.cpMax : found.cpMin + 1;
     }
 
+    // ...then ONE edit over the span from the first match to the end of the
+    // last: RichEdit records a single EM_REPLACESEL as one undo step, so one
+    // Ctrl+Z undoes the whole Replace All (as on GTK). Replacing match by
+    // match took one Ctrl+Z per replacement, could not be fully undone past
+    // the 100,000-step undo limit, and repainted for every replacement.
+    size_t replaced = 0;
+    if (count > 0 && !failed) {
+        LONG span_start = (LONG) matches[0].start;
+        LONG span_end = (LONG) matches[count - 1].end;
+        size_t span_len = (size_t) (span_end - span_start);
+        wchar_t *span = malloc((span_len + 1) * sizeof(wchar_t));
+        wchar_t *result = NULL;
+        if (span) {
+            // The control's internal form (bare CR breaks), so the positions
+            // the search returned index it directly
+            TEXTRANGEW tr;
+            tr.chrg.cpMin = span_start;
+            tr.chrg.cpMax = span_end;
+            tr.lpstrText = span;
+            LRESULT got = SendMessageW(e, EM_GETTEXTRANGE, 0, (LPARAM) &tr);
+            if (got == (LRESULT) span_len) {
+                for (size_t i = 0; i < count; i++) {
+                    matches[i].start -= span_start;
+                    matches[i].end -= span_start;
+                }
+                result = find_replace_ranges(span, span_len, matches, count, g_replace_eff, NULL);
+            }
+            free(span);
+        }
+        if (result) {
+            CHARRANGE target = { span_start, span_end };
+            SendMessageW(e, EM_EXSETSEL, 0, (LPARAM) &target);
+            SendMessageW(e, EM_REPLACESEL, TRUE, (LPARAM) result); // TRUE: one undo step
+            SendMessageW(e, EM_SCROLLCARET, 0, 0); // Caret after the last replacement
+            free(result);
+            replaced = count;
+        } else {
+            failed = true; // Could not build it: the document is left exactly as it was
+        }
+    }
+    free(matches);
+
     char message[128];
-    if (replaced > 0) {
+    if (failed) {
+        snprintf(message, sizeof(message), "Replace All failed - the document was not changed");
+    } else if (replaced > 0) {
         char count_text[40];
         format_count_a((unsigned long) replaced, count_text, sizeof(count_text));
         snprintf(message, sizeof(message), "Replaced %s occurrence%s", count_text,
@@ -3891,6 +5460,45 @@ static bool find_dialog_seed(Window *window, wchar_t *out, size_t cap) {
     return fits;
 }
 
+// Arm the coalesced Highlight All refresh (dialog timer 1) when highlighting
+// is ticked. Coalesce, not re-arm, so highlights refresh while you keep typing
+// in the search box, not just after you stop. The timer reads the box itself,
+// so a refresh with an emptied box clears the highlights.
+static void find_dialog_arm_highlight(HWND dialog) {
+    if (g_find_hl_pending || IsDlgButtonChecked(dialog, ID_FIND_HIGHLIGHT) != BST_CHECKED)
+        return;
+    g_find_hl_pending = true;
+    SetTimer(dialog, 1, NPAD_COALESCE_MS, NULL);
+}
+
+// Show the option globals in an open dialog, keeping what is typed: the
+// counterpart of GTK's npad_gtk_find_reload_settings. A settings broadcast
+// re-reads the globals from the file, and the dialog's checkboxes are read back
+// into them on every button and on close, so a dialog left showing the old
+// state would put it straight back (another instance's Reset of wrap-around,
+// say). Idempotent - broadcasts arrive at idle windows too - so it only touches
+// a control whose state differs, and returns whether anything changed.
+static bool find_dialog_sync_options(HWND dialog) {
+    static const int ids[] = { ID_FIND_CASE, ID_FIND_WHOLE_WORD, ID_FIND_WRAP, ID_FIND_ESCAPES,
+                               ID_FIND_HIGHLIGHT };
+    const bool values[] = { g_match_case, g_whole_word, g_wrap_around, g_interpret_escapes,
+                            g_highlight_all };
+    bool changed = false;
+    for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        if ((IsDlgButtonChecked(dialog, ids[i]) == BST_CHECKED) != values[i]) {
+            CheckDlgButton(dialog, ids[i], values[i] ? BST_CHECKED : BST_UNCHECKED);
+            changed = true;
+        }
+    }
+    if (GetDlgItem(dialog, IDC_RADIO_UP) &&
+        (IsDlgButtonChecked(dialog, IDC_RADIO_UP) != BST_CHECKED) != g_search_down) {
+        CheckRadioButton(dialog, IDC_RADIO_UP, IDC_RADIO_DOWN,
+                         g_search_down ? IDC_RADIO_DOWN : IDC_RADIO_UP);
+        changed = true;
+    }
+    return changed;
+}
+
 static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, LPARAM lparam) {
     bool has_replace = GetDlgItem(dialog, ID_REPLACE_WITH) != NULL;
     Window *window = (Window *) GetWindowLongPtrW(dialog, GWLP_USERDATA);
@@ -3948,41 +5556,52 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
             // Read after every control above is set, since this reads them all.
             if (seeded)
                 read_search_text(dialog, has_replace);
-            // Highlight-all otherwise waits for the first keystroke; a seeded
-            // term should light up straight away
-            if (seeded && g_highlight_all && !g_find_hl_pending) {
-                g_find_hl_pending = true;
-                SetTimer(dialog, 1, NPAD_COALESCE_MS, NULL);
-            }
+            // Highlight-all otherwise waits for the first keystroke: the term
+            // in the box, seeded or remembered, should light up straight away
+            // (GTK refreshes on open too)
+            find_dialog_arm_highlight(dialog);
             return FALSE; // Focus set manually
         }
 
         case WM_COMMAND:
-            // Live highlight refresh: retyping the search text (debounced)
-            // and toggling any option that changes what matches
-            if (LOWORD(wparam) == ID_FIND_TEXT && HIWORD(wparam) == CBN_EDITCHANGE) {
-                // Coalesce (not re-arm) so highlights refresh while you keep
-                // typing in the search box, not just after you stop
-                if (IsDlgButtonChecked(dialog, ID_FIND_HIGHLIGHT) == BST_CHECKED &&
-                    !g_find_hl_pending) {
-                    g_find_hl_pending = true;
-                    SetTimer(dialog, 1, NPAD_COALESCE_MS, NULL);
-                }
+            // Live highlight refresh: retyping the search text (debounced),
+            // picking a term from the history list, and toggling any option
+            // that changes what matches. On CBN_SELCHANGE the edit field does
+            // not hold the picked term yet, which is fine: the timer reads the
+            // box later, once the combo box has copied it in.
+            if (LOWORD(wparam) == ID_FIND_TEXT &&
+                (HIWORD(wparam) == CBN_EDITCHANGE || HIWORD(wparam) == CBN_SELCHANGE)) {
+                find_dialog_arm_highlight(dialog);
                 break;
             }
             if (HIWORD(wparam) == BN_CLICKED &&
                 (LOWORD(wparam) == ID_FIND_HIGHLIGHT || LOWORD(wparam) == ID_FIND_CASE ||
                  LOWORD(wparam) == ID_FIND_WHOLE_WORD || LOWORD(wparam) == ID_FIND_ESCAPES)) {
                 read_search_text(dialog, has_replace);
-                settings_set_bool("find_highlight_all", g_highlight_all);
+                persist_find_options();
                 refresh_highlights(window, g_highlight_all);
+                break;
+            }
+            // Wrap and Direction change where a search goes, not what matches:
+            // no highlight refresh, but they are options like the rest, saved
+            // (and shared) as soon as they change, as on GTK. Left unread until
+            // a button, a settings broadcast's re-sync of this dialog from the
+            // file would have undone the click.
+            if (HIWORD(wparam) == BN_CLICKED &&
+                (LOWORD(wparam) == ID_FIND_WRAP || LOWORD(wparam) == IDC_RADIO_UP ||
+                 LOWORD(wparam) == IDC_RADIO_DOWN)) {
+                read_search_text(dialog, has_replace);
+                persist_find_options();
                 break;
             }
             switch (LOWORD(wparam)) {
                 case ID_FIND_NEXT:
                     read_search_fields(dialog, has_replace);
+                    // Replace has no Direction group, so it always searches
+                    // down (notepad.exe's does too); the direction last chosen
+                    // in Find is kept for Find, not silently applied here
                     if (window)
-                        find_next(window, g_search_down);
+                        find_next(window, has_replace ? true : g_search_down);
                     return TRUE;
 
                 case ID_REPLACE_NEXT:
@@ -4021,15 +5640,23 @@ static INT_PTR CALLBACK find_replace_proc(HWND dialog, UINT msg, WPARAM wparam, 
         case WM_DESTROY: {
             KillTimer(dialog, 1);
             g_find_hl_pending = false;
+            // What is in the box when the dialog closes is the term F3 searches
+            // for afterwards, whether or not a button was pressed - the same
+            // rule as a seeded term, and the same on GTK. It used to depend on
+            // Highlight All, whose live refresh happened to read the box. The
+            // controls still exist here: children are destroyed after this.
+            read_search_text(dialog, has_replace);
             refresh_highlights(window, false); // Clear highlights with the dialog
-            // ...and the match count with them. Part 0 is otherwise only
-            // rewritten by the counts, which are off by default, so leaving it
-            // stranded "Match 3 of 7" forever in the default configuration.
+            // ...and the match count with them. Clearing the message itself,
+            // not just the bar: the counts refresh (or any settings broadcast)
+            // recomposes part 0 from status_msg, and brought a stale
+            // "Match 1 of 3" back moments after the dialog closed.
             // schedule_counts_update rather than apply_counts_pref: the latter
             // recomputes synchronously (a full document fetch) and would put a
             // hitch on closing the dialog.
             if (window) {
-                set_status_part0(window, L"");
+                window->status_msg[0] = L'\0';
+                compose_status_part0(window);
                 schedule_counts_update(window);
             }
             RECT rect;
@@ -4051,7 +5678,28 @@ static void show_find_replace_dialog(Window *parent, bool replace) {
     if (!parent)
         return;
 
-    // Only one find/replace dialog at a time, like Notepad
+    // Only one find/replace dialog at a time, like Notepad. Asking again for
+    // the one already open re-presents it, keeping what was typed (and taking
+    // a fresh seed from the selection, as opening does), like GTK. Recreating
+    // it threw away text typed but not yet searched for.
+    if (g_find_dialog && (GetDlgItem(g_find_dialog, ID_REPLACE_WITH) != NULL) == replace &&
+        (Window *) GetWindowLongPtrW(g_find_dialog, GWLP_USERDATA) == parent) {
+        HWND dialog = g_find_dialog;
+        wchar_t seed[256];
+        if (find_dialog_seed(parent, seed, 256)) {
+            SetDlgItemTextW(dialog, ID_FIND_TEXT, seed);
+            // The seed is the search from now on, as in WM_INITDIALOG
+            read_search_text(dialog, replace);
+            find_dialog_arm_highlight(dialog);
+        }
+        ShowWindow(dialog, SW_SHOW);
+        SetActiveWindow(dialog);
+        SendDlgItemMessageW(dialog, ID_FIND_TEXT, CB_SETEDITSEL, 0, MAKELPARAM(0, -1));
+        SetFocus(GetDlgItem(dialog, ID_FIND_TEXT));
+        return;
+    }
+    // Switching between Find and Replace: the old dialog's WM_DESTROY adopts
+    // the typed term, which the new one then shows (unless a seed replaces it)
     if (g_find_dialog) {
         DestroyWindow(g_find_dialog);
         g_find_dialog = NULL;
@@ -4091,7 +5739,7 @@ static void set_title_bar_dark(HWND hwnd, bool dark) {
     static bool resolved = false;
     if (!resolved) {
         resolved = true;
-        HMODULE dwmapi = LoadLibraryW(L"dwmapi.dll");
+        HMODULE dwmapi = LoadLibraryExW(L"dwmapi.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (dwmapi) {
             union {
                 FARPROC proc;
@@ -4189,6 +5837,10 @@ static void apply_theme(Window *window) {
 
     SendMessageW(window->edit_hwnd, EM_SETBKGNDCOLOR, 0, (LPARAM) back);
 
+    // Colour only. A CFM_COLOR-only stamp leaves every run's face alone, so
+    // the fallback faces font binding gave emoji and CJK Extension B keep
+    // their glyphs and nothing needs rebinding (refresh_font_binding is for a
+    // face or size change, in apply_font). It also records no undo step.
     CHARFORMAT2W cf;
     ZeroMemory(&cf, sizeof(cf));
     cf.cbSize = sizeof(cf);
@@ -4196,7 +5848,10 @@ static void apply_theme(Window *window) {
     cf.crTextColor = text;
     SendMessageW(window->edit_hwnd, EM_SETCHARFORMAT, SCF_ALL, (LPARAM) &cf);
     SendMessageW(window->edit_hwnd, EM_SETCHARFORMAT, SCF_DEFAULT, (LPARAM) &cf);
-    refresh_font_binding(window); // Restamping can drop emoji fallback faces
+    // apply_font compares against what was applied; the text colour is now
+    // this, so the next broadcast does not see a "changed" font and restamp
+    if (window->font_applied)
+        window->applied_font.crTextColor = text;
 
     view_restore(window->edit_hwnd, &view);
     window->setting_text_programmatically = false;
@@ -4231,9 +5886,10 @@ void ui_platform_set_dark_mode(bool enabled) {
     settings_set_string("theme", enabled ? "dark" : "light");
     g_dark_mode = enabled;
     if (g_main_window) {
-        // Colors only: apply_theme restamps CFM_COLOR; a full font stamp
-        // would wipe the fallback faces bound to emoji/CJK runs
-        apply_font_default(g_main_window);
+        // Colours only: apply_theme stamps CFM_COLOR on the text and the
+        // default format alike. A full font stamp (apply_font_default) here
+        // restyled every run in plain-text mode and wiped the fallback faces
+        // bound to emoji/CJK runs.
         apply_theme(g_main_window);
     }
 }
@@ -4272,34 +5928,43 @@ void ui_platform_set_text_modified(Window *window, bool modified) {
 // get_paragraph_bounds already sidesteps them for exactly this reason.
 //
 // With wrap OFF display and logical lines coincide, so the cheap API is kept.
-// With wrap ON the '\r' breaks are counted directly - one text fetch and a
-// linear scan, which is the same order of work the live counts already do.
-// Returns the number of CR breaks before `end` - i.e. the 0-based logical
-// line at that position - and, via line_start, the index just after the last
-// of them, which is where that line begins. Both come from one fetch so the
-// caret path does not pay for the scan twice.
-static int count_breaks_before(HWND e, LONG end, LONG *line_start) {
+// With wrap ON a logical line is a RichEdit paragraph, and TOM answers both
+// questions - which paragraph, and where it starts - inside the control,
+// without the text being copied out (this runs on every caret move, ~30 times
+// a second while an arrow key repeats). Without TOM the '\r' breaks are
+// counted through a fixed-size buffer (core/text_scan).
+//
+// Returns the 0-based logical line at pos and, via line_start, the index that
+// line begins at.
+static int logical_line_at(Window *window, LONG pos, LONG *line_start) {
     if (line_start)
         *line_start = 0;
-    if (end <= 0)
+    if (pos <= 0)
         return 0;
-    wchar_t *buf = malloc(((size_t) end + 1) * sizeof(wchar_t));
-    if (!buf)
-        return 0;
-    TEXTRANGEW tr;
-    tr.chrg.cpMin = 0;
-    tr.chrg.cpMax = end;
-    tr.lpstrText = buf;
-    LRESULT got = SendMessageW(e, EM_GETTEXTRANGE, 0, (LPARAM) &tr);
-    if (got < 0)
-        got = 0;
-    int breaks = 0;
-    for (LRESULT i = 0; i < got; i++) {
-        if (buf[i] == L'\r')
-            breaks++;
+
+    ITextDocument *doc = tom_document(window);
+    ITextRange *range = NULL;
+    if (doc && SUCCEEDED(doc->lpVtbl->Range(doc, pos, pos, &range)) && range) {
+        LONG index = 0, delta = 0, start = 0;
+        bool ok = SUCCEEDED(range->lpVtbl->GetIndex(range, tomParagraph, &index)) && index >= 1;
+        if (ok && line_start) {
+            ok = SUCCEEDED(range->lpVtbl->StartOf(range, tomParagraph, tomMove, &delta)) &&
+                 SUCCEEDED(range->lpVtbl->GetStart(range, &start)) && start >= 0 && start <= pos;
+        }
+        range->lpVtbl->Release(range);
+        if (ok) {
+            if (line_start)
+                *line_start = start;
+            return (int) (index - 1);
+        }
     }
-    free(buf);
-    return breaks;
+
+    LineScan scan;
+    line_scan_init(&scan);
+    scan_text(window->edit_hwnd, pos, &scan, NULL);
+    if (line_start)
+        *line_start = scan.line_start;
+    return (int) scan.breaks;
 }
 
 // Character index at which 0-based logical line `line` starts, or -1 if the
@@ -4329,7 +5994,7 @@ int ui_platform_get_line_count(Window *window) {
         return (int) SendMessageW(window->edit_hwnd, EM_GETLINECOUNT, 0, 0);
     }
     LONG len = (LONG) SendMessageW(window->edit_hwnd, WM_GETTEXTLENGTH, 0, 0);
-    return count_breaks_before(window->edit_hwnd, len, NULL) + 1;
+    return logical_line_at(window, len, NULL) + 1;
 }
 
 void ui_platform_get_cursor_line_column(Window *window, int *line, int *column) {
@@ -4343,11 +6008,12 @@ void ui_platform_get_cursor_line_column(Window *window, int *line, int *column) 
     int pos = ui_platform_get_cursor_position(window);
 
     // Word wrap makes EM_EXLINEFROMCHAR count wrapped rows, so Ln would climb
-    // past the document's real line count and disagree with Go To
+    // past the document's real line count and disagree with Go To. Col counts
+    // from that logical line's start (it once came out as the offset in the
+    // whole document, because the line start was never recorded)
     if (window->word_wrap_enabled) {
         LONG start = 0;
-        int breaks = count_breaks_before(window->edit_hwnd, pos, &start);
-        *line = breaks + 1;
+        *line = logical_line_at(window, pos, &start) + 1;
         *column = pos - (int) start + 1;
         return;
     }
@@ -4385,8 +6051,11 @@ void ui_platform_set_auto_save_timer(Window *window, int seconds) {
         return;
 
     KillTimer(window->hwnd, NPAD_AUTO_SAVE_TIMER_ID);
-    if (seconds > 0) {
-        SetTimer(window->hwnd, NPAD_AUTO_SAVE_TIMER_ID, (UINT) seconds * 1000, NULL);
+    // 64-bit and capped: (UINT) seconds * 1000 wrapped, so a huge interval
+    // became a sub-second auto-save
+    UINT ms = ui_interval_to_timer_ms(seconds);
+    if (ms > 0) {
+        SetTimer(window->hwnd, NPAD_AUTO_SAVE_TIMER_ID, ms, NULL);
     }
 }
 
@@ -4395,8 +6064,9 @@ void ui_platform_set_session_timer(Window *window, int seconds) {
         return;
 
     KillTimer(window->hwnd, NPAD_SESSION_TIMER_ID);
-    if (seconds > 0) {
-        SetTimer(window->hwnd, NPAD_SESSION_TIMER_ID, (UINT) seconds * 1000, NULL);
+    UINT ms = ui_interval_to_timer_ms(seconds);
+    if (ms > 0) {
+        SetTimer(window->hwnd, NPAD_SESSION_TIMER_ID, ms, NULL);
     }
 }
 
@@ -4454,6 +6124,7 @@ static void set_zoom(Window *window, int percent) {
     if (percent > 500)
         percent = 500;
     SendMessageW(window->edit_hwnd, EM_SETZOOM, (WPARAM) percent, 100);
+    apply_tab_stops(window); // The stop is 8 columns as drawn at this zoom
     update_status_bar(window);
     on_view_state_changed(window); // User-initiated zoom change
 }
@@ -4514,7 +6185,7 @@ static void apply_word_wrap(Window *window) {
 // The settings key (and default) for the font face the editor is currently
 // showing. OpenDyslexic overrides both; otherwise the Monospace toggle
 // selects between the monospace and proportional faces.
-static const char *active_font_key(const Window *window, const char **default_face) {
+static const char *font_key_for(bool monospace, const char **default_face) {
     // Only honour OpenDyslexic when the font is actually installed, so a
     // stale/imported setting cannot leave the editor stuck on a substituted
     // fallback face (which would also make the mono/proportional toggle
@@ -4525,8 +6196,7 @@ static const char *active_font_key(const Window *window, const char **default_fa
             *default_face = OPENDYSLEXIC_FONT;
         return "opendyslexic_font";
     }
-    // Font type is per-window view state (see monospace_current)
-    if (!window || window->monospace_current) {
+    if (monospace) {
         if (default_face)
             *default_face = DEFAULT_MONO_FONT;
         return "monospace_font";
@@ -4534,6 +6204,11 @@ static const char *active_font_key(const Window *window, const char **default_fa
     if (default_face)
         *default_face = DEFAULT_PROP_FONT;
     return "proportional_font";
+}
+
+static const char *active_font_key(const Window *window, const char **default_face) {
+    // Font type is per-window view state (see monospace_current)
+    return font_key_for(!window || window->monospace_current, default_face);
 }
 
 static int CALLBACK font_enum_proc(const LOGFONTW *lf, const TEXTMETRICW *tm, DWORD type,
@@ -4565,19 +6240,18 @@ static void build_char_format(const Window *window, CHARFORMAT2W *cf) {
     const char *default_face = DEFAULT_MONO_FONT;
     const char *key = active_font_key(window, &default_face);
     char *face = settings_get_string(key, default_face);
-    int size = settings_get_int("font_size", 11);
+    // Tenths of a point, clamped to 6-72 pt, so a 10.5 pt choice is kept
+    int tenths = ui_font_size_setting_tenths();
     int weight = settings_get_int("font_weight", FW_NORMAL);
     bool italic = settings_get_bool("font_italic", false);
 
-    if (size < 6)
-        size = 6;
-    if (size > 72)
-        size = 72;
+    if (weight < FW_THIN || weight > FW_HEAVY) // A hand edit; wWeight is a WORD
+        weight = FW_NORMAL;
 
     ZeroMemory(cf, sizeof(*cf));
     cf->cbSize = sizeof(*cf);
     cf->dwMask = CFM_FACE | CFM_SIZE | CFM_WEIGHT | CFM_ITALIC | CFM_COLOR;
-    cf->yHeight = size * 20; // Twips
+    cf->yHeight = tenths * 2; // Twips: 20 per point, so 2 per tenth
     cf->wWeight = (WORD) weight;
     cf->dwEffects = italic ? CFE_ITALIC : 0;
     theme_colors(NULL, &cf->crTextColor); // Match the current scheme's text color
@@ -4591,10 +6265,14 @@ static void build_char_format(const Window *window, CHARFORMAT2W *cf) {
     free(face);
 }
 
-// Refresh only the control's default character format. Existing runs keep
-// their formatting - in particular the fallback faces RichEdit's font
-// binding gave emoji/CJK runs, which a blanket SCF_ALL face stamp would
-// replace with a face that has no glyphs for them (showing boxes).
+// Stamp the configured font on the control's default character format, for
+// text about to be inserted: ui_platform_set_text calls this right before
+// EM_SETTEXTEX, which then binds fallback faces as it inserts. It is NOT a
+// harmless refresh of an existing document: in plain-text mode an
+// SCF_DEFAULT stamp that carries CFM_FACE restyles every run, replacing the
+// fallback faces font binding gave emoji/CJK runs with one that has no glyphs
+// for them (boxes). So nothing else calls it on a loaded document; a font
+// change goes through apply_font, which rebinds afterwards.
 static void apply_font_default(Window *window) {
     if (!window || !window->edit_hwnd)
         return;
@@ -4605,22 +6283,44 @@ static void apply_font_default(Window *window) {
 }
 
 // The control runs in plain-text mode, where the whole document shares one
-// character format: a document-wide format change (font or theme) discards
-// the fallback faces RichEdit's font binding gave emoji and other non-BMP
-// characters, leaving placeholder boxes. Binding only re-runs when text is
-// inserted, so when the document contains astral characters, re-set the
-// identical text through EM_SETTEXTEX to re-trigger it. Caret, scroll and
-// modified state are preserved; the undo stack is kept via ST_KEEPUNDO.
+// character format: a face or size change discards the fallback faces
+// RichEdit's font binding gave emoji and other non-BMP characters, leaving
+// placeholder boxes. (A colour-only change does not - apply_theme needs no
+// rebind.) Binding only re-runs when text is inserted, so when the document
+// contains astral characters, re-set the identical text through EM_SETTEXTEX
+// to re-trigger it.
+//
+// The re-set must be invisible to the user's history. ST_KEEPUNDO alone
+// RECORDS it: every font change then added an undo step holding a full copy
+// of the document, wiped Redo, and the next Ctrl+Z "undid" nothing visible
+// while marking an unchanged file modified and stripping the emoji faces
+// again. So undo recording is suspended around it (TOM tomSuspend); without
+// TOM the rebind is skipped - boxes until the next load are a cosmetic
+// fault, a corrupted undo history is not. Caret (including which end of a
+// selection is active), scroll, zoom and modified state are preserved.
 // Callers hold setting_text_programmatically while this runs.
 static void refresh_font_binding(Window *window) {
     if (!window || !window->edit_hwnd)
         return;
+    HWND e = window->edit_hwnd;
 
     GETTEXTLENGTHEX gtl;
     gtl.flags = GTL_NUMCHARS | GTL_PRECISE;
     gtl.codepage = 1200;
-    LRESULT len = SendMessageW(window->edit_hwnd, EM_GETTEXTLENGTHEX, (WPARAM) &gtl, 0);
+    LRESULT len = SendMessageW(e, EM_GETTEXTLENGTHEX, (WPARAM) &gtl, 0);
     if (len <= 0)
+        return;
+
+    // Look before copying: most documents hold no astral character, and for
+    // those a font change must not cost a second copy of the whole document
+    AstralScan astral;
+    astral_scan_init(&astral);
+    scan_text(e, (LONG) len, NULL, &astral);
+    if (!astral.found)
+        return; // Nothing the configured font could not render itself
+
+    ITextDocument *doc = tom_document(window);
+    if (!doc)
         return;
 
     wchar_t *buf = malloc(((size_t) len + 1) * sizeof(wchar_t));
@@ -4632,49 +6332,63 @@ static void refresh_font_binding(Window *window) {
     gt.cb = (DWORD) (((size_t) len + 1) * sizeof(wchar_t));
     gt.flags = GT_DEFAULT;
     gt.codepage = 1200;
-    LRESULT got = SendMessageW(window->edit_hwnd, EM_GETTEXTEX, (WPARAM) &gt, (LPARAM) buf);
-    if (got <= 0) {
+    LRESULT got = SendMessageW(e, EM_GETTEXTEX, (WPARAM) &gt, (LPARAM) buf);
+    if (got <= 0 || !tom_suspend_undo(doc)) {
         free(buf);
-        return;
-    }
-
-    bool has_astral = false;
-    for (LRESULT i = 0; i + 1 < got; i++) {
-        if (IS_HIGH_SURROGATE(buf[i]) && IS_LOW_SURROGATE(buf[i + 1])) {
-            has_astral = true;
-            break;
-        }
-    }
-    if (!has_astral) {
-        free(buf); // Nothing the configured font could not render itself
         return;
     }
 
 #if NPAD_SCROLL_TELEMETRY
     g_tel.rebinds++;
 #endif
+    // EM_EXGETSEL normalises the range, so a backward selection (made with
+    // Shift+Left or by dragging up) would come back forward with its caret at
+    // the other end. TOM says which end is active, and puts it back below.
     CHARRANGE saved_sel = { 0, 0 };
-    SendMessageW(window->edit_hwnd, EM_EXGETSEL, 0, (LPARAM) &saved_sel);
-    LRESULT first_line = SendMessageW(window->edit_hwnd, EM_GETFIRSTVISIBLELINE, 0, 0);
+    SendMessageW(e, EM_EXGETSEL, 0, (LPARAM) &saved_sel);
+    LONG anchor = saved_sel.cpMin, active = saved_sel.cpMax;
+    ITextSelection *sel = NULL;
+    if (SUCCEEDED(doc->lpVtbl->GetSelection(doc, &sel)) && sel) {
+        LONG flags = 0;
+        if (SUCCEEDED(sel->lpVtbl->GetFlags(sel, &flags)) && (flags & tomSelStartActive)) {
+            anchor = saved_sel.cpMax;
+            active = saved_sel.cpMin;
+        }
+        sel->lpVtbl->Release(sel);
+    }
+    LRESULT first_line = SendMessageW(e, EM_GETFIRSTVISIBLELINE, 0, 0);
     POINT scroll_pos = { 0, 0 };
-    SendMessageW(window->edit_hwnd, EM_GETSCROLLPOS, 0, (LPARAM) &scroll_pos);
+    SendMessageW(e, EM_GETSCROLLPOS, 0, (LPARAM) &scroll_pos);
     WPARAM zoom_num = 0;
     LPARAM zoom_den = 0;
-    SendMessageW(window->edit_hwnd, EM_GETZOOM, (WPARAM) &zoom_num, (LPARAM) &zoom_den);
-    SendMessageW(window->edit_hwnd, WM_SETREDRAW, FALSE, 0);
+    SendMessageW(e, EM_GETZOOM, (WPARAM) &zoom_num, (LPARAM) &zoom_den);
+    SendMessageW(e, WM_SETREDRAW, FALSE, 0);
 
     SETTEXTEX st;
-    st.flags = ST_KEEPUNDO;
+    st.flags = ST_KEEPUNDO; // Keep the user's history; suspended, so nothing is added to it
     st.codepage = 1200;
-    SendMessageW(window->edit_hwnd, EM_SETTEXTEX, (WPARAM) &st, (LPARAM) buf);
+    SendMessageW(e, EM_SETTEXTEX, (WPARAM) &st, (LPARAM) buf);
+    tom_resume_undo(doc);
 
     // EM_GETZOOM wrote through the pointers; EM_SETTEXTEX resets the ratio
     // cppcheck-suppress knownConditionTrueFalse
     if (zoom_num && zoom_den) {
-        SendMessageW(window->edit_hwnd, EM_SETZOOM, zoom_num, zoom_den);
+        SendMessageW(e, EM_SETZOOM, zoom_num, zoom_den);
     }
-    SendMessageW(window->edit_hwnd, EM_EXSETSEL, 0, (LPARAM) &saved_sel);
-    SendMessageW(window->edit_hwnd, EM_SETSCROLLPOS, 0, (LPARAM) &scroll_pos);
+    // TOM's SetRange is the documented way to put the active end back, so a
+    // backward selection stays backward: its order is (cpAnchor, cpActive),
+    // although MinGW's tom.h names the parameters (cpActive, cpOther). Only
+    // if TOM refuses does EM_SETSEL take over, which is specified as a range
+    // (RichEdit happens to make lParam the active end, but does not say so).
+    bool sel_restored = false;
+    ITextSelection *restore = NULL;
+    if (SUCCEEDED(doc->lpVtbl->GetSelection(doc, &restore)) && restore) {
+        sel_restored = SUCCEEDED(restore->lpVtbl->SetRange(restore, anchor, active));
+        restore->lpVtbl->Release(restore);
+    }
+    if (!sel_restored)
+        SendMessageW(e, EM_SETSEL, (WPARAM) anchor, (LPARAM) active);
+    SendMessageW(e, EM_SETSCROLLPOS, 0, (LPARAM) &scroll_pos);
     SendMessageW(window->edit_hwnd, WM_SETREDRAW, TRUE, 0);
     // The pixel position is a best effort across a full text reset; the first
     // visible line is what the user sees, so settle on that. And RedrawWindow,
@@ -4686,6 +6400,108 @@ static void refresh_font_binding(Window *window) {
     RedrawWindow(window->edit_hwnd, NULL, NULL,
                  RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
     free(buf);
+}
+
+// Notepad's tab stops are those of an Edit control: one every eight average
+// character widths of the font (TAB_EDIT_COLUMNS), so a tab is 8 columns in a
+// monospace face at any size. RichEdit's default is a fixed half inch, which
+// at Consolas 11 pt is about 5.95 columns and changes with the font size.
+//
+// The tab stop spacing for cf's font, in points, as drawn at dpi and zoom
+// zoom_num/zoom_den (0 if it cannot be measured). Measured the way the Edit
+// control measures, in device pixels at the size RichEdit draws the text:
+// GDI hints the advances at that size, so a width measured at any other size
+// and scaled does not equal 8 drawn columns. Consolas 11 pt at 96 DPI draws
+// 8 px letters (960 twips for 8), but measured at 1440 px/inch it gave 968,
+// half a pixel past column 8, and "12345678<TAB>X" put X at column 8. The
+// pixel stop is converted back through the same scale, rounded down (see
+// tab_stop_twips_for_pixels), so it depends on the DPI and zoom and is
+// re-applied whenever either changes (apply_tab_stops).
+static float tab_stop_points_for(HWND e, const CHARFORMAT2W *cf, UINT dpi, LONG zoom_num,
+                                 LONG zoom_den) {
+    long px_height = tab_font_pixel_height(cf->yHeight, (long) dpi, zoom_num, zoom_den);
+    if (px_height <= 0)
+        return 0.0f;
+    LOGFONTW lf;
+    ZeroMemory(&lf, sizeof(lf));
+    lf.lfHeight = -(LONG) px_height;
+    lf.lfWeight = cf->wWeight;
+    lf.lfItalic = (cf->dwEffects & CFE_ITALIC) ? TRUE : FALSE;
+    lf.lfCharSet = DEFAULT_CHARSET;
+    wcsncpy(lf.lfFaceName, cf->szFaceName, LF_FACESIZE - 1);
+    lf.lfFaceName[LF_FACESIZE - 1] = L'\0';
+
+    HFONT font = CreateFontIndirectW(&lf);
+    if (!font)
+        return 0.0f;
+    float points = 0.0f;
+    HDC hdc = GetDC(e);
+    if (hdc) {
+        HGDIOBJ old = SelectObject(hdc, font);
+        static const wchar_t sample[] = L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        SIZE extent = { 0, 0 };
+        if (GetTextExtentPoint32W(hdc, sample, 52, &extent) && extent.cx > 0) {
+            // GdiGetCharDimensions' average, which is what an Edit control
+            // (and so Notepad) spaces its default tab stops by
+            long stop_px = TAB_EDIT_COLUMNS * tab_edit_average_width(extent.cx);
+            long twips = tab_stop_twips_for_pixels(stop_px, (long) dpi, zoom_num, zoom_den);
+            // A quarter twip over, so a conversion back to whole twips that
+            // truncates still lands on twips rather than one below it
+            if (twips > 0)
+                points = ((float) twips + 0.25f) / 20.0f;
+        }
+        SelectObject(hdc, old);
+        ReleaseDC(e, hdc);
+    }
+    DeleteObject(font);
+    return points;
+}
+
+// Put the default tab stop at 8 drawn columns of the applied font at the
+// control's current DPI and zoom. Idempotent and cheap when nothing changed
+// (the measurement is cached per font, DPI and zoom), because it runs after
+// every zoom change (menu, keys, Ctrl+wheel, view sync, the zoom restores
+// around EM_SETTEXTEX), on WM_DPICHANGED, and after every programmatic text
+// replacement (NPAD_WM_REAPPLY_TABS): RichEdit is free to reset document
+// properties when EM_SETTEXTEX replaces everything, as it does the zoom.
+static void apply_tab_stops(Window *window) {
+    if (!window || !window->edit_hwnd || !window->font_applied)
+        return;
+    UINT dpi = get_window_dpi(window->edit_hwnd);
+    WPARAM zoom_num = 0;
+    LPARAM zoom_den = 0;
+    SendMessageW(window->edit_hwnd, EM_GETZOOM, (WPARAM) &zoom_num, (LPARAM) &zoom_den);
+    // EM_GETZOOM wrote through the pointers; 0/0 means 100%
+    // cppcheck-suppress knownConditionTrueFalse
+    if (!zoom_num || !zoom_den) {
+        zoom_num = 1;
+        zoom_den = 1;
+    }
+    if (window->tab_stop_points <= 0.0f || window->tab_dpi != dpi ||
+        window->tab_zoom_num != (LONG) zoom_num || window->tab_zoom_den != (LONG) zoom_den) {
+        window->tab_dpi = dpi;
+        window->tab_zoom_num = (LONG) zoom_num;
+        window->tab_zoom_den = (LONG) zoom_den;
+        window->tab_stop_points = tab_stop_points_for(window->edit_hwnd, &window->applied_font, dpi,
+                                                      (LONG) zoom_num, (LONG) zoom_den);
+    }
+    if (window->tab_stop_points <= 0.0f)
+        return;
+    ITextDocument *doc = tom_document(window);
+    if (!doc)
+        return;
+    float want = window->tab_stop_points;
+    float now = 0.0f;
+    // Within half a twip: a neighbouring stop is a whole twip (0.05 pt) away
+    if (SUCCEEDED(doc->lpVtbl->GetDefaultTabStop(doc, &now)) && now > want - 0.025f &&
+        now < want + 0.025f)
+        return;
+    // A document property, not an edit; keep it out of the undo history even
+    // if RichEdit would record it
+    bool suspended = tom_suspend_undo(doc);
+    doc->lpVtbl->SetDefaultTabStop(doc, want);
+    if (suspended)
+        tom_resume_undo(doc);
 }
 
 // Apply the configured font to the document. In plain-text mode setting the
@@ -4700,15 +6516,24 @@ static void apply_font(Window *window) {
     build_char_format(window, &cf);
 
     // Same reasoning as apply_theme: this runs on every settings broadcast,
-    // and re-applying an unchanged font still reflows the document
-    if (window->font_applied && memcmp(&cf, &window->applied_font, sizeof(cf)) == 0) {
+    // and re-applying an unchanged font still reflows the document. The text
+    // colour is apply_theme's to apply (colour only, which keeps the emoji
+    // faces), so it is left out of the comparison: a scheme change used to
+    // count as a font change here, restamping and rebinding the whole
+    // document once in each function.
+    if (window->font_applied) {
+        CHARFORMAT2W same_colour = cf;
+        same_colour.crTextColor = window->applied_font.crTextColor;
+        if (memcmp(&same_colour, &window->applied_font, sizeof(cf)) == 0) {
 #if NPAD_SCROLL_TELEMETRY
-        g_tel.restamps_skipped++;
+            g_tel.restamps_skipped++;
 #endif
-        return;
+            return;
+        }
     }
     window->font_applied = true;
     window->applied_font = cf;
+    window->tab_stop_points = 0.0f; // Measure the new font (apply_tab_stops)
 #if NPAD_SCROLL_TELEMETRY
     g_tel.restamps++;
 #endif
@@ -4719,21 +6544,28 @@ static void apply_font(Window *window) {
     view_save(window->edit_hwnd, &view);
     SendMessageW(window->edit_hwnd, EM_SETCHARFORMAT, SCF_DEFAULT, (LPARAM) &cf);
     refresh_font_binding(window);
+    apply_tab_stops(window); // After the rebind, which re-sets the text
     view_restore(window->edit_hwnd, &view);
     window->setting_text_programmatically = false;
     SendMessageW(window->edit_hwnd, EM_SETMODIFY, (WPARAM) was_modified, 0);
 }
 
 // Show the font chooser and save the selection to font_key (face) plus the
-// shared size/weight/italic settings.
-static void show_font_dialog(Window *window, const char *font_key, const char *default_face) {
+// shared size/weight/italic settings. owner is the window the chooser is modal
+// to: the main window from the Format menu, but the Preferences sheet when
+// opened from there - owned by the main window (which the sheet has already
+// disabled), the chooser left the sheet itself live underneath it.
+static void show_font_dialog(Window *window, HWND owner, const char *font_key,
+                             const char *default_face) {
     if (!window || !window->edit_hwnd)
         return;
 
     char *face = settings_get_string(font_key, default_face);
-    int size = settings_get_int("font_size", 11);
+    int tenths = ui_font_size_setting_tenths();
     int weight = settings_get_int("font_weight", FW_NORMAL);
     bool italic = settings_get_bool("font_italic", false);
+    if (weight < FW_THIN || weight > FW_HEAVY)
+        weight = FW_NORMAL;
 
     HDC hdc = GetDC(window->edit_hwnd);
     int log_pixels_y = GetDeviceCaps(hdc, LOGPIXELSY);
@@ -4741,7 +6573,7 @@ static void show_font_dialog(Window *window, const char *font_key, const char *d
 
     LOGFONTW lf;
     ZeroMemory(&lf, sizeof(lf));
-    lf.lfHeight = -MulDiv(size, log_pixels_y, 72);
+    lf.lfHeight = -MulDiv(tenths, log_pixels_y, 720);
     lf.lfWeight = weight;
     lf.lfItalic = italic ? TRUE : FALSE;
     wchar_t *wide_face = utf8_to_wide(face ? face : default_face);
@@ -4755,10 +6587,15 @@ static void show_font_dialog(Window *window, const char *font_key, const char *d
     CHOOSEFONTW cf;
     ZeroMemory(&cf, sizeof(cf));
     cf.lStructSize = sizeof(cf);
-    cf.hwndOwner = window->hwnd;
+    cf.hwndOwner = owner ? owner : window->hwnd;
     cf.lpLogFont = &lf;
-    cf.Flags = CF_SCREENFONTS | CF_INITTOLOGFONTSTRUCT | CF_NOSCRIPTSEL;
+    // CF_LIMITSIZE: the chooser itself refuses sizes outside the 6-72 pt the
+    // editor (and printing, and GTK) can show, instead of storing 96 and
+    // silently drawing 72
+    cf.Flags = CF_SCREENFONTS | CF_INITTOLOGFONTSTRUCT | CF_NOSCRIPTSEL | CF_LIMITSIZE;
     cf.nFontType = SCREEN_FONTTYPE;
+    cf.nSizeMin = FONT_SIZE_MIN_PT;
+    cf.nSizeMax = FONT_SIZE_MAX_PT;
 
     if (ChooseFontW(&cf)) {
         char *new_face = wide_to_utf8(lf.lfFaceName);
@@ -4766,7 +6603,9 @@ static void show_font_dialog(Window *window, const char *font_key, const char *d
             settings_set_string(font_key, new_face);
             free(new_face);
         }
-        settings_set_int("font_size", cf.iPointSize / 10); // iPointSize is tenths of a point
+        // iPointSize is tenths of a point; stored as "10.5", or "11" for a
+        // whole size, so a half point survives the round trip
+        ui_font_size_set_tenths(cf.iPointSize);
         settings_set_int("font_weight", (int) lf.lfWeight);
         settings_set_bool("font_italic", lf.lfItalic != 0);
 
@@ -4780,28 +6619,241 @@ static void show_font_dialog(Window *window, const char *font_key, const char *d
 // Preferences (tabbed property sheet)
 // ---------------------------------------------------------------------------
 
+// Save the settings and tell the other windows. A change that was not saved is
+// not broadcast: the others would only reload what is still on disk. When the
+// save fails, warn_owner (if given) tells the user it did not stick.
+static bool save_and_broadcast_settings(HWND warn_owner) {
+    if (!settings_save()) {
+        if (warn_owner) {
+            MessageBoxW(warn_owner,
+                        L"npad could not save the settings. Check that the settings folder is "
+                        L"writable, then try again.",
+                        L"npad", MB_OK | MB_ICONWARNING);
+        }
+        return false;
+    }
+    ui_platform_notify_settings_changed();
+    return true;
+}
+
 // Mark a property-sheet page dirty so the Apply button becomes enabled
 static void mark_prefs_dirty(HWND page) {
     PropSheet_Changed(GetParent(page), page);
 }
+
+// --- Preferences: write only what changed, save once ------------------------
+//
+// A property sheet sends PSN_APPLY to every page that has been CREATED, not
+// only to the ones that changed (see LESSONS.md). Pages that wrote every
+// control back therefore froze adaptive defaults (large_file_warning_mb became
+// 1/64 of today's RAM for good) and reverted whatever another window had just
+// changed. So each page snapshots its controls when it is built and on every
+// Apply writes only the controls that differ from that snapshot, the way the
+// Associations page and the GTK dialog already do.
+//
+// And instead of every page saving and broadcasting on its own (once per
+// visited page, plus once more when the sheet closed, even on Cancel), the
+// pages only stage their writes: the last page of the round saves once and
+// broadcasts once, only when something changed, and keeps the sheet open if
+// the save fails.
+//
+// While a round is open its staged writes live only in memory, and some
+// pages' PSN_APPLY run a modal loop (the OpenDyslexic notice, the all-users
+// association wait) that dispatches another instance's npadSettingsChanged.
+// Reloading then (settings_clear_all + settings_load) would drop what the
+// earlier pages staged, and the commit would save the reloaded disk state:
+// the Apply silently lost. So a broadcast that arrives mid-round only sets
+// reload_pending; the reload runs when the round commits or the sheet closes.
+
+#define PREFS_MAX_PAGES 9 // pages[] in show_preferences_dialog
+#define PREFS_SNAP_MAX 64 // Every snapshotted control of every page
+
+static struct {
+    HWND page;
+    int id;
+    wchar_t *value; // malloc'd
+} g_prefs_snap[PREFS_SNAP_MAX];
+static int g_prefs_snap_count;
+
+static struct {
+    HWND applied[PREFS_MAX_PAGES]; // Pages that have applied this round
+    int applied_count;
+    bool changed;         // A setting was written and is not saved yet
+    bool sync_view_after; // Sync view state just turned on: send it after the broadcast
+    bool reload_pending;  // Another instance saved mid-round: reload once it is over
+} g_prefs_txn;
+
+// Pages have staged writes (or applied part of a round) that are not saved yet
+static bool prefs_round_open(void) {
+    return g_prefs_txn.applied_count > 0 || g_prefs_txn.changed;
+}
+
+// Run the reload a mid-round broadcast deferred, once nothing staged is left
+static void prefs_run_deferred_reload(void) {
+    if (!g_prefs_txn.reload_pending || prefs_round_open())
+        return;
+    g_prefs_txn.reload_pending = false;
+    if (g_main_window)
+        reload_and_apply_settings(g_main_window);
+}
+
+#define PREFS_IDS(array) (array), (int) (sizeof(array) / sizeof((array)[0]))
+
+// A control's value as text: check state, combo selection, or edit text.
+// malloc'd; NULL when the control does not exist or memory ran out.
+static wchar_t *prefs_control_value(HWND page, int id) {
+    HWND ctl = GetDlgItem(page, id);
+    if (!ctl)
+        return NULL;
+    wchar_t cls[16] = L"";
+    GetClassNameW(ctl, cls, 16);
+    if (_wcsicmp(cls, L"Button") == 0 || _wcsicmp(cls, L"ComboBox") == 0) {
+        wchar_t *out = malloc(16 * sizeof(wchar_t));
+        if (out) {
+            LRESULT v = _wcsicmp(cls, L"Button") == 0 ? SendMessageW(ctl, BM_GETCHECK, 0, 0)
+                                                      : SendMessageW(ctl, CB_GETCURSEL, 0, 0);
+            _snwprintf(out, 15, L"%ld", (long) v);
+            out[15] = L'\0';
+        }
+        return out;
+    }
+    int len = GetWindowTextLengthW(ctl);
+    wchar_t *out = malloc(((size_t) len + 1) * sizeof(wchar_t));
+    if (out) {
+        out[0] = L'\0';
+        GetWindowTextW(ctl, out, len + 1);
+    }
+    return out;
+}
+
+static int prefs_snap_find(HWND page, int id) {
+    for (int i = 0; i < g_prefs_snap_count; i++) {
+        if (g_prefs_snap[i].page == page && g_prefs_snap[i].id == id)
+            return i;
+    }
+    return -1;
+}
+
+// Record the page's current values as the baseline Apply compares against.
+// Called at the end of WM_INITDIALOG and again after each Apply.
+static void prefs_snapshot(HWND page, const int *ids, int count) {
+    for (int i = 0; i < count; i++) {
+        int slot = prefs_snap_find(page, ids[i]);
+        if (slot < 0) {
+            if (g_prefs_snap_count >= PREFS_SNAP_MAX)
+                continue; // prefs_changed then reports a change: writes, as before
+            slot = g_prefs_snap_count++;
+            g_prefs_snap[slot].page = page;
+            g_prefs_snap[slot].id = ids[i];
+            g_prefs_snap[slot].value = NULL;
+        }
+        free(g_prefs_snap[slot].value);
+        g_prefs_snap[slot].value = prefs_control_value(page, ids[i]);
+    }
+}
+
+// Did the user change this control since the page was built or last applied?
+// Unknown (no snapshot) counts as changed, which writes the value: the
+// pre-snapshot behaviour, never a lost edit.
+static bool prefs_changed(HWND page, int id) {
+    int slot = prefs_snap_find(page, id);
+    if (slot < 0 || !g_prefs_snap[slot].value)
+        return true;
+    wchar_t *now = prefs_control_value(page, id);
+    bool changed = !now || wcscmp(now, g_prefs_snap[slot].value) != 0;
+    free(now);
+    return changed;
+}
+
+// A fresh sheet: no snapshots, nothing staged
+static void prefs_session_reset(void) {
+    for (int i = 0; i < g_prefs_snap_count; i++)
+        free(g_prefs_snap[i].value);
+    g_prefs_snap_count = 0;
+    ZeroMemory(&g_prefs_txn, sizeof(g_prefs_txn));
+}
+
+// Save once and broadcast once for the whole Apply / OK, if anything changed
+static LONG_PTR prefs_commit(HWND page) {
+    if (g_prefs_txn.changed) {
+        // On failure the sheet stays open with the values still in memory, so
+        // OK can be retried (an exit save would also still write them), and a
+        // deferred reload keeps waiting rather than dropping them
+        if (!save_and_broadcast_settings(GetParent(page)))
+            return PSNRET_INVALID_NOCHANGEPAGE;
+        g_prefs_txn.changed = false;
+        // Other windows turn sync on from the broadcast, then adopt this state
+        if (g_prefs_txn.sync_view_after && g_main_window)
+            on_view_state_changed(g_main_window);
+        g_prefs_txn.sync_view_after = false;
+    }
+    prefs_run_deferred_reload();
+    return PSNRET_NOERROR;
+}
+
+// Every page ends its PSN_APPLY here. changed: this page wrote a setting.
+// The round is over once every created page has applied - counted, not
+// assumed from the order the sheet happens to send them in.
+static void prefs_page_applied(HWND page, bool changed) {
+    if (changed)
+        g_prefs_txn.changed = true;
+
+    bool seen = false;
+    for (int i = 0; i < g_prefs_txn.applied_count; i++) {
+        if (g_prefs_txn.applied[i] == page)
+            seen = true;
+    }
+    if (!seen && g_prefs_txn.applied_count < PREFS_MAX_PAGES)
+        g_prefs_txn.applied[g_prefs_txn.applied_count++] = page;
+
+    HWND sheet = GetParent(page);
+    bool all = true;
+    for (int i = 0; i < PREFS_MAX_PAGES && all; i++) {
+        HWND created = PropSheet_IndexToHwnd(sheet, i); // NULL: not created yet
+        if (!created)
+            continue;
+        bool applied = false;
+        for (int j = 0; j < g_prefs_txn.applied_count; j++) {
+            if (g_prefs_txn.applied[j] == created)
+                applied = true;
+        }
+        all = applied;
+    }
+
+    LONG_PTR result = PSNRET_NOERROR;
+    if (all) {
+        g_prefs_txn.applied_count = 0;
+        result = prefs_commit(page);
+    }
+    SetWindowLongPtrW(page, DWLP_MSGRESULT, result);
+}
+
+static const int PREFS_GENERAL_IDS[] = {
+    ID_PREF_AUTOSAVE_ENABLED, ID_PREF_AUTOSAVE_INTERVAL, ID_PREF_LARGE_FILE_MB, ID_PREF_RECENT_MAX,
+    ID_PREF_SESSION_ENABLED,  ID_PREF_SESSION_INTERVAL,  ID_PREF_CTRL_N_WINDOW, ID_PREF_WATCH_FILE,
+};
 
 static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
         case WM_INITDIALOG:
             CheckDlgButton(page, ID_PREF_AUTOSAVE_ENABLED,
                            editor_is_auto_save_enabled() ? BST_CHECKED : BST_UNCHECKED);
+            // The boxes hold no more digits than their largest value (the
+            // GTK spin ranges, ui_rules.h); Apply clamps what remains
+            SendDlgItemMessageW(page, ID_PREF_AUTOSAVE_INTERVAL, EM_LIMITTEXT, 5, 0);
+            SendDlgItemMessageW(page, ID_PREF_LARGE_FILE_MB, EM_LIMITTEXT, 7, 0);
+            SendDlgItemMessageW(page, ID_PREF_RECENT_MAX, EM_LIMITTEXT, 2, 0);
+            SendDlgItemMessageW(page, ID_PREF_SESSION_INTERVAL, EM_LIMITTEXT, 5, 0);
             SetDlgItemInt(page, ID_PREF_AUTOSAVE_INTERVAL, (UINT) editor_get_auto_save_interval(),
                           FALSE);
-            SetDlgItemInt(
-                page, ID_PREF_LARGE_FILE_MB,
-                (UINT) settings_get_int("large_file_warning_mb", editor_default_large_file_mb()),
-                FALSE);
+            SetDlgItemInt(page, ID_PREF_LARGE_FILE_MB,
+                          (UINT) ui_large_file_mb_setting(editor_default_large_file_mb()), FALSE);
             SetDlgItemInt(page, ID_PREF_RECENT_MAX, (UINT) settings_get_int("recent_files_max", 10),
                           FALSE);
             CheckDlgButton(page, ID_PREF_SESSION_ENABLED,
                            editor_is_session_resume_enabled() ? BST_CHECKED : BST_UNCHECKED);
-            SetDlgItemInt(page, ID_PREF_SESSION_INTERVAL,
-                          (UINT) settings_get_int("session_interval", 30), FALSE);
+            SetDlgItemInt(page, ID_PREF_SESSION_INTERVAL, (UINT) ui_session_interval_setting(),
+                          FALSE);
             CheckDlgButton(page, ID_PREF_CTRL_N_WINDOW,
                            settings_get_bool("ctrl_n_new_window", false) ? BST_CHECKED
                                                                          : BST_UNCHECKED);
@@ -4812,6 +6864,7 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
                          editor_is_auto_save_enabled());
             EnableWindow(GetDlgItem(page, ID_PREF_SESSION_INTERVAL),
                          editor_is_session_resume_enabled());
+            prefs_snapshot(page, PREFS_IDS(PREFS_GENERAL_IDS));
             return TRUE;
 
         case WM_COMMAND: {
@@ -4839,6 +6892,9 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
             }
             if (id == ID_PREF_RECENT_CLEAR) {
                 settings_clear_recent_files();
+                // Saved and broadcast at once: otherwise another window still
+                // holding the old list writes it back when it exits
+                save_and_broadcast_settings(GetParent(page));
                 if (g_main_window) {
                     rebuild_recent_menu(g_main_window);
                 }
@@ -4851,52 +6907,94 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
             const NMHDR *nmhdr = (const NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
                 BOOL ok = FALSE;
+                bool changed = false;
 
-                editor_enable_auto_save(IsDlgButtonChecked(page, ID_PREF_AUTOSAVE_ENABLED) ==
-                                        BST_CHECKED);
-
-                UINT interval = GetDlgItemInt(page, ID_PREF_AUTOSAVE_INTERVAL, &ok, FALSE);
-                if (ok && interval > 0) {
-                    editor_set_auto_save_interval((int) interval);
+                if (prefs_changed(page, ID_PREF_AUTOSAVE_ENABLED)) {
+                    editor_enable_auto_save(IsDlgButtonChecked(page, ID_PREF_AUTOSAVE_ENABLED) ==
+                                            BST_CHECKED);
+                    changed = true;
                 }
 
-                UINT large_mb = GetDlgItemInt(page, ID_PREF_LARGE_FILE_MB, &ok, FALSE);
-                if (ok) {
-                    settings_set_int("large_file_warning_mb", (int) large_mb);
-                }
-
-                UINT recent_max = GetDlgItemInt(page, ID_PREF_RECENT_MAX, &ok, FALSE);
-                if (ok) {
-                    if (recent_max > MAX_RECENT_MENU_FILES) {
-                        recent_max = MAX_RECENT_MENU_FILES;
+                // Each number is clamped to its range in 64 bits (a UINT
+                // above INT_MAX used to turn negative), and a clamped value is
+                // written back so the box shows what was actually stored
+                if (prefs_changed(page, ID_PREF_AUTOSAVE_INTERVAL)) {
+                    UINT interval = GetDlgItemInt(page, ID_PREF_AUTOSAVE_INTERVAL, &ok, FALSE);
+                    if (ok) {
+                        int clamped = ui_clamp_auto_save_interval((long long) interval);
+                        editor_set_auto_save_interval(clamped);
+                        if ((UINT) clamped != interval)
+                            SetDlgItemInt(page, ID_PREF_AUTOSAVE_INTERVAL, (UINT) clamped, FALSE);
+                        changed = true;
                     }
-                    settings_set_int("recent_files_max", (int) recent_max);
+                }
+
+                // Untouched, the threshold stays unset and keeps following
+                // this machine's RAM (editor_default_large_file_mb)
+                if (prefs_changed(page, ID_PREF_LARGE_FILE_MB)) {
+                    UINT large_mb = GetDlgItemInt(page, ID_PREF_LARGE_FILE_MB, &ok, FALSE);
+                    if (ok) {
+                        int clamped = ui_clamp_large_file_mb((long long) large_mb);
+                        settings_set_int(LARGE_FILE_MB_KEY, clamped);
+                        if ((UINT) clamped != large_mb)
+                            SetDlgItemInt(page, ID_PREF_LARGE_FILE_MB, (UINT) clamped, FALSE);
+                        changed = true;
+                    }
+                }
+
+                if (prefs_changed(page, ID_PREF_RECENT_MAX)) {
+                    UINT recent_max = GetDlgItemInt(page, ID_PREF_RECENT_MAX, &ok, FALSE);
+                    if (ok) {
+                        if (recent_max > MAX_RECENT_MENU_FILES) {
+                            recent_max = MAX_RECENT_MENU_FILES;
+                            SetDlgItemInt(page, ID_PREF_RECENT_MAX, recent_max, FALSE);
+                        }
+                        settings_set_int("recent_files_max", (int) recent_max);
+                        changed = true;
+                        if (g_main_window) {
+                            rebuild_recent_menu(g_main_window);
+                        }
+                    }
+                }
+
+                bool session_changed = prefs_changed(page, ID_PREF_SESSION_ENABLED);
+                if (prefs_changed(page, ID_PREF_SESSION_INTERVAL)) {
+                    UINT session_interval =
+                        GetDlgItemInt(page, ID_PREF_SESSION_INTERVAL, &ok, FALSE);
+                    if (ok) {
+                        int clamped = ui_clamp_session_interval((long long) session_interval);
+                        settings_set_int(SESSION_INTERVAL_KEY, clamped);
+                        if ((UINT) clamped != session_interval)
+                            SetDlgItemInt(page, ID_PREF_SESSION_INTERVAL, (UINT) clamped, FALSE);
+                        session_changed = true;
+                    }
+                }
+                // Enable/disable last so the interval it reads is current (this
+                // is also what re-arms the timer for a new interval)
+                if (session_changed) {
+                    editor_enable_session_resume(
+                        IsDlgButtonChecked(page, ID_PREF_SESSION_ENABLED) == BST_CHECKED);
+                    changed = true;
+                }
+
+                if (prefs_changed(page, ID_PREF_CTRL_N_WINDOW)) {
+                    settings_set_bool("ctrl_n_new_window",
+                                      IsDlgButtonChecked(page, ID_PREF_CTRL_N_WINDOW) ==
+                                          BST_CHECKED);
+                    changed = true;
                     if (g_main_window) {
-                        rebuild_recent_menu(g_main_window);
+                        apply_new_window_pref(g_main_window);
                     }
                 }
 
-                UINT session_interval = GetDlgItemInt(page, ID_PREF_SESSION_INTERVAL, &ok, FALSE);
-                if (ok && session_interval > 0) {
-                    settings_set_int("session_interval", (int) session_interval);
-                }
-                // Enable/disable last so the interval it reads is current
-                editor_enable_session_resume(IsDlgButtonChecked(page, ID_PREF_SESSION_ENABLED) ==
-                                             BST_CHECKED);
-
-                settings_set_bool("ctrl_n_new_window",
-                                  IsDlgButtonChecked(page, ID_PREF_CTRL_N_WINDOW) == BST_CHECKED);
-                if (g_main_window) {
-                    apply_new_window_pref(g_main_window);
+                if (prefs_changed(page, ID_PREF_WATCH_FILE)) {
+                    settings_set_bool("watch_file_changes",
+                                      IsDlgButtonChecked(page, ID_PREF_WATCH_FILE) == BST_CHECKED);
+                    changed = true;
                 }
 
-                settings_set_bool("watch_file_changes",
-                                  IsDlgButtonChecked(page, ID_PREF_WATCH_FILE) == BST_CHECKED);
-
-                settings_save(); // Apply button: persist + propagate immediately
-                ui_platform_notify_settings_changed();
-
-                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                prefs_snapshot(page, PREFS_IDS(PREFS_GENERAL_IDS));
+                prefs_page_applied(page, changed); // Saves + broadcasts once per Apply
                 return TRUE;
             }
             break;
@@ -4907,6 +7005,13 @@ static INT_PTR CALLBACK prefs_general_proc(HWND page, UINT msg, WPARAM wparam, L
 
 // Preferences: Editor page - how typing and Find behave (Fill Find from the
 // selection, Find / Replace wrap-around, Tab inserts spaces)
+static const int PREFS_EDITOR_IDS[] = {
+    ID_PREF_FIND_SEED,
+    ID_PREF_FIND_WRAP,
+    ID_PREF_TAB_SPACES,
+    ID_PREF_TAB_WIDTH,
+};
+
 static INT_PTR CALLBACK prefs_editor_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
         case WM_INITDIALOG:
@@ -4921,6 +7026,7 @@ static INT_PTR CALLBACK prefs_editor_proc(HWND page, UINT msg, WPARAM wparam, LP
                            tab_inserts_spaces_enabled() ? BST_CHECKED : BST_UNCHECKED);
             SetDlgItemInt(page, ID_PREF_TAB_WIDTH, (UINT) tab_width_setting(), FALSE);
             EnableWindow(GetDlgItem(page, ID_PREF_TAB_WIDTH), tab_inserts_spaces_enabled());
+            prefs_snapshot(page, PREFS_IDS(PREFS_EDITOR_IDS));
             return TRUE;
 
         case WM_COMMAND: {
@@ -4942,36 +7048,47 @@ static INT_PTR CALLBACK prefs_editor_proc(HWND page, UINT msg, WPARAM wparam, LP
         case WM_NOTIFY: {
             const NMHDR *nmhdr = (const NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
-                settings_set_bool(FIND_SEED_KEY,
-                                  IsDlgButtonChecked(page, ID_PREF_FIND_SEED) == BST_CHECKED);
+                bool changed = false;
+                if (prefs_changed(page, ID_PREF_FIND_SEED)) {
+                    settings_set_bool(FIND_SEED_KEY,
+                                      IsDlgButtonChecked(page, ID_PREF_FIND_SEED) == BST_CHECKED);
+                    changed = true;
+                }
 
                 // Find wrap-around is also toggled from the Find/Replace
                 // dialog, so update the live flag and, if that dialog happens
                 // to be open, its checkbox - otherwise closing it would write
                 // the stale value straight back over this one.
-                g_wrap_around = IsDlgButtonChecked(page, ID_PREF_FIND_WRAP) == BST_CHECKED;
-                settings_set_bool("find_wrap_around", g_wrap_around);
-                if (g_find_dialog) {
-                    CheckDlgButton(g_find_dialog, ID_FIND_WRAP,
-                                   g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
+                if (prefs_changed(page, ID_PREF_FIND_WRAP)) {
+                    g_wrap_around = IsDlgButtonChecked(page, ID_PREF_FIND_WRAP) == BST_CHECKED;
+                    settings_set_bool(FIND_WRAP_KEY, g_wrap_around);
+                    if (g_find_dialog) {
+                        CheckDlgButton(g_find_dialog, ID_FIND_WRAP,
+                                       g_wrap_around ? BST_CHECKED : BST_UNCHECKED);
+                    }
+                    changed = true;
                 }
 
-                settings_set_bool(TAB_INSERTS_SPACES_KEY,
-                                  IsDlgButtonChecked(page, ID_PREF_TAB_SPACES) == BST_CHECKED);
-                BOOL ok = FALSE;
-                UINT tab_width = GetDlgItemInt(page, ID_PREF_TAB_WIDTH, &ok, FALSE);
-                if (ok) {
-                    // Out-of-range input is clamped, and the box shows what was kept
-                    int kept = tab_clamp_width(tab_width > TAB_WIDTH_MAX ? TAB_WIDTH_MAX
-                                                                         : (int) tab_width);
-                    settings_set_int(TAB_WIDTH_KEY, kept);
-                    SetDlgItemInt(page, ID_PREF_TAB_WIDTH, (UINT) kept, FALSE);
+                if (prefs_changed(page, ID_PREF_TAB_SPACES)) {
+                    settings_set_bool(TAB_INSERTS_SPACES_KEY,
+                                      IsDlgButtonChecked(page, ID_PREF_TAB_SPACES) == BST_CHECKED);
+                    changed = true;
+                }
+                if (prefs_changed(page, ID_PREF_TAB_WIDTH)) {
+                    BOOL ok = FALSE;
+                    UINT tab_width = GetDlgItemInt(page, ID_PREF_TAB_WIDTH, &ok, FALSE);
+                    if (ok) {
+                        // Out-of-range input is clamped, and the box shows what was kept
+                        int kept = tab_clamp_width(tab_width > TAB_WIDTH_MAX ? TAB_WIDTH_MAX
+                                                                             : (int) tab_width);
+                        settings_set_int(TAB_WIDTH_KEY, kept);
+                        SetDlgItemInt(page, ID_PREF_TAB_WIDTH, (UINT) kept, FALSE);
+                        changed = true;
+                    }
                 }
 
-                settings_save(); // Apply button: persist + propagate immediately
-                ui_platform_notify_settings_changed();
-
-                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                prefs_snapshot(page, PREFS_IDS(PREFS_EDITOR_IDS));
+                prefs_page_applied(page, changed); // Saves + broadcasts once per Apply
                 return TRUE;
             }
             break;
@@ -4986,6 +7103,26 @@ static const char *const SCHEME_KEYS[] = { "system", "light", "dark", "solarized
 static const wchar_t *const SCHEME_LABELS[] = { L"Follow system", L"Light", L"Dark",
                                                 L"Solarized Light", L"Solarized Dark" };
 #define SCHEME_COUNT ((int) (sizeof(SCHEME_KEYS) / sizeof(SCHEME_KEYS[0])))
+
+static const int PREFS_ICON_IDS[] = {
+    ID_PREF_ICON_SYSTEM, ID_PREF_ICON_NPAD,    ID_PREF_ICON_LIGHT,
+    ID_PREF_ICON_DARK,   ID_PREF_ICON_CLASSIC,
+};
+
+static const int PREFS_APPEARANCE_IDS[] = {
+    ID_PREF_SCHEME,        ID_PREF_OPENDYSLEXIC,  ID_PREF_STATUSBAR,    ID_PREF_SYNC_VIEW,
+    ID_PREF_AUTO_DEFAULTS, ID_PREF_STATUS_COUNTS, ID_PREF_ICON_SYSTEM,  ID_PREF_ICON_NPAD,
+    ID_PREF_ICON_LIGHT,    ID_PREF_ICON_DARK,     ID_PREF_ICON_CLASSIC,
+};
+
+// Has any control in the list changed (a radio group, say)?
+static bool prefs_any_changed(HWND page, const int *ids, int count) {
+    for (int i = 0; i < count; i++) {
+        if (prefs_changed(page, ids[i]))
+            return true;
+    }
+    return false;
+}
 
 static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
@@ -5036,6 +7173,7 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
                 CheckRadioButton(page, ID_PREF_ICON_SYSTEM, ID_PREF_ICON_CLASSIC, which);
                 free(style);
             }
+            prefs_snapshot(page, PREFS_IDS(PREFS_APPEARANCE_IDS));
             return TRUE;
         }
 
@@ -5050,12 +7188,15 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
                 (code == CBN_SELCHANGE && id == ID_PREF_SCHEME)) {
                 mark_prefs_dirty(page);
             }
+            // Owned by the sheet, so the sheet is disabled while it is open
             if (id == ID_PREF_FONT_MONO) {
-                show_font_dialog(g_main_window, "monospace_font", DEFAULT_MONO_FONT);
+                show_font_dialog(g_main_window, GetParent(page), "monospace_font",
+                                 DEFAULT_MONO_FONT);
                 return TRUE;
             }
             if (id == ID_PREF_FONT_PROP) {
-                show_font_dialog(g_main_window, "proportional_font", DEFAULT_PROP_FONT);
+                show_font_dialog(g_main_window, GetParent(page), "proportional_font",
+                                 DEFAULT_PROP_FONT);
                 return TRUE;
             }
             break;
@@ -5064,75 +7205,100 @@ static INT_PTR CALLBACK prefs_appearance_proc(HWND page, UINT msg, WPARAM wparam
         case WM_NOTIFY: {
             const NMHDR *nmhdr = (const NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
-                int sel = (int) SendDlgItemMessageW(page, ID_PREF_SCHEME, CB_GETCURSEL, 0, 0);
-                if (sel < 0 || sel >= SCHEME_COUNT) {
-                    sel = 0;
-                }
-                settings_set_string("theme", SCHEME_KEYS[sel]);
+                bool changed = false;
+                bool restyle = false;
 
-                bool dyslexic = IsDlgButtonChecked(page, ID_PREF_OPENDYSLEXIC) == BST_CHECKED;
-                if (dyslexic && !font_is_installed(OPENDYSLEXIC_FONT_W)) {
-                    // Cannot enable a font that is not installed: inform the
-                    // user and revert both the setting and the checkbox.
-                    MessageBoxW(page,
-                                L"The OpenDyslexic font is not installed.\n"
-                                L"Download it from https://opendyslexic.org and install it, "
-                                L"then enable this option.",
-                                L"npad", MB_OK | MB_ICONINFORMATION);
-                    dyslexic = false;
-                    CheckDlgButton(page, ID_PREF_OPENDYSLEXIC, BST_UNCHECKED);
+                if (prefs_changed(page, ID_PREF_SCHEME)) {
+                    int sel = (int) SendDlgItemMessageW(page, ID_PREF_SCHEME, CB_GETCURSEL, 0, 0);
+                    if (sel < 0 || sel >= SCHEME_COUNT) {
+                        sel = 0;
+                    }
+                    settings_set_string("theme", SCHEME_KEYS[sel]);
+                    restyle = true;
                 }
-                settings_set_bool("opendyslexic_enabled", dyslexic);
+
+                if (prefs_changed(page, ID_PREF_OPENDYSLEXIC)) {
+                    bool dyslexic = IsDlgButtonChecked(page, ID_PREF_OPENDYSLEXIC) == BST_CHECKED;
+                    if (dyslexic && !font_is_installed(OPENDYSLEXIC_FONT_W)) {
+                        // Cannot enable a font that is not installed: inform the
+                        // user and revert both the setting and the checkbox.
+                        MessageBoxW(page,
+                                    L"The OpenDyslexic font is not installed.\n"
+                                    L"Download it from https://opendyslexic.org and install it, "
+                                    L"then enable this option.",
+                                    L"npad", MB_OK | MB_ICONINFORMATION);
+                        dyslexic = false;
+                        CheckDlgButton(page, ID_PREF_OPENDYSLEXIC, BST_UNCHECKED);
+                    }
+                    settings_set_bool("opendyslexic_enabled", dyslexic);
+                    restyle = true;
+                }
 
                 // Re-apply colors and font for the chosen scheme (also syncs g_dark_mode)
-                if (g_main_window) {
-                    apply_font(g_main_window);
-                    apply_theme(g_main_window);
-                    update_status_bar(g_main_window);
+                if (restyle) {
+                    changed = true;
+                    if (g_main_window) {
+                        apply_font(g_main_window);
+                        apply_theme(g_main_window);
+                        update_status_bar(g_main_window);
+                    }
                 }
 
-                bool show_status = IsDlgButtonChecked(page, ID_PREF_STATUSBAR) == BST_CHECKED;
-                if (g_main_window && g_main_window->status_bar_visible != show_status) {
-                    set_status_bar_visible(g_main_window, show_status);
+                if (prefs_changed(page, ID_PREF_STATUSBAR)) {
+                    bool show_status = IsDlgButtonChecked(page, ID_PREF_STATUSBAR) == BST_CHECKED;
+                    settings_set_bool("status_bar_visible", show_status);
+                    if (g_main_window && g_main_window->status_bar_visible != show_status) {
+                        set_status_bar_visible(g_main_window, show_status);
+                    }
+                    changed = true;
                 }
 
-                bool sync_view = IsDlgButtonChecked(page, ID_PREF_SYNC_VIEW) == BST_CHECKED;
-                settings_set_bool("sync_view_state", sync_view);
-                settings_set_bool("auto_update_defaults",
-                                  IsDlgButtonChecked(page, ID_PREF_AUTO_DEFAULTS) == BST_CHECKED);
-
-                settings_set_bool("status_show_counts",
-                                  IsDlgButtonChecked(page, ID_PREF_STATUS_COUNTS) == BST_CHECKED);
-                if (g_main_window) {
-                    apply_counts_pref(g_main_window);
+                if (prefs_changed(page, ID_PREF_SYNC_VIEW)) {
+                    bool sync_view = IsDlgButtonChecked(page, ID_PREF_SYNC_VIEW) == BST_CHECKED;
+                    settings_set_bool("sync_view_state", sync_view);
+                    // Enabling sync should bring the other windows into line
+                    // with this (active) window's view state right away, not
+                    // only on the next change: sent once the broadcast is out
+                    if (sync_view)
+                        g_prefs_txn.sync_view_after = true;
+                    changed = true;
+                }
+                if (prefs_changed(page, ID_PREF_AUTO_DEFAULTS)) {
+                    settings_set_bool("auto_update_defaults",
+                                      IsDlgButtonChecked(page, ID_PREF_AUTO_DEFAULTS) ==
+                                          BST_CHECKED);
+                    changed = true;
                 }
 
-                const char *icon_style = "system";
-                if (IsDlgButtonChecked(page, ID_PREF_ICON_NPAD) == BST_CHECKED)
-                    icon_style = "npad";
-                else if (IsDlgButtonChecked(page, ID_PREF_ICON_LIGHT) == BST_CHECKED)
-                    icon_style = "light";
-                else if (IsDlgButtonChecked(page, ID_PREF_ICON_DARK) == BST_CHECKED)
-                    icon_style = "dark";
-                else if (IsDlgButtonChecked(page, ID_PREF_ICON_CLASSIC) == BST_CHECKED)
-                    icon_style = "classic";
-                settings_set_string("icon_style", icon_style);
-                if (g_main_window) {
-                    apply_window_icon(g_main_window);
+                if (prefs_changed(page, ID_PREF_STATUS_COUNTS)) {
+                    settings_set_bool("status_show_counts",
+                                      IsDlgButtonChecked(page, ID_PREF_STATUS_COUNTS) ==
+                                          BST_CHECKED);
+                    changed = true;
+                    if (g_main_window) {
+                        apply_counts_pref(g_main_window);
+                    }
                 }
 
-                settings_save(); // Apply button: persist + propagate immediately
-                ui_platform_notify_settings_changed();
-
-                // Enabling sync should bring the other windows into line with
-                // this (active) window's view state right away, not only on the
-                // next change. Other windows enable sync via the settings-changed
-                // reload above, then adopt the view state posted here.
-                if (sync_view && g_main_window) {
-                    on_view_state_changed(g_main_window);
+                if (prefs_any_changed(page, PREFS_IDS(PREFS_ICON_IDS))) {
+                    const char *icon_style = "system";
+                    if (IsDlgButtonChecked(page, ID_PREF_ICON_NPAD) == BST_CHECKED)
+                        icon_style = "npad";
+                    else if (IsDlgButtonChecked(page, ID_PREF_ICON_LIGHT) == BST_CHECKED)
+                        icon_style = "light";
+                    else if (IsDlgButtonChecked(page, ID_PREF_ICON_DARK) == BST_CHECKED)
+                        icon_style = "dark";
+                    else if (IsDlgButtonChecked(page, ID_PREF_ICON_CLASSIC) == BST_CHECKED)
+                        icon_style = "classic";
+                    settings_set_string("icon_style", icon_style);
+                    changed = true;
+                    if (g_main_window) {
+                        apply_window_icon(g_main_window);
+                    }
                 }
 
-                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                prefs_snapshot(page, PREFS_IDS(PREFS_APPEARANCE_IDS));
+                prefs_page_applied(page, changed); // Saves + broadcasts once per Apply
                 return TRUE;
             }
             break;
@@ -5148,13 +7314,16 @@ static void export_settings(HWND owner) {
     if (!src)
         return;
 
-    wchar_t filename[MAX_PATH] = L"npad-settings.json";
+    wchar_t *filename = calloc(NPAD_DIALOG_PATH_CCH, sizeof(wchar_t));
+    if (!filename)
+        return;
+    wcscpy(filename, L"npad-settings.json");
     OPENFILENAMEW ofn;
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = owner;
     ofn.lpstrFile = filename;
-    ofn.nMaxFile = MAX_PATH;
+    ofn.nMaxFile = NPAD_DIALOG_PATH_CCH;
     ofn.lpstrFilter = L"JSON Files (*.json)\0*.json\0All Files (*.*)\0*.*\0";
     ofn.nFilterIndex = 1;
     ofn.lpstrDefExt = L"json";
@@ -5166,95 +7335,108 @@ static void export_settings(HWND owner) {
         free(dest);
         MessageBoxW(owner, ok ? L"Settings exported." : L"Failed to export settings.", L"npad",
                     ok ? (MB_OK | MB_ICONINFORMATION) : (MB_OK | MB_ICONWARNING));
+    } else {
+        report_file_dialog_error(owner);
     }
+    free(filename);
 }
 
 // Replace the current settings with a user-chosen file and reload them
 static void import_settings(HWND owner) {
-    const char *dest = settings_get_file_path();
-    if (!dest)
+    if (!settings_get_file_path())
         return;
 
-    wchar_t filename[MAX_PATH] = L"";
+    wchar_t *filename = calloc(NPAD_DIALOG_PATH_CCH, sizeof(wchar_t));
+    if (!filename)
+        return;
     OPENFILENAMEW ofn;
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = owner;
     ofn.lpstrFile = filename;
-    ofn.nMaxFile = MAX_PATH;
+    ofn.nMaxFile = NPAD_DIALOG_PATH_CCH;
     ofn.lpstrFilter = L"JSON Files (*.json)\0*.json\0All Files (*.*)\0*.*\0";
     ofn.nFilterIndex = 1;
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY | OFN_EXPLORER;
 
     if (!GetOpenFileNameW(&ofn)) {
+        report_file_dialog_error(owner);
+        free(filename);
         return;
     }
 
+    // Only an npad settings file is accepted, the previous settings are kept
+    // as settings.json.bak, and the write is atomic (see settings_import.h).
+    // Picking the wrong file used to wipe every preference and recent file.
     char *src = wide_to_utf8(filename);
-    bool ok = src && file_copy(src, dest);
+    SettingsImportResult result = src ? settings_import_file(src) : SETTINGS_IMPORT_UNREADABLE;
+    free(filename);
     free(src);
-    if (!ok) {
-        MessageBoxW(owner, L"Failed to import settings.", L"npad", MB_OK | MB_ICONWARNING);
+    wchar_t *message = utf8_to_wide(settings_import_message(result));
+    if (result != SETTINGS_IMPORT_OK) {
+        MessageBoxW(owner, message ? message : L"Failed to import settings.", L"npad",
+                    MB_OK | MB_ICONWARNING);
+        free(message);
         return;
     }
 
-    // Reload settings and re-apply what can change live
-    settings_clear_all();
-    settings_load();
-    editor_reload_prefs();
+    // Re-apply everything that can change live (the same path as a change
+    // made in another instance), then tell the other running instances
     if (g_main_window) {
-        apply_font(g_main_window);
-        apply_theme(g_main_window);
-        apply_new_window_pref(g_main_window);
-        rebuild_recent_menu(g_main_window);
-        update_status_bar(g_main_window);
+        reload_and_apply_settings(g_main_window);
     }
-    // Propagate to other running instances too
     ui_platform_notify_settings_changed();
 
-    MessageBoxW(owner,
-                L"Settings imported. A few options (window size, default encoding) "
-                L"take effect on restart.",
-                L"npad", MB_OK | MB_ICONINFORMATION);
+    MessageBoxW(owner, message ? message : L"Settings imported.", L"npad",
+                MB_OK | MB_ICONINFORMATION);
+    free(message);
+
+    // The sheet's controls still show the pre-import values, and OK would
+    // write them back over the import; close it, as Reset does. Cancel, so
+    // nothing staged on another page is applied either.
+    PropSheet_PressButton(GetParent(owner), PSBTN_CANCEL);
 }
 
 // Reset every preference to its default (Backup page). Rather than an
 // allowlist of keys to remove (which silently drifts every time a new
 // Preferences tab/setting is added - and did), this resets EVERYTHING except
 // the small, stable set of preserved categories: recent files, window
-// geometry, and Find/Replace state (options + history). Any new preference
-// key is therefore reset by default; getters fall back to their defaults for
-// the now-missing keys. To keep something across a reset, add its prefix here.
+// geometry, and Find/Replace state (the dialog's options + history). Any new
+// preference key is therefore reset by default; getters fall back to their
+// defaults for the now-missing keys. What is kept is defined once, in
+// settings_reset_all_preferences, which GTK calls too.
 static void reset_all_preferences(HWND owner) {
-    static const char *const keep_prefixes[] = {
-        "recent_file_", // recent files list (recent_files_max is a pref -> reset)
-        "window_",      // window geometry
-        "find_",        // find options + find history
-        "replace_",     // replace history
-    };
-
     if (MessageBoxW(owner,
                     L"Reset all preferences to their defaults?\n\n"
-                    L"Recent files, window position and Find/Replace options and history "
-                    L"are kept.\n"
+                    L"Find wrap-around is reset with them. Recent files, window position "
+                    L"and the other Find/Replace options and history are kept.\n"
                     L"The Preferences window will close.",
                     L"npad", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) {
         return;
     }
 
-    settings_reset_except_prefixes(keep_prefixes,
-                                   (int) (sizeof(keep_prefixes) / sizeof(keep_prefixes[0])));
-    // The one find_-prefixed key that IS a preference (Preferences > General),
-    // not search state: the prefix keep above would otherwise preserve it
-    settings_remove_key(FIND_SEED_KEY);
-    settings_save();
+    // The find_-prefixed keys that ARE preferences (both on Preferences >
+    // Editor: Fill Find from the selection, Wrap around by default) are reset
+    // too, although the find_ prefix is kept as search state
+    bool saved = settings_reset_all_preferences_and_save();
 
     // Re-apply everything that can change live (same path as a cross-instance
-    // settings change), then tell other running instances
+    // settings change), then tell other running instances. That includes an
+    // open Find/Replace dialog's checkboxes (find_dialog_sync_options), which
+    // would otherwise put the pre-reset wrap-around back when next read. A
+    // reset that could not be saved is not applied: the reload puts back what
+    // is on disk.
     if (g_main_window) {
         reload_and_apply_settings(g_main_window);
     }
-    ui_platform_notify_settings_changed();
+    if (saved) {
+        ui_platform_notify_settings_changed();
+    } else {
+        MessageBoxW(owner,
+                    L"npad could not save the settings, so nothing was reset. Check that the "
+                    L"settings folder is writable, then try again.",
+                    L"npad", MB_OK | MB_ICONWARNING);
+    }
 
     // The sheet's controls still show pre-reset values; close it rather than
     // leave stale state on screen
@@ -5421,7 +7603,7 @@ static INT_PTR CALLBACK prefs_debug_proc(HWND page, UINT msg, WPARAM wparam, LPA
         case WM_NOTIFY: {
             const NMHDR *nmhdr = (const NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
-                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                prefs_page_applied(page, false); // Read-only page, but part of the round
                 return TRUE;
             }
             break;
@@ -5438,6 +7620,11 @@ static INT_PTR CALLBACK prefs_debug_proc(HWND page, UINT msg, WPARAM wparam, LPA
 }
 
 // Preferences: Defaults page - the initial state for new windows/files
+static const int PREFS_DEFAULTS_IDS[] = {
+    ID_PREF_DEFAULT_ENCODING, ID_PREF_DEFAULT_EOL,  ID_PREF_DEFAULT_FONT_TYPE,
+    ID_PREF_DEFAULT_ZOOM,     ID_PREF_PRINT_HEADER, ID_PREF_PRINT_FOOTER,
+};
+
 static INT_PTR CALLBACK prefs_defaults_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
         case WM_INITDIALOG: {
@@ -5492,6 +7679,7 @@ static INT_PTR CALLBACK prefs_defaults_proc(HWND page, UINT msg, WPARAM wparam, 
                 free(hdr);
                 free(ftr);
             }
+            prefs_snapshot(page, PREFS_IDS(PREFS_DEFAULTS_IDS));
             return TRUE;
         }
 
@@ -5522,50 +7710,68 @@ static INT_PTR CALLBACK prefs_defaults_proc(HWND page, UINT msg, WPARAM wparam, 
         case WM_NOTIFY: {
             const NMHDR *nmhdr = (const NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
-                LRESULT enc =
-                    SendMessageW(GetDlgItem(page, ID_PREF_DEFAULT_ENCODING), CB_GETCURSEL, 0, 0);
-                if (enc >= 0) {
-                    settings_set_int("default_encoding", (int) enc);
+                bool changed = false;
+                if (prefs_changed(page, ID_PREF_DEFAULT_ENCODING)) {
+                    LRESULT enc = SendMessageW(GetDlgItem(page, ID_PREF_DEFAULT_ENCODING),
+                                               CB_GETCURSEL, 0, 0);
+                    if (enc >= 0) {
+                        settings_set_int("default_encoding", (int) enc);
+                        changed = true;
+                    }
                 }
-                LRESULT eol =
-                    SendMessageW(GetDlgItem(page, ID_PREF_DEFAULT_EOL), CB_GETCURSEL, 0, 0);
-                if (eol >= 0) {
-                    settings_set_int("default_line_ending", (int) eol);
+                if (prefs_changed(page, ID_PREF_DEFAULT_EOL)) {
+                    LRESULT eol =
+                        SendMessageW(GetDlgItem(page, ID_PREF_DEFAULT_EOL), CB_GETCURSEL, 0, 0);
+                    if (eol >= 0) {
+                        settings_set_int("default_line_ending", (int) eol);
+                        changed = true;
+                    }
                 }
-                LRESULT font_type =
-                    SendMessageW(GetDlgItem(page, ID_PREF_DEFAULT_FONT_TYPE), CB_GETCURSEL, 0, 0);
-                if (font_type >= 0) {
-                    settings_set_bool("default_font_mono", font_type == 0);
+                if (prefs_changed(page, ID_PREF_DEFAULT_FONT_TYPE)) {
+                    LRESULT font_type = SendMessageW(GetDlgItem(page, ID_PREF_DEFAULT_FONT_TYPE),
+                                                     CB_GETCURSEL, 0, 0);
+                    if (font_type >= 0) {
+                        settings_set_bool("default_font_mono", font_type == 0);
+                        changed = true;
+                    }
                 }
 
-                BOOL ok = FALSE;
-                UINT zoom = GetDlgItemInt(page, ID_PREF_DEFAULT_ZOOM, &ok, FALSE);
-                if (ok) {
-                    if (zoom < 10)
-                        zoom = 10;
-                    if (zoom > 500)
-                        zoom = 500;
-                    settings_set_int("default_zoom", (int) zoom);
+                if (prefs_changed(page, ID_PREF_DEFAULT_ZOOM)) {
+                    BOOL ok = FALSE;
+                    UINT zoom = GetDlgItemInt(page, ID_PREF_DEFAULT_ZOOM, &ok, FALSE);
+                    if (ok) {
+                        if (zoom < 10)
+                            zoom = 10;
+                        if (zoom > 500)
+                            zoom = 500;
+                        settings_set_int("default_zoom", (int) zoom);
+                        changed = true;
+                    }
                 }
 
-                {
-                    wchar_t whdr[256] = L"", wftr[256] = L"";
+                if (prefs_changed(page, ID_PREF_PRINT_HEADER)) {
+                    wchar_t whdr[256] = L"";
                     GetDlgItemTextW(page, ID_PREF_PRINT_HEADER, whdr, 256);
-                    GetDlgItemTextW(page, ID_PREF_PRINT_FOOTER, wftr, 256);
                     char *hdr = wide_to_utf8(whdr);
-                    char *ftr = wide_to_utf8(wftr);
-                    if (hdr)
+                    if (hdr) {
                         settings_set_string("print_header", hdr);
-                    if (ftr)
-                        settings_set_string("print_footer", ftr);
+                        changed = true;
+                    }
                     free(hdr);
+                }
+                if (prefs_changed(page, ID_PREF_PRINT_FOOTER)) {
+                    wchar_t wftr[256] = L"";
+                    GetDlgItemTextW(page, ID_PREF_PRINT_FOOTER, wftr, 256);
+                    char *ftr = wide_to_utf8(wftr);
+                    if (ftr) {
+                        settings_set_string("print_footer", ftr);
+                        changed = true;
+                    }
                     free(ftr);
                 }
 
-                settings_save(); // Apply button: persist + propagate immediately
-                ui_platform_notify_settings_changed();
-
-                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                prefs_snapshot(page, PREFS_IDS(PREFS_DEFAULTS_IDS));
+                prefs_page_applied(page, changed); // Saves + broadcasts once per Apply
                 return TRUE;
             }
             break;
@@ -5596,7 +7802,7 @@ static INT_PTR CALLBACK prefs_backup_proc(HWND page, UINT msg, WPARAM wparam, LP
             const NMHDR *nmhdr = (const NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
                 // Nothing page-local to apply; export/import act immediately
-                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                prefs_page_applied(page, false);
                 return TRUE;
             }
             break;
@@ -5791,8 +7997,8 @@ static INT_PTR CALLBACK prefs_assoc_proc(HWND page, UINT msg, WPARAM wparam, LPA
                     }
                 }
 
-                assoc_page_load(page); // Re-read: the registry is the truth
-                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                assoc_page_load(page);           // Re-read: the registry is the truth
+                prefs_page_applied(page, false); // Registry, not settings.json
                 return TRUE;
             }
             break;
@@ -5800,6 +8006,8 @@ static INT_PTR CALLBACK prefs_assoc_proc(HWND page, UINT msg, WPARAM wparam, LPA
     }
     return FALSE;
 }
+
+static const int PREFS_UPDATES_IDS[] = { ID_PREF_UPD_MODE, ID_PREF_UPD_ON_LAUNCH };
 
 static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
@@ -5811,22 +8019,7 @@ static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, L
             wcur[31] = L'\0';
             SetDlgItemTextW(page, ID_PREF_UPD_CURRENT, wcur);
             g_updates_page = page;
-
-            char *latest = settings_get_string("update_latest_version", "");
-            wchar_t *wlatest = utf8_to_wide((latest && latest[0]) ? latest : "unknown");
-            if (wlatest) {
-                SetDlgItemTextW(page, ID_PREF_UPD_LATEST, wlatest);
-                free(wlatest);
-            }
-            free(latest);
-
-            char *last = settings_get_string("update_last_checked", "");
-            wchar_t *wlast = utf8_to_wide((last && last[0]) ? last : "never");
-            if (wlast) {
-                SetDlgItemTextW(page, ID_PREF_UPD_LASTCHECK, wlast);
-                free(wlast);
-            }
-            free(last);
+            prefs_updates_show_status(page);
 
             HWND combo = GetDlgItem(page, ID_PREF_UPD_MODE);
             for (int i = 0; i < UPDATE_MODE_COUNT; i++)
@@ -5847,6 +8040,7 @@ static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, L
                                                                               : BST_UNCHECKED);
             prefs_updates_sync_skip(page);
             updates_page_sync_busy(); // A download may already be running
+            prefs_snapshot(page, PREFS_IDS(PREFS_UPDATES_IDS));
             return TRUE;
         }
 
@@ -5859,7 +8053,8 @@ static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, L
                 return TRUE;
             }
             if (id == ID_PREF_UPD_CHECK) {
-                // Manual check from the prefs page (result goes to the main window)
+                // Manual check from the prefs page. The result is reported over
+                // the sheet (update_dialog_owner) and refreshes this page.
                 if (g_main_window)
                     start_update_check(g_main_window, true);
                 updates_page_sync_busy();
@@ -5871,13 +8066,7 @@ static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, L
                 char *latest = settings_get_string("update_latest_version", "");
                 if (latest && latest[0] && g_main_window) {
                     if (InterlockedCompareExchange(&g_update_busy, 1, 0) == 0) {
-                        char status[96];
-                        snprintf(status, sizeof(status), "Downloading npad %s...", latest);
-                        set_status_message(g_main_window, status);
-                        if (!spawn_update_download(g_main_window, latest)) {
-                            set_status_message(g_main_window, "Update download failed to start");
-                            InterlockedExchange(&g_update_busy, 0);
-                        }
+                        begin_update_download(g_main_window, latest);
                     } else {
                         set_status_message(g_main_window, "An update check is already running");
                     }
@@ -5896,7 +8085,7 @@ static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, L
                         apply_update_indicator(g_main_window);
                 }
                 free(latest);
-                prefs_updates_sync_skip(page);
+                updates_page_sync_busy(); // Skip / Install Now, unless a download runs
                 return TRUE;
             }
             break;
@@ -5910,16 +8099,25 @@ static INT_PTR CALLBACK prefs_updates_proc(HWND page, UINT msg, WPARAM wparam, L
         case WM_NOTIFY: {
             const NMHDR *nmhdr = (const NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
-                LRESULT sel = SendMessageW(GetDlgItem(page, ID_PREF_UPD_MODE), CB_GETCURSEL, 0, 0);
-                if (sel >= 0 && sel < UPDATE_MODE_COUNT)
-                    settings_set_string("update_mode", UPDATE_MODE_KEYS[sel]);
-                settings_set_bool("update_check_on_launch",
-                                  IsDlgButtonChecked(page, ID_PREF_UPD_ON_LAUNCH) == BST_CHECKED);
-                settings_save();
-                ui_platform_notify_settings_changed();
-                if (g_main_window)
+                bool changed = false;
+                if (prefs_changed(page, ID_PREF_UPD_MODE)) {
+                    LRESULT sel =
+                        SendMessageW(GetDlgItem(page, ID_PREF_UPD_MODE), CB_GETCURSEL, 0, 0);
+                    if (sel >= 0 && sel < UPDATE_MODE_COUNT) {
+                        settings_set_string("update_mode", UPDATE_MODE_KEYS[sel]);
+                        changed = true;
+                    }
+                }
+                if (prefs_changed(page, ID_PREF_UPD_ON_LAUNCH)) {
+                    settings_set_bool("update_check_on_launch",
+                                      IsDlgButtonChecked(page, ID_PREF_UPD_ON_LAUNCH) ==
+                                          BST_CHECKED);
+                    changed = true;
+                }
+                if (changed && g_main_window)
                     apply_update_indicator(g_main_window);
-                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                prefs_snapshot(page, PREFS_IDS(PREFS_UPDATES_IDS));
+                prefs_page_applied(page, changed); // Saves + broadcasts once per Apply
                 return TRUE;
             }
             break;
@@ -5949,6 +8147,23 @@ static void prefs_lists_sync_enables(HWND page) {
     for (int id = ID_PREF_PASTE_PRIMARY_PLAIN; id <= ID_PREF_PASTE_ALT_MD; id++)
         EnableWindow(GetDlgItem(page, id), on);
 }
+
+static const int PREFS_PASTE_PRIMARY_IDS[] = {
+    ID_PREF_PASTE_PRIMARY_PLAIN,
+    ID_PREF_PASTE_PRIMARY_LISTS,
+    ID_PREF_PASTE_PRIMARY_MD,
+};
+static const int PREFS_PASTE_ALT_IDS[] = {
+    ID_PREF_PASTE_ALT_PLAIN,
+    ID_PREF_PASTE_ALT_LISTS,
+    ID_PREF_PASTE_ALT_MD,
+};
+static const int PREFS_LISTS_IDS[] = {
+    ID_PREF_LIST_ENABLED,      ID_PREF_LIST_INDENT_FORMAT,  ID_PREF_LIST_CUSTOM_TEXT,
+    ID_PREF_LIST_TAB_BRACKETS, ID_PREF_PASTE_PRIMARY_PLAIN, ID_PREF_PASTE_PRIMARY_LISTS,
+    ID_PREF_PASTE_PRIMARY_MD,  ID_PREF_PASTE_ALT_PLAIN,     ID_PREF_PASTE_ALT_LISTS,
+    ID_PREF_PASTE_ALT_MD,
+};
 
 static INT_PTR CALLBACK prefs_lists_proc(HWND page, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
@@ -5989,6 +8204,7 @@ static INT_PTR CALLBACK prefs_lists_proc(HWND page, UINT msg, WPARAM wparam, LPA
             CheckRadioButton(page, ID_PREF_PASTE_ALT_PLAIN, ID_PREF_PASTE_ALT_MD,
                              ID_PREF_PASTE_ALT_PLAIN + alt);
             prefs_lists_sync_enables(page);
+            prefs_snapshot(page, PREFS_IDS(PREFS_LISTS_IDS));
             return TRUE;
         }
 
@@ -6007,40 +8223,61 @@ static INT_PTR CALLBACK prefs_lists_proc(HWND page, UINT msg, WPARAM wparam, LPA
         case WM_NOTIFY: {
             const NMHDR *nmhdr = (const NMHDR *) lparam;
             if (nmhdr->code == PSN_APPLY) {
-                settings_set_bool("list_tools_enabled",
-                                  IsDlgButtonChecked(page, ID_PREF_LIST_ENABLED) == BST_CHECKED);
-                LRESULT sel =
-                    SendMessageW(GetDlgItem(page, ID_PREF_LIST_INDENT_FORMAT), CB_GETCURSEL, 0, 0);
-                if (sel >= 0)
-                    settings_set_int("list_default_indent_format", (int) sel);
-                wchar_t wide_custom[128];
-                GetDlgItemTextW(page, ID_PREF_LIST_CUSTOM_TEXT, wide_custom, 128);
-                char *custom = wide_to_utf8(wide_custom);
-                if (custom) {
-                    // Stored raw (as typed); unescaped at point of use
-                    settings_set_string("list_custom_indent", custom);
-                    free(custom);
+                bool changed = false;
+                if (prefs_changed(page, ID_PREF_LIST_ENABLED)) {
+                    settings_set_bool("list_tools_enabled",
+                                      IsDlgButtonChecked(page, ID_PREF_LIST_ENABLED) ==
+                                          BST_CHECKED);
+                    changed = true;
                 }
-                settings_set_bool("list_indent_shortcut_brackets",
-                                  IsDlgButtonChecked(page, ID_PREF_LIST_TAB_BRACKETS) ==
-                                      BST_CHECKED);
-                int prim = IsDlgButtonChecked(page, ID_PREF_PASTE_PRIMARY_LISTS) == BST_CHECKED ? 1
-                           : IsDlgButtonChecked(page, ID_PREF_PASTE_PRIMARY_MD) == BST_CHECKED  ? 2
-                                                                                                : 0;
-                settings_set_int("markdown_paste_primary", prim);
-                int alt = IsDlgButtonChecked(page, ID_PREF_PASTE_ALT_LISTS) == BST_CHECKED ? 1
-                          : IsDlgButtonChecked(page, ID_PREF_PASTE_ALT_MD) == BST_CHECKED  ? 2
-                                                                                           : 0;
-                settings_set_int("markdown_paste_alt", alt);
-                settings_save();
+                if (prefs_changed(page, ID_PREF_LIST_INDENT_FORMAT)) {
+                    LRESULT sel = SendMessageW(GetDlgItem(page, ID_PREF_LIST_INDENT_FORMAT),
+                                               CB_GETCURSEL, 0, 0);
+                    if (sel >= 0) {
+                        settings_set_int("list_default_indent_format", (int) sel);
+                        changed = true;
+                    }
+                }
+                if (prefs_changed(page, ID_PREF_LIST_CUSTOM_TEXT)) {
+                    wchar_t wide_custom[128];
+                    GetDlgItemTextW(page, ID_PREF_LIST_CUSTOM_TEXT, wide_custom, 128);
+                    char *custom = wide_to_utf8(wide_custom);
+                    if (custom) {
+                        // Stored raw (as typed); unescaped at point of use
+                        settings_set_string("list_custom_indent", custom);
+                        free(custom);
+                        changed = true;
+                    }
+                }
+                if (prefs_changed(page, ID_PREF_LIST_TAB_BRACKETS)) {
+                    settings_set_bool("list_indent_shortcut_brackets",
+                                      IsDlgButtonChecked(page, ID_PREF_LIST_TAB_BRACKETS) ==
+                                          BST_CHECKED);
+                    changed = true;
+                }
+                if (prefs_any_changed(page, PREFS_IDS(PREFS_PASTE_PRIMARY_IDS))) {
+                    int prim =
+                        IsDlgButtonChecked(page, ID_PREF_PASTE_PRIMARY_LISTS) == BST_CHECKED ? 1
+                        : IsDlgButtonChecked(page, ID_PREF_PASTE_PRIMARY_MD) == BST_CHECKED  ? 2
+                                                                                             : 0;
+                    settings_set_int("markdown_paste_primary", prim);
+                    changed = true;
+                }
+                if (prefs_any_changed(page, PREFS_IDS(PREFS_PASTE_ALT_IDS))) {
+                    int alt = IsDlgButtonChecked(page, ID_PREF_PASTE_ALT_LISTS) == BST_CHECKED ? 1
+                              : IsDlgButtonChecked(page, ID_PREF_PASTE_ALT_MD) == BST_CHECKED  ? 2
+                                                                                               : 0;
+                    settings_set_int("markdown_paste_alt", alt);
+                    changed = true;
+                }
                 // Apply the enable toggle to this window right away (menu +
-                // indent accelerators), then propagate to other instances
-                if (g_main_window) {
+                // indent accelerators); the other instances follow the broadcast
+                if (changed && g_main_window) {
                     apply_list_tools_menu(g_main_window);
                     build_accelerators(g_main_window);
                 }
-                ui_platform_notify_settings_changed();
-                SetWindowLongPtrW(page, DWLP_MSGRESULT, PSNRET_NOERROR);
+                prefs_snapshot(page, PREFS_IDS(PREFS_LISTS_IDS));
+                prefs_page_applied(page, changed); // Saves + broadcasts once per Apply
                 return TRUE;
             }
             break;
@@ -6121,33 +8358,61 @@ static void show_preferences_dialog(const Window *window, int start_page, bool s
     psh.nStartPage = (start_page >= 0) ? (UINT) start_page : (show_debug ? 8 : 0);
     psh.ppsp = pages;
 
+    // Apply and OK save and broadcast once per press, only when something
+    // changed (prefs_page_applied). Closing the sheet adds nothing: it used
+    // to save and broadcast again, even on Cancel, making every other window
+    // reload for nothing.
+    prefs_session_reset();
     PropertySheetW(&psh);
-
-    // Persist all applied preference changes to disk immediately, so they
-    // survive even if this run is later killed without a clean exit
-    settings_save();
-
-    // Let other running instances pick up the change live
-    ui_platform_notify_settings_changed();
+    // A broadcast deferred by a round that never committed (Cancel after a
+    // failed save or a refused page) is applied now: what is on disk wins
+    bool reload = g_prefs_txn.reload_pending;
+    prefs_session_reset();
+    if (reload && g_main_window)
+        reload_and_apply_settings(g_main_window);
 }
 
-// Go To Line dialog (resource-based, truly modal)
+// Go To Line dialog (resource-based, truly modal). Like notepad.exe it opens
+// on the caret's line, and a number past the end (or 0) is reported without
+// closing, so it can be corrected in place. lparam is the Window.
 static INT_PTR CALLBACK goto_proc(HWND dialog, UINT msg, WPARAM wparam, LPARAM lparam) {
-    (void) lparam;
     switch (msg) {
-        case WM_INITDIALOG:
+        case WM_INITDIALOG: {
+            Window *window = (Window *) lparam;
+            SetWindowLongPtrW(dialog, DWLP_USER, (LONG_PTR) window);
             position_dialog_on_owner(dialog);
-            SetDlgItemInt(dialog, ID_GOTO_EDIT, 1, FALSE);
+            int line = 1, column = 1;
+            ui_platform_get_cursor_line_column(window, &line, &column);
+            SetDlgItemInt(dialog, ID_GOTO_EDIT, (UINT) (line > 0 ? line : 1), FALSE);
             SendDlgItemMessageW(dialog, ID_GOTO_EDIT, EM_SETSEL, 0, -1);
             SetFocus(GetDlgItem(dialog, ID_GOTO_EDIT));
             return FALSE;
+        }
 
         case WM_COMMAND:
             switch (LOWORD(wparam)) {
                 case IDOK: {
-                    BOOL ok = FALSE;
-                    UINT line = GetDlgItemInt(dialog, ID_GOTO_EDIT, &ok, FALSE);
-                    EndDialog(dialog, ok ? (INT_PTR) line : 0);
+                    Window *window = (Window *) GetWindowLongPtrW(dialog, DWLP_USER);
+                    // Read as text: GetDlgItemInt accepts up to UINT_MAX, and
+                    // a line above INT_MAX wrapped negative and went to the top
+                    wchar_t wide[32];
+                    wide[0] = L'\0';
+                    GetDlgItemTextW(dialog, ID_GOTO_EDIT, wide, 32);
+                    char text[32];
+                    int n = 0;
+                    for (const wchar_t *p = wide; *p && n < 31; p++)
+                        text[n++] = (*p < 128) ? (char) *p : '?';
+                    text[n] = '\0';
+                    int line = 0;
+                    if (ui_goto_line_parse(text, ui_platform_get_line_count(window), &line) ==
+                        GOTO_LINE_OK) {
+                        EndDialog(dialog, (INT_PTR) line);
+                        return TRUE;
+                    }
+                    MessageBoxW(dialog, L"The line number is beyond the total number of lines",
+                                L"npad - Go To Line", MB_OK);
+                    SendDlgItemMessageW(dialog, ID_GOTO_EDIT, EM_SETSEL, 0, -1);
+                    SetFocus(GetDlgItem(dialog, ID_GOTO_EDIT));
                     return TRUE;
                 }
                 case IDCANCEL:
@@ -6167,9 +8432,10 @@ static void show_goto_dialog(Window *window) {
     if (!window || !window->edit_hwnd)
         return;
 
-    INT_PTR line =
-        DialogBoxParamW(g_hinstance, MAKEINTRESOURCEW(IDD_GOTO), window->hwnd, goto_proc, 0);
-    if (line <= 0)
+    // The dialog only returns a line that exists (1..line count, so <= INT_MAX)
+    INT_PTR line = DialogBoxParamW(g_hinstance, MAKEINTRESOURCEW(IDD_GOTO), window->hwnd, goto_proc,
+                                   (LPARAM) window);
+    if (line <= 0 || line > INT_MAX)
         return;
 
     // Logical lines, so the number matches what Ln shows and what the file
@@ -6248,11 +8514,8 @@ static bool show_custom_indent_dialog(Window *window) {
                            custom_indent_proc, 0) == 1;
 }
 
-// Insert the current time and date at the caret, like Notepad's F5
-static void insert_time_date(Window *window) {
-    if (!window || !window->edit_hwnd)
-        return;
-
+// Notepad's F5 stamp: the locale's short time (no seconds), then short date
+static void format_time_date(wchar_t *out, size_t count) {
     SYSTEMTIME st;
     GetLocalTime(&st);
 
@@ -6261,11 +8524,42 @@ static void insert_time_date(Window *window) {
     GetTimeFormatW(LOCALE_USER_DEFAULT, TIME_NOSECONDS, &st, NULL, time_str, 64);
     GetDateFormatW(LOCALE_USER_DEFAULT, DATE_SHORTDATE, &st, NULL, date_str, 64);
 
-    wchar_t combined[132];
-    _snwprintf(combined, 131, L"%s %s", time_str, date_str);
-    combined[131] = L'\0';
+    _snwprintf(out, count - 1, L"%ls %ls", time_str, date_str);
+    out[count - 1] = L'\0';
+}
 
-    SendMessageW(window->edit_hwnd, EM_REPLACESEL, TRUE, (LPARAM) combined);
+// Insert the current time and date at the caret, like Notepad's F5
+static void insert_time_date(Window *window) {
+    if (!window || !window->edit_hwnd)
+        return;
+    wchar_t combined[132];
+    format_time_date(combined, 132);
+    replace_sel_one_step(window->edit_hwnd, combined);
+}
+
+// A .LOG file just opened: stamp a new line at the end, as Notepad does. An
+// ordinary replace-selection edit, so it is undoable and EN_CHANGE marks the
+// document modified, and its own undo step, so Ctrl+Z after typing the entry
+// does not take the stamp with it.
+void ui_platform_append_time_date_line(Window *window) {
+    if (!window || !window->edit_hwnd)
+        return;
+    wchar_t stamp[132];
+    format_time_date(stamp, 132);
+    wchar_t line[140];
+    _snwprintf(line, 139, L"\r\n%ls\r\n", stamp);
+    line[139] = L'\0';
+
+    LONG end = edit_text_cp_length(window->edit_hwnd);
+    CHARRANGE at = { end, end };
+    SendMessageW(window->edit_hwnd, EM_EXSETSEL, 0, (LPARAM) &at);
+    replace_sel_one_step(window->edit_hwnd, line);
+    SendMessageW(window->edit_hwnd, EM_SCROLLCARET, 0, 0);
+    update_status_bar(window);
+}
+
+void ui_platform_set_status_message(Window *window, const char *message) {
+    set_status_message(window, message);
 }
 
 // (Re)build the accelerator table. The Ctrl+N / Ctrl+Shift+N pair maps to
@@ -6298,7 +8592,10 @@ static void build_accelerators(Window *window) {
                       { FCONTROL | FVIRTKEY, 'M', ID_FORMAT_MONOSPACE },
                       { FCONTROL | FVIRTKEY, 'P', ID_FILE_PRINT },
                       { FCONTROL | FSHIFT | FVIRTKEY, 'P', ID_FILE_PRINT_PREVIEW },
-                      { FCONTROL | FVIRTKEY, 'E', ID_FORMAT_EOL_CYCLE },
+                      // No Ctrl+E: it cycled the line ending, a file-changing
+                      // action undo cannot reverse, on the key Windows 10
+                      // Notepad gives to Search with Bing. Format > Line
+                      // Ending and the status bar still change it.
                       { FCONTROL | FVIRTKEY, VK_OEM_COMMA, ID_FILE_PREFERENCES },
                       // Hidden: Preferences opened on the Debug diagnostics page
                       { FCONTROL | FSHIFT | FVIRTKEY, VK_OEM_PERIOD, ID_FILE_PREFERENCES_DEBUG },
@@ -6366,9 +8663,9 @@ static void spawn_self(const wchar_t *extra) {
     // CreateProcess may modify the command line buffer, so pass a copy
     wchar_t cmdline[1024];
     if (extra && extra[0]) {
-        _snwprintf(cmdline, 1023, L"\"%s\" %s", path, extra);
+        _snwprintf(cmdline, 1023, L"\"%ls\" %ls", path, extra);
     } else {
-        _snwprintf(cmdline, 1023, L"\"%s\"", path);
+        _snwprintf(cmdline, 1023, L"\"%ls\"", path);
     }
     cmdline[1023] = L'\0';
 
@@ -6415,7 +8712,7 @@ void ui_platform_launch_recovery_instance(const char *slot_id, int cascade_index
     if (!wslot)
         return;
     wchar_t extra[160];
-    _snwprintf(extra, 159, L"--recover %s --cascade %d", wslot, cascade_index);
+    _snwprintf(extra, 159, L"--recover %ls --cascade %d", wslot, cascade_index);
     extra[159] = L'\0';
     free(wslot);
     spawn_self(extra);
@@ -6508,7 +8805,43 @@ void ui_platform_notify_settings_changed(void) {
     }
 }
 
-bool ui_platform_pid_is_running(long pid) {
+typedef struct {
+    DWORD pid;
+    bool found;
+} NpadPidWindowQuery;
+
+static BOOL CALLBACK pid_window_enum_proc(HWND hwnd, LPARAM lparam) {
+    NpadPidWindowQuery *q = (NpadPidWindowQuery *) lparam;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == q->pid) {
+        wchar_t cls[64];
+        if (GetClassNameW(hwnd, cls, 64) && wcscmp(cls, NPAD_WINDOW_CLASS) == 0) {
+            q->found = true;
+            return FALSE; // Found: stop enumerating
+        }
+    }
+    return TRUE;
+}
+
+static const wchar_t *image_basename(const wchar_t *image) {
+    const wchar_t *base = wcsrchr(image, L'\\');
+    return base ? base + 1 : image;
+}
+
+// Whether pid is a running npad - the owner of a live session slot, which
+// must not be offered as a crash leftover. Guards against pid reuse by
+// checking the process is npad, which used to mean "its exe is called
+// npad.exe": the portable download (npad-v0.36.0-portable-win-x64.exe) or any
+// renamed copy then saw every other live window's slot as a crash, offered to
+// restore it (a second window bound to the same file) or deleted it. Now a
+// process is npad when it owns an npad document window, or when its exe is
+// any npad*.exe (the portable download, npad-arm64.exe) or has the same name
+// as this one - the latter for a session on another desktop, where windows
+// cannot be enumerated.
+bool ui_platform_pid_is_running(long pid, long long *start_time) {
+    if (start_time)
+        *start_time = -1;
     if (pid <= 0)
         return false;
 
@@ -6520,13 +8853,32 @@ bool ui_platform_pid_is_running(long pid) {
     bool running = false;
     DWORD exit_code = 0;
     if (GetExitCodeProcess(proc, &exit_code) && exit_code == STILL_ACTIVE) {
-        // Confirm it is actually npad.exe, guarding against pid reuse
-        wchar_t image[MAX_PATH];
-        DWORD size = MAX_PATH;
-        if (QueryFullProcessImageNameW(proc, 0, image, &size)) {
-            const wchar_t *base = wcsrchr(image, L'\\');
-            base = base ? base + 1 : image;
-            running = (_wcsicmp(base, L"npad.exe") == 0);
+        NpadPidWindowQuery q = { (DWORD) pid, false };
+        EnumWindows(pid_window_enum_proc, (LPARAM) &q);
+        running = q.found;
+        if (!running) {
+            wchar_t image[MAX_PATH], self[MAX_PATH];
+            DWORD size = MAX_PATH;
+            DWORD self_len = GetModuleFileNameW(NULL, self, MAX_PATH);
+            if (QueryFullProcessImageNameW(proc, 0, image, &size)) {
+                const wchar_t *base = image_basename(image);
+                size_t len = wcslen(base);
+                bool npad_named = _wcsnicmp(base, L"npad", 4) == 0 && len >= 8 &&
+                                  _wcsicmp(base + len - 4, L".exe") == 0;
+                running = npad_named || (self_len > 0 && self_len < MAX_PATH &&
+                                         _wcsicmp(base, image_basename(self)) == 0);
+            }
+        }
+        // A recycled pid can also land on another npad, so report when this
+        // one started for the caller to compare with the slot's own time
+        FILETIME created, exited, kernel, user;
+        if (running && start_time && GetProcessTimes(proc, &created, &exited, &kernel, &user)) {
+            unsigned long long ticks = ((unsigned long long) created.dwHighDateTime << 32) |
+                                       (unsigned long long) created.dwLowDateTime;
+            // FILETIME counts 100 ns ticks from 1601; Unix time starts 1970
+            const unsigned long long epoch_offset = 116444736000000000ULL;
+            if (ticks > epoch_offset)
+                *start_time = (long long) ((ticks - epoch_offset) / 10000000ULL);
         }
     }
     CloseHandle(proc);
@@ -6663,7 +9015,7 @@ static void list_replace(const Window *window, LONG cpMin, LONG cpMax, const cha
 
     CHARRANGE target = { cpMin, cpMax };
     SendMessageW(e, EM_EXSETSEL, 0, (LPARAM) &target);
-    SendMessageW(e, EM_REPLACESEL, TRUE, (LPARAM) wide); // TRUE = single undo unit
+    replace_sel_one_step(e, wide);
     free(wide);
 
     CHARRANGE after = { 0, 0 };
@@ -6748,8 +9100,11 @@ static void list_indent_default(Window *window, bool unindent) {
 }
 
 // Append the Markdown-tool items into an existing menu (used by both the
-// Markdown menu-bar popup and the right-click context menu).
-static void populate_list_menu(HMENU menu) {
+// Markdown menu-bar popup and the right-click context menu). context selects
+// alternative mnemonics for the four items whose usual letter is already taken
+// by the context menu's own Undo, Cut, Paste and Delete - the same labels GTK
+// uses, so the right-click menu has no duplicate access keys on either platform.
+static void populate_list_menu(HMENU menu, bool context) {
     // The indent/unindent shortcut labels track the active binding
     bool brackets = settings_get_bool("list_indent_shortcut_brackets", false);
 
@@ -6763,7 +9118,8 @@ static void populate_list_menu(HMENU menu) {
     AppendMenuW(menu, MF_STRING | MF_POPUP, (UINT_PTR) sort, L"&Sort");
     AppendMenuW(menu, MF_STRING, ID_LIST_UNIQUE, L"Uni&que");
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(menu, MF_STRING, ID_LIST_CONVERT_DELIM, L"Convert &Delimiters...");
+    AppendMenuW(menu, MF_STRING, ID_LIST_CONVERT_DELIM,
+                context ? L"Convert De&limiters..." : L"Convert &Delimiters...");
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
 
     HMENU indent = CreatePopupMenu();
@@ -6777,13 +9133,15 @@ static void populate_list_menu(HMENU menu) {
     AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 4, L"Asterisk, &leading space (\" * \")");
     AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 5, L"Hyphen, l&eading space (\" - \")");
     AppendMenuW(indent, MF_STRING, ID_LIST_INDENT_BASE + 6, L"&Custom...");
-    AppendMenuW(menu, MF_STRING | MF_POPUP, (UINT_PTR) indent, L"Inden&t");
-    AppendMenuW(menu, MF_STRING, ID_LIST_UNINDENT,
-                brackets ? L"&Unindent\tCtrl+[" : L"&Unindent\tShift+Tab");
+    AppendMenuW(menu, MF_STRING | MF_POPUP, (UINT_PTR) indent, context ? L"I&ndent" : L"Inden&t");
+    const wchar_t *unindent = context ? (brackets ? L"Un&indent\tCtrl+[" : L"Un&indent\tShift+Tab")
+                                      : (brackets ? L"&Unindent\tCtrl+[" : L"&Unindent\tShift+Tab");
+    AppendMenuW(menu, MF_STRING, ID_LIST_UNINDENT, unindent);
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
     // Rich-text paste, fully converted to markdown (Ctrl+V / Ctrl+Shift+V modes
     // are configurable in Preferences; this item is always a full conversion)
-    AppendMenuW(menu, MF_STRING, ID_EDIT_PASTE_MARKDOWN, L"&Paste as Markdown");
+    AppendMenuW(menu, MF_STRING, ID_EDIT_PASTE_MARKDOWN,
+                context ? L"Paste as &Markdown" : L"&Paste as Markdown");
 }
 
 // Redrawing the menu bar twice in a row flashes it. A settings broadcast
@@ -6814,7 +9172,7 @@ static void apply_list_tools_menu(Window *window) {
     }
     if (enabled) {
         HMENU list = CreatePopupMenu();
-        populate_list_menu(list);
+        populate_list_menu(list, false);
         InsertMenuW(window->hmenu, 3, MF_BYPOSITION | MF_POPUP | MF_STRING, (UINT_PTR) list,
                     L"&Markdown");
         window->list_menu_present = true;
@@ -6970,7 +9328,7 @@ static void apply_update_indicator(Window *window) {
     if (avail) {
         wchar_t *wlatest = utf8_to_wide((latest && latest[0]) ? latest : "new version");
         wchar_t label[96];
-        _snwprintf(label, 95, L"&Update Available (%s)...", wlatest ? wlatest : L"new version");
+        _snwprintf(label, 95, L"&Update Available (%ls)...", wlatest ? wlatest : L"new version");
         label[95] = L'\0';
         free(wlatest);
         ModifyMenuW(window->hmenu, old_cmd, MF_BYCOMMAND | MF_STRING, ID_HELP_UPDATE_AVAILABLE,
@@ -6995,8 +9353,25 @@ typedef struct {
     wchar_t *path; // NULL for an unsaved document
     const wchar_t *name;
     wchar_t *face; // NULL falls back to the print module's default
-    int point_size;
+    PrintFont font;
 } PrintContext;
+
+// The font a window of the given font type shows - face, size, weight and
+// italic - which is what gets printed. face is allocated; the caller frees it.
+static void print_font_for(bool monospace, PrintFont *font, wchar_t **face) {
+    const char *default_face = DEFAULT_MONO_FONT;
+    const char *key = font_key_for(monospace, &default_face);
+    char *face_utf8 = settings_get_string(key, default_face);
+    *face = face_utf8 ? utf8_to_wide(face_utf8) : NULL;
+    free(face_utf8);
+    font->face = *face;
+    // Tenths of a point, clamped as the editor clamps them; printing takes
+    // whole points, so a half-point size rounds up
+    font->point_size = ui_font_size_tenths_to_points(ui_font_size_setting_tenths());
+    // Bold and italic too: GTK always printed them, Win32 dropped them
+    font->weight = settings_get_int("font_weight", FW_NORMAL);
+    font->italic = settings_get_bool("font_italic", false);
+}
 
 static bool print_context_build(Window *window, PrintContext *pc) {
     ZeroMemory(pc, sizeof(*pc));
@@ -7013,12 +9388,7 @@ static bool print_context_build(Window *window, PrintContext *pc) {
     pc->name = pc->path ? path_basename(pc->path) : L"Untitled";
 
     // Use the font this window is showing, not a fixed default
-    const char *default_face = DEFAULT_MONO_FONT;
-    const char *key = active_font_key(window, &default_face);
-    char *face_utf8 = settings_get_string(key, default_face);
-    pc->face = face_utf8 ? utf8_to_wide(face_utf8) : NULL;
-    free(face_utf8);
-    pc->point_size = settings_get_int("font_size", 11);
+    print_font_for(!window || window->monospace_current, &pc->font, &pc->face);
     return true;
 }
 
@@ -7026,6 +9396,86 @@ static void print_context_free(PrintContext *pc) {
     free(pc->text);
     free(pc->path);
     free(pc->face);
+}
+
+static void print_file_message(const wchar_t *text) {
+    MessageBoxW(NULL, text, L"npad", MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+}
+
+// npad /p FILE, as notepad.exe /p: print the file to the default printer with
+// no print dialog, then exit. No document window is created and no editor
+// state is touched - no recovery snapshot, no recent-files entry, no settings
+// written. The progress window (with Cancel) is the only UI, plus a message
+// if the file cannot be read or there is no printer.
+static int print_file_run(const char *path) {
+    g_hinstance = GetModuleHandleW(NULL);
+    INITCOMMONCONTROLSEX icex;
+    icex.dwSize = sizeof(icex);
+    icex.dwICC = ICC_STANDARD_CLASSES;
+    InitCommonControlsEx(&icex);
+    load_dpi_functions();
+    init_dark_mode_support();
+    print_set_window_hook(print_theme_window);
+
+    if (!path || !path[0]) {
+        print_file_message(L"No file was given to print.\n\nUsage: npad /p <file>");
+        return 1;
+    }
+
+    TextFileInfo info;
+    char *content = file_read_text_ex(path, &info);
+    if (!content) {
+        char message[600];
+        snprintf(message, sizeof(message), "Could not open %.300s:\n%.200s", path,
+                 file_get_last_error());
+        wchar_t *wide = utf8_to_wide(message);
+        print_file_message(wide ? wide : L"The file could not be opened.");
+        free(wide);
+        return 1;
+    }
+    wchar_t *text = utf8_to_wide(content);
+    free(content);
+    wchar_t *wpath = utf8_to_wide(path);
+    if (!text) {
+        free(wpath);
+        print_file_message(L"There is not enough memory to print this file.");
+        return 1;
+    }
+
+    // The font a new window would open with: the Defaults font type
+    bool mono =
+        settings_get_bool("default_font_mono", settings_get_bool("monospace_enabled", true));
+    PrintFont font;
+    wchar_t *face = NULL;
+    print_font_for(mono, &font, &face);
+
+    PrintResult result =
+        print_document_default(text, wpath ? path_basename(wpath) : L"Untitled", &font);
+    if (result == PRINT_RESULT_NO_PRINTER)
+        print_file_message(L"There is no default printer to print to.\n\n"
+                           L"Add a printer, or choose a default one, in Windows Settings.");
+    else if (result == PRINT_RESULT_FAILED)
+        print_file_message(L"The document could not be printed.");
+
+    free(face);
+    free(wpath);
+    free(text);
+    // 0 printed, 2 cancelled by the user, 1 anything else
+    if (result == PRINT_RESULT_PRINTED)
+        return 0;
+    return result == PRINT_RESULT_CANCELLED ? 2 : 1;
+}
+
+int ui_platform_print_file(const char *path) {
+    // The STA ui_platform_init sets up for the shell dialogs. A printer
+    // driver's own UI runs in this process from inside StartDoc - Microsoft
+    // Print to PDF and the FILE: port ask for a file name there - and may
+    // count on it, as the normal print path always has it
+    HRESULT com = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    int code = print_file_run(path);
+    if (SUCCEEDED(com)) // S_FALSE too: every successful call is balanced
+        CoUninitialize();
+    return code;
 }
 
 // ---------------------------------------------------------------------------
@@ -7068,7 +9518,7 @@ typedef struct {
     wchar_t *text;  // The snapshot this preview was built from
     wchar_t *title; //
     wchar_t face[LF_FACESIZE];
-    int point_size;
+    PrintFont print_font; // Its face points at the buffer above
 
     int page;  // 1-based, leftmost visible
     int pages; // Total
@@ -7078,7 +9528,10 @@ typedef struct {
     int max_scroll_x, max_scroll_y;
     int band_h;
     UINT dpi;
+    int wheel_accum; // Wheel delta not yet worth a page flip
 
+    bool themed; // The colours below are for `dark`
+    bool dark;
     COLORREF backdrop;
     COLORREF shadow;
     COLORREF border;
@@ -7242,8 +9695,17 @@ static void preview_refresh(PreviewWindow *pv) {
     InvalidateRect(pv->hwnd, NULL, FALSE);
 }
 
+// Also run on every "ImmersiveColorSet" (theme or accent change, possibly one
+// per wallpaper slide), so it repaints only when the colours actually change
 static void preview_apply_theme(PreviewWindow *pv) {
     bool dark = theme_colors(NULL, NULL);
+    // The icon follows Windows' own theme in the "system" icon mode, which can
+    // change without the scheme's dark flag changing
+    apply_window_icon_hwnd(pv->hwnd);
+    if (pv->themed && pv->dark == dark)
+        return;
+    pv->themed = true;
+    pv->dark = dark;
     // The paper is always white - it is paper. Only the backdrop follows npad.
     pv->backdrop = dark ? RGB(24, 24, 24) : RGB(0x80, 0x80, 0x80);
     pv->shadow = dark ? RGB(0, 0, 0) : RGB(0x50, 0x50, 0x50);
@@ -7253,7 +9715,6 @@ static void preview_apply_theme(PreviewWindow *pv) {
     // are two full-height white bars against a near-black canvas - exactly
     // what the editor's gutter needed fixing for
     apply_scroll_bar_theme(pv->hwnd, dark);
-    apply_window_icon_hwnd(pv->hwnd);
     InvalidateRect(pv->hwnd, NULL, TRUE);
 }
 
@@ -7410,8 +9871,7 @@ static void preview_scroll_by(PreviewWindow *pv, int dx, int dy) {
 // font. The document snapshot itself never changes: the owner is disabled
 // while the preview is open, so it cannot be edited underneath.
 static void preview_rebuild(PreviewWindow *pv) {
-    PrintLayout *rebuilt =
-        print_layout_create(pv->text, pv->title, pv->face[0] ? pv->face : NULL, pv->point_size);
+    PrintLayout *rebuilt = print_layout_create(pv->text, pv->title, &pv->print_font);
     if (!rebuilt)
         return;
     print_layout_free(pv->layout);
@@ -7554,11 +10014,19 @@ static LRESULT CALLBACK preview_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
                 return 0;
             int delta = GET_WHEEL_DELTA_WPARAM(wparam);
             if (pv->max_scroll_y > 0) {
+                pv->wheel_accum = 0;
                 preview_scroll_by(pv, 0, -MulDiv(delta, MulDiv(48, pv->dpi, 96), WHEEL_DELTA));
-            } else if (delta < 0) {
-                SendMessageW(hwnd, WM_COMMAND, PV_ID_NEXT, 0);
-            } else if (delta > 0) {
-                SendMessageW(hwnd, WM_COMMAND, PV_ID_PREV, 0);
+                return 0;
+            }
+            // The whole page is in view, so the wheel turns pages. One page
+            // per notch's worth of delta: a touchpad sends a stream of small
+            // deltas, and flipping on each one skipped many pages per swipe.
+            int pages = print_wheel_pages(&pv->wheel_accum, delta);
+            int step = pv->two_up ? 2 : 1;
+            if (pages != 0) {
+                pv->page += pages * step;
+                pv->scroll_y = 0;
+                preview_refresh(pv);
             }
             return 0;
         }
@@ -7608,8 +10076,7 @@ static LRESULT CALLBACK preview_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
                     // is owned by the PREVIEW, so it is reachable regardless -
                     // and enabling the document here would let it be closed,
                     // freeing this structure, while we are still on the stack.
-                    PrintResult result = print_document(
-                        hwnd, pv->text, pv->title, pv->face[0] ? pv->face : NULL, pv->point_size);
+                    PrintResult result = print_document(hwnd, pv->text, pv->title, &pv->print_font);
                     if (result == PRINT_RESULT_FAILED) {
                         MessageBoxW(hwnd, L"The document could not be printed.", L"npad",
                                     MB_OK | MB_ICONWARNING);
@@ -7623,8 +10090,7 @@ static LRESULT CALLBACK preview_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
                     return 0;
                 }
                 case PV_ID_PAGE_SETUP:
-                    print_show_page_setup(hwnd);
-                    ui_platform_notify_settings_changed();
+                    print_show_page_setup(hwnd); // Saves and broadcasts an OK
                     preview_rebuild(pv);
                     SetFocus(hwnd);
                     return 0;
@@ -7670,6 +10136,22 @@ static LRESULT CALLBACK preview_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
                 case IDCANCEL:
                     preview_destroy(pv);
                     return 0;
+                case IDOK: {
+                    // Enter on a focused toolbar button. The preview is not a
+                    // dialog, so the dialog manager never made the focused
+                    // button the default one: it reports Enter as IDOK and
+                    // nothing pressed the button. Press it here.
+                    HWND focus = GetFocus();
+                    if (focus && IsChild(hwnd, focus) && IsWindowEnabled(focus)) {
+                        for (int i = 0; i < PV_BUTTON_COUNT; i++) {
+                            if (pv->button[i] == focus) {
+                                SendMessageW(focus, BM_CLICK, 0, 0);
+                                break;
+                            }
+                        }
+                    }
+                    return 0;
+                }
                 default:
                     break;
             }
@@ -7702,15 +10184,20 @@ static LRESULT CALLBACK preview_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
                     SetActiveWindow(pv->owner);
                 if (pv->haccel)
                     DestroyAcceleratorTable(pv->haccel);
+                // An update prompt held back while this preview was open
+                // follows now (only posts; the handler checks again)
+                bool was_active = (g_preview == pv);
                 if (pv->font)
                     DeleteObject(pv->font);
                 print_layout_free(pv->layout);
                 free(pv->text);
                 free(pv->title);
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                if (g_preview == pv)
+                if (was_active)
                     g_preview = NULL;
                 free(pv);
+                if (was_active)
+                    print_flush_deferred();
             }
             return 0;
 
@@ -7746,7 +10233,7 @@ static bool register_preview_class(void) {
 }
 
 static void show_print_preview(Window *owner, const wchar_t *text, const wchar_t *title,
-                               const wchar_t *face, int point_size) {
+                               const PrintFont *font) {
     if (!owner || !owner->hwnd)
         return;
     if (g_preview) {
@@ -7769,15 +10256,18 @@ static void show_print_preview(Window *owner, const wchar_t *text, const wchar_t
     pv->owner = owner->hwnd;
     pv->text = preview_wcsdup(text);
     pv->title = preview_wcsdup(title ? title : L"Untitled");
-    if (face)
-        wcsncpy(pv->face, face, LF_FACESIZE - 1);
-    pv->point_size = point_size;
+    if (font) {
+        pv->print_font = *font;
+        if (font->face)
+            wcsncpy(pv->face, font->face, LF_FACESIZE - 1);
+    }
+    pv->print_font.face = pv->face[0] ? pv->face : NULL;
     pv->page = 1;
     pv->zoom_pct = 0; // Fit
     pv->dpi = get_window_dpi(owner->hwnd);
 
     pv->layout =
-        (pv->text && pv->title) ? print_layout_create(pv->text, pv->title, face, point_size) : NULL;
+        (pv->text && pv->title) ? print_layout_create(pv->text, pv->title, &pv->print_font) : NULL;
     if (old_cursor)
         SetCursor(old_cursor);
 
@@ -7793,8 +10283,11 @@ static void show_print_preview(Window *owner, const wchar_t *text, const wchar_t
     if (pv->pages < 1)
         pv->pages = 1;
 
+    // On the document's monitor, not the primary one: the preview disables
+    // the document, and opening on another screen left the user looking at a
+    // window that would not respond
     int x = 0, y = 0, w = 800, h = 600;
-    ui_platform_get_default_window_rect(&x, &y, &w, &h);
+    default_rect_on_monitor_of(owner->hwnd, &x, &y, &w, &h);
 
     pv->hwnd = CreateWindowExW(0, NPAD_PREVIEW_CLASS, L"Print Preview - npad",
                                WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_HSCROLL | WS_VSCROLL, x,
@@ -7809,8 +10302,8 @@ static void show_print_preview(Window *owner, const wchar_t *text, const wchar_t
         return;
     }
 
-    // The window is placed from the primary monitor's work area, so re-read
-    // the DPI from where it actually landed rather than from the owner
+    // Re-read the DPI from where the window actually landed rather than
+    // trusting the owner's
     pv->dpi = get_window_dpi(pv->hwnd);
 
     for (int i = 0; i < PV_BUTTON_COUNT; i++) {
@@ -7822,12 +10315,31 @@ static void show_print_preview(Window *owner, const wchar_t *text, const wchar_t
         CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP, 0, 0, 10, 10,
                         pv->hwnd, (HMENU) (INT_PTR) PV_ID_INDICATOR, g_hinstance, NULL);
 
+    // The same keys as the GTK preview: each works bare and with Ctrl, and
+    // "+" works typed (Shift+=) as well as on the "=" key and the keypad. A
+    // virtual-key accelerator matches only its exact Ctrl/Shift state, so
+    // every combination needs its own entry.
     ACCEL accel[] = {
-        { FVIRTKEY, VK_ESCAPE, PV_ID_CLOSE },       { FVIRTKEY, VK_PRIOR, PV_ID_PREV },
-        { FVIRTKEY, VK_NEXT, PV_ID_NEXT },          { FVIRTKEY, VK_HOME, PV_ID_FIRST },
-        { FVIRTKEY, VK_END, PV_ID_LAST },           { FCONTROL | FVIRTKEY, 'P', PV_ID_PRINT },
-        { FVIRTKEY, VK_OEM_PLUS, PV_ID_ZOOM_IN },   { FVIRTKEY, VK_ADD, PV_ID_ZOOM_IN },
-        { FVIRTKEY, VK_OEM_MINUS, PV_ID_ZOOM_OUT }, { FVIRTKEY, VK_SUBTRACT, PV_ID_ZOOM_OUT },
+        { FVIRTKEY, VK_ESCAPE, PV_ID_CLOSE },
+        { FCONTROL | FVIRTKEY, 'P', PV_ID_PRINT },
+        { FVIRTKEY, VK_PRIOR, PV_ID_PREV },
+        { FCONTROL | FVIRTKEY, VK_PRIOR, PV_ID_PREV },
+        { FVIRTKEY, VK_NEXT, PV_ID_NEXT },
+        { FCONTROL | FVIRTKEY, VK_NEXT, PV_ID_NEXT },
+        { FVIRTKEY, VK_HOME, PV_ID_FIRST },
+        { FCONTROL | FVIRTKEY, VK_HOME, PV_ID_FIRST },
+        { FVIRTKEY, VK_END, PV_ID_LAST },
+        { FCONTROL | FVIRTKEY, VK_END, PV_ID_LAST },
+        { FVIRTKEY, VK_OEM_PLUS, PV_ID_ZOOM_IN },
+        { FSHIFT | FVIRTKEY, VK_OEM_PLUS, PV_ID_ZOOM_IN },
+        { FCONTROL | FVIRTKEY, VK_OEM_PLUS, PV_ID_ZOOM_IN },
+        { FCONTROL | FSHIFT | FVIRTKEY, VK_OEM_PLUS, PV_ID_ZOOM_IN },
+        { FVIRTKEY, VK_ADD, PV_ID_ZOOM_IN },
+        { FCONTROL | FVIRTKEY, VK_ADD, PV_ID_ZOOM_IN },
+        { FVIRTKEY, VK_OEM_MINUS, PV_ID_ZOOM_OUT },
+        { FCONTROL | FVIRTKEY, VK_OEM_MINUS, PV_ID_ZOOM_OUT },
+        { FVIRTKEY, VK_SUBTRACT, PV_ID_ZOOM_OUT },
+        { FCONTROL | FVIRTKEY, VK_SUBTRACT, PV_ID_ZOOM_OUT },
     };
     pv->haccel = CreateAcceleratorTableW(accel, (int) (sizeof(accel) / sizeof(accel[0])));
 
@@ -7866,6 +10378,11 @@ static void preview_close_active(void) {
     g_preview = NULL;
 }
 
+static void preview_recolour_active(void) {
+    if (g_preview && g_preview->hwnd)
+        preview_apply_theme(g_preview);
+}
+
 static void preview_retheme_active(void) {
     if (!g_preview)
         return;
@@ -7873,6 +10390,54 @@ static void preview_retheme_active(void) {
     // Margins, orientation and the header/footer are settings too, so a change
     // from another instance invalidates the pagination, not just the colours
     preview_rebuild(g_preview);
+}
+
+// ---------------------------------------------------------------------------
+// Prompts that would land under Print Preview or a print job
+//
+// The preview disables its document, and Page Setup, the print dialog and a
+// spooling job pump messages. So a close request (Close All from another
+// window) or a posted prompt could reach the disabled document anyway: its
+// save prompt then opened over an owner that was already disabled - which a
+// dialog does not re-enable when it ends - and closing the preview re-enabled
+// the document under its own prompt. Now an idle preview is closed first
+// (it is only a snapshot), and anything arriving while a print dialog or job
+// is on the stack waits until it has finished.
+// ---------------------------------------------------------------------------
+
+static bool g_close_deferred = false;
+static UpdateDownloadResult *g_update_deferred = NULL;
+
+// The print module's idle hook, and the preview's WM_DESTROY: replay whatever
+// was held back. Only posts, so the handlers decide again whether it can run.
+static void print_flush_deferred(void) {
+    HWND hwnd = (g_main_window && g_main_window->hwnd) ? g_main_window->hwnd : NULL;
+    if (!hwnd)
+        return;
+    if (g_update_deferred &&
+        PostMessageW(hwnd, NPAD_WM_UPDATE_DOWNLOADED, 0, (LPARAM) g_update_deferred))
+        g_update_deferred = NULL; // Now owned by the posted message
+    if (g_close_deferred) {
+        g_close_deferred = false;
+        PostMessageW(hwnd, WM_CLOSE, 0, 0);
+    }
+}
+
+// Before the document shows a prompt of its own. False while a print dialog
+// or job is on the stack: the caller must hold the prompt back until
+// print_flush_deferred replays it. Otherwise any preview is closed first.
+static bool prepare_for_document_prompt(void) {
+    if (print_is_busy())
+        return false;
+    preview_close_active();
+    return true;
+}
+
+// The print module's window hook: the progress window gets the scheme's title
+// bar and npad's icon, like every other npad window
+static void print_theme_window(HWND hwnd) {
+    set_title_bar_dark(hwnd, theme_colors(NULL, NULL));
+    apply_window_icon_hwnd(hwnd);
 }
 
 static void create_menu(Window *window) {
@@ -7987,7 +10552,13 @@ static void create_menu(Window *window) {
     apply_update_indicator(window); // After Markdown, so Help is still last
 }
 
-// Rebuild the File > Recent Files submenu from settings
+// Rebuild the File > Recent Files submenu from settings.
+//
+// From the stored list as it is, with no existence check: this runs when the
+// submenu opens and after every settings broadcast, and _waccess on a path
+// whose NAS is asleep blocks the UI thread for the SMB timeout (20-40 s). A
+// missing file is reported when it is clicked, like any failed open. The
+// paths are kept with the menu, so a click opens the entry the user saw.
 static void rebuild_recent_menu(Window *window) {
     if (!window || !window->recent_menu)
         return;
@@ -7995,20 +10566,31 @@ static void rebuild_recent_menu(Window *window) {
     while (RemoveMenu(window->recent_menu, 0, MF_BYPOSITION)) {
         // Remove all existing items
     }
+    for (int i = 0; i < MAX_RECENT_MENU_FILES; i++) {
+        free(window->recent_paths[i]);
+        window->recent_paths[i] = NULL;
+    }
 
     int count = 0;
-    char **files = settings_get_recent_files(&count);
+    char **files = settings_get_recent_files_ex(&count, false);
 
     if (count == 0) {
         AppendMenuW(window->recent_menu, MF_STRING | MF_GRAYED, 0, L"(Empty)");
     } else {
         for (int i = 0; i < count && i < MAX_RECENT_MENU_FILES; i++) {
             char item[512];
-            snprintf(item, sizeof(item), "&%d %.400s", i + 1, files[i]);
+            // "&1".."&9", then "1&0": the tenth entry's mnemonic is 0, not a
+            // second Alt+1
+            if (i < 9)
+                snprintf(item, sizeof(item), "&%d %.400s", i + 1, files[i]);
+            else
+                snprintf(item, sizeof(item), "1&0 %.400s", files[i]);
             wchar_t *wide = utf8_to_wide(item);
             if (wide) {
                 AppendMenuW(window->recent_menu, MF_STRING, ID_FILE_RECENT_BASE + (UINT) i, wide);
                 free(wide);
+                window->recent_paths[i] = files[i]; // The menu owns it now
+                files[i] = NULL;
             }
         }
         AppendMenuW(window->recent_menu, MF_SEPARATOR, 0, NULL);
@@ -8114,10 +10696,11 @@ static void show_context_menu(Window *window, int x, int y) {
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(menu, MF_STRING, ID_EDIT_SELECT_ALL, L"Select &All");
 
-    // List tools mirror the List menu when enabled
+    // List tools mirror the Markdown menu when enabled, with mnemonics that
+    // do not collide with the items above (Undo, Cut, Paste, Delete)
     if (settings_get_bool("list_tools_enabled", false)) {
         AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-        populate_list_menu(menu);
+        populate_list_menu(menu, true);
     }
 
     apply_edit_command_states(window, menu);
@@ -8193,14 +10776,18 @@ static void set_status_bar_visible(Window *window, bool visible) {
 static void handle_command(Window *window, WORD command) {
     // Recent file entries occupy a reserved ID range
     if (command >= ID_FILE_RECENT_BASE && command < ID_FILE_RECENT_BASE + MAX_RECENT_MENU_FILES) {
-        int index = command - ID_FILE_RECENT_BASE;
-        int count = 0;
-        char **files = settings_get_recent_files(&count);
-        if (files && index < count) {
-            ui_post_event(UI_EVENT_FILE_DROPPED, window, files[index]);
-        }
-        if (files) {
-            settings_free_recent_files(files, count);
+        // The entry the menu showed, not whatever sits at that index after a
+        // re-read. Copied: the open runs prompts whose message loops can take
+        // a settings broadcast, which rebuilds the menu and frees its paths.
+        const char *shown = window->recent_paths[command - ID_FILE_RECENT_BASE];
+        if (shown) {
+            size_t n = strlen(shown) + 1;
+            char *path = malloc(n);
+            if (path) {
+                memcpy(path, shown, n);
+                ui_post_event(UI_EVENT_FILE_DROPPED, window, path);
+                free(path);
+            }
         }
         return;
     }
@@ -8268,6 +10855,9 @@ static void handle_command(Window *window, WORD command) {
             break;
         case ID_FILE_RECENT_CLEAR:
             settings_clear_recent_files();
+            // Saved and broadcast at once: otherwise another window still
+            // holding the old list writes it back when it exits
+            save_and_broadcast_settings(window->hwnd);
             rebuild_recent_menu(window);
             break;
         case ID_FILE_PREFERENCES:
@@ -8284,8 +10874,7 @@ static void handle_command(Window *window, WORD command) {
             PrintContext pc;
             if (!print_context_build(window, &pc))
                 return;
-            if (print_document(window->hwnd, pc.text, pc.name, pc.face, pc.point_size) ==
-                PRINT_RESULT_FAILED) {
+            if (print_document(window->hwnd, pc.text, pc.name, &pc.font) == PRINT_RESULT_FAILED) {
                 MessageBoxW(window->hwnd, L"The document could not be printed.", L"npad",
                             MB_OK | MB_ICONWARNING);
             }
@@ -8297,7 +10886,7 @@ static void handle_command(Window *window, WORD command) {
             PrintContext pc;
             if (!print_context_build(window, &pc))
                 return;
-            show_print_preview(window, pc.text, pc.name, pc.face, pc.point_size);
+            show_print_preview(window, pc.text, pc.name, &pc.font);
             print_context_free(&pc);
             return;
         }
@@ -8320,7 +10909,7 @@ static void handle_command(Window *window, WORD command) {
             }
             break;
         case ID_FILE_EXIT:
-            ui_post_event(UI_EVENT_QUIT, window, NULL);
+            request_quit(window);
             break;
         case ID_EDIT_UNDO:
             ui_post_event(UI_EVENT_EDIT_UNDO, window, NULL);
@@ -8396,13 +10985,10 @@ static void handle_command(Window *window, WORD command) {
         case ID_FORMAT_EOL_CR:
             editor_set_line_ending((LineEnding) (command - ID_FORMAT_EOL_CRLF));
             break;
-        case ID_FORMAT_EOL_CYCLE:
-            editor_set_line_ending((LineEnding) ((editor_get_line_ending() + 1) % 3));
-            break;
         case ID_FORMAT_FONT: {
             const char *def = DEFAULT_MONO_FONT;
             const char *key = active_font_key(window, &def);
-            show_font_dialog(window, key, def);
+            show_font_dialog(window, window->hwnd, key, def);
             break;
         }
         case ID_VIEW_ZOOM_IN:
@@ -8620,7 +11206,9 @@ static void resize_controls(Window *window) {
 static void reload_and_apply_settings(Window *window) {
     if (!window)
         return;
-    settings_clear_all();
+    // Merges: this window's unsaved changes (Recent Files, find options and
+    // history) survive, and a file that cannot be read leaves settings as they
+    // are rather than emptying them
     settings_load();
     editor_reload_prefs(); // Re-read auto-save / session settings and timers
     // Find options are process-globals seeded at init, so a broadcast has to
@@ -8630,9 +11218,12 @@ static void reload_and_apply_settings(Window *window) {
     g_match_case = settings_get_bool("find_match_case", false);
     g_whole_word = settings_get_bool("find_whole_word", false);
     g_search_down = settings_get_bool("find_search_down", true);
-    g_wrap_around = settings_get_bool("find_wrap_around", false);
+    g_wrap_around = settings_get_bool(FIND_WRAP_KEY, false);
     g_interpret_escapes = settings_get_bool("find_interpret_escapes", false);
     g_highlight_all = settings_get_bool("find_highlight_all", false);
+    // Escape interpretation (and Markdown support, which gates it) may have
+    // changed, and Find Next uses the effective strings with the dialog closed
+    recompute_search_effective();
     apply_font(window);
     apply_theme(window);
     apply_new_window_pref(window); // Also rebuilds accelerators (list Ctrl+]/[ gating)
@@ -8649,9 +11240,19 @@ static void reload_and_apply_settings(Window *window) {
     preview_retheme_active();
 
     // The Find dialog is modeless, so a live change to Markdown support has to
-    // reach its escapes checkbox - WM_INITDIALOG only runs once
+    // reach its escapes checkbox - WM_INITDIALOG only runs once - and the
+    // options just re-read have to reach its checkboxes, or closing it (or any
+    // button) would read the stale ones back over them
     if (g_find_dialog) {
         find_dialog_show_escapes(g_find_dialog, settings_get_bool("list_tools_enabled", false));
+        if (find_dialog_sync_options(g_find_dialog)) {
+            if (g_highlight_all) {
+                find_dialog_arm_highlight(g_find_dialog); // Coalesced; reads the box
+            } else {
+                LONG_PTR owner = GetWindowLongPtrW(g_find_dialog, GWLP_USERDATA);
+                refresh_highlights((const Window *) owner, false);
+            }
+        }
     }
 
     // Sync shared window options; per-window view state (font type, zoom)
@@ -8681,7 +11282,12 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 #if NPAD_SCROLL_TELEMETRY
             g_tel.broadcasts++;
 #endif
-            reload_and_apply_settings(window);
+            // Mid-Apply (a page's modal notice pumps messages): reloading now
+            // would drop the pages' staged writes, so wait for the commit
+            if (prefs_round_open())
+                g_prefs_txn.reload_pending = true;
+            else
+                reload_and_apply_settings(window);
         }
         return 0;
     }
@@ -8722,6 +11328,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                 window->monospace_current = mono;
                 apply_font(window);
             }
+            apply_tab_stops(window); // At the mirrored zoom (cheap if unchanged)
             update_menu_states(window);
             update_status_bar(window);
         }
@@ -8765,7 +11372,12 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         case WM_INITMENUPOPUP: {
             if (window) {
                 update_menu_states(window);
-                rebuild_recent_menu(window);
+                // Only for the Recent Files submenu itself. TranslateAccelerator
+                // sends this for every shortcut that matches a menu item
+                // (Ctrl+S, Ctrl+V, F3...), and each other popup too; the list
+                // is also rebuilt whenever settings change.
+                if ((HMENU) wparam == window->recent_menu)
+                    rebuild_recent_menu(window);
             }
             return 0;
         }
@@ -8781,8 +11393,14 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                         // which is the lifetime it had when it simply got
                         // overwritten by the next counts refresh. Now that the
                         // two are shown side by side, retiring it has to be
-                        // explicit or it would linger for ever.
-                        window->status_msg[0] = L'\0';
+                        // explicit or it would linger for ever. Recompose
+                        // here too: with the counts off (the default) nothing
+                        // else rewrites part 0, so a cleared message stayed
+                        // on screen while the user typed.
+                        if (window->status_msg[0]) {
+                            window->status_msg[0] = L'\0';
+                            compose_status_part0(window);
+                        }
                         // Counts refresh on programmatic changes too (open,
                         // transforms), not only user edits
                         schedule_counts_update(window);
@@ -8798,6 +11416,11 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                         if (!window->setting_text_programmatically) {
                             window->is_modified = true;
                             ui_post_event(UI_EVENT_TEXT_CHANGED, window, NULL);
+                        } else if (!window->tab_check_pending) {
+                            // The whole text may just have been replaced
+                            // (EM_SETTEXTEX); re-check the tab stop after it
+                            window->tab_check_pending = true;
+                            PostMessageW(hwnd, NPAD_WM_REAPPLY_TABS, 0, 0);
                         }
                     }
                 } else {
@@ -8854,29 +11477,37 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 
         case WM_DROPFILES: {
             HDROP drop = (HDROP) wparam;
-            wchar_t path[MAX_PATH];
-            if (window && DragQueryFileW(drop, 0, path, MAX_PATH) > 0) {
-                char *utf8 = wide_to_utf8(path);
-                if (utf8) {
-                    if (GetKeyState(VK_CONTROL) & 0x8000) {
-                        // Ctrl+Drop inserts the file contents at the caret
-                        TextFileInfo info;
-                        char *content = file_read_text_ex(utf8, &info);
-                        if (content) {
-                            wchar_t *wide = utf8_to_wide(content);
-                            if (wide) {
-                                SendMessageW(window->edit_hwnd, EM_REPLACESEL, TRUE, (LPARAM) wide);
-                                free(wide);
-                            }
-                            free(content);
-                        }
-                    } else {
-                        ui_post_event(UI_EVENT_FILE_DROPPED, window, utf8);
-                    }
-                    free(utf8);
-                }
+            // Sized to the path rather than MAX_PATH, which cut a longer one
+            // short and so opened (or failed on) some other name
+            UINT length = window ? DragQueryFileW(drop, 0, NULL, 0) : 0;
+            wchar_t *path = length > 0 ? malloc(((size_t) length + 1) * sizeof(wchar_t)) : NULL;
+            bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            char *utf8 = NULL;
+            if (path && DragQueryFileW(drop, 0, path, length + 1) == length) {
+                utf8 = wide_to_utf8(path);
             }
+            free(path);
+            // Done with the drop before anything below can raise a prompt
             DragFinish(drop);
+            if (utf8) {
+                if (ctrl) {
+                    // Ctrl+Drop inserts the file contents at the caret, after
+                    // the same binary, size and read checks as Open
+                    char *content = editor_read_file_for_insert(utf8);
+                    if (content) {
+                        // Breaks normalised, or a CR CR LF would be deleted
+                        wchar_t *wide = richedit_text_from_utf8(content, NULL, NULL);
+                        if (wide) {
+                            SendMessageW(window->edit_hwnd, EM_REPLACESEL, TRUE, (LPARAM) wide);
+                            free(wide);
+                        }
+                        free(content);
+                    }
+                } else {
+                    ui_post_event(UI_EVENT_FILE_DROPPED, window, utf8);
+                }
+                free(utf8);
+            }
             return 0;
         }
 
@@ -8916,8 +11547,9 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         }
 
         case NPAD_WM_UPDATE_CHECKED: {
-            if (lparam)
-                handle_update_checked(window, (UpdateCheckResult *) lparam);
+            // A NULL result (the worker could not allocate one) still ends the
+            // check, or the busy state would never clear
+            handle_update_checked(window, (UpdateCheckResult *) lparam);
             return 0;
         }
 
@@ -8931,8 +11563,18 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         }
 
         case NPAD_WM_UPDATE_DOWNLOADED: {
-            if (lparam)
-                handle_update_downloaded(window, (UpdateDownloadResult *) lparam);
+            // A NULL result (the worker could not allocate one) still ends the
+            // busy state at once. A real one is a prompt owned by this window,
+            // so it must not open under Print Preview or inside a print
+            // dialog's loop. Nor does a download finishing in the background
+            // close a preview the user is reading (WM_CLOSE does: the user
+            // asked for it); the prompt waits for the preview to close or the
+            // job to end.
+            if (lparam && (g_preview || print_is_busy())) {
+                g_update_deferred = (UpdateDownloadResult *) lparam;
+                return 0;
+            }
+            handle_update_downloaded(window, (UpdateDownloadResult *) lparam);
             return 0;
         }
 
@@ -8952,6 +11594,13 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
             prompt_external_change(window);
             return 0;
 
+        case NPAD_WM_REAPPLY_TABS:
+            if (window) {
+                window->tab_check_pending = false;
+                apply_tab_stops(window);
+            }
+            return 0;
+
         case WM_SETTINGCHANGE: {
             // Windows broadcasts this with "ImmersiveColorSet" when the
             // light/dark setting changes. There was no handler at all before,
@@ -8963,9 +11612,32 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 #endif
                     apply_theme(window); // Also re-applies the icon
                 }
+                // Print Preview gets this broadcast too, but its window proc
+                // does not handle it: under the "system" scheme the preview
+                // kept the old backdrop, title bar and scroll bars. Colours only -
+                // nothing about pagination changes with the Windows theme.
+                preview_recolour_active();
+            } else if (wparam == SPI_SETHIGHCONTRAST && window) {
+                // High Contrast switched on or off: Light and System follow
+                // its colours (theme_colors). apply_theme is idempotent, so
+                // a broadcast that changes nothing restamps nothing. An open
+                // preview takes the same colours.
+                apply_theme(window);
+                preview_recolour_active();
             }
             break;
         }
+
+        case WM_SYSCOLORCHANGE:
+        case WM_THEMECHANGED:
+            // The system colours (a High Contrast theme's among them) changed.
+            // Common controls only hear WM_SYSCOLORCHANGE from their parent.
+            if (window) {
+                if (msg == WM_SYSCOLORCHANGE && window->status_hwnd)
+                    SendMessageW(window->status_hwnd, WM_SYSCOLORCHANGE, wparam, lparam);
+                apply_theme(window);
+            }
+            break;
 
         case WM_DPICHANGED: {
             if (window) {
@@ -8976,12 +11648,16 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
                                  suggested_rect->bottom - suggested_rect->top,
                                  SWP_NOZORDER | SWP_NOACTIVATE);
                 }
-                // Char formats are in twips (DPI-independent), so existing
-                // runs - including font-bound emoji - keep their formatting;
-                // only the default needs a refresh
-                apply_font_default(window);
-                apply_edit_margins(window); // Pixel margins must rescale too
+                // Char formats are in twips (DPI-independent), so the text
+                // needs no restamp at all. Stamping the default format here
+                // used to restyle every run (plain-text mode), turning emoji
+                // into boxes whenever the window crossed to a monitor with
+                // another scale. Only the pixel-sized things below change -
+                // and the tab stop, which is 8 columns as GDI draws them at
+                // this DPI (hinted widths do not scale exactly).
+                apply_edit_margins(window); // Pixel margins must rescale
                 resize_controls(window);
+                apply_tab_stops(window);
                 // The icon slots are sized in pixels, so they need re-picking
                 // at the new DPI - this previously refreshed font and layout
                 // but left the caption showing a stale-sized icon
@@ -9016,28 +11692,51 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
             // user closing npad and must not prompt. The Restart Manager sends
             // WM_CLOSE after WM_ENDSESSION, and a save prompt there would be an
             // invisible modal dialog stalling the installer until it times out.
-            ui_post_event(g_session_ending ? UI_EVENT_QUIT_HANDOFF : UI_EVENT_QUIT, window, NULL);
+            // The save prompt must not open under Print Preview, nor inside a
+            // print dialog or job (Close All reaches this window regardless).
+            // A session-end handoff never prompts, so it goes ahead.
+            if (!g_session_ending && !prepare_for_document_prompt()) {
+                g_close_deferred = true;
+                return 0;
+            }
+            request_quit(window);
             return 0;
         }
 
         case WM_QUERYENDSESSION: {
             // Windows (or an installer's Restart Manager) is closing npad.
-            // Never veto and never show UI here - MSDN forbids it, and the
-            // window may be invisible, so a prompt would simply hang until
-            // HungAppTimeout and get npad reported as blocking the restart.
-            // Park the work while there is still time, then consent.
-            //
-            // A failed park is ignored here, unlike the update path: there is
-            // nothing useful to do about it. Prompting is forbidden, and
-            // refusing to consent would only get npad killed anyway - before
-            // this handler existed that is exactly what happened, with no
-            // snapshot attempted at all.
+            // Never show UI here - MSDN forbids it, and the window may be
+            // invisible, so a prompt would simply hang until HungAppTimeout
+            // and get npad reported as blocking the restart. Park the work
+            // while there is still time, then consent.
             g_session_ending = true;
-            ui_post_event(UI_EVENT_HANDOFF_SNAPSHOT, window, NULL);
+            if (!ui_post_event(UI_EVENT_HANDOFF_SNAPSHOT, window, NULL)) {
+                // The document is unsaved and could not be parked (a full
+                // disk, an unreachable roaming profile). Consenting would
+                // lose it without a word, so refuse - with a reason, which
+                // Windows shows on its "these apps are preventing shutdown"
+                // screen (where the user can still force it), and which a
+                // Restart Manager reports as an app it could not close: the
+                // same honest outcome the update path already chose. Close
+                // prompts normally again, so the user can save from here.
+                g_session_ending = false;
+                ShutdownBlockReasonCreate(hwnd, L"npad has unsaved changes that could not be "
+                                                L"kept safe. Switch to npad to save them.");
+                g_shutdown_blocked = true;
+                return FALSE;
+            }
+            if (g_shutdown_blocked) {
+                ShutdownBlockReasonDestroy(hwnd);
+                g_shutdown_blocked = false;
+            }
             return TRUE;
         }
 
         case WM_ENDSESSION: {
+            if (g_shutdown_blocked) {
+                ShutdownBlockReasonDestroy(hwnd);
+                g_shutdown_blocked = false;
+            }
             if (!wparam) {
                 // Called off: go back to prompting on close, and drop the mark
                 // so a genuine crash later is still reported as one

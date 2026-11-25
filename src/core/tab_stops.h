@@ -67,4 +67,29 @@ int tab_spaces_to_stop(size_t column, int width);
 // width).
 int tab_spaces_for_line_prefix(const char *line_prefix, size_t len, int width);
 
+// --- Displayed tab stops (Notepad's Edit control rule) ----------------------
+// A literal tab is drawn to the next of the stops an Edit control uses: one
+// every TAB_EDIT_COLUMNS average character widths, measured in device pixels
+// at the size the text is drawn. The arithmetic is here so it can be tested;
+// the measuring is the platform layer's.
+
+#define TAB_EDIT_COLUMNS 8
+
+// GdiGetCharDimensions' average character width, which an Edit control spaces
+// its default tab stops by, from the device-pixel extent of the 52 letters
+// A-Z a-z. 0 for a non-positive extent.
+long tab_edit_average_width(long letters_extent);
+
+// The em height in device pixels of a font height_twips tall drawn at dpi and
+// zoom zoom_num/zoom_den, rounded to nearest as MulDiv does. A dpi of 0 counts
+// as 96 and a non-positive zoom term as 100%.
+long tab_font_pixel_height(long height_twips, long dpi, long zoom_num, long zoom_den);
+
+// The tab stop spacing in twips that a control scaling twips by dpi and zoom
+// draws at stop_px pixels. Rounded DOWN when the ratio is not exact, so the
+// stop lands at most a fraction of a pixel early, never late: a stop even a
+// fraction past 8 columns would catch "12345678<TAB>" on that same stop
+// instead of the next one. 0 for a non-positive stop_px.
+long tab_stop_twips_for_pixels(long stop_px, long dpi, long zoom_num, long zoom_den);
+
 #endif // TAB_STOPS_H

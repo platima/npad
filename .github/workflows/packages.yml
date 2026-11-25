@@ -63,22 +63,25 @@ jobs:
         - { arch: arm64,   rpm_arch: aarch64, runner: ubuntu-24.04-arm, image: "debian:12",     glibc_max: "2.35", qemu: false }
         - { arch: riscv64, rpm_arch: riscv64, runner: ubuntu-latest,    image: "debian:trixie", glibc_max: "2.39", qemu: true }
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Set up QEMU
       if: matrix.qemu
-      uses: docker/setup-qemu-action@v4
+      uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       with:
         platforms: ${{ matrix.arch }}
 
     - name: Compile npad-linux in ${{ matrix.image }} (linux/${{ matrix.arch }})
+      env:
+        ARCH: ${{ matrix.arch }}
+        IMAGE: ${{ matrix.image }}
       run: |
         # The .desktop/AppStream validation needs doing once, not per arch
         validate=0
-        [ "${{ matrix.arch }}" = amd64 ] && validate=1
-        docker run --rm --platform "linux/${{ matrix.arch }}" \
+        [ "$ARCH" = amd64 ] && validate=1
+        docker run --rm --platform "linux/$ARCH" \
           -e NPAD_VALIDATE_METADATA=$validate \
-          -v "$PWD:/src" -w /src "${{ matrix.image }}" sh scripts/ci-linux-build.sh
+          -v "$PWD:/src" -w /src "$IMAGE" sh scripts/ci-linux-build.sh
 
     - name: Install nfpm (pinned, checksum-verified)
       run: sudo sh scripts/install-nfpm.sh
@@ -203,15 +206,28 @@ jobs:
       env:
         ARCH: ${{ matrix.arch }}
       run: |
+        set -eu
         # `make deb` falls back to scripts/build-deb.sh when nfpm is missing.
-        # It carries its own Depends line; fail if the two ever drift.
-        sh scripts/build-deb.sh "$(ls dist/npad_*_"$ARCH".deb | sed "s/.*npad_//; s/_$ARCH.deb//")" npad-linux fallback "$ARCH"
-        want=$(dpkg-deb -f dist/npad_*_"$ARCH".deb Depends)
-        have=$(dpkg-deb -f fallback/npad_*_"$ARCH".deb Depends)
-        echo "nfpm:     $want"
-        echo "fallback: $have"
-        [ "$want" = "$have" ] || { echo "ERROR: Depends differ"; exit 1; }
-        rm -rf fallback
+        # It carries its own Depends line and its own spelling of the
+        # version; fail if either ever drifts from nfpm's. Checked for this
+        # build's version and for a made-up pre-release, whose Version must
+        # be 0.36.0~rc2 (sorting before 0.36.0), never 0.36.0-rc2 (after it).
+        real=$(ls dist/npad_*_"$ARCH".deb | sed "s/.*npad_//; s/_$ARCH.deb//")
+        for v in "$real" 0.36.0-rc2; do
+          rm -rf fallback nfpm-check
+          sh scripts/build-deb.sh "$v" npad-linux fallback "$ARCH"
+          sh scripts/build-package.sh deb "$v" npad-linux nfpm-check "$ARCH"
+          for field in Depends Version; do
+            want=$(dpkg-deb -f nfpm-check/npad_"$v"_"$ARCH".deb "$field")
+            have=$(dpkg-deb -f fallback/npad_"$v"_"$ARCH".deb "$field")
+            echo "$v $field: nfpm '$want', fallback '$have'"
+            [ "$want" = "$have" ] || { echo "ERROR: $field differs for $v"; exit 1; }
+          done
+        done
+        have=$(dpkg-deb -f fallback/npad_0.36.0-rc2_"$ARCH".deb Version)
+        dpkg --compare-versions "$have" lt 0.36.0 || { echo "ERROR: $have does not sort before 0.36.0"; exit 1; }
+        dpkg --compare-versions 0.35.0 lt "$have" || { echo "ERROR: $have does not sort after 0.35.0"; exit 1; }
+        rm -rf fallback nfpm-check
 
     - name: Checksums
       env:
@@ -222,7 +238,7 @@ jobs:
         for f in npad_*_"$ARCH".deb npad-*."$RPM_ARCH".rpm npad-*-1-"$RPM_ARCH".pkg.tar.zst npad-v*-portable-linux-"$RPM_ARCH".tar.gz; do sha256sum "$f" > "$f.sha256"; done
         cat *.sha256
 
-    - uses: actions/upload-artifact@v7
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: ${{ inputs.artifact_name }}-${{ matrix.arch }}
         path: |
@@ -273,28 +289,35 @@ jobs:
         - { arch: arm64,   runner: ubuntu-24.04-arm, image: "debian:12",           kind: tarball }
         - { arch: riscv64, runner: ubuntu-latest,    image: "debian:trixie",       kind: tarball, qemu: true }
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-    - uses: actions/download-artifact@v8
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         name: ${{ inputs.artifact_name }}-${{ matrix.arch }}
         path: pkgs
 
     - name: Set up QEMU
       if: matrix.qemu
-      uses: docker/setup-qemu-action@v4
+      uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       with:
         platforms: ${{ matrix.arch }}
 
     - name: Import the Arch rootfs (${{ matrix.rootfs }})
       if: matrix.rootfs
-      run: sh scripts/ci-arch-rootfs.sh "${{ matrix.rootfs }}" "${{ matrix.image }}"
+      env:
+        ROOTFS: ${{ matrix.rootfs }}
+        IMAGE: ${{ matrix.image }}
+      run: sh scripts/ci-arch-rootfs.sh "$ROOTFS" "$IMAGE"
 
     - name: Install and check
+      env:
+        ARCH: ${{ matrix.arch }}
+        IMAGE: ${{ matrix.image }}
+        KIND: ${{ matrix.kind }}
       run: |
         ls -la pkgs
-        docker run --rm --platform "linux/${{ matrix.arch }}" \
-          -v "$PWD:/w" -w /w "${{ matrix.image }}" sh scripts/ci-linux-install-test.sh "${{ matrix.kind }}"
+        docker run --rm --platform "linux/$ARCH" \
+          -v "$PWD:/w" -w /w "$IMAGE" sh scripts/ci-linux-install-test.sh "$KIND"
 
   # The AUR package (packaging/arch/aur/npad-bin) is only text until a release
   # ships, so check what can be checked without one, in a real Arch: that
@@ -305,7 +328,7 @@ jobs:
     name: aur-check (PKGBUILD, .SRCINFO, aur-update.sh)
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Check in an archlinux container
       run: docker run --rm -v "$PWD:/src:ro" archlinux:latest sh /src/scripts/ci-aur-check.sh

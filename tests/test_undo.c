@@ -263,6 +263,79 @@ TEST_CASE(typing_after_group_does_not_join_it) {
     undo_destroy(u);
 }
 
+// A one-character paste after typing: the platform groups it (GTK flushes a
+// user action holding one edit as a plain record, which would otherwise extend
+// the word being typed)
+TEST_CASE(one_character_group_after_typing_stands_alone) {
+    UndoStack *u = undo_create(100);
+    Doc doc = { "" };
+    type_chars(&doc, u, 0, "abc");
+    undo_begin_group(u);
+    type_text(&doc, u, 3, "x");
+    undo_end_group(u);
+    type_chars(&doc, u, 4, "de");
+    TEST_ASSERT_STR_EQ("abcxde", doc.text, "typed, pasted, typed");
+
+    undo_undo(u, &k_target, &doc, NULL, NULL);
+    TEST_ASSERT_STR_EQ("abcx", doc.text, "typing after the paste is its own step");
+    undo_undo(u, &k_target, &doc, NULL, NULL);
+    TEST_ASSERT_STR_EQ("abc", doc.text, "the paste is one step, not merged into abc");
+    undo_undo(u, &k_target, &doc, NULL, NULL);
+    TEST_ASSERT_STR_EQ("", doc.text, "the typing is intact");
+    undo_destroy(u);
+}
+
+// Without the group the same record merges: the reason callers must group
+TEST_CASE(ungrouped_one_character_insert_merges) {
+    UndoStack *u = undo_create(100);
+    Doc doc = { "" };
+    type_chars(&doc, u, 0, "abc");
+    type_text(&doc, u, 3, "x");
+    undo_undo(u, &k_target, &doc, NULL, NULL);
+    TEST_ASSERT_STR_EQ("", doc.text, "a bare single insert extends the word");
+    undo_destroy(u);
+}
+
+// Replace All with one match and an empty replacement, or a one-character cut,
+// right after Backspaces: a single delete that must not join them
+TEST_CASE(one_character_delete_group_after_backspace_stands_alone) {
+    UndoStack *u = undo_create(100);
+    Doc doc = { "" };
+    type_text(&doc, u, 0, "hello");
+    undo_break(u);
+    delete_text(&doc, u, 4, 1); // Backspace: "hell"
+    undo_begin_group(u);
+    delete_text(&doc, u, 3, 1); // Cut / Replace All of the "l" before it: "hel"
+    undo_end_group(u);
+    delete_text(&doc, u, 2, 1); // Another Backspace: "he"
+    TEST_ASSERT_STR_EQ("he", doc.text, "edited");
+
+    undo_undo(u, &k_target, &doc, NULL, NULL);
+    TEST_ASSERT_STR_EQ("hel", doc.text, "the later Backspace alone");
+    undo_undo(u, &k_target, &doc, NULL, NULL);
+    TEST_ASSERT_STR_EQ("hell", doc.text, "the grouped delete alone");
+    undo_undo(u, &k_target, &doc, NULL, NULL);
+    TEST_ASSERT_STR_EQ("hello", doc.text, "the first Backspace alone");
+    undo_destroy(u);
+}
+
+// undo_break on both sides isolates a single edit the platform cannot group
+// (GTK's own middle-click paste and text drops, whose ends it only observes)
+TEST_CASE(break_on_both_sides_isolates_a_single_edit) {
+    UndoStack *u = undo_create(100);
+    Doc doc = { "" };
+    type_chars(&doc, u, 0, "ab");
+    undo_break(u);
+    type_text(&doc, u, 2, "x");
+    undo_break(u);
+    type_chars(&doc, u, 3, "cd");
+    undo_undo(u, &k_target, &doc, NULL, NULL);
+    TEST_ASSERT_STR_EQ("abx", doc.text, "typing after it separate");
+    undo_undo(u, &k_target, &doc, NULL, NULL);
+    TEST_ASSERT_STR_EQ("ab", doc.text, "the edit itself separate");
+    undo_destroy(u);
+}
+
 TEST_CASE(multibyte_positions) {
     UndoStack *u = undo_create(100);
     Doc doc = { "" };
@@ -389,6 +462,45 @@ TEST_CASE(clear_forgets_everything) {
     undo_clear(u);
     TEST_ASSERT(!undo_can_undo(u), "no undo after clear");
     TEST_ASSERT(!undo_can_redo(u), "no redo after clear");
+    TEST_ASSERT_EQ(0, (long) undo_total_bytes(u), "clear releases every byte");
+    undo_destroy(u);
+}
+
+// The step count alone did not bound memory: each step holds its text
+TEST_CASE(byte_limit_drops_oldest_keeps_newest) {
+    UndoStack *u = undo_create(10000);
+    TEST_ASSERT_EQ((long) UNDO_DEFAULT_MAX_BYTES, (long) (256L * 1024 * 1024),
+                   "default byte budget is 256 MB");
+    undo_set_max_bytes(u, 10);
+    Doc doc = { "" };
+    type_text(&doc, u, 0, "aaaa"); // 4 bytes
+    type_text(&doc, u, 4, "bbbb"); // 8
+    type_text(&doc, u, 8, "cccc"); // 12: over budget, the oldest goes
+    TEST_ASSERT_EQ(8, (long) undo_total_bytes(u), "oldest step dropped to fit the budget");
+    TEST_ASSERT(undo_undo(u, &k_target, &doc, NULL, NULL), "newest undoes");
+    TEST_ASSERT(undo_undo(u, &k_target, &doc, NULL, NULL), "second newest undoes");
+    TEST_ASSERT(!undo_undo(u, &k_target, &doc, NULL, NULL), "the dropped step is gone");
+    TEST_ASSERT_STR_EQ("aaaa", doc.text, "only the kept steps were undone");
+
+    // One edit larger than the whole budget is still undoable on its own
+    undo_clear(u);
+    strcpy(doc.text, "");
+    type_text(&doc, u, 0, "xy");
+    type_text(&doc, u, 2, "0123456789ABCDEF");
+    TEST_ASSERT_EQ(16, (long) undo_total_bytes(u), "only the oversized newest step is kept");
+    TEST_ASSERT(undo_undo(u, &k_target, &doc, NULL, NULL), "the oversized edit undoes");
+    TEST_ASSERT_STR_EQ("xy", doc.text, "back to before the large edit");
+
+    // Coalesced typing counts as it grows; undo and redo do not change the total
+    undo_clear(u);
+    undo_set_max_bytes(u, 0);
+    strcpy(doc.text, "");
+    type_chars(&doc, u, 0, "abc");
+    TEST_ASSERT_EQ(3, (long) undo_total_bytes(u), "merged characters are counted");
+    undo_undo(u, &k_target, &doc, NULL, NULL);
+    TEST_ASSERT_EQ(3, (long) undo_total_bytes(u), "an undone step still holds its text");
+    type_text(&doc, u, 0, "z");
+    TEST_ASSERT_EQ(1, (long) undo_total_bytes(u), "discarded redo releases its bytes");
     undo_destroy(u);
 }
 
@@ -407,11 +519,16 @@ int main(void) {
     RUN_TEST(group_is_one_step);
     RUN_TEST(nested_and_empty_groups);
     RUN_TEST(typing_after_group_does_not_join_it);
+    RUN_TEST(one_character_group_after_typing_stands_alone);
+    RUN_TEST(ungrouped_one_character_insert_merges);
+    RUN_TEST(one_character_delete_group_after_backspace_stands_alone);
+    RUN_TEST(break_on_both_sides_isolates_a_single_edit);
     RUN_TEST(multibyte_positions);
     RUN_TEST(history_limit_drops_oldest);
     RUN_TEST(replay_is_not_recorded);
     RUN_TEST(failed_group_record_drops_history);
     RUN_TEST(failed_record_outside_group_drops_history);
     RUN_TEST(clear_forgets_everything);
+    RUN_TEST(byte_limit_drops_oldest_keeps_newest);
     TEST_SUMMARY();
 }

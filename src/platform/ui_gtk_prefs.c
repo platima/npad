@@ -29,15 +29,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
 
 #include "../core/editor.h"
 #include "../core/file_ops.h"
 #include "../core/find_seed.h"
 #include "../core/session.h"
 #include "../core/settings.h"
+#include "../core/settings_import.h"
 #include "../core/startup_prof.h"
 #include "../core/tab_stops.h"
+#include "../core/ui_rules.h"
 #include "../core/update_check.h"
 #include "../main.h"
 
@@ -98,6 +99,9 @@ static struct {
     // Nothing reaches settings.json until Apply or OK, and Cancel drops them.
     GHashTable *staged;
     bool memory_dirty; // A failed save left applied values in memory only
+    // The keys those applied values were written to (static strings, like the
+    // staged keys), so closing after a failed save undoes just them
+    GHashTable *written;
 
     GtkWidget *spins[8]; // Every number box: typed text counts before it is committed
     int spin_count;
@@ -122,7 +126,9 @@ static struct {
     GtkWidget *upd_mode, *upd_advice;
     bool upd_seen; // The Updates page has been shown (the advice is wanted)
     // Associations
-    GtkWidget *assoc_status;
+    GtkWidget *assoc_status, *assoc_button;
+    bool assoc_seen; // The Associations page has been shown (xdg-mime is asked)
+    guint serial;    // Which opening of the dialog this is (see g_prefs_serial)
     // Debug
     GtkWidget *debug_view;
 } P;
@@ -249,6 +255,7 @@ static bool apply_staged(void) {
         } else {
             write_staged(key, entry);
         }
+        g_hash_table_add(P.written, key);
         if (strcmp(key, "sync_view_state") == 0 && entry->number != 0)
             sync_turned_on = true;
     }
@@ -261,6 +268,7 @@ static bool apply_staged(void) {
     if (!commit())
         return false;
     P.memory_dirty = false;
+    g_hash_table_remove_all(P.written);
     g_hash_table_remove_all(P.staged);
     update_apply_button();
 
@@ -547,13 +555,14 @@ static void load_widgets(void) {
 // shared size / weight / italic keys, exactly what apply_view_css reads
 static void choose_font(GtkWindow *parent, const char *font_key, const char *default_face) {
     char *face = settings_get_string(font_key, default_face);
-    int size = settings_get_int("font_size", 11);
+    int size_tenths = ui_font_size_setting_tenths(); // "10.5" from Windows stays 10.5
     int weight = settings_get_int("font_weight", 400);
     bool italic = settings_get_bool("font_italic", false);
 
     PangoFontDescription *initial = pango_font_description_new();
     pango_font_description_set_family(initial, face ? face : default_face);
-    pango_font_description_set_size(initial, size * PANGO_SCALE);
+    pango_font_description_set_size(initial,
+                                    ui_font_size_tenths_to_scaled(size_tenths, PANGO_SCALE));
     pango_font_description_set_weight(initial, (PangoWeight) weight);
     pango_font_description_set_style(initial, italic ? PANGO_STYLE_ITALIC : PANGO_STYLE_NORMAL);
     free(face);
@@ -576,8 +585,10 @@ static void choose_font(GtkWindow *parent, const char *font_key, const char *def
                     settings_set_string(font_key, family);
                 g_free(family);
             }
-            int points = (pango_font_description_get_size(chosen) + PANGO_SCALE / 2) / PANGO_SCALE;
-            settings_set_int("font_size", points < 6 ? 6 : (points > 72 ? 72 : points));
+            // To the nearest tenth, stored as Windows does ("11", "10.5"),
+            // so a half point survives and a whole size stays an integer
+            ui_font_size_set_tenths(ui_font_size_scaled_to_tenths(
+                pango_font_description_get_size(chosen), PANGO_SCALE));
             int new_weight = (int) pango_font_description_get_weight(chosen);
             settings_set_int("font_weight",
                              new_weight < 100 ? 100 : (new_weight > 900 ? 900 : new_weight));
@@ -687,7 +698,7 @@ static void build_editor(GtkWidget *notebook) {
 
     GtkWidget *find = add_group(page, "Find and Replace");
     add_check(find, "_Fill Find with the selected text", FIND_SEED_KEY, true);
-    add_check(find, "Wrap _around by default", "find_wrap_around", false);
+    add_check(find, "Wrap _around by default", FIND_WRAP_KEY, false);
 
     GtkWidget *tab = add_group(page, "Tab key");
     P.tab_check =
@@ -940,29 +951,11 @@ static void on_export_clicked(GtkButton *button, gpointer data) {
     g_object_unref(native);
 }
 
-// Does the file look like a settings file (a JSON object)? Importing anything
-// else would silently reset every preference.
-static bool looks_like_settings(const char *path) {
-    gchar *contents = NULL;
-    gsize length = 0;
-    if (!g_file_get_contents(path, &contents, &length, NULL))
-        return false;
-    const char *p = contents;
-    if (g_str_has_prefix(p, "\xEF\xBB\xBF"))
-        p += 3;
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
-        p++;
-    bool ok = *p == '{' && g_utf8_validate(contents, (gssize) length, NULL);
-    g_free(contents);
-    return ok;
-}
-
 // Replace the current settings with a user-chosen file and reload them
 static void on_import_clicked(GtkButton *button, gpointer data) {
     (void) button;
     (void) data;
-    const char *dest = settings_get_file_path();
-    if (!dest)
+    if (!settings_get_file_path())
         return;
 
     GtkFileChooserNative *native = gtk_file_chooser_native_new(
@@ -975,46 +968,45 @@ static void on_import_clicked(GtkButton *button, gpointer data) {
     if (!src)
         return;
 
-    bool ok = looks_like_settings(src) && file_copy(src, dest);
+    // Only an npad settings file is accepted, the previous settings are kept
+    // as settings.json.bak, and the write is atomic (see settings_import.h)
+    SettingsImportResult result = settings_import_file(src);
     g_free(src);
-    if (!ok) {
-        show_message(GTK_WINDOW(P.dialog), GTK_MESSAGE_WARNING, "Failed to import settings.");
+    if (result != SETTINGS_IMPORT_OK) {
+        show_message(GTK_WINDOW(P.dialog), GTK_MESSAGE_WARNING, settings_import_message(result));
         return;
     }
 
     // Re-read and re-apply what can change live, tell the other instances,
-    // then show the imported values
+    // then show the imported values. The imported file replaces this window's
+    // unsaved changes rather than being merged with them.
+    settings_discard_unsaved_changes();
     npad_gtk_reload_and_apply_settings(P.owner);
     ui_notify_settings_changed();
-    g_hash_table_remove_all(P.staged); // The imported file replaces pending edits
+    g_hash_table_remove_all(P.staged);  // The imported file replaces pending edits
+    g_hash_table_remove_all(P.written); // And what a failed Apply left in memory
+    P.memory_dirty = false;
     update_apply_button();
     load_widgets();
-    show_message(GTK_WINDOW(P.dialog), GTK_MESSAGE_INFO,
-                 "Settings imported. A few options (window size, default encoding) "
-                 "take effect on restart.");
+    show_message(GTK_WINDOW(P.dialog), GTK_MESSAGE_INFO, settings_import_message(result));
 }
 
 // Reset every preference to its default. Rather than an allowlist of keys to
 // remove (which silently drifts every time a setting is added), this resets
 // EVERYTHING except a small, stable set of preserved categories: recent files,
-// window geometry, and Find/Replace state (options + history). Any new
-// preference key is therefore reset by default. This is the list
-// reset_all_preferences keeps on Win32.
+// window geometry, and Find/Replace state (the dialog's options + history).
+// Any new preference key is therefore reset by default. What is kept is
+// defined once, in settings_reset_all_preferences, which Win32 calls too.
 static void on_reset_clicked(GtkButton *button, gpointer data) {
     (void) button;
     (void) data;
-    static const char *const keep_prefixes[] = {
-        "recent_file_", // recent files list (recent_files_max is a pref -> reset)
-        "window_",      // window geometry
-        "find_",        // find options + find history
-        "replace_",     // replace history
-    };
 
     GtkWidget *ask = gtk_message_dialog_new(
         GTK_WINDOW(P.dialog), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
         GTK_MESSAGE_QUESTION, GTK_BUTTONS_YES_NO, "%s",
         "Reset all preferences to their defaults?\n\n"
-        "Recent files, window position and Find/Replace options and history are kept.\n"
+        "Find wrap-around is reset with them. Recent files, window position and the other "
+        "Find/Replace options and history are kept.\n"
         "The Preferences window will close.");
     gtk_window_set_title(GTK_WINDOW(ask), "npad");
     gtk_dialog_set_default_response(GTK_DIALOG(ask), GTK_RESPONSE_NO);
@@ -1023,12 +1015,19 @@ static void on_reset_clicked(GtkButton *button, gpointer data) {
     if (answer != GTK_RESPONSE_YES)
         return;
 
-    settings_reset_except_prefixes(keep_prefixes,
-                                   (int) (sizeof(keep_prefixes) / sizeof(keep_prefixes[0])));
-    // The one find_-prefixed key that IS a preference (Preferences > General),
-    // not search state: the prefix keep above would otherwise preserve it
-    settings_remove_key(FIND_SEED_KEY);
-    commit();
+    // A reset that could not be saved is not applied: the reload puts back
+    // what is on disk (see settings_reset_all_preferences_and_save). The
+    // find_-prefixed keys that ARE preferences (both on the Editor page: Fill
+    // Find with the selected text, Wrap around by default) are reset too,
+    // although the find_ prefix is kept as search state.
+    if (settings_reset_all_preferences_and_save()) {
+        ui_notify_settings_changed();
+    } else {
+        show_message(GTK_WINDOW(P.dialog), GTK_MESSAGE_WARNING,
+                     "npad could not save the settings, so nothing was reset. Check that the "
+                     "settings folder is writable, then try again.");
+    }
+    npad_gtk_reload_and_apply_settings(P.owner);
 
     // The controls still show pre-reset values; close rather than leave stale
     // state on screen. Cancel, so nothing staged is written back over the reset.
@@ -1059,8 +1058,9 @@ static void build_backup(GtkWidget *notebook) {
     gtk_container_add(GTK_CONTAINER(reset), rbox);
     add_button(rbox, "_Reset All Preferences...", G_CALLBACK(on_reset_clicked));
     gtk_box_pack_start(GTK_BOX(page), reset, FALSE, FALSE, 0);
-    add_note(page, "Restores every preference to its default. Recent files, window position and "
-                   "Find/Replace options and history are kept.");
+    add_note(page, "Restores every preference to its default, Find wrap-around included. Recent "
+                   "files, window position and the other Find/Replace options and history are "
+                   "kept.");
 }
 
 // ---------------------------------------------------------------------------
@@ -1099,6 +1099,8 @@ static void on_skip_clicked(GtkButton *button, gpointer data) {
     npad_gtk_prefs_updates_refresh();
 }
 
+static void refresh_assoc_status(bool asked, bool accepted);
+
 // The advice needs the install source, which costs a dpkg / rpm / pacman
 // query: only ask once the page has been looked at
 static void on_switch_page(GtkNotebook *notebook, GtkWidget *page, guint index, gpointer data) {
@@ -1108,6 +1110,13 @@ static void on_switch_page(GtkNotebook *notebook, GtkWidget *page, guint index, 
     if (index == PAGE_UPDATES && !P.upd_seen) {
         P.upd_seen = true;
         npad_gtk_prefs_updates_refresh();
+    }
+    // Likewise who handles text/plain: xdg-mime is a shell script that can
+    // take a while, so it runs only once the page is looked at, and in the
+    // background
+    if (index == PAGE_ASSOC && !P.assoc_seen) {
+        P.assoc_seen = true;
+        refresh_assoc_status(false, false);
     }
 }
 
@@ -1201,48 +1210,94 @@ static void build_updates(GtkWidget *notebook) {
 // Associations page: the Linux stand-in is one explicit action
 // ---------------------------------------------------------------------------
 
-// g_spawn_sync's status is a wait status on Unix. (g_spawn_check_exit_status is
-// deprecated and its replacement needs GLib 2.70, newer than some targets.)
-static bool exited_cleanly(gint status) {
-    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+// Counts the openings of the dialog. xdg-mime runs in the background, and its
+// answer is shown only if the dialog it was asked for is still the open one.
+static guint g_prefs_serial = 0;
+
+// What an xdg-mime run was for, carried to its completion
+typedef struct {
+    guint serial;
+    bool asked;    // The user clicked the button (otherwise: just showing)
+    bool accepted; // xdg-mime default succeeded
+} AssocRequest;
+
+static AssocRequest *assoc_request_new(bool asked, bool accepted) {
+    AssocRequest *request = g_new0(AssocRequest, 1);
+    request->serial = P.serial;
+    request->asked = asked;
+    request->accepted = accepted;
+    return request;
 }
 
-// The desktop file id currently handling text/plain, or NULL (g_free)
-static char *query_default_text_editor(void) {
-    char *xdg = g_find_program_in_path("xdg-mime");
-    if (!xdg)
-        return NULL;
-    char *argv[] = { xdg, "query", "default", "text/plain", NULL };
-    char *out = NULL;
-    gint status = 0;
-    bool ok = g_spawn_sync(NULL, argv, NULL, G_SPAWN_STDERR_TO_DEV_NULL, NULL, NULL, &out, NULL,
-                           &status, NULL) &&
-              exited_cleanly(status);
-    g_free(xdg);
-    if (ok && out)
-        g_strstrip(out);
-    if (!ok || !out || !out[0]) {
-        g_free(out);
-        return NULL;
-    }
-    return out;
+static bool assoc_request_current(const AssocRequest *request) {
+    return P.dialog && P.assoc_status && P.serial == request->serial;
 }
 
-// Show who handles text/plain now; asked = the user just clicked the button
-static void refresh_assoc_status(bool asked, bool accepted) {
-    char *current = query_default_text_editor();
+static bool subprocess_succeeded(GSubprocess *process) {
+    return g_subprocess_get_if_exited(process) && g_subprocess_get_exit_status(process) == 0;
+}
+
+// Show who handles text/plain now; current is the desktop file id or NULL
+static void show_assoc_status(const AssocRequest *request, const char *current) {
     const char *lead = "";
-    if (asked && !accepted)
+    if (request->asked && !request->accepted)
         lead = "Could not change the default text editor.\n";
-    else if (asked && current && strcmp(current, NPAD_DESKTOP_FILE) == 0)
+    else if (request->asked && current && strcmp(current, NPAD_DESKTOP_FILE) == 0)
         lead = "npad is now the default text editor.\n";
-    else if (asked)
+    else if (request->asked)
         lead = "Requested. Your desktop may need a moment, or a new login, to notice.\n";
     char *text = g_strdup_printf("%sCurrent default for plain text: %s", lead,
                                  current ? current : "unknown");
     gtk_label_set_text(GTK_LABEL(P.assoc_status), text);
     g_free(text);
-    g_free(current);
+}
+
+static void on_assoc_query_done(GObject *source, GAsyncResult *result, gpointer data) {
+    AssocRequest *request = data;
+    GSubprocess *process = G_SUBPROCESS(source);
+    char *out = NULL;
+    bool ok = g_subprocess_communicate_utf8_finish(process, result, &out, NULL, NULL) &&
+              subprocess_succeeded(process);
+    if (ok && out)
+        g_strstrip(out);
+    if (assoc_request_current(request))
+        show_assoc_status(request, (ok && out && out[0]) ? out : NULL);
+    g_free(out);
+    g_free(request);
+}
+
+// Ask xdg-mime who handles text/plain, in the background; the label says so
+// meanwhile. asked / accepted: what the button just did, if anything.
+static void refresh_assoc_status(bool asked, bool accepted) {
+    AssocRequest *request = assoc_request_new(asked, accepted);
+    char *xdg = g_find_program_in_path("xdg-mime");
+    GSubprocess *process =
+        xdg ? g_subprocess_new(G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_SILENCE,
+                               NULL, xdg, "query", "default", "text/plain", NULL)
+            : NULL;
+    g_free(xdg);
+    if (!process) {
+        show_assoc_status(request, NULL);
+        g_free(request);
+        return;
+    }
+    if (!asked)
+        gtk_label_set_text(GTK_LABEL(P.assoc_status),
+                           "Current default for plain text: checking...");
+    // The pending operation holds the process until it completes
+    g_subprocess_communicate_utf8_async(process, NULL, NULL, on_assoc_query_done, request);
+    g_object_unref(process);
+}
+
+static void on_make_default_done(GObject *source, GAsyncResult *result, gpointer data) {
+    AssocRequest *request = data;
+    GSubprocess *process = G_SUBPROCESS(source);
+    bool ok = g_subprocess_wait_finish(process, result, NULL) && subprocess_succeeded(process);
+    if (assoc_request_current(request)) {
+        gtk_widget_set_sensitive(P.assoc_button, TRUE);
+        refresh_assoc_status(true, ok);
+    }
+    g_free(request);
 }
 
 static void on_make_default_clicked(GtkButton *button, gpointer data) {
@@ -1256,16 +1311,20 @@ static void on_make_default_clicked(GtkButton *button, gpointer data) {
             "Install xdg-utils, or use your desktop's Default Applications settings.");
         return;
     }
-    char *argv[] = { xdg, "default", NPAD_DESKTOP_FILE, "text/plain", NULL };
-    gint status = 0;
-    GError *error = NULL;
-    bool ok =
-        g_spawn_sync(NULL, argv, NULL, G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
-                     NULL, NULL, NULL, NULL, &status, &error) &&
-        exited_cleanly(status);
+    GSubprocess *process =
+        g_subprocess_new(G_SUBPROCESS_FLAGS_STDOUT_SILENCE | G_SUBPROCESS_FLAGS_STDERR_SILENCE,
+                         NULL, xdg, "default", NPAD_DESKTOP_FILE, "text/plain", NULL);
     g_free(xdg);
-    g_clear_error(&error);
-    refresh_assoc_status(true, ok);
+    if (!process) {
+        AssocRequest request = { P.serial, true, false };
+        show_assoc_status(&request, NULL);
+        return;
+    }
+    // One run at a time; the button comes back when it has finished
+    gtk_widget_set_sensitive(P.assoc_button, FALSE);
+    gtk_label_set_text(GTK_LABEL(P.assoc_status), "Asking your desktop...");
+    g_subprocess_wait_async(process, NULL, on_make_default_done, assoc_request_new(true, false));
+    g_object_unref(process);
 }
 
 static void build_associations(GtkWidget *notebook) {
@@ -1275,34 +1334,48 @@ static void build_associations(GtkWidget *notebook) {
                    "made the default unless you ask: this runs\n"
                    "xdg-mime default " NPAD_DESKTOP_FILE " text/plain\n"
                    "for your account. Most file managers use that for other text files too.");
-    add_button(page, "Make npad the default text _editor", G_CALLBACK(on_make_default_clicked));
-    P.assoc_status = add_note(page, "");
-    refresh_assoc_status(false, false);
+    P.assoc_button =
+        add_button(page, "Make npad the default text _editor", G_CALLBACK(on_make_default_clicked));
+    // Filled in when the page is first shown (on_switch_page)
+    P.assoc_status = add_note(page, "Current default for plain text: checking...");
 }
 
 // ---------------------------------------------------------------------------
 // Debug page (hidden: Ctrl+Shift+. or Shift+click on Preferences)
 // ---------------------------------------------------------------------------
 
+// "label: value\n" with value (a path, or an environment string, which hold
+// bytes rather than text) in its UTF-8 display form: a GtkTextBuffer rejects
+// invalid UTF-8, and Copy Diagnostics hands the same text to the clipboard
+static void append_shown(GString *out, const char *label, const char *value, const char *suffix) {
+    char *shown = npad_gtk_display_text(value ? value : "?");
+    g_string_append_printf(out, "%s: %s%s\n", label, shown, suffix ? suffix : "");
+    g_free(shown);
+}
+
 static char *build_diagnostics_text(void) {
     GString *out = g_string_new(NULL);
     g_string_append_printf(out, "npad %s\n", NPAD_VERSION);
 
     char *exe = g_file_read_link("/proc/self/exe", NULL);
-    g_string_append_printf(out, "Executable: %s\n", exe ? exe : "?");
+    append_shown(out, "Executable", exe, NULL);
     g_free(exe);
 
     g_string_append_printf(out, "GTK: %u.%u.%u (built against %d.%d.%d)\n", gtk_get_major_version(),
                            gtk_get_minor_version(), gtk_get_micro_version(), GTK_MAJOR_VERSION,
                            GTK_MINOR_VERSION, GTK_MICRO_VERSION);
     GdkDisplay *display = gdk_display_get_default();
+    // The display name is $DISPLAY / $WAYLAND_DISPLAY, a socket path or name
+    char *display_name = npad_gtk_display_text(display ? gdk_display_get_name(display) : "?");
     g_string_append_printf(out, "Display backend: %s (%s)\n",
-                           display ? G_OBJECT_TYPE_NAME(display) : "none",
-                           display ? gdk_display_get_name(display) : "?");
-    const char *session = g_getenv("XDG_SESSION_TYPE");
-    const char *desktop = g_getenv("XDG_CURRENT_DESKTOP");
-    g_string_append_printf(out, "Session: %s, desktop %s\n", session ? session : "?",
-                           desktop ? desktop : "?");
+                           display ? G_OBJECT_TYPE_NAME(display) : "none", display_name);
+    g_free(display_name);
+    char *session = npad_gtk_display_text(g_getenv("XDG_SESSION_TYPE"));
+    char *desktop = npad_gtk_display_text(g_getenv("XDG_CURRENT_DESKTOP"));
+    g_string_append_printf(out, "Session: %s, desktop %s\n", session[0] ? session : "?",
+                           desktop[0] ? desktop : "?");
+    g_free(session);
+    g_free(desktop);
     gchar *theme = NULL;
     g_object_get(gtk_settings_get_default(), "gtk-theme-name", &theme, NULL);
     g_string_append_printf(out, "GTK theme: %s\n", theme ? theme : "?");
@@ -1310,19 +1383,23 @@ static char *build_diagnostics_text(void) {
     char *colours = npad_gtk_theme_diagnostics();
     g_string_append(out, colours);
     g_free(colours);
-    const char *locale = setlocale(LC_ALL, NULL);
-    g_string_append_printf(out, "Locale: %s\n", locale ? locale : "?");
+    append_shown(out, "Locale", setlocale(LC_ALL, NULL), NULL); // From $LANG / $LC_*
 
     const char *settings_path = settings_get_file_path();
-    if (settings_path)
-        g_string_append_printf(out, "Settings: %s (%d entries)\n", settings_path, settings_count());
+    if (settings_path) {
+        char entries[32];
+        snprintf(entries, sizeof(entries), " (%d entries)", settings_count());
+        append_shown(out, "Settings", settings_path, entries);
+    }
 
     char *recovery_dir = editor_session_dir();
     if (recovery_dir) {
         int slot_count = 0;
         char **slots = session_list_slots(recovery_dir, &slot_count);
         session_free_slots(slots, slot_count);
-        g_string_append_printf(out, "Recovery: %s (%d slots)\n", recovery_dir, slot_count);
+        char slots_text[32];
+        snprintf(slots_text, sizeof(slots_text), " (%d slots)", slot_count);
+        append_shown(out, "Recovery", recovery_dir, slots_text);
         free(recovery_dir);
     }
 
@@ -1413,6 +1490,7 @@ static void show_preferences(Window *window, bool show_debug, int start_page) {
     }
     memset(&P, 0, sizeof(P));
     P.owner = window;
+    P.serial = ++g_prefs_serial;
 
     P.dialog = gtk_dialog_new_with_buttons("Preferences", GTK_WINDOW(window->window),
                                            GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, "_OK",
@@ -1420,6 +1498,7 @@ static void show_preferences(Window *window, bool show_debug, int start_page) {
                                            "_Apply", GTK_RESPONSE_APPLY, NULL);
     gtk_dialog_set_default_response(GTK_DIALOG(P.dialog), GTK_RESPONSE_OK);
     P.staged = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, free_staged);
+    P.written = g_hash_table_new(g_str_hash, g_str_equal);
 
     GtkWidget *notebook = gtk_notebook_new();
     gtk_container_set_border_width(GTK_CONTAINER(notebook), 6);
@@ -1469,10 +1548,21 @@ static void show_preferences(Window *window, bool show_debug, int start_page) {
                      "npad could not save the settings. Check that the settings folder is "
                      "writable, then try again.");
     }
-    if (P.memory_dirty)
-        npad_gtk_reload_and_apply_settings(window); // Drop values that never reached disk
+    if (P.memory_dirty) {
+        // Drop the applied values that never reached disk: a reload alone
+        // would keep them, as it keeps every unsaved change. Only those keys:
+        // this window's other unsaved changes (Recent Files, find history)
+        // have nothing to do with Preferences and are kept for a later save.
+        GHashTableIter iter;
+        gpointer key;
+        g_hash_table_iter_init(&iter, P.written);
+        while (g_hash_table_iter_next(&iter, &key, NULL))
+            settings_discard_unsaved_change(key);
+        npad_gtk_reload_and_apply_settings(window);
+    }
     gtk_widget_destroy(P.dialog);
     g_hash_table_destroy(P.staged);
+    g_hash_table_destroy(P.written);
     memset(&P, 0, sizeof(P));
 }
 

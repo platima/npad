@@ -21,11 +21,13 @@
 
 #include "core/editor.h"
 #include "core/error.h"
+#include "core/print_core.h"
 #include "core/settings.h"
 #include "core/startup_prof.h"
 #include "core/thread_safety.h"
 #include "ui_interface.h"
 #ifdef _WIN32
+#include "platform/args_win32.h"
 #include "platform/assoc_win32.h"
 #endif
 
@@ -43,7 +45,54 @@ static void show_version(void);
 // (0 for a normally launched window). Set from --cascade.
 int g_cascade_index = 0;
 
+// Installed once the UI exists. A fatal error (no main window, say) is shown,
+// because the Windows build has no console and stderr goes nowhere; the
+// caller then exits through its own cleanup. Lesser errors are already
+// reported to the user by the code that hit them, so they are only logged.
+static void gui_error_callback(const npad_error_info_t *error) {
+    npad_error_log_stderr(error);
+    if (error && error->level == NPAD_ERROR_FATAL) {
+        char message[640];
+        snprintf(message, sizeof(message), "npad cannot continue:\n%.500s", error->message);
+        ui_show_message_box(NULL, "npad", message, false);
+    }
+}
+
+// /p FILE (Windows) or -p / --print FILE: print and exit, as notepad.exe /p.
+// The name is a copy: on Windows argv is the UTF-8 one built from the wide
+// command line, which is freed once the command line has been parsed.
+static bool g_print_mode = false;
+static char *g_print_file = NULL;
+
+// The print switch accepts Notepad's own "/p" only on Windows: on Linux "/p"
+// is a perfectly good absolute path
+#ifdef _WIN32
+#define PRINT_SWITCH_ALLOWS_SLASH true
+#else
+#define PRINT_SWITCH_ALLOWS_SLASH false
+#endif
+
 int main(int argc, char *argv[]) {
+#ifdef NPAD_PLATFORM_WINDOWS
+    // Before anything loads a DLL: look for DLLs named without a path in
+    // System32 only. Otherwise the exe's own folder is searched first, and a
+    // portable npad run from Downloads beside a planted msftedit.dll (or
+    // winhttp/bcrypt/msimg32, which the delay-load helper loads by bare name
+    // on first use) would run that DLL's code. None of npad's DLLs lives
+    // anywhere else; the explicit loads also pass LOAD_LIBRARY_SEARCH_SYSTEM32.
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
+
+    // argv from the wide command line, as UTF-8: the narrow one is in the ANSI
+    // code page, so any non-ASCII file name passed by Explorer, Open with,
+    // Send To or a console could not be opened (see args_win32.h)
+    int utf8_argc = 0;
+    char **utf8_argv = args_win32_utf8_argv(GetCommandLineW(), &utf8_argc);
+    if (utf8_argv) {
+        argc = utf8_argc;
+        argv = utf8_argv;
+    }
+#endif
+
     DEBUG_PRINT("npad starting...");
 
     // DPI awareness is declared in the embedded manifest (dpiAware true/PM +
@@ -57,8 +106,14 @@ int main(int argc, char *argv[]) {
 
     startup_prof_mark("main enter");
 
-    // Parse command line arguments
+    // Errors can be reported from here on (the command line, settings)
+    npad_error_init();
+
+    // Parse command line arguments (everything it keeps, it copies)
     parse_command_line(argc, argv);
+#ifdef NPAD_PLATFORM_WINDOWS
+    args_win32_free_argv(utf8_argv, utf8_argc);
+#endif
 
     // Initialize thread safety
     if (!thread_safety_init()) {
@@ -74,6 +129,19 @@ int main(int argc, char *argv[]) {
     }
     startup_prof_mark("settings loaded");
 
+    // Print and exit. Nothing else starts: no document window, no editor (so
+    // no crash recovery prompt, no session snapshot, no recent-files entry),
+    // and settings are read but never written.
+    if (g_print_mode) {
+        int code = ui_print_file(g_print_file);
+        free(g_print_file);
+        g_print_file = NULL;
+        settings_cleanup();
+        thread_safety_cleanup();
+        npad_error_cleanup();
+        return code;
+    }
+
     // Initialize the UI system
     if (!ui_init()) {
         NPAD_ERROR_FATAL(NPAD_ERROR_UI, 0, "main initialization", "Failed to initialize UI system");
@@ -82,11 +150,13 @@ int main(int argc, char *argv[]) {
         npad_error_cleanup();
         return 1;
     }
+    npad_error_set_callback(gui_error_callback);
 
     // Initialize the editor core
     if (!editor_init()) {
         NPAD_ERROR_FATAL(NPAD_ERROR_EDITOR, 0, "main initialization",
                          "Failed to initialize editor system");
+        npad_error_set_callback(NULL); // The UI is going away
         ui_cleanup();
         settings_cleanup();
         thread_safety_cleanup();
@@ -111,6 +181,7 @@ int main(int argc, char *argv[]) {
     if (!main_window) {
         NPAD_ERROR_FATAL(NPAD_ERROR_UI, 0, "main initialization", "Failed to create main window");
         editor_cleanup();
+        npad_error_set_callback(NULL); // The UI is going away
         ui_cleanup();
         settings_cleanup();
         thread_safety_cleanup();
@@ -119,7 +190,9 @@ int main(int argc, char *argv[]) {
     }
 
     // Window geometry: use the saved state if present, otherwise a large
-    // DPI-correct default centred on the work area (first run).
+    // DPI-correct default centred on the work area (first run). Positions are
+    // screen coordinates on every platform (Win32 converts its workspace-
+    // coordinate placement when it reads it).
     int x, y, width, height;
     bool maximized = false;
     if (settings_has_key("window_width")) {
@@ -145,16 +218,19 @@ int main(int argc, char *argv[]) {
     // UI events always see a valid main window
     editor_set_main_window(main_window);
 
-    // Show the window, restoring maximized state if applicable
-    ui_show_window(main_window);
+    // Restore the maximized state BEFORE the first show, so the window
+    // appears maximized rather than painting at its restored size and then
+    // jumping (Win32 shows it with SW_SHOWMAXIMIZED; GTK maximizes on map)
     if (maximized) {
         ui_set_window_maximized(main_window, true);
     }
+    ui_show_window(main_window);
 
-    // Open startup file if specified
+    // Open startup file if specified (offering to create it when missing,
+    // as Notepad does)
     extern char *g_startup_file;
     if (g_startup_file) {
-        editor_open_file(g_startup_file);
+        editor_open_startup_file(g_startup_file);
     }
 
     DEBUG_PRINT("Entering message loop...");
@@ -165,16 +241,19 @@ int main(int argc, char *argv[]) {
 
     DEBUG_PRINT("Message loop exited with code: %d", result);
 
-    // Save window state (restored geometry plus maximized flag)
-    ui_get_window_position(main_window, &x, &y);
-    ui_get_window_size(main_window, &width, &height);
-    settings_save_window_state(x, y, width, height, ui_is_window_maximized(main_window));
-
-    // Save settings
-    settings_save();
+    // Save window state (restored geometry plus maximized flag), then settings.
+    // Not for a recovery window that closed itself unused: its cascaded
+    // position is nobody's choice, and it changed nothing worth writing.
+    if (!editor_exited_unused()) {
+        ui_get_window_position(main_window, &x, &y);
+        ui_get_window_size(main_window, &width, &height);
+        settings_save_window_state(x, y, width, height, ui_is_window_maximized(main_window));
+        settings_save();
+    }
 
     // Cleanup
     editor_cleanup();
+    npad_error_set_callback(NULL); // The UI is going away
     ui_cleanup();
     settings_cleanup();
     thread_safety_cleanup();
@@ -213,14 +292,29 @@ static void parse_command_line(int argc, char *argv[]) {
             exit(1);
 #endif
         } else if (strcmp(argv[i], "--recover") == 0) {
-            // Internal: reopen a specific crash-recovery slot in this instance
-            if (i + 1 < argc) {
-                editor_set_recover_slot(argv[++i]);
+            // Internal: reopen a specific crash-recovery slot in this instance.
+            // The id names files that get renamed and deleted, so one that npad
+            // could not have made is refused, and this starts as a plain launch.
+            if (i + 1 < argc && !editor_set_recover_slot(argv[++i])) {
+                NPAD_ERROR_ERROR(NPAD_ERROR_INVALID_PARAM, 0, argv[i],
+                                 "Ignoring invalid recovery slot: %s", argv[i]);
             }
         } else if (strcmp(argv[i], "--cascade") == 0) {
             // Internal: stagger this recovery window's position
             if (i + 1 < argc) {
                 g_cascade_index = atoi(argv[++i]);
+            }
+        } else if (print_switch_matches(argv[i], PRINT_SWITCH_ALLOWS_SLASH)) {
+            // notepad.exe /p FILE: print to the default printer, no dialog,
+            // then exit. Explorer's Print verb runs exactly this. Before it
+            // was recognised, "/p" was taken for the name of a file to open.
+            g_print_mode = true;
+            if (i + 1 < argc) {
+                const char *name = argv[++i];
+                free(g_print_file); // A repeated switch: the last one wins
+                g_print_file = malloc(strlen(name) + 1);
+                if (g_print_file)
+                    strcpy(g_print_file, name);
             }
         } else if (argv[i][0] != '-') {
             // Assume it's a filename to open
@@ -242,6 +336,13 @@ static void show_help(void) {
     printf("Options:\n");
     printf("  -h, --help     Show this help message\n");
     printf("  -v, --version  Show version information\n");
+#ifdef _WIN32
+    printf("  /p, -p, --print FILE\n");
+#else
+    printf("  -p, --print FILE\n");
+#endif
+    printf("                 Print FILE to the default printer, without the print\n");
+    printf("                 dialog, then exit\n");
     printf("\n");
     printf("If no filename is specified, npad starts with a new document.\n");
 }

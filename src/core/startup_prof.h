@@ -22,7 +22,10 @@ int startup_prof_count(void);
 // Phase name of mark i (borrowed pointer; valid for the process lifetime)
 const char *startup_prof_name(int i);
 
-// Milliseconds from the first mark to mark i
+// Milliseconds from the start of the process to mark i. On Windows that is
+// the moment the OS created the process (so loader and DLL time before main()
+// is included); elsewhere, where no portable equivalent exists, it is the
+// first mark.
 double startup_prof_ms(int i);
 
 #endif // STARTUP_PROF_H

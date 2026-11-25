@@ -13,38 +13,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-TEST_CASE(extract_tag_basic) {
-    char tag[32];
-    TEST_ASSERT(update_extract_tag("{\"tag_name\":\"v0.15.0\",\"name\":\"npad v0.15.0\"}", tag,
-                                   sizeof(tag)),
-                "extraction should succeed");
-    TEST_ASSERT_STR_EQ("v0.15.0", tag, "tag value extracted");
-}
-
-TEST_CASE(extract_tag_spaced) {
-    char tag[32];
-    TEST_ASSERT(update_extract_tag("{ \"tag_name\" : \"v1.2.3\" }", tag, sizeof(tag)),
-                "extraction tolerates whitespace around the colon");
-    TEST_ASSERT_STR_EQ("v1.2.3", tag, "spaced tag value extracted");
-}
-
-TEST_CASE(extract_tag_missing_or_bad) {
-    char tag[32];
-    TEST_ASSERT(!update_extract_tag("{\"name\":\"no tag here\"}", tag, sizeof(tag)),
-                "missing key fails");
-    TEST_ASSERT(!update_extract_tag("{\"tag_name\":\"\"}", tag, sizeof(tag)), "empty value fails");
-    TEST_ASSERT(!update_extract_tag(NULL, tag, sizeof(tag)), "NULL json fails");
-    char tiny[4];
-    TEST_ASSERT(!update_extract_tag("{\"tag_name\":\"v0.15.0\"}", tiny, sizeof(tiny)),
-                "value longer than the buffer fails");
-}
-
 TEST_CASE(version_compare_numeric) {
     TEST_ASSERT(update_version_compare("v0.15.0", "v0.15.1") < 0, "patch compares");
     TEST_ASSERT(update_version_compare("v0.9.0", "v0.15.0") < 0, "numeric, not lexicographic");
     TEST_ASSERT(update_version_compare("v1.0.0", "v0.99.99") > 0, "major wins");
     TEST_ASSERT(update_version_compare("v0.15.0", "0.15.0") == 0, "leading v optional");
-    TEST_ASSERT(update_version_compare("v0.16.0-dev", "v0.15.0") > 0, "suffix ignored");
+    TEST_ASSERT(update_version_compare("v0.16.0-dev", "v0.15.0") > 0,
+                "a dev build of a later version is newer (the suffix only orders equal triples)");
     TEST_ASSERT(update_version_compare("v0.15.0", "v0.15.0") == 0, "equal");
     // Pre-releases sort before their release, and among themselves naturally
     TEST_ASSERT(update_version_compare("v0.36.0-rc2", "v0.36.0") < 0, "rc before its release");
@@ -261,6 +236,266 @@ TEST_CASE(find_asset_arm64_never_falls_back_to_x64) {
     TEST_ASSERT(!update_find_asset_url(json, update_installer_suffix("arm64", true), url,
                                        sizeof(url)),
                 "no arm64 digest on an x64-only release");
+}
+
+TEST_CASE(find_asset_ignores_nested_names) {
+    // The uploader object (or anything nested) carrying a "name" of its own
+    // between the asset's name and its URL must not steal the pairing
+    const char *json =
+        "{\"tag_name\":\"v0.37.0\",\"assets\":["
+        "{\"name\":\"npad-v0.37.0-setup-win-x64.exe\",\"uploader\":{\"login\":\"platima\","
+        "\"name\":\"Platima\"},\"browser_download_url\":\"https://github.com/platima/npad/"
+        "releases/download/v0.37.0/npad-v0.37.0-setup-win-x64.exe\"}]}";
+    char url[512];
+    TEST_ASSERT(update_find_asset_url(json, "-setup-win-x64.exe", url, sizeof(url)),
+                "asset found past an uploader with a name");
+    TEST_ASSERT_STR_EQ("https://github.com/platima/npad/releases/download/v0.37.0/"
+                       "npad-v0.37.0-setup-win-x64.exe",
+                       url, "URL paired with the asset's own name");
+
+    // A nested name that happens to match the suffix is not an asset
+    const char *decoy = "{\"assets\":[{\"name\":\"README.txt\",\"uploader\":{\"name\":\"x-setup-"
+                        "win-x64.exe\"},\"browser_download_url\":\"https://github.com/a/b/"
+                        "README.txt\"}]}";
+    TEST_ASSERT(!update_find_asset_url(decoy, "-setup-win-x64.exe", url, sizeof(url)),
+                "a nested name never matches");
+}
+
+TEST_CASE(find_asset_field_order_and_escapes) {
+    // URL before name, pretty-printed, an escaped slash and a quote in a
+    // string elsewhere: none of it may confuse the walker
+    const char *json = "{\n  \"body\": \"say \\\"hi\\\" {not json}\",\n  \"assets\": [\n"
+                       "    {\n      \"browser_download_url\": \"https:\\/\\/github.com\\/"
+                       "platima\\/npad\\/releases\\/download\\/v1.0.0\\/npad-v1.0.0-msi-win-"
+                       "arm64.msi\",\n      \"name\": \"npad-v1.0.0-msi-win-arm64.msi\"\n    }\n"
+                       "  ]\n}";
+    char url[512];
+    TEST_ASSERT(update_find_asset_url(json, "-msi-win-arm64.msi", url, sizeof(url)),
+                "URL before name");
+    TEST_ASSERT_STR_EQ("https://github.com/platima/npad/releases/download/v1.0.0/"
+                       "npad-v1.0.0-msi-win-arm64.msi",
+                       url, "escaped slashes decoded");
+    TEST_ASSERT(!update_find_asset_url("{\"assets\":[{\"name\":\"a-setup-win-x64.exe\","
+                                       "\"browser_download_url\":\"https://github.com/cut",
+                                       "-setup-win-x64.exe", url, sizeof(url)),
+                "a response cut short yields nothing");
+    TEST_ASSERT(!update_find_asset_url("{\"assets\":[{\"name\":\"a-setup-win-x64.exe\","
+                                       "\"browser_download_url\":\"https://x/\\u00e9\"}]}",
+                                       "-setup-win-x64.exe", url, sizeof(url)),
+                "a non-ASCII \\u escape is refused rather than mangled");
+}
+
+static const char *RELEASE_LIST =
+    "[{\"tag_name\":\"v0.37.0-rc1\",\"draft\":false,\"prerelease\":true,\"assets\":[]},"
+    "{\"tag_name\":\"v0.38.0-rc1\",\"draft\":true,\"prerelease\":true,\"assets\":[]},"
+    "{\"tag_name\":\"v0.36.0\",\"draft\":false,\"prerelease\":false,\"assets\":"
+    "[{\"name\":\"x\",\"uploader\":{\"tag_name\":\"v9.9.9\"}}]},"
+    "{\"tag_name\":\"nightly\",\"draft\":false,\"prerelease\":true},"
+    "{\"tag_name\":\"v0.36.0-rc2\",\"draft\":false,\"prerelease\":true}]";
+
+TEST_CASE(pick_release_tag) {
+    char tag[32];
+    TEST_ASSERT(update_pick_release_tag(RELEASE_LIST, true, tag, sizeof(tag)),
+                "a list with pre-releases");
+    TEST_ASSERT_STR_EQ("v0.37.0-rc1", tag, "the newest non-draft, pre-releases included");
+    TEST_ASSERT(update_pick_release_tag(RELEASE_LIST, false, tag, sizeof(tag)),
+                "a list without pre-releases");
+    TEST_ASSERT_STR_EQ("v0.36.0", tag, "only final releases; nested tag_name ignored");
+    TEST_ASSERT(update_pick_release_tag("{\"tag_name\":\"v0.36.0\",\"name\":\"npad\"}", false, tag,
+                                        sizeof(tag)),
+                "a single release object (/releases/latest)");
+    TEST_ASSERT_STR_EQ("v0.36.0", tag, "the single release's tag");
+    TEST_ASSERT(update_pick_release_tag("{ \"tag_name\" : \"v1.2.3\" }", false, tag, sizeof(tag)),
+                "whitespace around the colon");
+    TEST_ASSERT_STR_EQ("v1.2.3", tag, "spaced tag value");
+    TEST_ASSERT(!update_pick_release_tag("{\"tag_name\":\"\"}", false, tag, sizeof(tag)),
+                "an empty tag");
+    TEST_ASSERT(!update_pick_release_tag("[]", true, tag, sizeof(tag)), "empty list");
+    TEST_ASSERT(!update_pick_release_tag("{\"message\":\"Not Found\"}", true, tag, sizeof(tag)),
+                "an error object");
+    TEST_ASSERT(!update_pick_release_tag("[{\"tag_name\":\"nightly\"}]", true, tag, sizeof(tag)),
+                "no version tags");
+    TEST_ASSERT(!update_pick_release_tag(NULL, true, tag, sizeof(tag)), "NULL");
+    char tiny[4];
+    TEST_ASSERT(!update_pick_release_tag(RELEASE_LIST, true, tiny, sizeof(tiny)),
+                "a tag longer than the buffer");
+}
+
+TEST_CASE(prerelease_builds) {
+    TEST_ASSERT(update_is_prerelease("v0.36.0-rc2"), "rc");
+    TEST_ASSERT(update_is_prerelease("v0.36.0-beta1"), "beta");
+    TEST_ASSERT(!update_is_prerelease("v0.36.0"), "release");
+    TEST_ASSERT(!update_is_prerelease("v0.36.0-dev"), "dev build is not published");
+    TEST_ASSERT(!update_is_prerelease("v0.36.0-DEV"), "dev, any case");
+    TEST_ASSERT(update_is_prerelease("v0.36.0-devel1"), "only exactly dev is excluded");
+    TEST_ASSERT(!update_is_prerelease(NULL), "NULL");
+    // An rc tester is offered the next rc and the final release
+    TEST_ASSERT(update_is_newer_unskipped("v0.36.0-rc2", "v0.36.0-rc3", ""), "rc2 -> rc3");
+}
+
+TEST_CASE(http_status_messages) {
+    char msg[200];
+    update_http_status_message(403, msg, sizeof(msg));
+    TEST_ASSERT(strstr(msg, "403") && strstr(msg, "limiting"), "403 is the rate limit");
+    update_http_status_message(429, msg, sizeof(msg));
+    TEST_ASSERT(strstr(msg, "429") && strstr(msg, "hour"), "429 is the rate limit");
+    update_http_status_message(404, msg, sizeof(msg));
+    TEST_ASSERT(strstr(msg, "404") != NULL, "404 named");
+    update_http_status_message(503, msg, sizeof(msg));
+    TEST_ASSERT(strstr(msg, "503") && strstr(msg, "servers"), "5xx is GitHub's problem");
+    update_http_status_message(418, msg, sizeof(msg));
+    TEST_ASSERT(strstr(msg, "HTTP 418") != NULL, "anything else names its status");
+    for (int s = 300; s < 600; s += 37) {
+        update_http_status_message(s, msg, sizeof(msg));
+        TEST_ASSERT(strstr(msg, "Could not reach") == NULL, "an answer is not unreachable");
+        TEST_ASSERT(strstr(msg, "Npad") == NULL && strstr(msg, "NPAD") == NULL, "lowercase npad");
+    }
+    char tiny[8];
+    update_http_status_message(403, tiny, sizeof(tiny));
+    TEST_ASSERT(strlen(tiny) < sizeof(tiny), "truncates safely");
+}
+
+TEST_CASE(msi_package_suffixes) {
+    TEST_ASSERT_STR_EQ("-msi-win-x64.msi", update_package_suffix("x64", UPDATE_PACKAGE_MSI, false),
+                       "x64 MSI");
+    TEST_ASSERT_STR_EQ("-msi-win-arm64.msi.sha256",
+                       update_package_suffix("arm64", UPDATE_PACKAGE_MSI, true),
+                       "arm64 MSI digest");
+    TEST_ASSERT_STR_EQ("-setup-win-x64.exe",
+                       update_package_suffix("x64", UPDATE_PACKAGE_SETUP, false), "setup");
+    TEST_ASSERT(update_package_suffix("x86", UPDATE_PACKAGE_MSI, false) == NULL, "no x86 MSI");
+    char json[4096], url[512];
+    build_release(json, sizeof(json));
+    TEST_ASSERT(update_find_asset_url(json, update_package_suffix("x64", UPDATE_PACKAGE_MSI, false),
+                                      url, sizeof(url)),
+                "MSI asset found");
+    TEST_ASSERT_STR_EQ("https://github.com/platima/npad/releases/download/v0.23.0/"
+                       "npad-v0.23.0-msi-win-x64.msi",
+                       url, "MSI URL");
+}
+
+TEST_CASE(windows_package_choice) {
+    TEST_ASSERT_EQ(UPDATE_PACKAGE_MSI, update_windows_package(false, true),
+                   "an MSI install updates with the MSI");
+    TEST_ASSERT_EQ(UPDATE_PACKAGE_SETUP, update_windows_package(true, false), "a setup install");
+    TEST_ASSERT_EQ(UPDATE_PACKAGE_SETUP, update_windows_package(true, true),
+                   "both: the setup owns this folder");
+    TEST_ASSERT_EQ(UPDATE_PACKAGE_SETUP, update_windows_package(false, false),
+                   "neither (portable): as before");
+}
+
+TEST_CASE(msi_feature_args) {
+    const char *installed[] = { "Main",      "PathEnv",      "OpenWith", "AssocText",
+                                "AssocData", "NotepadAlias", "Fonts" };
+    const size_t n = sizeof(installed) / sizeof(installed[0]);
+    char out[256];
+
+    const char *nothing_installed[] = { "AssocMarkdown", "AssocConfig", "AssocLog" };
+    TEST_ASSERT(!update_msi_feature_args(installed, n, nothing_installed, 3, out, sizeof(out)),
+                "unregistered groups the MSI never installed: leave the upgrade alone");
+    TEST_ASSERT_STR_EQ("", out, "nothing written");
+    TEST_ASSERT(!update_msi_feature_args(installed, n, NULL, 0, out, sizeof(out)),
+                "every group registered");
+
+    const char *drop[] = { "AssocText", "AssocMarkdown", "AssocLog" };
+    TEST_ASSERT(update_msi_feature_args(installed, n, drop, 3, out, sizeof(out)),
+                "an installed group the user unregistered");
+    TEST_ASSERT_STR_EQ(" ADDLOCAL=Main,PathEnv,OpenWith,AssocData,NotepadAlias,Fonts "
+                       "REMOVE=AssocText",
+                       out, "everything else kept, only the installed group removed");
+
+    const char *odd[] = { "Main", "Bad Name", "Main", "x;y", "AssocText" };
+    TEST_ASSERT(update_msi_feature_args(odd, 5, drop, 3, out, sizeof(out)), "odd names");
+    TEST_ASSERT_STR_EQ(" ADDLOCAL=Main REMOVE=AssocText", out,
+                       "non-identifiers ignored, duplicates once");
+
+    char tiny[20];
+    TEST_ASSERT(!update_msi_feature_args(installed, n, drop, 3, tiny, sizeof(tiny)),
+                "does not fit");
+    TEST_ASSERT_STR_EQ("", tiny, "nothing half-written");
+    const char *only_dropped[] = { "AssocText" };
+    TEST_ASSERT(!update_msi_feature_args(only_dropped, 1, drop, 3, out, sizeof(out)),
+                "nothing would be left to install");
+    TEST_ASSERT(!update_msi_feature_args(NULL, 0, drop, 3, out, sizeof(out)), "NULL list");
+}
+
+TEST_CASE(dir_holds_exe) {
+    TEST_ASSERT(update_dir_holds_exe("C:\\Users\\me\\AppData\\Local\\Programs\\npad\\",
+                                     "C:\\Users\\me\\AppData\\Local\\Programs\\npad\\npad.exe"),
+                "Inno's InstallLocation, trailing backslash");
+    TEST_ASSERT(
+        update_dir_holds_exe("c:\\program files\\NPAD", "C:\\Program Files\\npad\\npad.exe"),
+        "case and no trailing separator");
+    TEST_ASSERT(update_dir_holds_exe("C:/Tools/npad/", "C:\\Tools\\npad\\npad.exe"),
+                "either separator");
+    TEST_ASSERT(!update_dir_holds_exe("C:\\Tools", "C:\\Tools\\npad\\npad.exe"), "a parent");
+    TEST_ASSERT(!update_dir_holds_exe("C:\\Tools\\np", "C:\\Tools\\npad\\npad.exe"), "a prefix");
+    TEST_ASSERT(!update_dir_holds_exe("", "C:\\npad.exe"), "empty dir");
+    TEST_ASSERT(!update_dir_holds_exe("\\\\", "\\npad.exe"), "only separators");
+    TEST_ASSERT(!update_dir_holds_exe(NULL, "C:\\npad.exe"), "NULL dir");
+    TEST_ASSERT(!update_dir_holds_exe("C:\\x", NULL), "NULL exe");
+}
+
+TEST_CASE(msi_owner) {
+    const char *pf = "C:\\Program Files\\npad";
+    const char *upf = "C:\\Users\\me\\AppData\\Local\\Programs\\npad";
+    const char *pf_exe = "C:\\Program Files\\npad\\npad.exe";
+    const char *upf_exe = "C:\\Users\\me\\AppData\\Local\\Programs\\npad\\npad.exe";
+    const char *portable = "C:\\Tools\\npad\\npad.exe";
+
+    UpdateMsiProduct recorded[] = { { "D:\\Apps\\npad\\", true } };
+    TEST_ASSERT(update_msi_owner(recorded, 1, "D:\\Apps\\npad\\npad.exe", pf, upf) == 0,
+                "a recorded InstallLocation owns its folder");
+    TEST_ASSERT(update_msi_owner(recorded, 1, pf_exe, pf, upf) == -1,
+                "a recorded InstallLocation owns nothing else, the default folder included");
+
+    // Pre-0.36.0 MSIs recorded no InstallLocation: only the default folder
+    // for the product's own scope is evidence
+    UpdateMsiProduct legacy_machine[] = { { "", true } };
+    TEST_ASSERT(update_msi_owner(legacy_machine, 1, pf_exe, pf, upf) == 0,
+                "legacy all-users product, exe in Program Files\\npad");
+    TEST_ASSERT(update_msi_owner(legacy_machine, 1, portable, pf, upf) == -1,
+                "legacy product, portable copy elsewhere: not the MSI's");
+    TEST_ASSERT(update_msi_owner(legacy_machine, 1, upf_exe, pf, upf) == -1,
+                "legacy all-users product, exe in the per-user folder");
+    UpdateMsiProduct legacy_user[] = { { "", false } };
+    TEST_ASSERT(update_msi_owner(legacy_user, 1, upf_exe, pf, upf) == 0,
+                "legacy per-user product, exe in Programs\\npad");
+    TEST_ASSERT(update_msi_owner(legacy_user, 1, pf_exe, pf, upf) == -1,
+                "legacy per-user product, exe in Program Files");
+    TEST_ASSERT(update_msi_owner(legacy_user, 1, upf_exe, pf, NULL) == -1,
+                "no default folder known: no evidence");
+
+    // A recorded match wins over a legacy one, wherever it is listed
+    UpdateMsiProduct both[] = { { "", false }, { upf, false } };
+    TEST_ASSERT(update_msi_owner(both, 2, upf_exe, pf, upf) == 1, "recorded beats legacy");
+    UpdateMsiProduct unreadable[] = { { NULL, true }, { "", true } };
+    TEST_ASSERT(update_msi_owner(unreadable, 2, pf_exe, pf, upf) == 1,
+                "an unreadable location is skipped, not taken as legacy");
+    TEST_ASSERT(update_msi_owner(unreadable, 1, pf_exe, pf, upf) == -1, "unreadable alone");
+    TEST_ASSERT(update_msi_owner(NULL, 0, pf_exe, pf, upf) == -1, "no products");
+    TEST_ASSERT(update_msi_owner(legacy_machine, 1, NULL, pf, upf) == -1, "NULL exe");
+}
+
+TEST_CASE(signature_policy) {
+    // Unsigned build: the hash decides, but a broken signature never runs
+    TEST_ASSERT(update_signature_problem(UPDATE_SIG_NONE, UPDATE_SIG_NONE, false) == NULL,
+                "unsigned build, unsigned installer");
+    TEST_ASSERT(update_signature_problem(UPDATE_SIG_NONE, UPDATE_SIG_VALID, false) == NULL,
+                "unsigned build, signed installer");
+    TEST_ASSERT(update_signature_problem(UPDATE_SIG_NONE, UPDATE_SIG_BAD, false) != NULL,
+                "a broken signature is refused even then");
+    TEST_ASSERT(update_signature_problem(UPDATE_SIG_BAD, UPDATE_SIG_NONE, false) == NULL,
+                "a build whose own signature fails counts as unsigned");
+    // Signed build: same publisher, validly signed, or nothing
+    TEST_ASSERT(update_signature_problem(UPDATE_SIG_VALID, UPDATE_SIG_VALID, true) == NULL,
+                "signed by the same publisher");
+    TEST_ASSERT(update_signature_problem(UPDATE_SIG_VALID, UPDATE_SIG_VALID, false) != NULL,
+                "another publisher");
+    TEST_ASSERT(update_signature_problem(UPDATE_SIG_VALID, UPDATE_SIG_NONE, true) != NULL,
+                "an unsigned installer for a signed build");
+    TEST_ASSERT(update_signature_problem(UPDATE_SIG_VALID, UPDATE_SIG_BAD, true) != NULL,
+                "a broken signature for a signed build");
 }
 
 // --- HTTP responses (the Linux check) ---------------------------------------
@@ -495,9 +730,6 @@ TEST_CASE(owner_output_parsing) {
 int main(void) {
     TEST_INIT();
 
-    RUN_TEST(extract_tag_basic);
-    RUN_TEST(extract_tag_spaced);
-    RUN_TEST(extract_tag_missing_or_bad);
     RUN_TEST(version_compare_numeric);
     RUN_TEST(sha256_parse);
     RUN_TEST(newer_unskipped);
@@ -510,6 +742,17 @@ int main(void) {
     RUN_TEST(build_arch_matches_compiler_target);
     RUN_TEST(find_asset_picks_the_builds_architecture);
     RUN_TEST(find_asset_arm64_never_falls_back_to_x64);
+    RUN_TEST(find_asset_ignores_nested_names);
+    RUN_TEST(find_asset_field_order_and_escapes);
+    RUN_TEST(pick_release_tag);
+    RUN_TEST(prerelease_builds);
+    RUN_TEST(http_status_messages);
+    RUN_TEST(msi_package_suffixes);
+    RUN_TEST(windows_package_choice);
+    RUN_TEST(msi_feature_args);
+    RUN_TEST(dir_holds_exe);
+    RUN_TEST(msi_owner);
+    RUN_TEST(signature_policy);
     RUN_TEST(http_plain_body);
     RUN_TEST(http_content_length);
     RUN_TEST(http_chunked);

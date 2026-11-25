@@ -10,7 +10,6 @@
 
 // Global mutexes
 npad_mutex_t g_settings_mutex;
-npad_mutex_t g_editor_mutex;
 
 bool npad_mutex_init(npad_mutex_t *mutex) {
     if (!mutex)
@@ -58,17 +57,9 @@ void npad_mutex_unlock(npad_mutex_t *mutex) {
 }
 
 bool thread_safety_init(void) {
-    if (!npad_mutex_init(&g_settings_mutex)) {
-        return false;
-    }
-    if (!npad_mutex_init(&g_editor_mutex)) {
-        npad_mutex_destroy(&g_settings_mutex);
-        return false;
-    }
-    return true;
+    return npad_mutex_init(&g_settings_mutex);
 }
 
 void thread_safety_cleanup(void) {
     npad_mutex_destroy(&g_settings_mutex);
-    npad_mutex_destroy(&g_editor_mutex);
 }
